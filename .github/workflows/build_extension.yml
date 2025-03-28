@@ -71,6 +71,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.toolchain }}
+      - name: set windows cargo home
+        if: ${{ env.os == 'windows-latest' }}
+        run: echo "CARGO_HOME=C:\\cargo" >> ${{ matrix.github_env }}
       - name: build pyrefly binary
         run: cargo build --release --all-features --target-dir lsp/bin --manifest-path pyre2/Cargo.toml
       - uses: actions/setup-node@v4
