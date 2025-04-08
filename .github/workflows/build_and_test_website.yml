@@ -5,10 +5,10 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
-    pull_request:
-      types: [opened]
-      paths:
-        - 'website/**'
+  pull_request:
+    types: [ opened ]
+    paths:
+      - 'website/**'
 
 jobs:
   # Single deploy job since we're just deploying
@@ -24,15 +24,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20.x"
-      - name: Install yarn deps
-        run: cd website && yarn install
-      - name: Install wasm-pack
-        run: cargo install wasm-pack wasm-opt
-      - name: Use rust nightly
-        run: rustup install nightly && rustup default nightly
+      - name: Install dependencies
+        working-directory: ./website
+        run: scripts/install.sh
       - name: Build
         working-directory: ./website
-        run: cargo version && chmod +x scripts/build.sh && scripts/build.sh
+        run: scripts/build.sh
       - name: Test
         working-directory: ./website
         run: yarn test
