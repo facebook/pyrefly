@@ -3,12 +3,14 @@ name: Build and Test Pyrefly Website
 on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+  # Allow this workflow to be called by other workflows
+  workflow_call:
   push:
     branches: [ main ]
-    pull_request:
-      types: [opened]
-      paths:
-        - 'website/**'
+  pull_request:
+    types: [opened]
+    paths:
+      - 'website/**'
 
 jobs:
   # Single deploy job since we're just deploying
