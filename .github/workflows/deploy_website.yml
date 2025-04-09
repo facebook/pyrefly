@@ -7,7 +7,6 @@ on:
 jobs:
   build:
     uses: ./.github/workflows/build_and_test_website.yml
-
   # Single deploy job since we're just deploying
   deploy:
     environment:
