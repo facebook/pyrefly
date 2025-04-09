@@ -38,3 +38,9 @@ jobs:
       - name: Test
         working-directory: ./website
         run: yarn test
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: website-build
+          path: website/build
+          retention-days: 1
