@@ -7,6 +7,7 @@ on:
 jobs:
   build:
     uses: ./.github/workflows/build_and_test_website.yml
+
   # Single deploy job since we're just deploying
   deploy:
     environment:
@@ -16,6 +17,13 @@ jobs:
     needs: build
     if: success()
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: website-build
+          path: website/build
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Deploy to github pages
