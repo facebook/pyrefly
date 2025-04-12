@@ -344,7 +344,7 @@ def main() -> None:
             messages.append("\n".join(difference) + "\n")
         if len(messages) > 0:
             logger.error(
-                "Conformance output is not up to date. Please cd to fbcode/tools/pyre/pyre2/conformance/\n"
+                "Conformance output is not up to date. Please cd to fbcode/pyrefly/conformance/\n"
                 + "and re-generate the output with `buck2 run :conformance_output_script -- ./third_party`.\n"
                 + "\n".join(messages)
             )

@@ -26,7 +26,7 @@ From this directory, you can run:
 - Run a single test: `buck2 test pyrefly -- NAME_OF_THE_TEST`
 - Run the end-to-end tests: `buck2 test test:`
 - Run `arc pyre` (a.k.a. per-target type checking) with Pyrefly:
-  `arc pyre check <targets_to_check> -c python.type_checker=fbcode//tools/pyre/pyre2:pyrefly_for_buck`
+  `arc pyre check <targets_to_check> -c python.type_checker=fbcode//pyrefly:pyrefly_for_buck`
 - Debug a file: `buck2 run pyrefly -- check <filename> --debug-info=debug.js`,
   then open `debug.html` in your browser
 - Fetch Typeshed from upstream
@@ -37,7 +37,7 @@ From this directory, you can run:
 We use [maturin](https://github.com/PyO3/maturin) to build wheels and source
 distributions. This also means that you can pip install `maturin` and use
 `maturin build` and `maturin develop` for local development. `pip install .` in
-the `pyre2/pyrefly` directory works as well.
+the `pyrefly/pyrefly` directory works as well.
 
 ### Deploying to PyPI
 
@@ -48,7 +48,7 @@ version to PyPI.
 
 If you'd like to do a manual release between the weekly automated releases,
 follow the instructions in
-[version.bzl](https://www.internalfb.com/code/fbsource/fbcode/tools/pyre/pyre2/version.bzl)
+[version.bzl](https://www.internalfb.com/code/fbsource/fbcode/pyrefly/version.bzl)
 to update the version number.
 
 Behind the scenes, what's happening is:

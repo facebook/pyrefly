@@ -221,7 +221,7 @@ const config: Config = {
                             : false, // TODO (T217317240): add back sidebar when we are ready to publish docs
                     editUrl: fbContent({
                         internal:
-                            'https://www.internalfb.com/code/fbsource/fbcode/tools/pyre/pyre2/website/',
+                            'https://www.internalfb.com/code/fbsource/fbcode/pyrefly/website/',
                         external: 'https://github.com/facebook/pyrefly/edit/main/website/',
                     }),
                 },

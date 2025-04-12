@@ -13,7 +13,7 @@
 # Fail if we have any errors
 set -e
 
-# Change to `pyre2` directory
+# Change to `pyrefly` directory
 cd -- "$(dirname -- "$0")/.."
 
 # Merge stdout and stderr logs because Sandcastle shows them separately.

@@ -18,7 +18,7 @@
 # Fail if we have any errors
 set -e
 
-# Change to `pyre2` directory
+# Change to `pyrefly` directory
 cd -- "$(dirname -- "$0")/.."
 
 ../pyrefly_wasm/build.sh
