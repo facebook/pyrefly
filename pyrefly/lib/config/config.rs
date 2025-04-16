@@ -23,12 +23,26 @@ use tracing::warn;
 use crate::PythonEnvironment;
 use crate::config::base::ConfigBase;
 use crate::config::error::ErrorDisplayConfig;
+use crate::globs::Glob;
 use crate::globs::Globs;
 use crate::metadata::PythonPlatform;
 use crate::metadata::PythonVersion;
 use crate::metadata::RuntimeMetadata;
 use crate::module::wildcard::ModuleWildcard;
 use crate::util::fs_anyhow;
+
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
+pub struct SubConfig {
+    matches: Glob,
+    #[serde(flatten)]
+    settings: ConfigBase,
+}
+
+impl SubConfig {
+    fn rewrite_with_path_to_config(&mut self, config_root: &Path) {
+        self.matches = self.matches.clone().from_root(config_root);
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
 pub struct ConfigFile {
@@ -62,6 +76,9 @@ pub struct ConfigFile {
     /// The `ConfigBase` values for the whole project.
     #[serde(default, flatten)]
     pub root: ConfigBase,
+
+    #[serde(default)]
+    pub sub_configs: Vec<SubConfig>,
 }
 
 impl Default for ConfigFile {
@@ -98,6 +115,7 @@ impl ConfigFile {
                 site_package_path: None,
             },
             root: Default::default(),
+            sub_configs: Default::default(),
         }
     }
 }
@@ -236,6 +254,9 @@ impl ConfigFile {
             .python_interpreter
             .as_ref()
             .map(|i| config_root.join(i));
+        self.sub_configs
+            .iter_mut()
+            .for_each(|c| c.rewrite_with_path_to_config(config_root));
     }
 
     pub fn validate(&self) {
@@ -285,9 +306,20 @@ impl ConfigFile {
                     ConfigFile::parse_config(&config_str)
                 }?;
 
-            if error_on_extras && !config.root.extras.0.is_empty() {
-                let extra_keys = config.root.extras.0.keys().join(", ");
-                return Err(anyhow!("Extra keys found in config: {extra_keys}"));
+            if error_on_extras {
+                if !config.root.extras.0.is_empty() {
+                    let extra_keys = config.root.extras.0.keys().join(", ");
+                    return Err(anyhow!("Extra keys found in config: {extra_keys}"));
+                }
+                for sub_config in &config.sub_configs {
+                    if !sub_config.settings.extras.0.is_empty() {
+                        let extra_keys = config.root.extras.0.keys().join(", ");
+                        return Err(anyhow!(
+                            "Extra keys found in sub config matching {}: {extra_keys}",
+                            sub_config.matches
+                        ));
+                    }
+                }
             }
 
             if let Some(config_root) = config_path.parent() {
@@ -373,6 +405,16 @@ mod tests {
             [errors]
             assert-type = true
             bad-return = false
+
+            [[sub_configs]]
+            matches = "sub/project/**"
+
+            skip_untyped_functions = true
+            replace_imports_with_any = []
+            ignore_errors_in_generated_code = false
+            [sub_configs.errors]
+            assert-type = false
+            invalid-yield = false
         "#;
         let config = ConfigFile::parse_config(config_str).unwrap();
         assert_eq!(
@@ -399,7 +441,20 @@ mod tests {
                     ignore_errors_in_generated_code: Some(true),
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
                     skip_untyped_functions: Some(false),
-                }
+                },
+                sub_configs: vec![SubConfig {
+                    matches: Glob::new("sub/project/**".to_owned()),
+                    settings: ConfigBase {
+                        extras: Default::default(),
+                        errors: Some(ErrorDisplayConfig::new(HashMap::from_iter([
+                            (ErrorKind::AssertType, false),
+                            (ErrorKind::InvalidYield, false)
+                        ]))),
+                        ignore_errors_in_generated_code: Some(false),
+                        replace_imports_with_any: Some(Vec::new()),
+                        skip_untyped_functions: Some(true),
+                    }
+                }],
             }
         );
     }
@@ -416,11 +471,20 @@ mod tests {
         let config_str = r#"
             laszewo = "good kids"
             python_platform = "windows"
+
+            [[sub_configs]]
+            matches = "abcd"
+            
+            atliens = 1
         "#;
         let config = ConfigFile::parse_config(config_str).unwrap();
         assert_eq!(
             config.root.extras.0,
-            Table::from_iter([("laszewo".to_owned(), Value::String("good kids".to_owned()))])
+            Table::from_iter([("laszewo".to_owned(), Value::String("good kids".to_owned())),])
+        );
+        assert_eq!(
+            config.sub_configs[0].settings.extras.0,
+            Table::from_iter([("atliens".to_owned(), Value::Integer(1))])
         );
     }
 
@@ -531,6 +595,10 @@ mod tests {
             python_environment: python_environment.clone(),
             python_interpreter: Some(PathBuf::from(interpreter.clone())),
             root: Default::default(),
+            sub_configs: vec![SubConfig {
+                matches: Glob::new("sub/project/**".to_owned()),
+                settings: Default::default(),
+            }],
         };
 
         let path_str = with_sep("path/to/my/config");
@@ -545,6 +613,8 @@ mod tests {
         python_environment.site_package_path =
             Some(vec![test_path.join("venv/lib/python1.2.3/site-packages")]);
 
+        let sub_config_matches = Glob::new(path_str.clone() + &with_sep("/sub/project/**"));
+
         config.rewrite_with_path_to_config(&test_path);
 
         let expected_config = ConfigFile {
@@ -554,6 +624,10 @@ mod tests {
             search_path,
             python_environment,
             root: Default::default(),
+            sub_configs: vec![SubConfig {
+                matches: sub_config_matches,
+                settings: Default::default(),
+            }],
         };
         assert_eq!(config, expected_config);
     }
@@ -568,6 +642,16 @@ mod tests {
         ";
         let err = ConfigFile::parse_config(config_str).unwrap_err();
         assert!(err.to_string().contains("unknown variant"));
+    }
+
+    #[test]
+    fn test_deserializing_sub_config_missing_matches() {
+        let config_str = r#"
+            [[sub_configs]]
+            search_path = ["../../.."]
+        "#;
+        let err = ConfigFile::parse_config(config_str).unwrap_err();
+        assert!(err.to_string().contains("missing field `matches`"));
     }
 
     #[test]
