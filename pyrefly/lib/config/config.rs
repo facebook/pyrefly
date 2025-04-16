@@ -17,7 +17,6 @@ use itertools::Itertools;
 use path_absolutize::Absolutize;
 use serde::Deserialize;
 use serde::Serialize;
-use toml::Table;
 use tracing::debug;
 use tracing::warn;
 
@@ -44,10 +43,6 @@ pub struct ConfigFile {
     #[serde(default = "ConfigFile::default_project_excludes")]
     pub project_excludes: Globs,
 
-    /// analyze function body and infer return type
-    #[serde(default)]
-    pub skip_untyped_functions: bool,
-
     /// corresponds to --search-path in Args, the list of directories where imports are
     /// found (including type checked files).
     #[serde(default = "ConfigFile::default_search_path")]
@@ -65,17 +60,21 @@ pub struct ConfigFile {
     pub python_environment: PythonEnvironment,
 
     #[serde(default)]
-    pub errors: ErrorDisplayConfig,
+    pub errors: Option<ErrorDisplayConfig>,
 
     /// String-prefix-matched names of modules from which import errors should be ignored
     /// and the module should always be replaced with `typing.Any`
     #[serde(default)]
-    pub replace_imports_with_any: Vec<ModuleWildcard>,
+    pub replace_imports_with_any: Option<Vec<ModuleWildcard>>,
+
+    /// analyze function body and infer return type
+    #[serde(default)]
+    pub skip_untyped_functions: Option<bool>,
 
     /// Whether to ignore type errors in generated code. By default this is disabled.
     /// Generated code is defined as code that contains the marker string `@` immediately followed by `generated`.
     #[serde(default)]
-    pub ignore_errors_in_generated_code: bool,
+    pub ignore_errors_in_generated_code: Option<bool>,
 
     /// Any unknown config items
     #[serde(default, flatten)]
@@ -106,20 +105,20 @@ impl ConfigFile {
     /// since it may have strange runtime behavior. Prefer to use `ConfigFile::default()` instead.
     fn default_no_path_rewrite() -> Self {
         ConfigFile {
+            project_includes: Self::default_project_includes(),
+            project_excludes: Self::default_project_excludes(),
+            python_interpreter: PythonEnvironment::get_default_interpreter(),
             search_path: Self::default_search_path(),
             python_environment: PythonEnvironment {
                 python_platform: None,
                 python_version: None,
                 site_package_path: None,
             },
-            project_includes: Self::default_project_includes(),
-            project_excludes: Self::default_project_excludes(),
-            skip_untyped_functions: false,
-            python_interpreter: PythonEnvironment::get_default_interpreter(),
-            errors: ErrorDisplayConfig::default(),
-            ignore_errors_in_generated_code: false,
-            extras: Self::default_extras(),
-            replace_imports_with_any: Vec::new(),
+            errors: None,
+            replace_imports_with_any: None,
+            skip_untyped_functions: None,
+            ignore_errors_in_generated_code: None,
+            extras: Default::default(),
         }
     }
 }
@@ -143,10 +142,6 @@ impl ConfigFile {
 
     pub fn default_search_path() -> Vec<PathBuf> {
         vec![PathBuf::from("")]
-    }
-
-    pub fn default_extras() -> ExtraConfigs {
-        ExtraConfigs(Table::new())
     }
 
     pub fn python_version(&self) -> PythonVersion {
@@ -174,8 +169,28 @@ impl ConfigFile {
         RuntimeMetadata::new(self.python_version(), self.python_platform().clone())
     }
 
-    pub fn default_error_config() -> ErrorDisplayConfig {
-        ErrorDisplayConfig::default()
+    pub fn errors(&self) -> &ErrorDisplayConfig {
+        // we can use unwrap here, because the value in the root config must
+        // be set in `ConfigFile::configure()`.
+        self.errors.as_ref().unwrap()
+    }
+
+    pub fn replace_imports_with_any(&self) -> &[ModuleWildcard] {
+        // we can use unwrap here, because the value in the root config must
+        // be set in `ConfigFile::configure()`.
+        self.replace_imports_with_any.as_deref().unwrap()
+    }
+
+    pub fn skip_untyped_functions(&self) -> bool {
+        // we can use unwrap here, because the value in the root config must
+        // be set in `ConfigFile::configure()`.
+        self.skip_untyped_functions.unwrap()
+    }
+
+    pub fn ignore_errors_in_generated_code(&self) -> bool {
+        // we can use unwrap here, because the value in the root config must
+        // be set in `ConfigFile::configure()`.
+        self.ignore_errors_in_generated_code.unwrap()
     }
 
     /// Configures values that must be updated *after* overwriting with CLI flag values,
@@ -192,6 +207,22 @@ impl ConfigFile {
                 Pyrefly defaults for missing values."
                 )
             }
+        }
+
+        if self.errors.is_none() {
+            self.errors = Some(Default::default());
+        }
+
+        if self.replace_imports_with_any.is_none() {
+            self.replace_imports_with_any = Some(Default::default());
+        }
+
+        if self.skip_untyped_functions.is_none() {
+            self.skip_untyped_functions = Some(Default::default());
+        }
+
+        if self.ignore_errors_in_generated_code.is_none() {
+            self.ignore_errors_in_generated_code = Some(Default::default());
         }
     }
 
@@ -328,9 +359,9 @@ impl Display for ConfigFile {
             self.python_interpreter,
             self.python_environment,
             self.replace_imports_with_any
-                .iter()
-                .map(|p| p.as_str())
-                .join(", "),
+                .as_ref()
+                .map(|r| { r.iter().map(|p| p.as_str()).join(", ") })
+                .unwrap_or_default(),
         )
     }
 }
@@ -340,6 +371,7 @@ mod tests {
     use std::collections::HashMap;
     use std::path;
 
+    use toml::Table;
     use toml::Value;
 
     use super::*;
@@ -371,7 +403,7 @@ mod tests {
                     "./implementation".to_owned()
                 ]),
                 project_excludes: Globs::new(vec!["tests/untyped/**".to_owned()]),
-                skip_untyped_functions: false,
+                skip_untyped_functions: Some(false),
                 search_path: vec![PathBuf::from("../..")],
                 python_environment: PythonEnvironment::new(
                     PythonPlatform::mac(),
@@ -379,13 +411,13 @@ mod tests {
                     vec![PathBuf::from("venv/lib/python1.2.3/site-packages")],
                 ),
                 python_interpreter: Some(PathBuf::from("venv/my/python")),
-                extras: ConfigFile::default_extras(),
-                errors: ErrorDisplayConfig::new(HashMap::from_iter([
+                extras: Default::default(),
+                errors: Some(ErrorDisplayConfig::new(HashMap::from_iter([
                     (ErrorKind::AssertType, true),
                     (ErrorKind::BadReturn, false)
-                ])),
-                ignore_errors_in_generated_code: true,
-                replace_imports_with_any: vec![ModuleWildcard::new("fibonacci").unwrap()],
+                ]))),
+                ignore_errors_in_generated_code: Some(true),
+                replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
             },
         );
     }
@@ -513,7 +545,7 @@ mod tests {
         let mut config = ConfigFile {
             project_includes: Globs::new(vec!["path1/**".to_owned(), "path2/path3".to_owned()]),
             project_excludes: Globs::new(vec!["tests/untyped/**".to_owned()]),
-            skip_untyped_functions: false,
+            skip_untyped_functions: Some(false),
             search_path: vec![PathBuf::from("../..")],
             python_environment: python_environment.clone(),
             python_interpreter: Some(PathBuf::from(interpreter.clone())),
@@ -528,7 +560,7 @@ mod tests {
             path_str.clone() + &with_sep("/path2/path3"),
         ];
         let project_excludes_vec = vec![path_str.clone() + &with_sep("/tests/untyped/**")];
-        let skip_untyped_functions = false;
+        let skip_untyped_functions = Some(false);
         let search_path = vec![test_path.join("../.."), test_path.clone()];
         python_environment.site_package_path =
             Some(vec![test_path.join("venv/lib/python1.2.3/site-packages")]);

@@ -21,7 +21,7 @@ pub fn set_option_if_some<T: Clone>(config_field: &mut Option<T>, value: Option<
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(transparent)]
 pub struct ExtraConfigs(pub Table);
 

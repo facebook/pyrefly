@@ -243,8 +243,8 @@ impl Handles {
         self.module_to_error_config.insert(
             ModulePath::filesystem(path.clone()),
             ErrorConfig::new(
-                config.errors.clone(),
-                config.ignore_errors_in_generated_code,
+                config.errors().clone(),
+                config.ignore_errors_in_generated_code(),
             ),
         );
         let loader = self.get_or_register_loader(&config);
@@ -258,7 +258,7 @@ impl Handles {
         let key = LoaderInputs {
             search_path: config.search_path.clone(),
             site_package_path: config.site_package_path().to_owned(),
-            replace_imports_with_any: config.replace_imports_with_any.clone(),
+            replace_imports_with_any: config.replace_imports_with_any().to_vec(),
         };
         if let Some(loader) = self.loader_factory.get_mut(&key) {
             loader.dupe()
@@ -422,7 +422,7 @@ impl Args {
             &mut config.python_interpreter,
             self.python_interpreter.as_ref(),
         );
-        set_if_some(
+        set_option_if_some(
             &mut config.ignore_errors_in_generated_code,
             self.ignore_errors_in_generated_code.as_ref(),
         );
