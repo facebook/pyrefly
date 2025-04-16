@@ -883,7 +883,8 @@ impl Server {
             let new_config = Config::new(
                 search_path,
                 site_package_path,
-                env.get_runtime_metadata(),
+                // this is okay, since `get_interpreter_env()` must return an environment with all values as `Some()`
+                RuntimeMetadata::new(env.python_version.unwrap(), env.python_platform.unwrap()),
                 config.open_files.lock().clone(),
             );
             configs.insert(config_path, new_config);

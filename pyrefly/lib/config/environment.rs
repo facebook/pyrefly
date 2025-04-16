@@ -24,7 +24,6 @@ use which::which;
 
 use crate::PythonVersion;
 use crate::metadata::PythonPlatform;
-use crate::metadata::RuntimeMetadata;
 use crate::util::lock::Mutex;
 
 static INTERPRETER_ENV_REGISTRY: LazyLock<Mutex<SmallMap<PathBuf, Option<PythonEnvironment>>>> =
@@ -141,18 +140,6 @@ print(json.dumps({'python_platform': platform, 'python_version': version, 'site_
         None
     }
 
-    pub fn python_platform(&self) -> PythonPlatform {
-        self.python_platform.clone().unwrap_or_default()
-    }
-
-    pub fn python_version(&self) -> PythonVersion {
-        self.python_version.unwrap_or_default()
-    }
-
-    pub fn site_package_path(&self) -> &[PathBuf] {
-        self.site_package_path.as_deref().unwrap_or_default()
-    }
-
     pub fn get_interpreter_env(interpreter: &Path) -> PythonEnvironment {
         INTERPRETER_ENV_REGISTRY.lock()
         .entry(interpreter.to_path_buf()).or_insert_with(move || {
@@ -160,10 +147,6 @@ print(json.dumps({'python_platform': platform, 'python_version': version, 'site_
                 error!("Failed to query interpreter, falling back to default Python environment settings\n{}", e);
             }).ok()
         }).clone().unwrap_or_default()
-    }
-
-    pub fn get_runtime_metadata(&self) -> RuntimeMetadata {
-        RuntimeMetadata::new(self.python_version(), self.python_platform())
     }
 }
 
@@ -185,12 +168,15 @@ impl Display for PythonEnvironment {
         write!(
             f,
             "{{python_platform: {}, python_version: {}, site_package_path: [{}]}}",
-            self.python_platform(),
-            self.python_version(),
-            self.site_package_path()
-                .iter()
-                .map(|p| p.display())
-                .join(", ")
+            self.python_platform
+                .as_ref()
+                .map_or_else(|| "None".to_owned(), |platform| platform.to_string()),
+            self.python_version
+                .map_or_else(|| "None".to_owned(), |version| version.to_string()),
+            self.site_package_path.as_ref().map_or_else(
+                || "".to_owned(),
+                |path| path.iter().map(|p| p.display()).join(", ")
+            )
         )
     }
 }

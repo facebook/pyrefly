@@ -150,19 +150,28 @@ impl ConfigFile {
     }
 
     pub fn python_version(&self) -> PythonVersion {
-        self.python_environment.python_version()
+        // we can use unwrap here, because the value in the root config must
+        // be set in `ConfigFile::configure()`.
+        self.python_environment.python_version.unwrap()
     }
 
-    pub fn python_platform(&self) -> PythonPlatform {
-        self.python_environment.python_platform()
+    pub fn python_platform(&self) -> &PythonPlatform {
+        // we can use unwrap here, because the value in the root config must
+        // be set in `ConfigFile::configure()`.
+        self.python_environment.python_platform.as_ref().unwrap()
     }
 
     pub fn site_package_path(&self) -> &[PathBuf] {
-        self.python_environment.site_package_path()
+        // we can use unwrap here, because the value in the root config must
+        // be set in `ConfigFile::configure()`.
+        self.python_environment
+            .site_package_path
+            .as_deref()
+            .unwrap()
     }
 
     pub fn get_runtime_metadata(&self) -> RuntimeMetadata {
-        self.python_environment.get_runtime_metadata()
+        RuntimeMetadata::new(self.python_version(), self.python_platform().clone())
     }
 
     pub fn default_error_config() -> ErrorDisplayConfig {
@@ -548,5 +557,39 @@ mod tests {
         ";
         let err = ConfigFile::parse_config(config_str).unwrap_err();
         assert!(err.to_string().contains("unknown variant"));
+    }
+
+    #[test]
+    fn test_expect_all_fields_set_in_root_config() {
+        let mut config = ConfigFile::default_no_path_rewrite();
+        config.configure();
+
+        let table: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+
+        let ignore_keys: Vec<String> = vec![
+            // top level configs, where null values (if possible), should be allowed
+            "project_includes",
+            "project_excludes",
+            "python_interpreter",
+            // values we won't be geting
+            "extras",
+            // values that must be Some (if flattend, their contents will be checked)
+            "python_environment",
+        ]
+        .into_iter()
+        .map(|k| k.to_owned())
+        .collect();
+
+        table.keys().for_each(|k| {
+            if ignore_keys.contains(k) {
+                return;
+            }
+
+            assert!(
+                table.get(k).is_some_and(|v| !v.is_null()),
+                "Value for {k} is None after ConfigFile::configure()"
+            );
+        });
     }
 }
