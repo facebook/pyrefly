@@ -21,8 +21,8 @@ use tracing::debug;
 use tracing::warn;
 
 use crate::PythonEnvironment;
+use crate::config::base::ConfigBase;
 use crate::config::error::ErrorDisplayConfig;
-use crate::config::util::ExtraConfigs;
 use crate::globs::Globs;
 use crate::metadata::PythonPlatform;
 use crate::metadata::PythonVersion;
@@ -59,26 +59,9 @@ pub struct ConfigFile {
     #[serde(flatten)]
     pub python_environment: PythonEnvironment,
 
-    #[serde(default)]
-    pub errors: Option<ErrorDisplayConfig>,
-
-    /// String-prefix-matched names of modules from which import errors should be ignored
-    /// and the module should always be replaced with `typing.Any`
-    #[serde(default)]
-    pub replace_imports_with_any: Option<Vec<ModuleWildcard>>,
-
-    /// analyze function body and infer return type
-    #[serde(default)]
-    pub skip_untyped_functions: Option<bool>,
-
-    /// Whether to ignore type errors in generated code. By default this is disabled.
-    /// Generated code is defined as code that contains the marker string `@` immediately followed by `generated`.
-    #[serde(default)]
-    pub ignore_errors_in_generated_code: Option<bool>,
-
-    /// Any unknown config items
+    /// The `ConfigBase` values for the whole project.
     #[serde(default, flatten)]
-    pub extras: ExtraConfigs,
+    pub root: ConfigBase,
 }
 
 impl Default for ConfigFile {
@@ -114,11 +97,7 @@ impl ConfigFile {
                 python_version: None,
                 site_package_path: None,
             },
-            errors: None,
-            replace_imports_with_any: None,
-            skip_untyped_functions: None,
-            ignore_errors_in_generated_code: None,
-            extras: Default::default(),
+            root: Default::default(),
         }
     }
 }
@@ -172,25 +151,25 @@ impl ConfigFile {
     pub fn errors(&self) -> &ErrorDisplayConfig {
         // we can use unwrap here, because the value in the root config must
         // be set in `ConfigFile::configure()`.
-        self.errors.as_ref().unwrap()
+        self.root.errors.as_ref().unwrap()
     }
 
     pub fn replace_imports_with_any(&self) -> &[ModuleWildcard] {
         // we can use unwrap here, because the value in the root config must
         // be set in `ConfigFile::configure()`.
-        self.replace_imports_with_any.as_deref().unwrap()
+        self.root.replace_imports_with_any.as_deref().unwrap()
     }
 
     pub fn skip_untyped_functions(&self) -> bool {
         // we can use unwrap here, because the value in the root config must
         // be set in `ConfigFile::configure()`.
-        self.skip_untyped_functions.unwrap()
+        self.root.skip_untyped_functions.unwrap()
     }
 
     pub fn ignore_errors_in_generated_code(&self) -> bool {
         // we can use unwrap here, because the value in the root config must
         // be set in `ConfigFile::configure()`.
-        self.ignore_errors_in_generated_code.unwrap()
+        self.root.ignore_errors_in_generated_code.unwrap()
     }
 
     /// Configures values that must be updated *after* overwriting with CLI flag values,
@@ -209,20 +188,20 @@ impl ConfigFile {
             }
         }
 
-        if self.errors.is_none() {
-            self.errors = Some(Default::default());
+        if self.root.errors.is_none() {
+            self.root.errors = Some(Default::default());
         }
 
-        if self.replace_imports_with_any.is_none() {
-            self.replace_imports_with_any = Some(Default::default());
+        if self.root.replace_imports_with_any.is_none() {
+            self.root.replace_imports_with_any = Some(Default::default());
         }
 
-        if self.skip_untyped_functions.is_none() {
-            self.skip_untyped_functions = Some(Default::default());
+        if self.root.skip_untyped_functions.is_none() {
+            self.root.skip_untyped_functions = Some(Default::default());
         }
 
-        if self.ignore_errors_in_generated_code.is_none() {
-            self.ignore_errors_in_generated_code = Some(Default::default());
+        if self.root.ignore_errors_in_generated_code.is_none() {
+            self.root.ignore_errors_in_generated_code = Some(Default::default());
         }
     }
 
@@ -306,8 +285,8 @@ impl ConfigFile {
                     ConfigFile::parse_config(&config_str)
                 }?;
 
-            if error_on_extras && !config.extras.0.is_empty() {
-                let extra_keys = config.extras.0.keys().join(", ");
+            if error_on_extras && !config.root.extras.0.is_empty() {
+                let extra_keys = config.root.extras.0.keys().join(", ");
                 return Err(anyhow!("Extra keys found in config: {extra_keys}"));
             }
 
@@ -358,7 +337,8 @@ impl Display for ConfigFile {
             self.search_path.iter().map(|p| p.display()).join(", "),
             self.python_interpreter,
             self.python_environment,
-            self.replace_imports_with_any
+            self.root
+                .replace_imports_with_any
                 .as_ref()
                 .map(|r| { r.iter().map(|p| p.as_str()).join(", ") })
                 .unwrap_or_default(),
@@ -403,7 +383,6 @@ mod tests {
                     "./implementation".to_owned()
                 ]),
                 project_excludes: Globs::new(vec!["tests/untyped/**".to_owned()]),
-                skip_untyped_functions: Some(false),
                 search_path: vec![PathBuf::from("../..")],
                 python_environment: PythonEnvironment::new(
                     PythonPlatform::mac(),
@@ -411,14 +390,17 @@ mod tests {
                     vec![PathBuf::from("venv/lib/python1.2.3/site-packages")],
                 ),
                 python_interpreter: Some(PathBuf::from("venv/my/python")),
-                extras: Default::default(),
-                errors: Some(ErrorDisplayConfig::new(HashMap::from_iter([
-                    (ErrorKind::AssertType, true),
-                    (ErrorKind::BadReturn, false)
-                ]))),
-                ignore_errors_in_generated_code: Some(true),
-                replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
-            },
+                root: ConfigBase {
+                    extras: Default::default(),
+                    errors: Some(ErrorDisplayConfig::new(HashMap::from_iter([
+                        (ErrorKind::AssertType, true),
+                        (ErrorKind::BadReturn, false)
+                    ]))),
+                    ignore_errors_in_generated_code: Some(true),
+                    replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
+                    skip_untyped_functions: Some(false),
+                }
+            }
         );
     }
 
@@ -437,7 +419,7 @@ mod tests {
         "#;
         let config = ConfigFile::parse_config(config_str).unwrap();
         assert_eq!(
-            config.extras.0,
+            config.root.extras.0,
             Table::from_iter([("laszewo".to_owned(), Value::String("good kids".to_owned()))])
         );
     }
@@ -527,7 +509,7 @@ mod tests {
         "#;
         let config = ConfigFile::parse_pyproject_toml(config_str).unwrap();
         assert_eq!(
-            config.extras.0,
+            config.root.extras.0,
             Table::from_iter([("inzo".to_owned(), Value::String("overthinker".to_owned()))])
         );
     }
@@ -545,11 +527,10 @@ mod tests {
         let mut config = ConfigFile {
             project_includes: Globs::new(vec!["path1/**".to_owned(), "path2/path3".to_owned()]),
             project_excludes: Globs::new(vec!["tests/untyped/**".to_owned()]),
-            skip_untyped_functions: Some(false),
             search_path: vec![PathBuf::from("../..")],
             python_environment: python_environment.clone(),
             python_interpreter: Some(PathBuf::from(interpreter.clone())),
-            ..Default::default()
+            root: Default::default(),
         };
 
         let path_str = with_sep("path/to/my/config");
@@ -560,7 +541,6 @@ mod tests {
             path_str.clone() + &with_sep("/path2/path3"),
         ];
         let project_excludes_vec = vec![path_str.clone() + &with_sep("/tests/untyped/**")];
-        let skip_untyped_functions = Some(false);
         let search_path = vec![test_path.join("../.."), test_path.clone()];
         python_environment.site_package_path =
             Some(vec![test_path.join("venv/lib/python1.2.3/site-packages")]);
@@ -570,11 +550,10 @@ mod tests {
         let expected_config = ConfigFile {
             project_includes: Globs::new(project_includes_vec),
             project_excludes: Globs::new(project_excludes_vec),
-            skip_untyped_functions,
+            python_interpreter: Some(test_path.join(interpreter)),
             search_path,
             python_environment,
-            python_interpreter: Some(test_path.join(interpreter)),
-            ..ConfigFile::default_no_path_rewrite()
+            root: Default::default(),
         };
         assert_eq!(config, expected_config);
     }

@@ -423,7 +423,7 @@ impl Args {
             self.python_interpreter.as_ref(),
         );
         set_option_if_some(
-            &mut config.ignore_errors_in_generated_code,
+            &mut config.root.ignore_errors_in_generated_code,
             self.ignore_errors_in_generated_code.as_ref(),
         );
         config.configure();
