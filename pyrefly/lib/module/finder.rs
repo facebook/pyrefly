@@ -108,49 +108,10 @@ pub fn find_module_in_site_package_path(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
-
-    // Utility structure to facilitate setting up filesystem structure under test directories.
-    enum TestPathKind {
-        File,
-        Directory(Vec<TestPath>),
-    }
-    struct TestPath {
-        name: String,
-        kind: TestPathKind,
-    }
-
-    impl TestPath {
-        fn file(name: &str) -> Self {
-            Self {
-                name: name.to_owned(),
-                kind: TestPathKind::File,
-            }
-        }
-        fn dir(name: &str, children: Vec<TestPath>) -> Self {
-            Self {
-                name: name.to_owned(),
-                kind: TestPathKind::Directory(children),
-            }
-        }
-    }
-
-    fn setup_test_directory(root: &Path, paths: Vec<TestPath>) {
-        for path in paths {
-            match path.kind {
-                TestPathKind::File => {
-                    std::fs::File::create(root.join(path.name)).unwrap();
-                }
-                TestPathKind::Directory(children) => {
-                    let dir = root.join(path.name);
-                    std::fs::create_dir(&dir).unwrap();
-                    setup_test_directory(&dir, children);
-                }
-            }
-        }
-    }
+    use crate::util::test::TestPath;
+    use crate::util::test::TestPathKind;
+    use crate::util::test::setup_test_directory;
 
     #[test]
     fn test_find_module_simple() {

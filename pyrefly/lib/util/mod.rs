@@ -25,6 +25,8 @@ pub mod notify_watcher;
 pub mod prelude;
 pub mod recurser;
 pub mod task_heap;
+#[cfg(test)]
+pub mod test;
 pub mod thread_pool;
 pub mod trace;
 pub mod uniques;
