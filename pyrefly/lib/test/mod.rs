@@ -48,7 +48,7 @@ mod type_alias;
 mod type_var_tuple;
 mod typed_dict;
 mod typing_self;
-mod util;
+pub mod util;
 mod variance_inference;
 mod with;
 mod yields;

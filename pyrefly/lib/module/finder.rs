@@ -153,55 +153,14 @@ pub fn find_module_in_site_package_path(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
-
-    // Utility structure to facilitate setting up filesystem structure under test directories.
-    enum TestPathKind {
-        File,
-        Directory(Vec<TestPath>),
-    }
-    struct TestPath {
-        name: String,
-        kind: TestPathKind,
-    }
-
-    impl TestPath {
-        fn file(name: &str) -> Self {
-            Self {
-                name: name.to_owned(),
-                kind: TestPathKind::File,
-            }
-        }
-        fn dir(name: &str, children: Vec<TestPath>) -> Self {
-            Self {
-                name: name.to_owned(),
-                kind: TestPathKind::Directory(children),
-            }
-        }
-    }
-
-    fn setup_test_directory(root: &Path, paths: Vec<TestPath>) {
-        for path in paths {
-            match path.kind {
-                TestPathKind::File => {
-                    std::fs::File::create(root.join(path.name)).unwrap();
-                }
-                TestPathKind::Directory(children) => {
-                    let dir = root.join(path.name);
-                    std::fs::create_dir(&dir).unwrap();
-                    setup_test_directory(&dir, children);
-                }
-            }
-        }
-    }
+    use crate::test::util::TestPath;
 
     #[test]
     fn test_find_module_simple() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        setup_test_directory(
+        TestPath::setup_test_directory(
             root,
             vec![TestPath::dir(
                 "foo",
@@ -230,7 +189,7 @@ mod tests {
     fn test_find_module_init() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        setup_test_directory(
+        TestPath::setup_test_directory(
             root,
             vec![TestPath::dir(
                 "foo",
@@ -255,7 +214,7 @@ mod tests {
     fn test_find_pyi_takes_precedence() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        setup_test_directory(
+        TestPath::setup_test_directory(
             root,
             vec![TestPath::dir(
                 "foo",
@@ -276,7 +235,7 @@ mod tests {
     fn test_find_init_takes_precedence() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        setup_test_directory(
+        TestPath::setup_test_directory(
             root,
             vec![TestPath::dir(
                 "foo",
@@ -297,7 +256,7 @@ mod tests {
     fn test_basic_namespace_package() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        setup_test_directory(
+        TestPath::setup_test_directory(
             root,
             vec![
                 TestPath::dir("a", vec![]),
@@ -328,7 +287,7 @@ mod tests {
     fn test_find_regular_package_early_return() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        setup_test_directory(
+        TestPath::setup_test_directory(
             root,
             vec![
                 TestPath::dir(
@@ -363,7 +322,7 @@ mod tests {
     fn test_find_namespace_package_no_early_return() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        setup_test_directory(
+        TestPath::setup_test_directory(
             root,
             vec![
                 TestPath::dir(
@@ -391,7 +350,7 @@ mod tests {
     fn test_find_stubs_module_takes_precedence() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        setup_test_directory(
+        TestPath::setup_test_directory(
             root,
             vec![
                 TestPath::dir(
