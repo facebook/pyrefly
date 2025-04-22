@@ -286,7 +286,10 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
+    use path_absolutize::Absolutize;
+
     use super::*;
+    use crate::test::util::TestPath;
 
     #[test]
     fn test_roots() {
@@ -560,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn test_matches_path() {
+    fn test_path_matches_default_exclude_glob() {
         let patterns = Globs::new(vec![
             "**/__pycache__/**".to_owned(),
             "**/.[!/.]*".to_owned(),
@@ -624,5 +627,234 @@ mod tests {
                 .matches(Path::new("__pycache__"))
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn test_globs_match_file() {
+        fn glob_matches(pattern: &str, equal: bool) {
+            let file_to_match = Path::new("path/to/my/file.py").absolutize().unwrap();
+            let root = std::env::current_dir().unwrap();
+            let root = root.absolutize().unwrap();
+            let glob = Glob::new_with_root(&root, pattern.to_owned());
+            assert!(
+                glob.matches(file_to_match.as_ref()).unwrap() == equal,
+                "glob `{}` failed (`{}` expanded, `{}` file)",
+                pattern,
+                glob,
+                file_to_match.display(),
+            );
+        }
+
+        // TODO(connernilsen): all of these should be uncommented and pass
+
+        // glob_matches("path/to", true);
+        // glob_matches("path/to/", true);
+        glob_matches("path/to/m", false);
+        glob_matches("path/to/m*", true);
+
+        glob_matches("path/to/my/file.py", true);
+        glob_matches("path/to/my/file.py/", true);
+        glob_matches("path/to/my/file.py/this_is_weird.py", false);
+        glob_matches("path/to/my/file.pyi", false);
+        glob_matches("path/to/my/file", false);
+        glob_matches("path/to/my/file*", true);
+        glob_matches("path/to/my/f*", true);
+        glob_matches("path/to/my/*e*", true);
+
+        // glob_matches("", true);
+        // glob_matches("..", true);
+        // glob_matches(".", true);
+        // glob_matches("path/to/./my", true);
+        glob_matches("*", true);
+        glob_matches("**", true);
+        glob_matches("**/*", true);
+        glob_matches("**/*.py", true);
+        glob_matches("**/*.pyi", false);
+    }
+
+    #[test]
+    fn test_globbing_on_project() {
+        use std::path::StripPrefixError;
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "a",
+                    vec![
+                        TestPath::file("b.py"),
+                        TestPath::dir(
+                            "c",
+                            vec![
+                                TestPath::file("d.py"),
+                                TestPath::file("e.pyi"),
+                                TestPath::file("f.not_py"),
+                            ],
+                        ),
+                        TestPath::file(".dotfile.py"),
+                        TestPath::dir(
+                            "__pycache__",
+                            vec![TestPath::file("g.py"), TestPath::file("h.pyi")],
+                        ),
+                    ],
+                ),
+                TestPath::dir(
+                    // another c directory
+                    "c",
+                    vec![
+                        TestPath::file("i"),
+                        TestPath::dir("j", vec![TestPath::file("k.py")]),
+                    ],
+                ),
+                TestPath::file("l.py"),
+                TestPath::dir("also_has_l", vec![TestPath::file("m.py")]),
+            ],
+        );
+
+        let glob_files_match = |pattern: &str, expected: &[&str]| -> anyhow::Result<()> {
+            let glob_files = Glob::new_with_root(root, pattern.to_owned()).files()?;
+            let mut glob_files = glob_files
+                .iter()
+                .map(|p| p.strip_prefix(root))
+                .collect::<Result<Vec<&Path>, StripPrefixError>>()
+                .unwrap();
+            glob_files.sort();
+            glob_files.dedup();
+
+            let mut expected = expected.iter().map(Path::new).collect::<Vec<&Path>>();
+            expected.sort();
+            expected.dedup();
+
+            assert_eq!(
+                glob_files, expected,
+                "failed to match with pattern `{pattern}`"
+            );
+
+            Ok(())
+        };
+
+        let all_valid_files = &[
+            "a/b.py",
+            "a/c/d.py",
+            "a/c/e.pyi",
+            "a/.dotfile.py",
+            "a/__pycache__/g.py",
+            "a/__pycache__/h.pyi",
+            "c/j/k.py",
+            "l.py",
+            "also_has_l/m.py",
+        ];
+
+        // TODO(connernilsen): all below files/tests should be uncommented
+        glob_files_match("", all_valid_files).unwrap();
+        glob_files_match(".", all_valid_files).unwrap();
+        glob_files_match(
+            "**",
+            // should be all_valid_files
+            &[
+                "a/b.py",
+                "a/c/d.py",
+                "a/c/e.pyi",
+                "a/.dotfile.py",
+                "a/__pycache__/g.py",
+                "a/__pycache__/h.pyi",
+                "c/j/k.py",
+                // "l.py",
+                "also_has_l/m.py",
+            ],
+        )
+        .unwrap();
+        glob_files_match("**/*", all_valid_files).unwrap();
+
+        glob_files_match(
+            "**/*.py",
+            &[
+                "a/b.py",
+                "a/c/d.py",
+                "a/.dotfile.py",
+                "a/__pycache__/g.py",
+                "c/j/k.py",
+                "l.py",
+                "also_has_l/m.py",
+            ],
+        )
+        .unwrap();
+        glob_files_match("**/*.pyi", &["a/c/e.pyi", "a/__pycache__/h.pyi"]).unwrap();
+        glob_files_match("**/*.py?", &["a/c/e.pyi", "a/__pycache__/h.pyi"]).unwrap();
+        glob_files_match("**/*.py*", all_valid_files).unwrap();
+
+        // this one may be unexpected, since the glob pattern should only match `l.py`,  but we
+        // have `resolve_dir` to handle searching this anyway.
+        // in our case, it will probably be fine, since we technically are 'matching' the
+        // directories there, and it can be further tuned with `project_excludes`.
+        glob_files_match("*", all_valid_files).unwrap();
+
+        glob_files_match(
+            "**/a",
+            &[
+                "a/b.py",
+                "a/c/d.py",
+                "a/c/e.pyi",
+                "a/.dotfile.py",
+                "a/__pycache__/g.py",
+                "a/__pycache__/h.pyi",
+            ],
+        )
+        .unwrap();
+        glob_files_match(
+            "**/a/**",
+            &[
+                // "a/b.py",
+                "a/c/d.py",
+                "a/c/e.pyi",
+                // "a/.dotfile.py",
+                "a/__pycache__/g.py",
+                "a/__pycache__/h.pyi",
+            ],
+        )
+        .unwrap();
+        glob_files_match(
+            "**/a/*",
+            &[
+                "a/b.py",
+                "a/c/d.py",
+                "a/c/e.pyi",
+                "a/__pycache__/g.py",
+                "a/__pycache__/h.pyi",
+                "a/.dotfile.py",
+            ],
+        )
+        .unwrap();
+
+        glob_files_match("**/c", &["a/c/d.py", "a/c/e.pyi", "c/j/k.py"]).unwrap();
+        glob_files_match(
+            "**/c/**",
+            &[
+                // "a/c/d.py",
+                // "a/c/e.pyi",
+                "c/j/k.py",
+            ],
+        )
+        .unwrap();
+        glob_files_match("a/c", &["a/c/d.py", "a/c/e.pyi"]).unwrap();
+
+        assert!(glob_files_match("l", &[]).is_err());
+        glob_files_match("*l", &["also_has_l/m.py"]).unwrap();
+        glob_files_match("*l*", &["l.py", "also_has_l/m.py"]).unwrap();
+        glob_files_match(
+            "?",
+            &[
+                "a/b.py",
+                "a/c/d.py",
+                "a/c/e.pyi",
+                "a/.dotfile.py",
+                "a/__pycache__/g.py",
+                "a/__pycache__/h.pyi",
+                "c/j/k.py",
+            ],
+        )
+        .unwrap();
     }
 }

@@ -70,6 +70,8 @@ the config is invalid.
       well.
     - When a `project_includes` pattern does not match any files, we will return
       an error.
+    - If you get an error about no matches for a directory when passing a glob as a CLI
+      argument, try wrapping the glob in quotes to prevent eager shell glob expansion.
 - `project_excludes`: the glob patterns used to describe which files to avoid
   type checking, usually as a more fine-grained way of controlling the files you
   get type errors on.
@@ -90,6 +92,8 @@ the config is invalid.
     - When passing in `FILES...`, we also do not consult the config file for
       what to use for `project_excludes`. If `project_excludes` should not use
       the default value, override it with a flag as well.
+    - If you get an error about no matches for a directory when passing a glob as a CLI
+      argument, try wrapping the glob in quotes to prevent eager shell glob expansion.
 - `search_path`: a file path describing a root from which imports should be
   found and imported from (including modules in `project_includes`). This takes
   the highest precedence in import order, before `typeshed` and
