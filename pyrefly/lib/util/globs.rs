@@ -9,6 +9,7 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::fmt::Display;
 use std::path::Component;
+use std::path::MAIN_SEPARATOR_STR;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -17,6 +18,8 @@ use itertools::Itertools;
 use path_absolutize::Absolutize;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de;
+use serde::de::Visitor;
 use starlark_map::small_set::SmallSet;
 
 use crate::util::fs_anyhow;
@@ -24,20 +27,25 @@ use crate::util::listing::FileList;
 use crate::util::prelude::SliceExt;
 use crate::util::prelude::VecExt;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Default)]
 pub struct Glob(PathBuf);
 
 impl Glob {
     /// Create a new `Glob`, but do not do absolutizing (since we don't want to do
     /// that until rewriting with a root)
-    pub fn new(pattern: String) -> Self {
+    pub fn new(mut pattern: String) -> Self {
+        if pattern.ends_with("**") {
+            pattern.push_str(&format!("{MAIN_SEPARATOR_STR}*"));
+        } else if pattern.ends_with("**/") || pattern.ends_with(r"**\") {
+            pattern.push('*');
+        }
         Self(PathBuf::from(pattern))
     }
 
     /// Create a new `Glob`, with the pattern relative to `root`.
     /// `root` should be an absolute path.
     pub fn new_with_root(root: &Path, pattern: String) -> Self {
-        Self(Self::pattern_relative_to_root(root, Path::new(&pattern)))
+        Self::new(pattern).from_root(root)
     }
 
     /// Rewrite the current `Glob` relative to `root`.
@@ -134,6 +142,33 @@ impl Glob {
 impl Display for Glob {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0.display())
+    }
+}
+
+impl<'de> Deserialize<'de> for Glob {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct GlobVisitor;
+
+        impl<'de> Visitor<'de> for GlobVisitor {
+            type Value = Glob;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("glob")
+            }
+
+            fn visit_string<E: de::Error>(self, value: String) -> Result<Self::Value, E> {
+                Ok(Glob::new(value))
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                self.visit_string(v.to_owned())
+            }
+        }
+
+        deserializer.deserialize_string(GlobVisitor)
     }
 }
 
@@ -342,6 +377,7 @@ mod tests {
             "a/b*/c",
             "a/b/*.txt",
             "/**",
+            "/**/",
             "/absolute/path/**/files",
         ];
         if cfg!(windows) {
@@ -382,10 +418,14 @@ mod tests {
                 "/my/path/to/a/b/c.txt",
                 "/my/path/to/a/b*/c",
                 "/my/path/to/a/b/*.txt",
-                "/**",
+                "/**/*",
+                "/**/*",
                 "/absolute/path/**/files",
             ],
-            vec![r"c:\absolute\path\**", r"c:\my\path\to\relative\path\**"],
+            vec![
+                r"c:\absolute\path\**\*",
+                r"c:\my\path\to\relative\path\**\*",
+            ],
         );
         if cfg!(windows) {
             f(
@@ -399,10 +439,14 @@ mod tests {
                     r"c:\my\path\to\a\b\c.txt",
                     r"c:\my\path\to\a\b*\c",
                     r"c:\my\path\to\a\b\*.txt",
-                    r"c:\**",
+                    r"c:\**\*",
+                    r"c:\**\*",
                     r"c:\absolute\path\**\files",
                 ],
-                vec![r"c:\absolute\path\**", r"c:\my\path\to\relative\path\**"],
+                vec![
+                    r"c:\absolute\path\**\*",
+                    r"c:\my\path\to\relative\path\**\*",
+                ],
             );
             f(
                 r"d:\my\path\to",
@@ -415,10 +459,14 @@ mod tests {
                     r"d:\my\path\to\a\b\c.txt",
                     r"d:\my\path\to\a\b*\c",
                     r"d:\my\path\to\a\b\*.txt",
-                    r"d:\**",
+                    r"d:\**\*",
+                    r"d:\**\*",
                     r"d:\absolute\path\**\files",
                 ],
-                vec![r"c:\absolute\path\**", r"c:\my\path\to\relative\path\**"],
+                vec![
+                    r"c:\absolute\path\**\*",
+                    r"c:\my\path\to\relative\path\**\*",
+                ],
             );
         }
     }
@@ -619,25 +667,9 @@ mod tests {
             "also_has_l/m.py",
         ];
 
-        // TODO(connernilsen): all below files/tests should be uncommented
         glob_files_match("", all_valid_files).unwrap();
         glob_files_match(".", all_valid_files).unwrap();
-        glob_files_match(
-            "**",
-            // should be all_valid_files
-            &[
-                "a/b.py",
-                "a/c/d.py",
-                "a/c/e.pyi",
-                "a/.dotfile.py",
-                "a/__pycache__/g.py",
-                "a/__pycache__/h.pyi",
-                "c/j/k.py",
-                // "l.py",
-                "also_has_l/m.py",
-            ],
-        )
-        .unwrap();
+        glob_files_match("**", all_valid_files).unwrap();
         glob_files_match("**/*", all_valid_files).unwrap();
 
         glob_files_match(
@@ -705,10 +737,10 @@ mod tests {
         glob_files_match(
             "**/a/**",
             &[
-                // "a/b.py",
+                "a/b.py",
                 "a/c/d.py",
                 "a/c/e.pyi",
-                // "a/.dotfile.py",
+                "a/.dotfile.py",
                 "a/__pycache__/g.py",
                 "a/__pycache__/h.pyi",
             ],
@@ -729,15 +761,7 @@ mod tests {
 
         glob_files_match("**/c", &["a/c/d.py", "a/c/e.pyi", "c/j/k.py"]).unwrap();
         glob_files_match("**/c/", &["a/c/d.py", "a/c/e.pyi", "c/j/k.py"]).unwrap();
-        glob_files_match(
-            "**/c/**",
-            &[
-                // "a/c/d.py",
-                // "a/c/e.pyi",
-                "c/j/k.py",
-            ],
-        )
-        .unwrap();
+        glob_files_match("**/c/**", &["a/c/d.py", "a/c/e.pyi", "c/j/k.py"]).unwrap();
         glob_files_match("a/c", &["a/c/d.py", "a/c/e.pyi"]).unwrap();
 
         assert!(glob_files_match("l", &[]).is_err());
