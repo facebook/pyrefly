@@ -9,6 +9,7 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::fmt::Display;
 use std::path::Component;
+use std::path::MAIN_SEPARATOR;
 use std::path::MAIN_SEPARATOR_STR;
 use std::path::Path;
 use std::path::PathBuf;
@@ -122,20 +123,25 @@ impl Glob {
     }
 
     /// Returns true if the given file matches any of the contained globs.
-    /// We always attempt to append `**` if a pattern ends in `/` in case
+    /// We always attempt to append `**` in case
     /// the pattern is meant to be a directory wildcard.
     pub fn matches(&self, file: &Path) -> anyhow::Result<bool> {
         let pattern_path = &self.0;
         let mut pattern_str = pattern_path.to_string_lossy().to_string();
-        if pattern_str.ends_with("/") {
-            pattern_str.push_str("**");
-        }
         let pattern = glob::Pattern::new(&pattern_str)
             .with_context(|| format!("When resolving pattern `{pattern_str}`"))?;
         if pattern.matches_path(file) {
             return Ok(true);
         }
-        Ok(false)
+        if !pattern_str.ends_with(['/', '\\']) {
+            pattern_str.push(MAIN_SEPARATOR);
+        }
+        pattern_str.push_str("**");
+        // don't return an error if we fail to construct a glob here, since it's something
+        // we automatically attempted and failed at. We should ignore failure here, since
+        // we attempted to do this automatically, and the pattern we're constructing should be valid
+        // (i.e. the previous pattern we constructed should have failed before we get to here).
+        Ok(glob::Pattern::new(&pattern_str).is_ok_and(|pattern| pattern.matches_path(file)))
     }
 }
 
@@ -510,7 +516,7 @@ mod tests {
         assert!(!patterns.matches(Path::new("just/a/regular.file")).unwrap());
         assert!(!patterns.matches(Path::new("file/with/a.dot")).unwrap());
         assert!(
-            !Globs::new(vec!["**/__pycache__".to_owned()])
+            Globs::new(vec!["**/__pycache__".to_owned()])
                 .matches(Path::new("__pycache__/some/file.pyc"))
                 .unwrap()
         );
@@ -520,7 +526,7 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            !Globs::new(vec!["**/__pycache__".to_owned()])
+            Globs::new(vec!["**/__pycache__".to_owned()])
                 .matches(Path::new("__pycache__/"))
                 .unwrap()
         );
@@ -562,10 +568,10 @@ mod tests {
             );
         }
 
-        // TODO(connernilsen): all of these should be uncommented and pass
-
-        // glob_matches("path/to", true);
-        // glob_matches("path/to/", true);
+        glob_matches("path/to", true);
+        glob_matches("path/to/", true);
+        glob_matches("path/to/my", true);
+        glob_matches("path/to/my/", true);
         glob_matches("path/to/m", false);
         glob_matches("path/to/m*", true);
 
@@ -578,12 +584,12 @@ mod tests {
         glob_matches("path/to/my/f*", true);
         glob_matches("path/to/my/*e*", true);
 
-        // glob_matches("", true);
-        // glob_matches("..", true);
+        glob_matches("", true);
+        glob_matches("..", true);
         glob_matches("../**", true);
-        // glob_matches(".", true);
+        glob_matches(".", true);
         glob_matches("./**", true);
-        // glob_matches("path/to/./my", true);
+        glob_matches("path/to/./my", true);
         glob_matches("path/to/./my/**", true);
         glob_matches("*", true);
         glob_matches("**", true);
