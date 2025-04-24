@@ -1,0 +1,63 @@
+---
+title: Migrating from Pyright
+
+description: How to switch from Pyright to Pyrefly
+---
+
+# Running Pyrefly
+
+Like pyright, pyrefly can be given a list of files to check:
+
+```sh
+$ pyrefly check file1.py file2.py
+```
+
+The easiest way to run pyrefly on all files in a project is to run it from the project root:
+
+```sh
+$ cd your/project
+$ pyrefly check
+```
+
+Pyrefly doesn't need a config file to start checking your code. Its sensible defaults are designed to work well for most projects.
+However, projects with existing pyright configs may want to configure pyrefly to suit their own needs.
+
+# Pyright Config Migration
+
+To make it as easy as possible to get started with pyrefly, we've provided a script for automatically migrating a pyright config to pyrefly.
+
+```sh
+$ pyrefly config-migration path/to/your/pyrightconfig.json
+```
+
+This will load your existing `pyrightconfig.json` and transform it into a `pyrefly.toml` while preserving as many options as possible. See `config-migration --help` for more options.
+
+There is a significant overlap between pyright's and pyrefly's configuration options, so migration is pretty straightforward. However, it may be worth checking the generated config for errors, just in case.
+
+If you'd rather start fresh with a hand-written config, please see the [pyrefly configuration docs](../configuration). If you run into any issues with config migration, please [let us know](https://github.com/facebook/pyrefly/issues)!
+
+## Config Migration Details
+
+When it comes to listing files, pyright uses just paths, while pyrefly supports glob patterns. Thankfully, paths are a subset of glob patterns, so pyrefly can just use the paths as-is. You could consider manually simplifying the paths into glob patterns, but it's not necessary.
+
+Pyright supports four platforms: Windows, Linux, Darwin (macOS), and All. Since pyrefly only supports Python's [supported platforms](https://docs.python.org/3/library/sys.html#sys.platform), we choose to treat "All" as "linux".
+
+# Silencing Errors
+
+Like pyright, pyrefly has ways to silence specific error codes. Full details can be found in the [Error Suppression docs](../error-suppresions).
+
+To silence an error on a specific line, add a disable comment above that line:
+
+```
+# pyrefly: ignore
+x: str = 1
+```
+
+To suppress all instances of an error, disable that error in the config:
+
+```
+[errors]
+import-error = false
+```
+
+This is similar to pyright's [type check rule overrides](https://microsoft.github.io/pyright/#/configuration?id=type-check-rule-overrides), though of course the [error codes](../error-kinds) are different!

@@ -35,14 +35,12 @@ function getNavBarItems() {
             label: 'Sandbox',
             position: 'left' as const,
         },
-        // TODO (T221099224) remove this check when we are ready to publish Installation doc to public
-        process.env.INTERNAL_STATIC_DOCS === '1' ?
         {
-            to: 'en/docs/fb/installation/',
-            activeBasePath: 'en/docs/fb/installation',
+            to: 'en/docs/installation/',
+            activeBasePath: 'en/docs/installation',
             label: 'Install',
             position: 'left' as const,
-        } : null,
+        },
         // Please keep GitHub link to the right for consistency.
         {
             href: 'https://github.com/facebook/pyrefly',
