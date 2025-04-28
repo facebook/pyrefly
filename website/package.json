@@ -34,7 +34,7 @@
     "@stylexjs/webpack-plugin": "^0.11.1",
     "@svgr/webpack": "8.1.0",
     "clsx": "^1.2.1",
-    "docusaurus-plugin-internaldocs-fb": "^1.19.1",
+    "docusaurus-plugin-internaldocs-fb": "^3.2.4",
     "esbuild": "0.25.0",
     "file-loader": "^6.2.0",
     "http-proxy-middleware": "2.0.9",
