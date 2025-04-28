@@ -50,6 +50,28 @@ impl PyrightConfig {
     }
 }
 
+#[derive(thiserror::Error, Debug)]
+#[error("No [tool.pyright] section found in pyproject.toml")]
+pub struct PyrightNotFoundError {}
+
+pub fn parse_pyproject_toml(raw_file: &str) -> anyhow::Result<ConfigFile> {
+    #[derive(Deserialize)]
+    struct Tool {
+        pyright: Option<PyrightConfig>,
+    }
+
+    #[derive(Deserialize)]
+    struct PyProject {
+        tool: Option<Tool>,
+    }
+
+    toml::from_str::<PyProject>(raw_file)?
+        .tool
+        .and_then(|tool| tool.pyright)
+        .ok_or(anyhow::anyhow!(PyrightNotFoundError {}))
+        .map(PyrightConfig::convert)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,5 +148,35 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_convert_from_pyproject() -> anyhow::Result<()> {
+        // From https://microsoft.github.io/pyright/#/configuration?id=sample-pyprojecttoml-file
+        let src = r#"[tool.pyright]
+include = ["src"]
+exclude = ["**/node_modules",
+    "**/__pycache__",
+    "src/experimental",
+    "src/typestubs"
+]
+ignore = ["src/oldstuff"]
+defineConstant = { DEBUG = true }
+stubPath = "src/stubs"
+
+reportMissingImports = "error"
+reportMissingTypeStubs = false
+
+pythonVersion = "3.6"
+pythonPlatform = "Linux"
+
+executionEnvironments = [
+  { root = "src/web", pythonVersion = "3.5", pythonPlatform = "Windows", extraPaths = [ "src/service_libs" ], reportMissingImports = "warning" },
+  { root = "src/sdk", pythonVersion = "3.0", extraPaths = [ "src/backend" ] },
+  { root = "src/tests", extraPaths = ["src/tests/e2e", "src/sdk" ]},
+  { root = "src" }
+]
+"#;
+        parse_pyproject_toml(src).map(|_| ())
     }
 }

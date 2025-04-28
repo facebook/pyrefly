@@ -699,3 +699,15 @@ def varargs_kwargs_bad(*args: int, x: int, **kwargs: int) -> None: ...
 foo(varargs_kwargs_bad)  # E: not assignable to parameter `f`
 "#,
 );
+
+testcase!(
+    test_call_self,
+    r#"
+from typing import assert_type
+class Foo:
+    def __call__(self, a: int) -> int:
+        return a
+    def bar(self, b: int) -> None:
+        assert_type(self(b), int)
+    "#,
+);

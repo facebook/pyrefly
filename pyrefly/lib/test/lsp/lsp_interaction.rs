@@ -45,6 +45,7 @@ fn run_test_lsp(test_case: TestCase) {
     let args = Args {
         search_path: test_case.search_path,
         site_package_path: Vec::new(),
+        experimental_project_path: Vec::new(),
     };
     // language_client_sender is used to send messages to the language client
     // language_client_receiver sees messages sent to the language client
@@ -259,6 +260,8 @@ fn get_initialize_responses() -> Vec<Message> {
             "capabilities": {
                 "completionProvider": { "triggerCharacters": ["."]},
                 "definitionProvider": true,
+                "documentHighlightProvider":true,
+                "documentSymbolProvider":true,
                 "hoverProvider": true,
                 "inlayHintProvider": true,
                 "textDocumentSync": 1

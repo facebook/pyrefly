@@ -384,7 +384,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Expr::EllipsisLiteral(_) => Type::type_form(Type::callable_ellipsis(ret)),
                     name @ Expr::Name(_) => {
                         let ty = self.expr_untype(name, TypeFormContext::TypeArgument, errors);
-                        Type::type_form(Type::callable_param_spec(ty, ret))
+                        if ty.is_kind_param_spec() {
+                            Type::type_form(Type::callable_param_spec(ty, ret))
+                        } else {
+                            self.error(errors, name.range(),ErrorKind::BadSpecialization, None, format!("Callable types can only have `ParamSpec` in this position, got `{}`", self.for_display(ty)));
+                            Type::type_form(Type::callable_ellipsis(Type::any_error()))
+                        }
                     }
                     x @ Expr::Subscript(_) => {
                         let ty = self.expr_untype(x, TypeFormContext::TypeArgument, errors);

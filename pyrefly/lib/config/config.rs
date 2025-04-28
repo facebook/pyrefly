@@ -269,6 +269,23 @@ impl ConfigFile {
         self.root.ignore_errors_in_generated_code.unwrap()
     }
 
+    #[expect(dead_code)]
+    /// Filter to sub configs whose matches succeed for the given `path`,
+    /// then return the first non-None value the getter returns, or None
+    /// if a non-empty value can't be found.
+    fn get_from_sub_configs<'a, T>(
+        &'a self,
+        getter: impl Fn(&'a ConfigBase) -> Option<T>,
+        path: &Path,
+    ) -> Option<T> {
+        self.sub_configs.iter().find_map(|c| {
+            if c.matches.matches(path).ok()? {
+                return getter(&c.settings);
+            }
+            None
+        })
+    }
+
     /// Configures values that must be updated *after* overwriting with CLI flag values,
     /// which should probably be everything except for `PathBuf` or `Globs` types.
     pub fn configure(&mut self) {

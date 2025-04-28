@@ -72,12 +72,12 @@ section if it exists, otherwise it will assume a default config.
 The same errors will be returned as when loading a `pyrefly.toml` if
 the config is invalid.
 
-# Configuration Options
+## Configuration Options
 
 The following section lists all recognized options that can be specified in a config
 file or `pyproject.toml` Pyrefly config section.
 
-## `project_includes`
+### `project_includes`
 
 The glob patterns used to describe which files to type
 check, typically understood as user-space files.
@@ -101,7 +101,7 @@ import should be resolved from. See [`search_path`](#search_path) instead.
   - If you get an error about no matches for a directory when passing a glob as a CLI
     argument, try wrapping the glob in quotes to prevent eager shell glob expansion.
 
-## `project_excludes`
+### `project_excludes`
 
 The glob patterns used to describe which files to avoid
 type checking as way to filter files that match `project_includes`,
@@ -121,10 +121,10 @@ but we don't want to type check.
     the default value, override it with a flag as well. When no `FILES...` are passed,
     `project_excludes` overrides the config's value.
 
-## `search_path`
+### `search_path`
 
 A file path describing the roots from which imports should be
-found and imported from (including modules in [`project_includes`](#project-includes)). This takes
+found and imported from (including modules in [`project_includes`](#project_includes)). This takes
 the [highest precedence in import order](./import-resolution.mdx#absolute-imports),
 before `typeshed` and [`site_package_path`](#site_package_path). When a `project_includes`
 type checked file is imported by another type checked file, we check all search roots to
@@ -145,7 +145,7 @@ determine how to import it.
     [Import Resolution](./import-resolution.mdx)
     for more information about how modules are imported.
 
-## `site_package_path`
+### `site_package_path`
 
 A file path describing a root from which imports should
 be found and imported from. This takes the lowest priority in import
@@ -170,7 +170,7 @@ testing specific behavior, or having trouble with [Environment Autoconfiguration
 Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
 to be reused between different systems and platforms.
 
-## `python_platform`
+### `python_platform`
 
 The value used with conditions based on type checking
 against
@@ -184,7 +184,7 @@ values.
 - ENV equivalent: `PYREFLY_PYTHON_PLATFORM`
 - Equivalent configs: `pythonPlatform` in Pyright, `platform` in mypy
 
-## `python_version`
+### `python_version`
 
 The value used with conditions based on type checking
 against
@@ -199,7 +199,7 @@ micro can be omitted to take the default positional value.
 - ENV equivalent: `PYREFLY_PYTHON_VERSION`
 - Equivalent configs: `pythonVersion` in Pyright, `python_version` in mypy
 
-## `python_interpreter`
+### `python_interpreter`
 
 The Python interpreter to query when attempting to autoconfigure
 Python environment values (`site_package_path`, `python_platform`, `python_version`).
@@ -219,7 +219,7 @@ testing specific behavior, or having trouble with [Environment Autoconfiguration
 Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
 to be reused between different systems and platforms.
 
-## `errors`
+### `errors`
 
 Configure (enable and disable) the errors Pyrefly emits. `true` (default) tells Pyrefly to
 emit the error, while `false` tells Pyrefly to hide it.
@@ -238,7 +238,7 @@ emit the error, while `false` tells Pyrefly to hide it.
 - Notes: setting `<error-code> = true` is the same as having no error code configuration present, which means
   the error will be shown. Setting `<error-code> = false` will disable the error for type checking.
 
-## `replace_imports_with_any`
+### `replace_imports_with_any`
 
 [`ModuleGlob`](#module-globbing)s of modules from which import errors should be
 ignored, and the module should be replaced with `typing.Any`. For example, with
@@ -255,7 +255,7 @@ information will still be replaced with `typing.Any`.
   - `errors = {import-error = false}` (TOML inline table for `errors`) has similar behavior in Pyrefly, but ignores
     *all* import errors instead of import errors from specific modules, and won't replace findable modules with `typing.Any`.
 
-## `ignore_errors_in_generated_code`
+### `ignore_errors_in_generated_code`
 
 Whether to ignore type errors in generated code. If enabled, generated files
 will be treated as if they are included in `project_excludes`.
@@ -268,7 +268,7 @@ the substring '<span>&#64;</span>generated'.
 - ENV equivalent: `IGNORE_ERRORS_IN_GENERATED_CODE`
 - Equivalent configs: none
 
-## `use_untyped_imports`
+### `use_untyped_imports`
 
 Whether to search imports in [`site_package_path`](#site_package_path) that do not have a
 `py.typed` file unconditionally. When this is true, we skip any checks for `py.typed` files,
@@ -282,7 +282,7 @@ more information on when a `site_package_path` cannot be used for typing informa
 - ENV equivalent: none
 - Equivalent configs: `useLibraryCodeForTypes` in Pyright, `follow_untyped_imports` in mypy
 
-## `ignore_missing_source`
+### `ignore_missing_source`
 
 Whether to skip the check for a non-stubs package when a `-stubs` package is found in
 [`site_package_path`](#site_package_path). When this is true, we immediately return
@@ -294,13 +294,13 @@ and that at runtime you may not actually be able to import the given package, ev
 type stubs could be found. See
 [Stub Files vs Source Files](./import-resolution.mdx#stub-files-vs-source-files) for more information.
 
-# Configuration Details
+## Configuration Details
 
 This section describes some of the configuration options, behaviors, or types in more depth, when
 there are details shared between multiple config options or the information is more than what
 can fit under a single config option description.
 
-## Environment Autoconfiguration
+### Environment Autoconfiguration
 
 If any of [`python_platform`](#python_platform), [`python_version`](#python_version), or
 [`site_package_path`](#site_package_path) are empty, we attempt to query an interpreter
@@ -313,7 +313,7 @@ The values queried from the interpreter are:
 * `python_version`: `sys.version_info[:3]`
 * `site_package_path`: `site.getsitepackages() + [site.getusersitepackages()]`
 
-## Filesystem Globbing
+### Filesystem Globbing
 
 We use a standard Unix-style glob, which allows for wildcard matching when specifying a fileset. It is similar
 to regex, but more restricted given the subset of allowed syntax for paths on a filesystem. We currently only
@@ -345,7 +345,7 @@ Examples:
 - `src/**/tests`, `src/**/tests/`, `src/**/tests/**`, and `src/**/tests/**/*`: match all `.py` and `.pyi` files in `src/`
   under a directory named `tests`
 
-## Module Globbing
+### Module Globbing
 
 In some config options, we've added globbing for module paths. This is different from both path globs and regex,
 in the sense that we're performing a match on a Python dotted import, such as `this.is.any.module`.
@@ -370,12 +370,12 @@ Examples:
   - `this.is.my.module`
   - `this.is`
 
-# Example Configuration
+## Example Configuration
 
 This section displays an example config showing the usage of all config options listed above to make creating
 your own easier, and to give you an easy place to start.
 
-## Default `pyrefly.toml`
+### Default `pyrefly.toml`
 
 This is a configuration with the Pyrefly defaults. If you have an
 interpreter installed, some of these values may be overridden.
@@ -403,7 +403,7 @@ ignore_missing_source = false
 [errors]
 ```
 
-## Example `pyrefly.toml`
+### Example `pyrefly.toml`
 
 ```toml
 #### configuring what to type check and where to import from
@@ -432,7 +432,7 @@ bad-assignment = false
 invalid-argument = false
 ```
 
-## Example `pyproject.toml`
+### Example `pyproject.toml`
 
 ```toml
 ...

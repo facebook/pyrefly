@@ -17,7 +17,6 @@ use tracing::info;
 
 use crate::commands::run::CommandExitStatus;
 use crate::config::config::ConfigFile;
-use crate::config::error::ErrorConfigs;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
 use crate::error::legacy::LegacyErrors;
@@ -81,8 +80,8 @@ fn compute_errors(sys_info: SysInfo, sourcedb: BuckSourceDatabase) -> Vec<Error>
     state.run(&modules_to_check, Require::Exports, None);
     let transaction = state.transaction();
     transaction
-        .get_loads(modules_to_check.iter().map(|(handle, _)| handle))
-        .collect_errors(&ErrorConfigs::default())
+        .get_errors(modules_to_check.iter().map(|(handle, _)| handle))
+        .collect_errors()
         .shown
 }
 

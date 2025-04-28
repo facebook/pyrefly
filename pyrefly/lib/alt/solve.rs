@@ -46,7 +46,6 @@ use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::EmptyAnswer;
-use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::FunctionSource;
 use crate::binding::binding::Initialized;
 use crate::binding::binding::IsAsync;
@@ -60,13 +59,13 @@ use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::SuperStyle;
 use crate::binding::binding::TypeParameter;
 use crate::binding::binding::UnpackedPosition;
+use crate::binding::narrow::identifier_and_chain_for_attribute;
 use crate::dunder;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
-use crate::error::style::ErrorStyle;
 use crate::module::short_identifier::ShortIdentifier;
 use crate::ruff::ast::Ast;
 use crate::types::annotation::Annotation;
@@ -239,6 +238,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 annotation: Annotation::new_type(x.clone()),
             }),
         }
+    }
+
+    pub fn is_subset_eq(&self, got: &Type, want: &Type) -> bool {
+        self.solver().is_subset_eq(got, want, self.type_order())
     }
 
     fn expr_qualifier(
@@ -474,63 +477,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn iterate_instance(
-        &self,
-        iterable: &Type,
-        context: &impl Fn() -> ErrorContext,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) -> Vec<Iterable> {
-        let ty = self
-            .unwrap_iterable(iterable)
-            .or_else(|| {
-                let int_ty = self.stdlib.int().clone().to_type();
-                let arg = CallArg::Type(&int_ty, range);
-                self.call_method(
-                    iterable,
-                    &dunder::GETITEM,
-                    range,
-                    &[arg],
-                    &[],
-                    errors,
-                    Some(context),
-                )
-            })
-            .unwrap_or_else(|| {
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::NotIterable,
-                    None,
-                    context().format(),
-                )
-            });
-        vec![Iterable::OfType(ty)]
-    }
-
-    fn iterate_class(
-        &self,
-        cls: &Class,
-        context: &impl Fn() -> ErrorContext,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) -> Vec<Iterable> {
-        // Class objects should be treated like instances of their metaclasses.
-        let metadata = self.get_metadata_for_class(cls);
-        let metaclass = metadata.metaclass();
-        if let Some(metaclass) = metaclass {
-            self.iterate_instance(&Type::ClassType(metaclass.clone()), &context, range, errors)
-        } else {
-            vec![Iterable::OfType(self.error(
-                errors,
-                range,
-                ErrorKind::NotIterable,
-                None,
-                context().format(),
-            ))]
-        }
-    }
-
     /// Given an `iterable` type, determine the iteration type; this is the type
     /// of `x` if we were to loop using `for x in iterable`.
     pub fn iterate(
@@ -554,11 +500,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .iter()
                 .flat_map(|t| self.iterate(t, range, errors))
                 .collect(),
-            Type::ClassDef(cls) => self.iterate_class(cls, &context, range, errors),
-            Type::Type(box Type::ClassType(cls)) => {
-                self.iterate_class(cls.class_object(), &context, range, errors)
+            _ => {
+                let ty = self
+                    .unwrap_iterable(iterable)
+                    .or_else(|| {
+                        let int_ty = self.stdlib.int().clone().to_type();
+                        let arg = CallArg::Type(&int_ty, range);
+                        self.call_magic_dunder_method(
+                            iterable,
+                            &dunder::GETITEM,
+                            range,
+                            &[arg],
+                            &[],
+                            errors,
+                            Some(&context),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::NotIterable,
+                            None,
+                            context().format(),
+                        )
+                    });
+                vec![Iterable::OfType(ty)]
             }
-            _ => self.iterate_instance(iterable, &context, range, errors),
         }
     }
 
@@ -605,11 +573,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let base_exception_class_type = Type::ClassDef(base_exception_class.class_object().dupe());
         let base_exception_type = base_exception_class.clone().to_type();
         let expected_types = vec![base_exception_type, base_exception_class_type];
-        if !self.solver().is_subset_eq(
-            &actual_type,
-            &Type::Union(expected_types),
-            self.type_order(),
-        ) {
+        if !self.is_subset_eq(&actual_type, &Type::Union(expected_types)) {
             self.error(
                 errors,
                 range,
@@ -1183,31 +1147,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
             }
-            BindingExpect::CheckAssignToAttribute(box (attr, ExprOrBinding::Binding(got))) => {
-                let base = self.expr_infer(&attr.value, errors);
-                let got = self.solve_binding(got, errors);
-                self.check_attr_set_with_type(
-                    base,
-                    &attr.attr.id,
-                    got.ty(),
-                    attr.range,
-                    errors,
-                    None,
-                    "Answers::solve_expectation::CheckAssignTypeToAttribute",
-                );
-            }
-            BindingExpect::CheckAssignToAttribute(box (attr, ExprOrBinding::Expr(value))) => {
-                let base = self.expr_infer(&attr.value, errors);
-                self.check_attr_set_with_expr(
-                    base,
-                    &attr.attr.id,
-                    value,
-                    attr.range,
-                    errors,
-                    None,
-                    "Answers::solve_expectation::CheckAssignExprToAttribute",
-                );
-            }
         }
         Arc::new(EmptyAnswer)
     }
@@ -1431,10 +1370,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Restriction::Constraints(constraints) => {
                 // Default must exactly match one of the constraints
-                if !constraints.iter().any(|c| {
-                    self.solver().is_subset_eq(c, default, self.type_order())
-                        && self.solver().is_subset_eq(default, c, self.type_order())
-                }) {
+                if !constraints
+                    .iter()
+                    .any(|c| self.is_subset_eq(c, default) && self.is_subset_eq(default, c))
+                {
                     let formatted_constraints = constraints
                         .iter()
                         .map(|x| format!("`{}`", x))
@@ -1539,6 +1478,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.get_idx(*default);
                 self.binding_to_type_info(binding, errors)
             }
+            Binding::AssignToAttribute(box (attr, got)) => {
+                let base = self.expr_infer(&attr.value, errors);
+                let narrowed = self.check_assign_to_attribute_and_infer_narrow(
+                    &base,
+                    &attr.attr.id,
+                    got,
+                    attr.range,
+                    errors,
+                );
+                if let Some((identifier, chain)) = identifier_and_chain_for_attribute(attr) {
+                    let mut type_info = self
+                        .get(&Key::Usage(ShortIdentifier::new(&identifier)))
+                        .arc_clone();
+                    type_info.update_for_assignment(chain.names(), narrowed);
+                    type_info
+                } else {
+                    // Placeholder: in this case, we're assigning to an anonymous base and the
+                    // type info will not propagate anywhere.
+                    TypeInfo::of_ty(Type::never())
+                }
+            }
             _ => {
                 // All other Bindings model `Type` level operations where we do not
                 // propagate any attribute narrows.
@@ -1552,7 +1512,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::Forward(..)
             | Binding::Default(..)
             | Binding::Phi(..)
-            | Binding::Narrow(..) => {
+            | Binding::Narrow(..)
+            | Binding::AssignToAttribute(..) => {
                 // These forms require propagating attribute narrowing information, so they
                 // are handled in `binding_to_type_info`
                 self.binding_to_type_info(binding, errors).into_ty()
@@ -1936,10 +1897,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         e.ty(),
                                         *kind,
                                         TextRange::default(),
-                                        &ErrorCollector::new(
-                                            self.module_info().dupe(),
-                                            ErrorStyle::Never,
-                                        ),
+                                        &self.error_swallower(),
                                         None,
                                     );
                                     !context_catch(&res)
@@ -1985,11 +1943,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Some(base_exception_group_any_type) =
                         base_exception_group_any_type.as_ref()
                         && !exception.is_any()
-                        && self.solver().is_subset_eq(
-                            &exception,
-                            base_exception_group_any_type,
-                            self.type_order(),
-                        )
+                        && self.is_subset_eq(&exception, base_exception_group_any_type)
                     {
                         self.error(
                             errors,
@@ -2117,11 +2071,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         typed_dict.name(),
                                     ),
                                 )
-                            } else if !self.solver().is_subset_eq(
-                                &value_ty,
-                                &field.ty,
-                                self.type_order(),
-                            ) {
+                            } else if !self.is_subset_eq(&value_ty, &field.ty) {
                                 self.error(
                                     errors,
                                     x.range(),

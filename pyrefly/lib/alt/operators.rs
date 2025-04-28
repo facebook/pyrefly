@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use dupe::Dupe;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCompare;
@@ -21,6 +20,7 @@ use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
+use crate::alt::solve::Iterable;
 use crate::binding::binding::KeyAnnotation;
 use crate::dunder;
 use crate::error::collector::ErrorCollector;
@@ -28,7 +28,6 @@ use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
-use crate::error::style::ErrorStyle;
 use crate::graph::index::Idx;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
@@ -69,7 +68,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let mut first_call = None;
         for (dunder, target, arg) in calls {
-            let method_type_dunder = self.type_of_attr_get_if_found(
+            let method_type_dunder = self.type_of_magic_dunder_attr(
                 target,
                 dunder,
                 range,
@@ -80,7 +79,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let Some(method_type_dunder) = method_type_dunder else {
                 continue;
             };
-            let dunder_errors = ErrorCollector::new(self.module_info().dupe(), ErrorStyle::Delayed);
+            let dunder_errors = self.error_collector();
             let ret = self.callable_dunder_helper(
                 method_type_dunder,
                 range,
@@ -225,8 +224,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     self.stdlib.bool().clone().to_type()
                                 }
                                 CmpOp::In | CmpOp::NotIn => {
-                                    // `x in y` desugars to `y.__contains__(x)`
-                                    if let Some(ret) = self.call_method(
+                                    // See https://docs.python.org/3/reference/expressions.html#membership-test-operations.
+                                    // `x in y` first tries `y.__contains__(x)`, then checks if `x` matches an element
+                                    // obtained by iterating over `y`.
+                                    if let Some(ret) = self.call_magic_dunder_method(
                                         right,
                                         &dunder::CONTAINS,
                                         x.range,
@@ -238,13 +239,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         // Comparison method called.
                                         ret
                                     } else {
-                                        self.error(
-                                            errors,
-                                            x.range,
-                                            ErrorKind::UnsupportedOperand,
-                                            None,
-                                            context().format(),
-                                        );
+                                        let iteration_errors = self.error_collector();
+                                        let iterables =
+                                            self.iterate(right, x.range, &iteration_errors);
+                                        if !iteration_errors.is_empty()
+                                            || !iterables.iter().any(|iterable| match iterable {
+                                                Iterable::OfType(ty) => self.is_subset_eq(left, ty),
+                                                Iterable::FixedLen(ts) => {
+                                                    ts.iter().any(|t| self.is_subset_eq(left, t))
+                                                }
+                                            })
+                                        {
+                                            // Iterating `y` failed, or `x` does not match any of the produced types.
+                                            self.error(
+                                                errors,
+                                                x.range,
+                                                ErrorKind::UnsupportedOperand,
+                                                None,
+                                                context().format(),
+                                            );
+                                        }
                                         self.stdlib.bool().clone().to_type()
                                     }
                                 }

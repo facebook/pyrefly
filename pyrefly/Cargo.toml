@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly"
-version = "0.12.0"
+version = "0.13.0"
 authors = ["Meta"]
 edition = "2021"
 repository = "https://github.com/facebook/pyrefly"
@@ -21,7 +21,7 @@ anyhow = "1.0.95"
 append-only-vec = "0.1.2"
 argfile = "0.1.6"
 async-trait = "0.1.86"
-blake3 = { version = "=1.5.2", features = ["mmap", "rayon", "traits-preview"] }
+blake3 = { version = "=1.5.5", features = ["mmap", "rayon", "traits-preview"] }
 clap = { version = "4.5.30", features = ["derive", "env", "string", "unicode", "wrap_help"] }
 const-str = "0.4.3"
 convert_case = "0.6"
@@ -52,6 +52,7 @@ ruff_source_file = { git = "https://github.com/astral-sh/ruff/", rev = "3acf4e71
 ruff_text_size = { git = "https://github.com/astral-sh/ruff/", rev = "3acf4e716d5d1fb9bd1316dc268deb6824a300c8" }
 serde = { version = "1.0.185", features = ["derive", "rc"] }
 serde_json = { version = "1.0.140", features = ["float_roundtrip", "unbounded_depth"] }
+serde_with = { version = "1.14.0", features = ["hex", "json"] }
 starlark_map = "0.13.0"
 static_assertions = "1.1.0"
 static_interner = "0.1.1"

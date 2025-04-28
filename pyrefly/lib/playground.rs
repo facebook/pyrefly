@@ -15,7 +15,6 @@ use ruff_source_file::SourceLocation;
 use serde::Serialize;
 
 use crate::config::config::ConfigFile;
-use crate::config::error::ErrorConfigs;
 use crate::config::finder::ConfigFinder;
 use crate::module::module_info::SourceRange;
 use crate::module::module_name::ModuleName;
@@ -149,8 +148,8 @@ impl Playground {
     pub fn get_errors(&self) -> Vec<Diagnostic> {
         self.state
             .transaction()
-            .get_loads([&self.handle])
-            .collect_errors(&ErrorConfigs::default())
+            .get_errors([&self.handle])
+            .collect_errors()
             .shown
             .into_iter()
             .map(|e| {

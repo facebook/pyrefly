@@ -51,24 +51,36 @@ mod test;
 mod types;
 mod util;
 
-pub mod exported {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub use crate::commands::run;
-    pub use crate::config::base::ConfigBase;
-    pub use crate::config::config::ConfigFile;
-    pub use crate::config::environment::PythonEnvironment;
-    pub use crate::config::finder;
-    pub use crate::module::module_name::ModuleName;
-    pub use crate::module::module_path::ModulePath;
-    pub use crate::sys_info::PythonPlatform;
-    pub use crate::sys_info::PythonVersion;
-    pub use crate::util::arc_id::ArcId;
-    pub use crate::util::args::clap_env;
-    pub use crate::util::args::get_args_expanded;
-    pub use crate::util::globs;
-    pub use crate::util::listing::FileList;
-    pub use crate::util::notify_watcher::NotifyWatcher;
-    pub use crate::util::thread_pool::init_thread_pool;
-    pub use crate::util::trace::init_tracing;
-    pub use crate::util::watcher::Watcher;
+/// This interface is NOT stable and should not be relied upon.
+/// It will change during minor version increments.
+///
+/// We name it `library` many times to make it longer than our real imports, and thus
+/// to discourage Rust Analyzer from suggesting it for imports.
+/// See https://github.com/rust-lang/rust-analyzer/issues/19689.
+pub mod library {
+    pub mod library {
+        pub mod library {
+            pub mod library {
+                #[cfg(not(target_arch = "wasm32"))]
+                pub use crate::commands::run;
+                pub use crate::config::base::ConfigBase;
+                pub use crate::config::config::ConfigFile;
+                pub use crate::config::environment::PythonEnvironment;
+                pub use crate::config::finder;
+                pub use crate::module::module_name::ModuleName;
+                pub use crate::module::module_path::ModulePath;
+                pub use crate::sys_info::PythonPlatform;
+                pub use crate::sys_info::PythonVersion;
+                pub use crate::util::arc_id::ArcId;
+                pub use crate::util::args::clap_env;
+                pub use crate::util::args::get_args_expanded;
+                pub use crate::util::globs;
+                pub use crate::util::listing::FileList;
+                pub use crate::util::notify_watcher::NotifyWatcher;
+                pub use crate::util::thread_pool::init_thread_pool;
+                pub use crate::util::trace::init_tracing;
+                pub use crate::util::watcher::Watcher;
+            }
+        }
+    }
 }

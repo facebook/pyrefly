@@ -18,23 +18,24 @@ use anyhow::anyhow;
 use clap::Parser;
 use clap::Subcommand;
 use dupe::Dupe;
+use library::ArcId;
+use library::ConfigFile;
+use library::ModuleName;
+use library::ModulePath;
+use library::NotifyWatcher;
+use library::clap_env;
+use library::finder::ConfigFinder;
+use library::get_args_expanded;
+use library::globs::FilteredGlobs;
+use library::globs::Globs;
+use library::run::BuckCheckArgs;
+use library::run::CheckArgs;
+use library::run::CommandExitStatus;
+use library::run::CommonGlobalArgs;
+use library::run::ConfigMigrationArgs;
+use library::run::LspArgs;
 use path_absolutize::Absolutize;
-use pyrefly::exported::ArcId;
-use pyrefly::exported::ConfigFile;
-use pyrefly::exported::ModuleName;
-use pyrefly::exported::ModulePath;
-use pyrefly::exported::NotifyWatcher;
-use pyrefly::exported::clap_env;
-use pyrefly::exported::finder::ConfigFinder;
-use pyrefly::exported::get_args_expanded;
-use pyrefly::exported::globs::FilteredGlobs;
-use pyrefly::exported::globs::Globs;
-use pyrefly::exported::run::BuckCheckArgs;
-use pyrefly::exported::run::CheckArgs;
-use pyrefly::exported::run::CommandExitStatus;
-use pyrefly::exported::run::CommonGlobalArgs;
-use pyrefly::exported::run::ConfigMigrationArgs;
-use pyrefly::exported::run::LspArgs;
+use pyrefly::library::library::library::library;
 use tracing::debug;
 use tracing::info;
 
@@ -104,7 +105,7 @@ fn exit_on_panic() {
 }
 
 async fn run_check(
-    args: pyrefly::exported::run::CheckArgs,
+    args: library::run::CheckArgs,
     watch: bool,
     files_to_check: FilteredGlobs,
     config_finder: ConfigFinder,
@@ -123,7 +124,7 @@ async fn run_check(
     }
 }
 
-fn config_finder(args: pyrefly::exported::run::CheckArgs) -> ConfigFinder {
+fn config_finder(args: library::run::CheckArgs) -> ConfigFinder {
     let args = Arc::new(args);
     let args2 = args.dupe();
     let default = LazyLock::new(move || ArcId::new(args.override_config(ConfigFile::default())));
@@ -143,7 +144,7 @@ async fn run_check_on_project(
     watch: bool,
     config: Option<PathBuf>,
     project_excludes: Option<Vec<String>>,
-    args: pyrefly::exported::run::CheckArgs,
+    args: library::run::CheckArgs,
     allow_forget: bool,
 ) -> anyhow::Result<CommandExitStatus> {
     let config = match config {
@@ -183,7 +184,7 @@ async fn run_check_on_files(
     files_to_check: Globs,
     project_excludes: Option<Vec<String>>,
     watch: bool,
-    args: pyrefly::exported::run::CheckArgs,
+    args: library::run::CheckArgs,
     allow_forget: bool,
 ) -> anyhow::Result<CommandExitStatus> {
     let project_excludes =

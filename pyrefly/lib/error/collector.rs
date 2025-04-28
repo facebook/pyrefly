@@ -226,7 +226,7 @@ mod tests {
         );
         assert_eq!(
             errors
-                .collect(&ErrorConfig::default())
+                .collect(&ErrorConfig::new(&ErrorDisplayConfig::default(), false))
                 .shown
                 .map(|x| x.msg()),
             vec!["a", "b", "a"]
@@ -272,14 +272,12 @@ mod tests {
             None,
         );
 
-        let config = ErrorConfig::new(
-            ErrorDisplayConfig::new(HashMap::from([
-                (ErrorKind::AsyncError, true),
-                (ErrorKind::BadAssignment, false),
-                (ErrorKind::NotIterable, false),
-            ])),
-            false,
-        );
+        let display_config = ErrorDisplayConfig::new(HashMap::from([
+            (ErrorKind::AsyncError, true),
+            (ErrorKind::BadAssignment, false),
+            (ErrorKind::NotIterable, false),
+        ]));
+        let config = ErrorConfig::new(&display_config, false);
 
         assert_eq!(
             errors.collect(&config).shown.map(|x| x.msg()),
@@ -302,10 +300,11 @@ mod tests {
             None,
         );
 
-        let config0 = ErrorConfig::new(ErrorDisplayConfig::default(), false);
+        let display_config = ErrorDisplayConfig::default();
+        let config0 = ErrorConfig::new(&display_config, false);
         assert_eq!(errors.collect(&config0).shown.map(|x| x.msg()), vec!["a"]);
 
-        let config1 = ErrorConfig::new(ErrorDisplayConfig::default(), true);
+        let config1 = ErrorConfig::new(&display_config, true);
         assert!(errors.collect(&config1).shown.map(|x| x.msg()).is_empty());
     }
 }

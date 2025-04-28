@@ -20,7 +20,8 @@ use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
-use crate::config::error::ErrorConfigs;
+use crate::config::config::ConfigFile;
+use crate::config::error::ErrorConfig;
 use crate::error::collector::ErrorCollector;
 use crate::module::module_info::ModuleInfo;
 use crate::module::module_name::ModuleName;
@@ -28,23 +29,20 @@ use crate::state::handle::Handle;
 use crate::state::load::Load;
 use crate::state::state::Transaction;
 use crate::table_for_each;
+use crate::util::arc_id::ArcId;
 use crate::util::display::DisplayWithCtx;
 use crate::util::prelude::SliceExt;
 
-pub fn debug_info(
-    transaction: &Transaction,
-    handles: &[Handle],
-    error_configs: &ErrorConfigs,
-    is_javascript: bool,
-) -> String {
+pub fn debug_info(transaction: &Transaction, handles: &[Handle], is_javascript: bool) -> String {
     fn f(
         transaction: &Transaction,
         handles: &[Handle],
-    ) -> Option<Vec<(Arc<Load>, Bindings, Arc<Answers>)>> {
+    ) -> Option<Vec<(ArcId<ConfigFile>, Arc<Load>, Bindings, Arc<Answers>)>> {
         handles
             .iter()
             .map(|x| {
                 Some((
+                    transaction.get_config(x)?,
                     transaction.get_load(x)?,
                     transaction.get_bindings(x)?,
                     transaction.get_answers(x)?,
@@ -54,10 +52,8 @@ pub fn debug_info(
     }
 
     let owned = f(transaction, handles).expect("Everything to be computed for debug info");
-    let debug_info = DebugInfo::new(
-        &owned.map(|x| (&x.0.module_info, &x.0.errors, &x.1, &*x.2)),
-        error_configs,
-    );
+    let debug_info =
+        DebugInfo::new(&owned.map(|x| (&*x.0, &x.1.module_info, &x.1.errors, &x.2, &*x.3)));
     let mut output = serde_json::to_string(&debug_info).unwrap();
     if is_javascript {
         output = format!("var data = {output}");
@@ -93,8 +89,13 @@ struct Error {
 
 impl DebugInfo {
     pub fn new(
-        modules: &[(&ModuleInfo, &ErrorCollector, &Bindings, &Answers)],
-        error_configs: &ErrorConfigs,
+        modules: &[(
+            &ConfigFile,
+            &ModuleInfo,
+            &ErrorCollector,
+            &Bindings,
+            &Answers,
+        )],
     ) -> Self {
         fn f<K: SolveRecursive>(
             t: &AnswerEntry<K>,
@@ -123,11 +124,12 @@ impl DebugInfo {
         Self {
             modules: modules
                 .iter()
-                .map(|(module_info, errors, bindings, answers)| {
+                .map(|(config, module_info, errors, bindings, answers)| {
                     let mut res = Vec::new();
-                    let error_config = error_configs.get(module_info.path());
+                    let error_config =
+                        ErrorConfig::new(config.errors(), config.ignore_errors_in_generated_code());
                     table_for_each!(answers.table(), |t| f(t, module_info, bindings, &mut res));
-                    let errors = errors.collect(error_config).shown.map(|e| Error {
+                    let errors = errors.collect(&error_config).shown.map(|e| Error {
                         location: e.source_range().to_string(),
                         message: e.msg().to_owned(),
                     });

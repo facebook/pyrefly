@@ -24,6 +24,7 @@ pub mod no_hash;
 pub mod notify_watcher;
 pub mod prelude;
 pub mod recurser;
+pub mod small_set1;
 pub mod task_heap;
 pub mod thread_pool;
 pub mod trace;

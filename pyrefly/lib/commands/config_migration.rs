@@ -20,7 +20,9 @@ use tracing::info;
 
 use crate::commands::run::CommandExitStatus;
 use crate::config::config::ConfigFile;
+use crate::config::mypy;
 use crate::config::mypy::MypyConfig;
+use crate::config::pyright;
 use crate::config::pyright::PyrightConfig;
 use crate::util::fs_anyhow;
 
@@ -33,6 +35,25 @@ pub struct Args {
 }
 
 impl Args {
+    fn load_from_pyproject(raw_file: &str) -> anyhow::Result<ConfigFile> {
+        info!("Attempting to load [tool.mypy] config");
+        match mypy::parse_pyrproject_config(raw_file) {
+            ok @ Ok(_) => {
+                info!("Successfully loaded [tool.mypy] config from pyproject.toml");
+                return ok;
+            }
+            Err(e) => {
+                info!("Failed to load [tool.mypy] config from pyproject.toml:\n  {e}");
+                info!("Attempting to load [tool.pyright] config.");
+            }
+        }
+        pyright::parse_pyproject_toml(raw_file)
+            .inspect(|_| info!("Successfully loaded [tool.pyright] config from pyproject.toml"))
+            .inspect_err(|e| {
+                info!("failed to load [tool.pyright] config from pyproject.toml:\n  {e}")
+            })
+    }
+
     pub fn run(&self) -> anyhow::Result<CommandExitStatus> {
         info!("Looking for {}", self.input_path.display());
         let config = if self.input_path.file_name() == Some("pyrightconfig.json".as_ref()) {
@@ -43,9 +64,13 @@ impl Args {
         } else if self.input_path.file_name() == Some("mypy.ini".as_ref()) {
             info!("Detected mypy config file");
             MypyConfig::parse_mypy_config(&self.input_path)?
+        } else if self.input_path.file_name() == Some("pyproject.toml".as_ref()) {
+            let raw_file = fs_anyhow::read_to_string(&self.input_path)?;
+            info!("Detected pyproject.toml file.");
+            Self::load_from_pyproject(&raw_file)?
         } else {
             eprintln!(
-                "Currently only migration from pyrightconfig.json and mypy.ini is supported at this time"
+                "Currently only migration from pyrightconfig.json, mypy.ini, and pyproject.toml is supported"
             );
             return Ok(CommandExitStatus::UserError);
         };
@@ -69,6 +94,7 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
+    use crate::util::globs::Globs;
 
     #[test]
     fn test_run_pyright() -> anyhow::Result<()> {
@@ -146,6 +172,72 @@ check_untyped_defs = True
             vec!["src", "other_src", "test/some_test.py"]
         );
         assert_eq!(search_path, vec!["some_paths", "comma", "separated"]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_pyproject_mypy() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let args = Args {
+            input_path: tmp.path().join("pyproject.toml"),
+            output_path: None,
+        };
+        let pyproject = br#"[tool.mypy]
+files = ["a.py"]
+"#;
+        fs_anyhow::write(&args.input_path, pyproject)?;
+        let status = args.run()?;
+        assert!(matches!(status, CommandExitStatus::Success));
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_pyproject_pyright() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let args = Args {
+            input_path: tmp.path().join("pyproject.toml"),
+            output_path: None,
+        };
+        let pyproject = br#"[tool.pyright]
+include = ["a.py"]
+"#;
+        fs_anyhow::write(&args.input_path, pyproject)?;
+        let status = args.run()?;
+        assert!(matches!(status, CommandExitStatus::Success));
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_pyproject_bad_mypy_into_pyright() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let args = Args {
+            input_path: tmp.path().join("pyproject.toml"),
+            output_path: None,
+        };
+        let pyproject = br#"[tool.pyright]
+include = ["a.py"]
+
+[tool.mypy]
+files = 1
+"#;
+        fs_anyhow::write(&args.input_path, pyproject)?;
+        let status = args.run()?;
+        assert!(matches!(status, CommandExitStatus::Success));
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_pyproject_mypy_over_pyright() -> anyhow::Result<()> {
+        // The current implementation favors mypy over pyright. This test documents that.
+        // However, we may want to change this in the future, so it's OK to break this test.
+        let pyproject = r#"[tool.pyright]
+include = ["pyright.py"]
+
+[tool.mypy]
+files = ["mypy.py"]
+"#;
+        let cfg = Args::load_from_pyproject(pyproject)?;
+        assert_eq!(cfg.project_includes, Globs::new(vec!["mypy.py".to_owned()]));
         Ok(())
     }
 }

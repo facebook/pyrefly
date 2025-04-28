@@ -34,10 +34,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.solver().expand(var.to_type())
     }
 
-    fn is_subset_eq(&self, got: &Type, want: &Type) -> bool {
-        self.solver().is_subset_eq(got, want, self.type_order())
-    }
-
     pub fn is_async_generator(&self, ty: &Type) -> bool {
         let yield_ty = self.fresh_var();
         let send_ty = self.fresh_var();

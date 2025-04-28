@@ -61,10 +61,11 @@ impl ModuleStyle {
 impl Display for ModulePath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &**self.0 {
-            ModulePathDetails::FileSystem(path)
-            | ModulePathDetails::Memory(path)
-            | ModulePathDetails::Namespace(path) => {
+            ModulePathDetails::FileSystem(path) | ModulePathDetails::Namespace(path) => {
                 write!(f, "{}", path.display())
+            }
+            ModulePathDetails::Memory(path) => {
+                write!(f, "in-memory {}", path.display())
             }
             ModulePathDetails::BundledTypeshed(relative_path) => {
                 write!(

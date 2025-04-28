@@ -36,6 +36,11 @@ use lsp_types::DidChangeTextDocumentParams;
 use lsp_types::DidCloseTextDocumentParams;
 use lsp_types::DidOpenTextDocumentParams;
 use lsp_types::DidSaveTextDocumentParams;
+use lsp_types::DocumentHighlight;
+use lsp_types::DocumentHighlightParams;
+use lsp_types::DocumentSymbol;
+use lsp_types::DocumentSymbolParams;
+use lsp_types::DocumentSymbolResponse;
 use lsp_types::GotoDefinitionParams;
 use lsp_types::GotoDefinitionResponse;
 use lsp_types::Hover;
@@ -66,12 +71,13 @@ use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::notification::DidSaveTextDocument;
 use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::Completion;
+use lsp_types::request::DocumentHighlightRequest;
+use lsp_types::request::DocumentSymbolRequest;
 use lsp_types::request::GotoDefinition;
 use lsp_types::request::HoverRequest;
 use lsp_types::request::InlayHintRequest;
 use lsp_types::request::WorkspaceConfiguration;
-use ruff_source_file::SourceLocation;
-use ruff_text_size::TextSize;
+use path_absolutize::Absolutize;
 use serde::de::DeserializeOwned;
 use starlark_map::small_map::SmallMap;
 
@@ -79,11 +85,8 @@ use crate::commands::run::CommandExitStatus;
 use crate::commands::util::module_from_path;
 use crate::config::config::ConfigFile;
 use crate::config::environment::PythonEnvironment;
-use crate::config::error::ErrorConfigs;
 use crate::config::finder::ConfigFinder;
-use crate::exported::ArcId;
 use crate::module::module_info::ModuleInfo;
-use crate::module::module_info::SourceRange;
 use crate::module::module_info::TextRangeWithModuleInfo;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
@@ -95,7 +98,13 @@ use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionData;
 use crate::sys_info::SysInfo;
+use crate::types::lsp::position_to_text_size;
+use crate::types::lsp::source_range_to_range;
+use crate::types::lsp::text_size_to_position;
+use crate::util::arc_id::ArcId;
 use crate::util::args::clap_env;
+use crate::util::globs::Globs;
+use crate::util::listing::FileList;
 use crate::util::lock::Mutex;
 use crate::util::lock::RwLock;
 use crate::util::prelude::VecExt;
@@ -106,6 +115,11 @@ pub struct Args {
     pub(crate) search_path: Vec<PathBuf>,
     #[clap(long = "site-package-path", env = clap_env("SITE_PACKAGE_PATH"))]
     pub(crate) site_package_path: Vec<PathBuf>,
+    /// Temporary way to obtain the list of all the files belong to a project.
+    /// This is necessary to know what files should be considered during find references.
+    /// The information should eventually come from configs. TODO(@connernilsen)
+    #[clap(long = "experimental_project-path", env = clap_env("EXPERIMENTAL_PROJECT_PATH"))]
+    pub(crate) experimental_project_path: Vec<PathBuf>,
 }
 
 /// `IDETransactionManager` aims to always produce a transaction that contains the up-to-date
@@ -291,8 +305,16 @@ pub fn run_lsp(
             trigger_characters: Some(vec![".".to_owned()]),
             ..Default::default()
         }),
+        document_highlight_provider: Some(OneOf::Left(true)),
+        // Find references won't work properly if we don't know all the files.
+        references_provider: if args.experimental_project_path.is_empty() {
+            None
+        } else {
+            Some(OneOf::Left(true))
+        },
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         inlay_hint_provider: Some(OneOf::Left(true)),
+        document_symbol_provider: Some(OneOf::Left(true)),
         ..Default::default()
     })
     .unwrap();
@@ -309,13 +331,20 @@ pub fn run_lsp(
     let search_path = args.search_path;
     let site_package_path = args.site_package_path;
     let connection_for_send = connection.dupe();
-    let send = move |msg| connection_for_send.sender.send(msg).unwrap();
+    let send = move |msg| {
+        if connection_for_send.sender.send(msg).is_err() {
+            // On error, we know the channel is closed.
+            // https://docs.rs/crossbeam/latest/crossbeam/channel/struct.Sender.html#method.send
+            eprintln!("Connection closed.");
+        };
+    };
     let server = Server::new(
         Arc::new(send),
         initialization_params,
         search_path,
         site_package_path,
     );
+    server.populate_all_project_files(&args.experimental_project_path);
     eprintln!("Reading messages");
     let mut ide_transaction_manager = IDETransactionManager::default();
     let mut canceled_requests = HashSet::new();
@@ -367,8 +396,9 @@ fn to_real_path(path: &ModulePath) -> Option<&Path> {
 
 fn module_info_to_uri(module_info: &ModuleInfo) -> Option<Url> {
     let path = to_real_path(module_info.path())?;
-    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
-    Some(Url::from_file_path(path).unwrap())
+    let abs_path = path.absolutize();
+    let abs_path = abs_path.as_deref().unwrap_or(path);
+    Some(Url::from_file_path(abs_path).unwrap())
 }
 
 fn publish_diagnostics_for_uri(
@@ -444,6 +474,14 @@ impl Server {
                         ide_transaction_manager.non_commitable_transaction(&self.state);
                     self.send_response(new_response(x.id, self.completion(&transaction, params)));
                     ide_transaction_manager.save(transaction);
+                } else if let Some(params) = as_request::<DocumentHighlightRequest>(&x) {
+                    let transaction =
+                        ide_transaction_manager.non_commitable_transaction(&self.state);
+                    self.send_response(new_response(
+                        x.id,
+                        Ok(self.document_highlight(&transaction, params)),
+                    ));
+                    ide_transaction_manager.save(transaction);
                 } else if let Some(params) = as_request::<HoverRequest>(&x) {
                     let default_response = Hover {
                         contents: HoverContents::Array(Vec::new()),
@@ -462,6 +500,17 @@ impl Server {
                     self.send_response(new_response(
                         x.id,
                         Ok(self.inlay_hints(&transaction, params).unwrap_or_default()),
+                    ));
+                    ide_transaction_manager.save(transaction);
+                } else if let Some(params) = as_request::<DocumentSymbolRequest>(&x) {
+                    let transaction =
+                        ide_transaction_manager.non_commitable_transaction(&self.state);
+                    self.send_response(new_response(
+                        x.id,
+                        Ok(DocumentSymbolResponse::Nested(
+                            self.hierarchical_document_symbols(&transaction, params)
+                                .unwrap_or_default(),
+                        )),
                     ));
                     ide_transaction_manager.save(transaction);
                 } else {
@@ -611,8 +660,8 @@ impl Server {
             }
             // TODO(connernilsen): replace with real error config from config file
             for e in transaction
-                .get_loads(handles.iter().map(|(handle, _)| handle))
-                .collect_errors(&ErrorConfigs::default())
+                .get_errors(handles.iter().map(|(handle, _)| handle))
+                .collect_errors()
                 .shown
             {
                 if let Some(path) = to_real_path(e.path()) {
@@ -676,6 +725,51 @@ impl Server {
             self.invalidate(move |t| t.invalidate_disk(&invalidate_disk));
         }
         Ok(())
+    }
+
+    /// Certain IDE features (e.g. find-references) require us to know the dependency graph of the
+    /// entire project to work. This blocking function should be called during server initialization
+    /// time if we intend to provide features like find-references, and should be called when config
+    /// changes (currently this is a TODO).
+    fn populate_all_project_files(&self, search_paths: &[PathBuf]) {
+        if search_paths.is_empty() {
+            return;
+        }
+        let immediately_handled_events = self.immediately_handled_events.dupe();
+        eprintln!(
+            "Populating all files in the project path ({:?}).",
+            search_paths
+        );
+        let mut transaction = self
+            .state
+            .new_committable_transaction(Require::Exports, None);
+        let mut handles = Vec::new();
+        for search_path in search_paths {
+            let paths = Globs::new_with_root(search_path, vec![".".to_owned()])
+                .files()
+                .unwrap_or_default();
+            for path in paths {
+                let module_name = module_from_path(&path, search_paths);
+                handles.push((
+                    Handle::new(
+                        module_name,
+                        ModulePath::filesystem(path),
+                        SysInfo::default(),
+                    ),
+                    Require::Exports,
+                ));
+            }
+        }
+        eprintln!("Prepare to check {} files.", handles.len());
+        transaction.as_mut().run(&handles);
+        self.state.commit_transaction(transaction);
+        // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
+        // the main event loop of the server. As a result, the server can do a revalidation of
+        // all the in-memory files based on the fresh main State as soon as possible.
+        immediately_handled_events
+            .lock()
+            .push(ImmediatelyHandledEvent::RecheckFinished);
+        eprintln!("Populated all files in the project path.");
     }
 
     fn did_save(&self, params: DidSaveTextDocumentParams) -> anyhow::Result<()> {
@@ -807,6 +901,33 @@ impl Server {
         }))
     }
 
+    fn document_highlight(
+        &self,
+        transaction: &Transaction<'_>,
+        params: DocumentHighlightParams,
+    ) -> Option<Vec<DocumentHighlight>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        if self
+            .workspaces
+            .get_with(uri.to_file_path().unwrap(), |workspace| {
+                workspace.disable_language_services
+            })
+        {
+            return None;
+        }
+        let handle = self.make_handle(uri);
+        let info = transaction.get_module_info(&handle)?;
+        let position = position_to_text_size(&info, params.text_document_position_params.position);
+        Some(
+            transaction
+                .find_local_references(&handle, position)
+                .into_map(|range| DocumentHighlight {
+                    range: source_range_to_range(&info.source_range(range)),
+                    kind: None,
+                }),
+        )
+    }
+
     fn hover(&self, transaction: &Transaction<'_>, params: HoverParams) -> Option<Hover> {
         let uri = &params.text_document_position_params.text_document.uri;
         if self
@@ -872,6 +993,32 @@ impl Server {
                 data: None,
             }
         }))
+    }
+
+    fn hierarchical_document_symbols(
+        &self,
+        transaction: &Transaction<'_>,
+        params: DocumentSymbolParams,
+    ) -> Option<Vec<DocumentSymbol>> {
+        let uri = &params.text_document.uri;
+        if self
+            .workspaces
+            .get_with(uri.to_file_path().unwrap(), |workspace| {
+                workspace.disable_language_services
+            })
+            || !self
+                .initialize_params
+                .capabilities
+                .text_document
+                .as_ref()?
+                .document_symbol
+                .as_ref()?
+                .hierarchical_document_symbol_support?
+        {
+            return None;
+        }
+        let handle = self.make_handle(uri);
+        transaction.symbols(&handle)
     }
 
     fn change_workspace(&self) {
@@ -973,28 +1120,6 @@ impl Server {
         }
         self.invalidate_config();
     }
-}
-
-fn source_range_to_range(x: &SourceRange) -> lsp_types::Range {
-    lsp_types::Range::new(
-        source_location_to_position(&x.start),
-        source_location_to_position(&x.end),
-    )
-}
-
-fn source_location_to_position(x: &SourceLocation) -> lsp_types::Position {
-    lsp_types::Position {
-        line: x.row.to_zero_indexed() as u32,
-        character: x.column.to_zero_indexed() as u32,
-    }
-}
-
-fn text_size_to_position(info: &ModuleInfo, x: TextSize) -> lsp_types::Position {
-    source_location_to_position(&info.source_location(x))
-}
-
-fn position_to_text_size(info: &ModuleInfo, position: lsp_types::Position) -> TextSize {
-    info.to_text_size(position.line, position.character)
 }
 
 fn as_notification<T>(x: &Notification) -> Option<T::Params>

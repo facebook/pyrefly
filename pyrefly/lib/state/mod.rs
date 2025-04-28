@@ -7,6 +7,7 @@
 
 pub mod dirty;
 pub mod epoch;
+pub mod errors;
 pub mod handle;
 pub mod load;
 pub mod loader;

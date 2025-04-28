@@ -1576,6 +1576,16 @@
     },
     {
       "code": -2,
+      "column": 14,
+      "concise_description": "Callable types can only have `ParamSpec` in this position, got `int`",
+      "description": "Callable types can only have `ParamSpec` in this position, got `int`",
+      "line": 56,
+      "name": "bad-specialization",
+      "stop_column": 17,
+      "stop_line": 56
+    },
+    {
+      "code": -2,
       "column": 18,
       "concise_description": "Expected a type form, got instance of `list[type[int]]`",
       "description": "Expected a type form, got instance of `list[type[int]]`",
@@ -9819,36 +9829,6 @@
     },
     {
       "code": -2,
-      "column": 17,
-      "concise_description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: Type (trying to access __mro__)",
-      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: Type (trying to access __mro__)",
-      "line": 106,
-      "name": "missing-attribute",
-      "stop_column": 26,
-      "stop_line": 106
-    },
-    {
-      "code": -2,
-      "column": 17,
-      "concise_description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: Type (trying to access unknown)",
-      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: Type (trying to access unknown)",
-      "line": 107,
-      "name": "missing-attribute",
-      "stop_column": 26,
-      "stop_line": 107
-    },
-    {
-      "code": -2,
-      "column": 17,
-      "concise_description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: Type (trying to access unknown)",
-      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: Type (trying to access unknown)",
-      "line": 108,
-      "name": "missing-attribute",
-      "stop_column": 26,
-      "stop_line": 108
-    },
-    {
-      "code": -2,
       "column": 5,
       "concise_description": "assert_type(Any, tuple[type, ...]) failed",
       "description": "assert_type(Any, tuple[type, ...]) failed",
@@ -9876,16 +9856,6 @@
       "name": "missing-attribute",
       "stop_column": 14,
       "stop_line": 120
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "assert_type(Type, type[Any]) failed",
-      "description": "assert_type(Type, type[Any]) failed",
-      "line": 137,
-      "name": "assert-type",
-      "stop_column": 30,
-      "stop_line": 137
     },
     {
       "code": -2,

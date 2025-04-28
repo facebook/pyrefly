@@ -406,3 +406,11 @@ class A:
 assert_type(A() == 42, int)
     "#,
 );
+
+testcase!(
+    test_in_generator,
+    r#"
+'x' in (x for x in ['y'])
+42 in (x for x in ['y'])  # E: `in` is not supported between `Literal[42]` and `Generator[str, None, None]`
+    "#,
+);

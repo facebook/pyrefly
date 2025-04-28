@@ -19,6 +19,7 @@ use ruff_text_size::TextSize;
 
 use crate::module::module_info::ModuleInfo;
 use crate::module::module_name::ModuleName;
+use crate::module::module_path::ModulePath;
 use crate::types::equality::TypeEq;
 use crate::types::equality::TypeEqCtx;
 
@@ -36,6 +37,7 @@ impl Debug for QName {
             // and we only cache it so we can defer expanding the range.
             // Therefore, shorten the Debug output, as ModuleInfo is pretty big.
             .field("module", &self.module.name())
+            .field("path", &self.module.path())
             .finish()
     }
 }
@@ -50,7 +52,9 @@ impl Eq for QName {}
 
 impl TypeEq for QName {
     fn type_eq(&self, other: &Self, _: &mut TypeEqCtx) -> bool {
-        self.name.id == other.name.id && self.module.name() == other.module.name()
+        self.name.id == other.name.id
+            && self.module.name() == other.module.name()
+            && self.module.path() == other.module.path()
     }
 }
 
@@ -73,12 +77,13 @@ impl Display for QName {
 }
 
 impl QName {
-    fn key(&self) -> (&Name, TextSize, TextSize, ModuleName) {
+    fn key(&self) -> (&Name, TextSize, TextSize, ModuleName, &ModulePath) {
         (
             &self.name.id,
             self.name.range.start(),
             self.name.range.end(),
             self.module.name(),
+            self.module.path(),
         )
     }
 

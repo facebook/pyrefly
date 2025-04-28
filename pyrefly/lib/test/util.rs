@@ -26,7 +26,6 @@ use starlark_map::small_map::SmallMap;
 
 use crate::binding::binding::KeyExport;
 use crate::config::config::ConfigFile;
-use crate::config::error::ErrorConfigs;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
 use crate::module::module_name::ModuleName;
@@ -199,8 +198,8 @@ impl TestEnv {
         print_errors(
             &state
                 .transaction()
-                .get_loads(handles.iter())
-                .collect_errors(&ErrorConfigs::default())
+                .get_errors(handles.iter())
+                .collect_errors()
                 .shown,
         );
         (state, move |module| {
@@ -295,8 +294,8 @@ pub fn mk_multi_file_state(
         assert_eq!(
             state
                 .transaction()
-                .get_loads(handles.values())
-                .collect_errors(&ErrorConfigs::default())
+                .get_errors(handles.values())
+                .collect_errors()
                 .shown
                 .len(),
             0
@@ -356,6 +355,26 @@ pub fn get_batched_lsp_operations_report_allow_error(
     get_batched_lsp_operations_report_helper(files, false, get_report)
 }
 
+pub fn get_batched_lsp_operations_report_no_cursor(
+    files: &[(&'static str, &str)],
+    get_report: impl Fn(&State, &Handle) -> String,
+) -> String {
+    let (handles, state) = mk_multi_file_state(files, true);
+    let mut report = String::new();
+    for (name, _code) in files {
+        report.push_str("# ");
+        report.push_str(name);
+        report.push_str(".py\n");
+        let handle = handles.get(name).unwrap();
+        report.push('\n');
+        report.push_str(&get_report(&state, handle));
+        report.push_str("\n\n");
+        report.push('\n');
+    }
+
+    report
+}
+
 pub fn init_test() {
     init_tracing(true, true, true);
     // Enough threads to see parallelism bugs, but not too many to debug through.
@@ -387,8 +406,8 @@ pub fn testcase_for_macro(
         let (state, handle) = env.clone().to_state();
         state
             .transaction()
-            .get_loads([&handle("main")])
-            .check_against_expectations(&ErrorConfigs::default())?;
+            .get_errors([&handle("main")])
+            .check_against_expectations()?;
         if start.elapsed().as_secs() <= limit {
             return Ok(());
         }

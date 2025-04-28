@@ -99,7 +99,6 @@
     "Line 94: Expected 1 errors"
   ],
   "callables_annotation.py": [
-    "Line 56: Expected 1 errors",
     "Line 156: Unexpected errors ['`Proto4[Ellipsis]` is not assignable to `Proto3`']",
     "Line 157: Unexpected errors ['`Proto7` is not assignable to `Proto6`']"
   ],
@@ -598,11 +597,8 @@
     "Line 99: Unexpected errors ['Object of class `type` has no attribute `unknown`']",
     "Line 100: Unexpected errors ['Object of class `type` has no attribute `unknown`']",
     "Line 102: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed']",
-    "Line 106: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed', 'TODO: Expr::attr_infer_for_type attribute base undefined for type: Type (trying to access __mro__)']",
-    "Line 107: Unexpected errors ['TODO: Expr::attr_infer_for_type attribute base undefined for type: Type (trying to access unknown)']",
-    "Line 108: Unexpected errors ['TODO: Expr::attr_infer_for_type attribute base undefined for type: Type (trying to access unknown)']",
+    "Line 106: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed']",
     "Line 110: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed']",
-    "Line 137: Unexpected errors ['assert_type(Type, type[Any]) failed']",
     "Line 139: Unexpected errors ['assert_type(type, type[Any]) failed']",
     "Line 152: Unexpected errors [\"Can't apply arguments to non-class, got LegacyExplicitTypeAlias[TA7, type[type[TypeVar(T, invariant)]]]\"]",
     "Line 156: Unexpected errors [\"Can't apply arguments to non-class, got LegacyExplicitTypeAlias[TA8, type[type[TypeVar(T, invariant)]]]\"]",

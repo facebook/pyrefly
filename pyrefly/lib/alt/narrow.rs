@@ -16,10 +16,9 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::attr::Narrowable;
 use crate::alt::callable::CallArg;
 use crate::binding::narrow::AtomicNarrowOp;
+use crate::binding::narrow::AttributeChain;
 use crate::binding::narrow::NarrowOp;
-use crate::binding::narrow::NarrowedAttribute;
 use crate::error::collector::ErrorCollector;
-use crate::error::style::ErrorStyle;
 use crate::types::callable::FunctionKind;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
@@ -65,9 +64,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn intersect(&self, left: &Type, right: &Type) -> Type {
         // Get our best approximation of ty & right.
         self.distribute_over_union(left, |t| {
-            if self.solver().is_subset_eq(right, t, self.type_order()) {
+            if self.is_subset_eq(right, t) {
                 right.clone()
-            } else if self.solver().is_subset_eq(t, right, self.type_order()) {
+            } else if self.is_subset_eq(t, right) {
                 t.clone()
             } else {
                 Type::never()
@@ -87,7 +86,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn subtract(&self, left: &Type, right: &Type) -> Type {
         self.distribute_over_union(left, |left| {
             // Special is_any check because `Any <: int` as a special case, but would mess up this.
-            if !left.is_any() && self.solver().is_subset_eq(left, right, self.type_order()) {
+            if !left.is_any() && self.is_subset_eq(left, right) {
                 Type::never()
             } else {
                 left.clone()
@@ -326,17 +325,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn get_attribute_type(
-        &self,
-        base: &TypeInfo,
-        attr: &NarrowedAttribute,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) -> Type {
+    fn get_attribute_type(&self, base: &TypeInfo, attr: &AttributeChain, range: TextRange) -> Type {
         // We don't want to throw any attribute access errors when narrowing - the same code is traversed
         // separately for type checking, and there might be error context then we don't have here.
-        let ignore_errors = ErrorCollector::new(errors.module_info().clone(), ErrorStyle::Never);
-        let NarrowedAttribute(box names) = attr.clone();
+        let ignore_errors = self.error_swallower();
+        let AttributeChain(box names) = attr.clone();
         let (first_name, remaining_names) = names.split_off_first();
         match self.narrowable_for_attr_chain(
             base,
@@ -392,7 +385,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             NarrowOp::Atomic(Some(attr), op) => {
                 let ty = self.atomic_narrow(
-                    &self.get_attribute_type(type_info, attr, range, errors),
+                    &self.get_attribute_type(type_info, attr, range),
                     op,
                     range,
                     errors,

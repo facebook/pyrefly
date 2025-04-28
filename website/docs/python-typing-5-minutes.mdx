@@ -26,16 +26,21 @@ _TL;DR_
 
 Static analyzers can often _infer_ types from your code—no annotations required. Pyrefly takes this a step further.
 
-Python's built-in types can be used to write many simple type hints.
 <pre>
   <TryPyreflyBrowserOnly
-  sampleFilename="basic_types.py"
+  sampleFilename="basic_inference.py"
   isCodeSnippet={true}
-  codeSample={`TOTAL = 42
-PI = 3.14159
+  codeSample={`# Basic Inference
+answer = 42
+reveal_type(answer) # hover to reveal type
 
-def double(x): # x: int | float inferred from usage
-    return x * 2
+fruits = ["apple", "banana", "cherry"]
+scores = {"math": 95, "science": 90}
+
+def greet(name):
+    return f"Hello, {name}!"
+
+message = greet("World")
 `}
   />
 </pre>
@@ -47,10 +52,10 @@ def double(x): # x: int | float inferred from usage
 
 <pre>
   <TryPyreflyBrowserOnly
-  sampleFilename="basic_inference.py"
+  sampleFilename="return_inference.py"
   isCodeSnippet={true}
   codeSample={`def add(a: int, b: int):   # ✅ param annotations
-    return a + b             # 🔍 return inferred -> int
+    return a + b    # 🔍 return inferred -> int
 `}
   />
 </pre>
@@ -67,7 +72,7 @@ def double(x): # x: int | float inferred from usage
 Python's built-in types can be used to write many simple type hints.
 <pre>
   <TryPyreflyBrowserOnly
-  sampleFilename="basic_types.py"
+  sampleFilename="built_in_types.py"
   isCodeSnippet={true}
   codeSample={`# Example: Basic Types
 
@@ -129,7 +134,8 @@ The real power comes from composing smaller pieces into richer shapes.
   <TryPyreflyBrowserOnly
   sampleFilename="unions_types.py"
   isCodeSnippet={true}
-  codeSample={`
+  codeSample={`# Union and Optional Types
+
 from typing import Optional
 
 def to_int(data: str | bytes | None) -> Optional[int]:

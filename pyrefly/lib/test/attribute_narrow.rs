@@ -117,19 +117,76 @@ def f(foo: Foo):
 );
 
 testcase!(
-    bug = "PyTorch TODO: implement attribute narrowing",
-    test_attr_refine,
+    test_attr_assignment_introduction,
     r#"
-from typing import Any, Optional, reveal_type
+from typing import Any, Literal, assert_type
+class C:
+    x: Any
+    y: int | None
+    z: C | None
+def test_introduce_narrow_with_assignment(c0: C, c1: C):
+    assert_type(c0.x, Any)
+    assert_type(c0.y, int | None)
+    assert_type(c0.z, C | None)
+    c0.x = 42
+    c0.y = 43
+    c0.z = c1
+    assert_type(c0.x, Literal[42])
+    assert_type(c0.y, Literal[43])
+    assert_type(c0.z, C)
+"#,
+);
 
-class N:
-    type: Optional[Any]
+testcase!(
+    test_attr_assignment_invalidation,
+    r#"
+from typing import Any, Literal, assert_type
+class C:
+    x: Any
+    z: C | None
+def test_invalidate_narrow_with_assignment(c0: C, c1: C):
+    assert isinstance(c0.z, C)
+    assert isinstance(c0.z.x, int)
+    assert isinstance(c0.z.z, C)
+    assert isinstance(c0.z.z.x, int)
+    assert_type(c0.z, C)
+    assert_type(c0.z.x, int)
+    assert_type(c0.z.z, C)
+    assert_type(c0.z.z.x, int)
+    c0.z.z = c1
+    assert_type(c0.z, C)
+    assert_type(c0.z.x, int)
+    assert_type(c0.z.z, C)
+    assert_type(c0.z.z.x, Any)
+    c0.z = c1
+    assert_type(c0.z, C)
+    assert_type(c0.z.x, Any)
+    assert_type(c0.z.z, C | None)
+    print(c0.z.z.x)  # E: Object of class `NoneType` has no attribute `x`
+"#,
+);
 
-def add_inference_rule(n: N):
-    reveal_type(n) # E: revealed type: N
-    reveal_type(n.type) # E: revealed type: Any | None
-    n.type = 3
-    reveal_type(n.type + 3) # E: revealed type: int | Unknown # E: `+` is not supported between `None` and `Literal[3]`
+testcase!(
+    bug = "TODO(stroxler) We should fine-tune descriptor narrowing more; this is not high-priority",
+    test_descriptor_narrowing,
+    r#"
+from typing import Any, Literal, assert_type
+class C:
+    @property
+    def x(self) -> int | None: ...
+    @x.setter
+    def x(self, value: int) -> None: ...
+def f(c: C):
+    assert_type(c.x, int | None)
+    # No narrowing occurs on assignment to a descriptor. This is debateable, although
+    # in the case where the set type is mismatched vs get it would be absurd to narrow,
+    # and it could be very difficult in the presence of overloads.
+    c.x = 42
+    assert_type(c.x, int | None)
+    # Narrowing does occur on conditional checks. Ideally we would produce
+    # a strict-mode error on reads, that is not yet implemented.
+    assert isinstance(c.x, int)
+    assert_type(c.x, int)
 "#,
 );
 

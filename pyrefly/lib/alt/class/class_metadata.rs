@@ -315,10 +315,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         if let Some(metaclass) = &metaclass {
             self.check_base_class_metaclasses(cls, metaclass, &base_metaclasses, errors);
-            if self.solver().is_subset_eq(
+            if self.is_subset_eq(
                 &Type::ClassType(metaclass.clone()),
                 &Type::ClassType(self.stdlib.enum_meta().clone()),
-                self.type_order(),
             ) {
                 if !cls.tparams().is_empty() {
                     self.error(
@@ -336,10 +335,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         base.class_object().contains(&Name::new_static("_value_"))
                     }),
                     is_flag: bases_with_metadata.iter().any(|(base, _)| {
-                        self.solver().is_subset_eq(
+                        self.is_subset_eq(
                             &Type::ClassType(base.clone()),
                             &Type::ClassType(self.stdlib.enum_flag().clone()),
-                            self.type_order(),
                         )
                     }),
                 })
@@ -622,10 +620,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let m = (*m).clone();
                 let accept_m = match &inherited_meta {
                     None => true,
-                    Some(inherited) => self.solver().is_subset_eq(
+                    Some(inherited) => self.is_subset_eq(
                         &Type::ClassType(m.clone()),
                         &Type::ClassType(inherited.clone()),
-                        self.type_order(),
                     ),
                 };
                 if accept_m {
@@ -677,10 +674,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<ClassType> {
         match self.expr_untype(raw_metaclass, TypeFormContext::BaseClassList, errors) {
             Type::ClassType(meta) => {
-                if self.solver().is_subset_eq(
+                if self.is_subset_eq(
                     &Type::ClassType(meta.clone()),
                     &Type::ClassType(self.stdlib.builtins_type().clone()),
-                    self.type_order(),
                 ) {
                     Some(meta)
                 } else {

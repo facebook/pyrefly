@@ -1292,3 +1292,22 @@ def f(cond: bool, x: LiteralString, y: str):
     reveal_type(x if cond else y)  # E: revealed type: str
 "#,
 );
+
+testcase!(
+    test_typing_type_as_type_any,
+    r#"
+from typing import Type
+def f(x: Type) -> None: ...
+def g(x: type) -> None: ...
+
+f(int)
+f(Type)
+f(type)
+f(42)  # E: not assignable to parameter `x` with type `type[Unknown]`
+
+g(int)
+g(Type)
+g(type)
+g(42)  # E: not assignable to parameter `x` with type `type`
+"#,
+);

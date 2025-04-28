@@ -582,11 +582,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else {
                         match self.unwrap_mapping(&ty) {
                             Some((key, value)) => {
-                                if self.solver().is_subset_eq(
-                                    &key,
-                                    &self.stdlib.str().clone().to_type(),
-                                    self.type_order(),
-                                ) {
+                                if self.is_subset_eq(&key, &self.stdlib.str().clone().to_type()) {
                                     if let Some((name, want)) = kwargs.as_ref() {
                                         self.check_type(
                                             want,

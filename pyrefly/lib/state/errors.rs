@@ -1,0 +1,64 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+use std::sync::Arc;
+
+use dupe::Dupe;
+use starlark_map::small_map::SmallMap;
+
+use crate::config::config::ConfigFile;
+use crate::config::error::ErrorConfig;
+use crate::error::collector::CollectedErrors;
+use crate::error::expectation::Expectation;
+use crate::module::ignore::Ignore;
+use crate::module::module_path::ModulePath;
+use crate::state::load::Load;
+use crate::util::arc_id::ArcId;
+
+/// The errors from a collection of modules.
+#[derive(Debug)]
+pub struct Errors {
+    // Sorted by module name (so deterministic display order)
+    loads: Vec<(Arc<Load>, ArcId<ConfigFile>)>,
+}
+
+impl Errors {
+    pub fn new(mut loads: Vec<(Arc<Load>, ArcId<ConfigFile>)>) -> Self {
+        loads.sort_by_key(|x| x.0.module_info.name());
+        Self { loads }
+    }
+
+    pub fn collect_errors(&self) -> CollectedErrors {
+        let mut errors = CollectedErrors::default();
+        for (load, config) in &self.loads {
+            let error_config =
+                ErrorConfig::new(config.errors(), config.ignore_errors_in_generated_code());
+            load.errors.collect_into(&error_config, &mut errors);
+        }
+        errors
+    }
+
+    pub fn collect_ignores(&self) -> SmallMap<&ModulePath, &Ignore> {
+        let mut ignore_collection: SmallMap<&ModulePath, &Ignore> = SmallMap::new();
+        for (load, _) in &self.loads {
+            let module_path = load.module_info.path();
+            let ignores = load.module_info.ignore();
+            ignore_collection.insert(module_path, ignores);
+        }
+        ignore_collection
+    }
+
+    pub fn check_against_expectations(&self) -> anyhow::Result<()> {
+        for (load, config) in &self.loads {
+            let error_config =
+                ErrorConfig::new(config.errors(), config.ignore_errors_in_generated_code());
+            Expectation::parse(load.module_info.dupe(), load.module_info.contents())
+                .check(&load.errors.collect(&error_config).shown)?;
+        }
+        Ok(())
+    }
+}

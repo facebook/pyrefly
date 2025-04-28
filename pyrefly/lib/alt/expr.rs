@@ -201,6 +201,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::SpecialForm(SpecialForm::Callable) => {
                 *ty = Type::callable_ellipsis(Type::Any(AnyStyle::Implicit))
             }
+            Type::SpecialForm(SpecialForm::Type) => {
+                *ty = Type::type_form(Type::Any(AnyStyle::Implicit))
+            }
             Type::ClassDef(cls) => {
                 if cls.is_builtin("tuple") {
                     *ty = Type::type_form(Type::Tuple(Tuple::unbounded(Type::Any(
@@ -1397,7 +1400,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .expr_infer_type_info_with_hint(x, hint, errors)
             .into_ty();
         if let Some(want) = hint
-            && self.solver().is_subset_eq(&ty, want, self.type_order())
+            && self.is_subset_eq(&ty, want)
         {
             want.clone()
         } else {

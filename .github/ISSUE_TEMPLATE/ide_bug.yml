@@ -1,0 +1,49 @@
+name: Bug Report (IDE)
+description: File a bug report.
+title: "[Bug][IDE]: "
+labels: ["bug", "ide"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug!
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of the behavior you are seeing and the expected behavior along with steps to reproduce it. Screenshots / videos are helpful!
+      placeholder: When opening a python file, I see no type errors...
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: Codebase
+      description: If possible, please provide a reproducable sample of the code you are experiencing the issue with along with any third-party dependencies. In complicated cases, a github commit works.
+      placeholder: https://github.com/<org>/<repo>/path/to/project at commit hash <123456> or PR on line 123
+    validations:
+      required: false
+  - type: textarea
+    id: ide-setup
+    attributes:
+      label: IDE Setup
+      description: Which workspace folders are open in VSCode? Which files are open in the editor? Which extension version is installed? What operating system?
+      placeholder: I'm running on Pyrefly `1.0` on mac-arm with only the project root opened in VSCode.
+    validations:
+      required: false
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The extension outputs information to the output pane in VSCode (⇧+⌘+U on mac, ctrl+shift+U on PC). Please paste any relevant output from the Pyrefly dropdown.
+      placeholder: ...
+    validations:
+      required: false
+  - type: textarea
+    id: other-attempts
+    attributes:
+      label: Other Attempts
+      description: Have you tried anything else? Does Pyrefly check the code correctly in the [sandbox](https://pyrefly.org/try/)? Command-line?
+      placeholder: Same fatal exception when typechecking on the command-line...
+    validations:
+      required: false

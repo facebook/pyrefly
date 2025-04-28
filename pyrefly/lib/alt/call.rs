@@ -20,7 +20,6 @@ use crate::dunder;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::kind::ErrorKind;
-use crate::error::style::ErrorStyle;
 use crate::types::callable::BoolKeywords;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncFlags;
@@ -158,9 +157,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassDef(cls) => {
                 self.as_call_target(Type::type_form(self.instantiate_fresh(&cls)))
             }
-            Type::Type(box Type::ClassType(cls))
-            | Type::Type(box Type::SelfType(cls))
-            | Type::SelfType(cls) => Some(CallTarget::new(Target::Class(cls))),
+            Type::Type(box Type::ClassType(cls)) | Type::Type(box Type::SelfType(cls)) => {
+                Some(CallTarget::new(Target::Class(cls)))
+            }
             Type::Type(box Type::Quantified(quantified)) => {
                 Some(CallTarget::new(Target::Callable(Callable {
                     // TODO: use upper bound to determine input parameters
@@ -193,7 +192,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Any(style) => Some(CallTarget::new(Target::Any(style))),
             Type::TypeAlias(ta) => self.as_call_target(ta.as_value(self.stdlib)),
-            Type::ClassType(cls) => self
+            Type::ClassType(cls) | Type::SelfType(cls) => self
                 .instance_to_method(&cls)
                 .and_then(|ty| self.as_call_target(ty)),
             Type::Type(box Type::TypedDict(typed_dict)) => {
@@ -256,8 +255,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.call_infer(call_target, args, keywords, range, errors, context)
     }
 
-    /// Calls a method. If no attribute exists with the given method name, returns None without attempting the call.
-    pub fn call_method(
+    /// Calls a magic dunder method. If no attribute exists with the given method name, returns None without attempting the call.
+    ///
+    /// Note that this method is only expected to be used for magic dunder methods and is not expected to
+    /// produce correct results for arbitrary kinds of attributes. If you don't know whether an attribute is a magic
+    /// dunder attribute, it's highly likely that this method isn't the right thing to do for you. Examples of
+    /// magic dunder methods include: `__getattr__`, `__eq__`, `__contains__`, etc. Also see [`Self::type_of_magic_dunder_attr`].
+    pub fn call_magic_dunder_method(
         &self,
         ty: &Type,
         method_name: &Name,
@@ -267,7 +271,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Option<Type> {
-        let callee_ty = self.type_of_attr_get_if_found(
+        let callee_ty = self.type_of_magic_dunder_attr(
             ty,
             method_name,
             range,
@@ -371,8 +375,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let cls_ty = Type::type_form(instance_ty.clone());
                 let mut full_args = vec![CallArg::Type(&cls_ty, range)];
                 full_args.extend_from_slice(args);
-                let dunder_new_errors =
-                    ErrorCollector::new(self.module_info().dupe(), ErrorStyle::Delayed);
+                let dunder_new_errors = self.error_collector();
                 let ret = self.call_infer(
                     self.as_call_target_or_error(
                         new_method,
@@ -400,8 +403,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // If the class overrides `object.__new__` but not `object.__init__`, the `__init__` call
         // always succeeds at runtime, so we skip analyzing it.
         if let Some(init_method) = self.get_dunder_init(&cls, !overrides_new) {
-            let dunder_init_errors =
-                ErrorCollector::new(self.module_info().dupe(), ErrorStyle::Delayed);
+            let dunder_init_errors = self.error_collector();
             self.call_infer(
                 self.as_call_target_or_error(
                     init_method,
@@ -582,8 +584,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut closest_overload = None;
         let mut fewest_errors: Option<ErrorCollector> = None;
         for callable in overloads {
-            let arg_errors = ErrorCollector::new(self.module_info().dupe(), ErrorStyle::Delayed);
-            let call_errors = ErrorCollector::new(self.module_info().dupe(), ErrorStyle::Delayed);
+            let arg_errors = self.error_collector();
+            let call_errors = self.error_collector();
             let res = self.callable_infer(
                 callable.clone(),
                 Some(metadata.kind.as_func_id()),

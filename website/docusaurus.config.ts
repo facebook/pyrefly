@@ -14,18 +14,22 @@ import * as webpack from 'webpack';
 import MonacoWebpackPlugin from 'monaco-editor-webpack-plugin';
 import StylexPlugin from '@stylexjs/webpack-plugin';
 import PyodidePlugin from '@pyodide/webpack-plugin';
+import path from "path";
+import fs from "fs";
+
+const BasePath = 'en/docs';
 
 function getNavBarItems() {
     return [
         {
-            to: 'en/docs/',
-            activeBasePath: 'en/docs',
+            to: `${BasePath}/`,
+            activeBasePath: BasePath,
             label: 'Docs',
             position: 'left' as const,
         },
         {
-            to: 'en/docs/python-typing-5-minutes/',
-            activeBasePath: 'en/docs/python-typing-5-minutes',
+            to: `${BasePath}/python-typing-5-minutes/`,
+            activeBasePath: `${BasePath}/python-typing-5-minutes`,
             label: 'Learn',
             position: 'left' as const,
         },
@@ -35,14 +39,12 @@ function getNavBarItems() {
             label: 'Sandbox',
             position: 'left' as const,
         },
-        // TODO (T221099224) remove this check when we are ready to publish Installation doc to public
-        process.env.INTERNAL_STATIC_DOCS === '1' ?
         {
-            to: 'en/docs/fb/installation/',
-            activeBasePath: 'en/docs/fb/installation',
+            to: `${BasePath}/installation/`,
+            activeBasePath: `${BasePath}/installation`,
             label: 'Install',
             position: 'left' as const,
-        } : null,
+        },
         // Please keep GitHub link to the right for consistency.
         {
             href: 'https://github.com/facebook/pyrefly',
@@ -51,6 +53,36 @@ function getNavBarItems() {
             className: 'navbar__icon github__link',
         },
     ].filter((x): x is NonNullable<typeof x> => x != null);
+}
+
+async function generateLlmsTxt({ content, routes, outDir }, context) {
+    const { allMdx } = content as { allMdx: string[] };
+    // Write concatenated MDX content
+    const concatenatedPath = path.join(outDir, "llms-full.txt");
+    await fs.promises.writeFile(concatenatedPath, allMdx.join("\n\n---\n\n"));
+    // we need to dig down several layers:
+    // find PluginRouteConfig marked by plugin.name === "docusaurus-plugin-content-docs"
+    const docsPluginRouteConfig = routes.filter(
+        (route) => route.plugin.name === "docusaurus-plugin-content-docs"
+    )[0];
+    // docsPluginRouteConfig has a routes property has a record with the path "/" that contains all docs routes.
+    const allDocsRouteConfig = docsPluginRouteConfig.routes?.filter(
+        (route) => route.path.endsWith(`/${BasePath}/`)
+    )[0];
+    if (!allDocsRouteConfig?.props?.version) {
+        throw new Error(`/${BasePath}/ route not found`);
+    }
+    // this route config has a `props` property that contains the current documentation.
+    const currentVersionDocsRoutes = (
+        allDocsRouteConfig.props.version as Record<string, unknown>
+    ).docs as Record<string, Record<string, unknown>>;
+    // for every single docs route we now parse a path (which is the key) and a title
+    const docsRecords = Object.entries(currentVersionDocsRoutes).map(([path, record]) => {
+        return `- [${record.title}](${path}): ${record.description}`;
+    });
+    const llmsTxt = `# ${context.siteConfig.title}\n\n## Docs\n\n${docsRecords.join("\n")}`;
+    const llmsTxtPath = path.join(outDir, "llms.txt");
+    fs.writeFileSync(llmsTxtPath, llmsTxt);
 }
 
 const config: Config = {
@@ -77,6 +109,37 @@ const config: Config = {
     //   experimental_faster: true,
     // },
     plugins: [
+        async function pluginLlmsTxt(context) {
+            // This plugin generates a llms-full.txt file (containing all the content) and a llms.txt file
+            // (containing a link/overview for each page) to serve as context for LLMs.
+            // See https://llmstxt.org/
+            // Based on jharrel's solution from https://github.com/facebook/docusaurus/issues/10899
+            return {
+                name: "llms-txt-plugin",
+                loadContent: async () => {
+                    const { siteDir } = context;
+                    const contentDir = path.join(siteDir, "docs");
+                    const allMdx: string[] = [];
+                    const getMdxFiles = async (dir: string) => {
+                        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+                        for (const entry of entries) {
+                            const fullPath = path.join(dir, entry.name);
+                            if (entry.isDirectory()) {
+                                await getMdxFiles(fullPath);
+                            } else if (entry.name.endsWith(".mdx")) {
+                                const content = await fs.promises.readFile(fullPath, "utf8");
+                                allMdx.push(content);
+                            }
+                        }
+                    };
+                    await getMdxFiles(contentDir);
+                    return { allMdx };
+                },
+                // The file will only get generated with production builds, since the plugin
+                // operates on the output directory
+                postBuild: async props => await generateLlmsTxt(props, context),
+            };
+        },
         function polyfillNodeBuiltinsForFlowJS(context: any, options: any) {
             return {
                 name: 'polyfillNodeBuiltinsForFlowJS',
@@ -158,17 +221,6 @@ const config: Config = {
                 },
             };
         },
-        [
-            '@docusaurus/plugin-client-redirects',
-            {
-                redirects: [
-                    {
-                        from: '/en/docs/learn-python-typing',
-                        to: '/en/docs/python-typing-for-beginners',
-                    },
-                ],
-            },
-        ],
     ],
     themeConfig: {
         prism: {
@@ -244,7 +296,7 @@ const config: Config = {
             require.resolve('docusaurus-plugin-internaldocs-fb/docusaurus-preset'),
             {
                 docs: {
-                    routeBasePath: 'en/docs',
+                    routeBasePath: BasePath,
                     sidebarPath: require.resolve('./sidebars.ts'),
                     editUrl: fbContent({
                         internal:
@@ -268,8 +320,8 @@ const config: Config = {
         'https://buttons.github.io/buttons.js',
         'https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js',
         '/js/code-block-buttons.js',
-      ],
-      stylesheets: ['/css/code-block-buttons.css']
+    ],
+    stylesheets: ['/css/code-block-buttons.css']
 };
 
 export default config;

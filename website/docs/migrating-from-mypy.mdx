@@ -1,0 +1,80 @@
+---
+title: Migrating from Mypy
+
+description: How to switch from Mypy to Pyrefly
+---
+
+## Running Pyrefly
+
+Like mypy, pyrefly can be given a list of files to check:
+
+```sh
+$ pyrefly check file1.py file2.py
+```
+
+The easiest way to run pyrefly on all files in a project is to run it from the project root:
+
+```sh
+$ cd your/project
+$ pyrefly check
+```
+
+Pyrefly is designed to have sensible defaults, and you may not need to configure it at all.
+However, projects with existing mypy configs may want to configure pyrefly to suit their own needs.
+
+## Mypy Config Migration
+
+To make it as easy as possible to get started with pyrefly, we've provided a script for automatically migrating a mypy config to pyrefly.
+
+```sh
+$ pyrefly config-migration path/to/your/mypy.ini
+```
+
+This will load your existing `mypy.ini` and transform it into a `pyrefly.toml` while preserving as many options as possible. See `config-migration --help` for more options.
+
+We do recommend checking the resulting config for errors. While there is some overlap between mypy's config options and pyrefly's config options, it's not always possible to cleanly translate one config option to another.
+
+If you'd rather start fresh with a hand-written config, please see the [pyrefly configuration docs](../configuration). If you run into any issues with config migration, please [let us know](https://github.com/facebook/pyrefly/issues)!
+
+### Config Migration Details
+
+`files`, `modules`, and `packages` are combined into `project_includes`. This should work exactly the same for `files` and `packages`. Mypy doesn't recurse into `modules`, but pyrefly will.
+
+Pyrefly makes an effort to transform the `exclude` regex into a list of filepath globs for `project_excludes`. This should excel on simple regexes, such as `some/file.py|exclude_dir/`, which becomes `["**/some/file.py", "**/exclude_dir/"]`.
+
+The `ignore_missing_imports` per-module config option is turned into a list of modules. For example:
+
+```ini
+[mypy-some.*.module]
+ignore_missing_imports = True
+```
+
+Becomes:
+
+```toml
+replace_imports_with_any = ["some.*.module"]
+```
+
+Pyrefly does support mypy's [module name pattern syntax](https://mypy.readthedocs.io/en/stable/config_file.html#config-file-format).
+
+Mypy's `follow_untyped_imports` option is allowed to be global or per-module. The pyrefly equivalent, `use_untyped_imports`, is only global. If any per-module section in the mypy config has `follow_untyped_imports = True`, then `use_untyped_imports` will be `true` in the pyrefly config.
+
+## Silencing Errors
+
+Like mypy, pyrefly has ways to silence specific error codes. Full details can be found in the [Error Suppression docs](../error-suppresions)
+
+To silence an error on a specific line, add a disable comment above that line:
+
+```
+# pyrefly: ignore
+x: str = 1
+```
+
+To suppress all instances of an error, disable that error in the config:
+
+```
+[errors]
+import-error = false
+```
+
+This is equivalent to mypy's `disable_error_code`, though of course the [error codes](../error-kinds) are different!

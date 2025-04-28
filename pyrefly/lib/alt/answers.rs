@@ -506,7 +506,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        if module == self.module_info().name() {
+        if module == self.module_info().name()
+            && path.is_none_or(|path| path == self.module_info().path())
+        {
             self.get(k)
         } else {
             self.answers.get(module, path, k)
@@ -660,7 +662,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         tcc: &dyn Fn() -> TypeCheckContext,
     ) -> bool {
-        if got.is_error() || self.solver().is_subset_eq(got, want, self.type_order()) {
+        if got.is_error() || self.is_subset_eq(got, want) {
             true
         } else {
             self.solver().error(want, got, errors, loc, tcc);
@@ -743,5 +745,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         errors.add(range, msg, kind, context);
         Type::any_error()
+    }
+
+    /// Create a new error collector. Useful when a caller wants to decide whether or not to report
+    /// errors from an operation.
+    pub fn error_collector(&self) -> ErrorCollector {
+        ErrorCollector::new(self.module_info().dupe(), ErrorStyle::Delayed)
+    }
+
+    /// Create an error collector that simply swallows errors. Useful when a caller wants to try an
+    /// operation that may error but never report errors from it.
+    pub fn error_swallower(&self) -> ErrorCollector {
+        ErrorCollector::new(self.module_info().dupe(), ErrorStyle::Never)
     }
 }

@@ -128,6 +128,14 @@ exports[`Try Pyrefly Component renders in code snippet mode without error panel 
           </span>
         </button>
         <button
+          aria-label="copy code to clipboard"
+          id="copy-code-button"
+        >
+          <span>
+            📋 Copy
+          </span>
+        </button>
+        <button
           aria-label="reset to default code"
           id="reset-button"
         >

@@ -1,0 +1,65 @@
+---
+title: Installation
+
+description: How to install Pyrefly
+---
+
+
+Pyrefly isn't ready just yet,  but you can see our roadmap [here](https://github.com/facebook/pyrefly/milestone/1). We will be populating this section soon!
+
+----
+
+If you want to experiment with our tool, the easiest way to install Pyrefly is via `pip`.
+
+```
+pip install pyrefly
+```
+
+Then, `cd` into the directory or project you would like to type check and run
+
+```
+pyrefly check
+```
+
+You'll want to set up a basic configuration file to type check your project. You can add configuration options to a `pyproject.toml` file, or create a `pyrefly.toml` file in your project directory.
+
+```
+[tool.pyrefly]
+search_path = [
+    "example_directory/..."
+]
+```
+
+Then, simply run `pyrefly check`, this time the tool will use your configuration options.
+
+It's likely the tool will return a list of type errors, this is perfectly normal. At this point you have a few options:
+
+1. Silence the errors using `# pyrefly: ignore` comments. This will get your project to a clean type checking state and you can drive down the number of errors as you go. We've included a script that can do this for you:
+
+```
+pyrefly check --suppress-errors
+```
+2. Use extra configuration options to silence specific categories of errors, or exclude files with more errors than average.
+
+----
+## Upgrading Pyrefly
+
+Upgrading the version of Pyrefly you're using, or a third party library you depend on can surface new type errors in your code. Fixing them all at once is often not realistic. We've written scripts to help you temporarily silence them.
+
+```
+# step 1
+pyrefly check --suppress-errors
+```
+
+```
+# step 2
+<run your formatter of choice>
+```
+
+```
+# step 3
+pyrefly check --remove-unused-ignores
+```
+Repeat the steps above until you get a clean fomatting run and a clean type check.
+
+This will add ` # pyrefly: ignore` comments to your code that will enable you to silence errors, and come back and fix them at a later date. This can make the process of upgrading a large codebase much more manageable.

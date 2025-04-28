@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use crate::config::error::ErrorConfigs;
 use crate::test::util::TestEnv;
 use crate::testcase;
 
@@ -551,8 +550,8 @@ fn test_import_fail_to_load() {
     let (state, handle) = env.to_state();
     let errs = state
         .transaction()
-        .get_loads([&handle("foo")])
-        .collect_errors(&ErrorConfigs::default())
+        .get_errors([&handle("foo")])
+        .collect_errors()
         .shown;
     assert_eq!(errs.len(), 1);
     let msg = errs[0].to_string();
@@ -679,3 +678,29 @@ assert_type(x, list[str])
 "#,
 );
 */
+
+fn env_override_typing() -> TestEnv {
+    TestEnv::one(
+        "typing",
+        r#"
+# This module uses `Iterator` from the real typeshed typing
+for x in [1, 2, 3]:
+    pass
+
+custom_thing = 1
+"#,
+    )
+}
+
+testcase!(
+    test_override_typing,
+    env_override_typing(),
+    r#"
+# We are importing `typing` from `TestEnv`, which in turn makes use of things
+# from the typeshed `typing`.
+from typing import custom_thing
+
+for x in [1, 2, 3]:
+    pass
+"#,
+);

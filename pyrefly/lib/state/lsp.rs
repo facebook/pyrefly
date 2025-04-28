@@ -8,26 +8,31 @@
 use dupe::Dupe;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
+use lsp_types::DocumentSymbol;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use starlark_map::ordered_set::OrderedSet;
 
+use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::export::definitions::DocString;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
+use crate::module::module_info::ModuleInfo;
 use crate::module::module_info::TextRangeWithModuleInfo;
 use crate::module::module_name::ModuleName;
 use crate::module::short_identifier::ShortIdentifier;
 use crate::ruff::ast::Ast;
 use crate::state::handle::Handle;
 use crate::state::state::Transaction;
+use crate::types::lsp::source_range_to_range;
 use crate::types::module::Module;
 use crate::types::types::Type;
 use crate::util::gas::Gas;
@@ -37,7 +42,6 @@ use crate::util::visit::Visit;
 const INITIAL_GAS: Gas = Gas::new(20);
 
 pub enum DefinitionMetadata {
-    #[expect(dead_code)]
     Attribute(Name),
     Module,
     Variable,
@@ -285,6 +289,120 @@ impl<'a> Transaction<'a> {
         self.find_definition(handle, position).map(|x| x.2)?
     }
 
+    pub fn find_local_references(&self, handle: &Handle, position: TextSize) -> Vec<TextRange> {
+        if let Some((definition_kind, definition, _docstring)) =
+            self.find_definition(handle, position)
+        {
+            self.local_references_from_definition(handle, definition_kind, definition)
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn local_references_from_definition(
+        &self,
+        handle: &Handle,
+        definition_metadata: DefinitionMetadata,
+        definition: TextRangeWithModuleInfo,
+    ) -> Vec<TextRange> {
+        let mut references = match definition_metadata {
+            DefinitionMetadata::Attribute(expected_name) => {
+                self.local_attribute_references_from_definition(handle, &definition, &expected_name)
+            }
+            DefinitionMetadata::Module => Vec::new(),
+            DefinitionMetadata::Variable => {
+                self.local_variable_references_from_definition(handle, &definition)
+            }
+        };
+        if definition.module_info.path() == handle.path() {
+            references.push(definition.range);
+        }
+        references.sort_by_key(|range| range.start());
+        references.dedup();
+        references
+    }
+
+    fn local_attribute_references_from_definition(
+        &self,
+        handle: &Handle,
+        definition: &TextRangeWithModuleInfo,
+        expected_name: &Name,
+    ) -> Vec<TextRange> {
+        // We first find all the attributes of the form `<expr>.<expected_name>`.
+        // These are candidates for the references of `definition`.
+        let relevant_attributes = if let Some(mod_module) = self.get_ast(handle) {
+            fn f(x: &Expr, expected_name: &Name, res: &mut Vec<ExprAttribute>) {
+                if let Expr::Attribute(x) = x
+                    && x.attr.id == *expected_name
+                {
+                    res.push(x.clone());
+                }
+                x.recurse(&mut |x| f(x, expected_name, res));
+            }
+            let mut res = Vec::new();
+            mod_module.visit(&mut |x| f(x, expected_name, &mut res));
+            res
+        } else {
+            Vec::new()
+        };
+        // For each attribute we found above, we will test whether it actually will jump to the
+        // given `definition`.
+        self.ad_hoc_solve(handle, |solver| {
+            let mut references = Vec::new();
+            for attribute in relevant_attributes {
+                if let Some(answers) = self.get_answers(handle)
+                    && let Some(base_type) = answers.get_type_trace(attribute.value.range())
+                {
+                    for AttrInfo {
+                        name,
+                        ty: _,
+                        module,
+                        range,
+                    } in solver.completions(base_type.arc_clone(), false)
+                    {
+                        if let Some(module) = module
+                            && let Some(range) = range
+                            && &name == expected_name
+                            && module.path() == definition.module_info.path()
+                            && range == definition.range
+                        {
+                            references.push(attribute.attr.range());
+                        }
+                    }
+                }
+            }
+            references
+        })
+        .unwrap_or_default()
+    }
+
+    fn local_variable_references_from_definition(
+        &self,
+        handle: &Handle,
+        definition: &TextRangeWithModuleInfo,
+    ) -> Vec<TextRange> {
+        let Some(bindings) = self.get_bindings(handle) else {
+            return Vec::new();
+        };
+        let mut references = Vec::new();
+        for idx in bindings.keys::<Key>() {
+            let binding = bindings.get(idx);
+            if let Some((
+                definition_handle,
+                Export {
+                    location,
+                    docstring: _,
+                },
+            )) = self.binding_to_export(handle, binding, INITIAL_GAS)
+                && definition_handle.path() == definition.module_info.path()
+                && definition.range == location
+            {
+                references.push(bindings.idx_to_key(idx).range());
+            }
+        }
+        references
+    }
+
     pub fn completion(&self, handle: &Handle, position: TextSize) -> Vec<CompletionItem> {
         let mut results = self
             .completion_unsorted_opt(handle, position)
@@ -388,5 +506,68 @@ impl<'a> Transaction<'a> {
             }
         }
         Some(res)
+    }
+
+    #[allow(dead_code)]
+    pub fn symbols(&self, handle: &Handle) -> Option<Vec<DocumentSymbol>> {
+        let ast = self.get_ast(handle)?;
+        let module_info = self.get_module_info(handle)?;
+        fn recurse_stmt_adding_symbols<'a>(
+            stmt: &'a Stmt,
+            symbols: &'a mut Vec<DocumentSymbol>,
+            module_info: &ModuleInfo,
+        ) {
+            let mut recursed_symbols = Vec::new();
+            stmt.recurse(&mut |stmt| {
+                recurse_stmt_adding_symbols(stmt, &mut recursed_symbols, module_info)
+            });
+
+            match stmt {
+                Stmt::FunctionDef(stmt_function_def) => {
+                    let mut children = Vec::new();
+                    children.append(&mut recursed_symbols);
+                    symbols.push(DocumentSymbol {
+                        name: stmt_function_def.name.to_string(),
+                        detail: None,
+                        kind: lsp_types::SymbolKind::FUNCTION,
+                        tags: None,
+                        #[expect(deprecated)]
+                        deprecated: None,
+                        range: source_range_to_range(
+                            &module_info.source_range(stmt_function_def.range),
+                        ),
+                        selection_range: source_range_to_range(
+                            &module_info.source_range(stmt_function_def.name.range),
+                        ),
+                        children: Some(children),
+                    });
+                }
+                Stmt::ClassDef(stmt_class_def) => {
+                    let mut children = Vec::new();
+                    children.append(&mut recursed_symbols);
+                    symbols.push(DocumentSymbol {
+                        name: stmt_class_def.name.to_string(),
+                        detail: None,
+                        kind: lsp_types::SymbolKind::CLASS,
+                        tags: None,
+                        #[expect(deprecated)]
+                        deprecated: None,
+                        range: source_range_to_range(
+                            &module_info.source_range(stmt_class_def.range),
+                        ),
+                        selection_range: source_range_to_range(
+                            &module_info.source_range(stmt_class_def.name.range),
+                        ),
+                        children: Some(children),
+                    });
+                }
+                _ => {}
+            };
+            symbols.append(&mut recursed_symbols);
+        }
+        let mut result = Vec::new();
+        ast.body
+            .visit(&mut |stmt| recurse_stmt_adding_symbols(stmt, &mut result, &module_info));
+        Some(result)
     }
 }

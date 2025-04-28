@@ -6,7 +6,9 @@
  */
 
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprAttribute;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingExpect;
@@ -17,9 +19,12 @@ use crate::binding::binding::KeyExpect;
 use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::bindings::LookupKind;
+use crate::binding::narrow::identifier_and_chain_for_attribute;
 use crate::binding::scope::FlowStyle;
 use crate::error::kind::ErrorKind;
 use crate::graph::index::Idx;
+use crate::module::short_identifier::ShortIdentifier;
 
 impl<'a> BindingsBuilder<'a> {
     fn bind_unpacking(
@@ -70,11 +75,30 @@ impl<'a> BindingsBuilder<'a> {
         );
     }
 
+    pub fn bind_attr_assign(&mut self, attr: ExprAttribute, value: ExprOrBinding) {
+        if let Some((identifier, _)) = identifier_and_chain_for_attribute(&attr) {
+            let idx = self.table.insert(
+                Key::AttrAssign(ShortIdentifier::new(&identifier)),
+                Binding::AssignToAttribute(Box::new((attr, value))),
+            );
+            let name = Hashed::new(&identifier.id);
+            if self.lookup_name_hashed(name, LookupKind::Regular).is_ok() {
+                self.scopes
+                    .update_flow_info_hashed(self.loop_depth, name, idx, FlowStyle::None);
+            }
+        } else {
+            self.table.insert(
+                Key::Anon(attr.range),
+                Binding::AssignToAttribute(Box::new((attr, value))),
+            );
+        }
+    }
+
     /// Bind the LHS of a target in a syntactic form (e.g. assignments, variables
     /// bound in a `for`` loop header, variables defined by a `with` statement header).
     ///
     /// The `target` is the LHS. It is an `Expr`, but in fact only a handful of forms
-    /// are legal because targets can only be names, attributes, subscripts, or unpackings. An
+    /// are legal because targets can only be names, attributes, subscripts, or unpackngs. An
     /// example target illustrating all of the cases is `(x.y, d["k"], [z, *w, q])`
     ///
     /// The `make_binding` function is a callback to the caller, who is responsible for constructing
@@ -100,51 +124,40 @@ impl<'a> BindingsBuilder<'a> {
         value: Option<&Expr>,
         ensure_mutable_name: bool,
     ) {
+        if ensure_mutable_name && let Expr::Name(name) = target {
+            // We normally should not ensure a top-level name, but if the target is for an
+            // AugAssign operation, then the name needs to already be in scope and will be used
+            // to resolve the target as a (possibly overwriting) mutation.
+            self.ensure_mutable_name(name);
+        } else if matches!(target, Expr::Subscript(..) | Expr::Attribute(..)) {
+            // We should always ensure a target that is an attribute or subscript, because
+            // the base needs to already be in scope and will be used to resolve the target as
+            // a mutation.
+            self.ensure_expr(target);
+        }
         match target {
-            Expr::Name(name) => {
-                if ensure_mutable_name {
-                    // This is only used for AugAssign targets, which unlike normal targets do not
-                    // define an entirely new name but rely on the name already being bound.
-                    self.ensure_mutable_name(name);
-                }
-                self.bind_assign(name, make_binding, FlowStyle::None)
+            Expr::Name(name) => self.bind_assign(name, make_binding, FlowStyle::None),
+            Expr::Attribute(x) => {
+                // `make_binding` will give us a binding for inferring the value type, which we
+                // *might* use to compute the attribute type if there are no explicit annotations.
+                let attr_value = if let Some(value) = value {
+                    ExprOrBinding::Expr(value.clone())
+                } else {
+                    ExprOrBinding::Binding(make_binding(None))
+                };
+                // Create a binding to verify that the assignment is valid and potentially narrow
+                // the name assigned to.
+                self.bind_attr_assign(x.clone(), attr_value.clone());
+                // If this is a self-assignment, record it because we may use it to infer
+                // the existence of an instance-only attribute.
+                self.record_self_attr_assign(x, attr_value, None);
             }
-            e if matches!(&e, Expr::Attribute(..) | Expr::Subscript(..)) => {
-                // Resolving assignment to an attribute or subscript depends on the base.
-                self.ensure_expr(e);
-                // Two layers of matching are needed so that we can pass `e` as mutable in `ensure_expr`.
-                match e {
-                    Expr::Attribute(x) => {
-                        // `make_binding` will give us a binding for inferring the value type, which we
-                        // *might* use to compute the attribute type if there are no explicit annotations.
-                        let attr_value = if let Some(value) = value {
-                            ExprOrBinding::Expr(value.clone())
-                        } else {
-                            ExprOrBinding::Binding(make_binding(None))
-                        };
-                        // Create a check binding to verify that the assignment is valid.
-                        self.table.insert(
-                            KeyExpect(x.range),
-                            BindingExpect::CheckAssignToAttribute(Box::new((
-                                x.clone(),
-                                attr_value.clone(),
-                            ))),
-                        );
-                        // If this is a self-assignment, record it because we may use it to infer
-                        // the existence of an instance-only attribute.
-                        self.record_self_attr_assign(x, attr_value, None);
-                    }
-                    Expr::Subscript(x) => {
-                        let binding = make_binding(None);
-                        self.table.insert(
-                            Key::Anon(x.range),
-                            Binding::SubscriptValue(Box::new(binding), x.clone()),
-                        );
-                    }
-                    _ => {
-                        unreachable!("The outer match disallows this case.")
-                    }
-                }
+            Expr::Subscript(x) => {
+                let binding = make_binding(None);
+                self.table.insert(
+                    Key::Anon(x.range),
+                    Binding::SubscriptValue(Box::new(binding), x.clone()),
+                );
             }
             Expr::Tuple(tup) => {
                 self.bind_unpacking(&mut tup.elts, make_binding, tup.range);

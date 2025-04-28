@@ -35,41 +35,33 @@ const docsSidebar = [
         label: 'Getting Started',
         description: "Never used a type system before or just new to Pyrefly? Start here!",
         collapsed: false,
-        items: [...fbInternalOnly(['fb/installation']), 'configuration'],
+        items: ['installation', 'configuration'],
     },
-    ...fbInternalOnly(
-        [
-            {
-                type: 'category' as const,
-                label: 'Migrating to Pyrefly',
-                link: {
-                    type: 'doc' as const,
-                    id: 'fb/migrating-to-pyrefly',
-                },
-                description: "Never used a type system before or just new to Pyrefly? Start here!",
-                items: ['fb/migrating-from-mypy',  'fb/migrating-from-pyright']
-            },
-        ]
-    ),
+    {
+        type: 'category' as const,
+        label: 'Migrating to Pyrefly',
+        link: {
+            type: 'doc' as const,
+            id: 'migrating-to-pyrefly',
+        },
+        description: "Never used a type system before or just new to Pyrefly? Start here!",
+        items: ['migrating-from-mypy',  'migrating-from-pyright']
+    },
     {
         type: 'doc' as const,
         id: 'pyrefly-faq',
         label: 'FAQ',
     },
-    ...fbInternalOnly(
-        [
-            {
-                type: 'doc' as const,
-                id: 'fb/IDE',
-                label: 'IDE',
-            },
-            {
-                type: 'doc' as const,
-                id: 'fb/error-suppresions',
-                label: 'Error Suppressions',
-            },
-        ]
-    ),
+    {
+        type: 'doc' as const,
+        id: 'IDE',
+        label: 'IDE',
+    },
+    {
+        type: 'doc' as const,
+        id: 'error-suppresions',
+        label: 'Error Suppressions',
+    },
     {
         type: 'doc' as const,
         id: 'error-kinds',

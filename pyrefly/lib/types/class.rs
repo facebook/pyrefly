@@ -26,6 +26,7 @@ use starlark_map::small_map::SmallMap;
 
 use crate::module::module_info::ModuleInfo;
 use crate::module::module_name::ModuleName;
+use crate::module::module_path::ModulePath;
 use crate::types::equality::TypeEq;
 use crate::types::qname::QName;
 use crate::types::quantified::Quantified;
@@ -141,8 +142,12 @@ impl Class {
 
     /// Key to use for equality purposes. If we have the same module and index,
     /// we must point at the same class underneath.
-    fn key_eq(&self) -> (ClassIndex, ModuleName) {
-        (self.0.index, self.0.qname.module_name())
+    fn key_eq(&self) -> (ClassIndex, ModuleName, &ModulePath) {
+        (
+            self.0.index,
+            self.0.qname.module_name(),
+            self.0.qname.module_info().path(),
+        )
     }
 
     /// Key to use for comparison purposes. Main used to sort identifiers in union,

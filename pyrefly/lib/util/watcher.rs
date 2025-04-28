@@ -62,4 +62,12 @@ impl CategorizedEvents {
             && self.removed.is_empty()
             && self.unknown.is_empty()
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = &PathBuf> {
+        self.created
+            .iter()
+            .chain(self.modified.iter())
+            .chain(self.removed.iter())
+            .chain(self.unknown.iter())
+    }
 }

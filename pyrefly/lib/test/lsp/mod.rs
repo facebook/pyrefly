@@ -9,7 +9,9 @@
 
 mod completion;
 mod definition;
+mod document_symbols;
 mod hover_docstring;
 mod hover_type;
 mod inlay_hint;
+mod local_find_refs;
 mod lsp_interaction;

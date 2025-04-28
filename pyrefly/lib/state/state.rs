@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::hash_map::Entry;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::BufWriter;
@@ -57,15 +58,17 @@ use crate::export::definitions::DocString;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
+use crate::module::bundled::BundledTypeshed;
 use crate::module::module_info::ModuleInfo;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
+use crate::module::module_path::ModulePathDetails;
 use crate::state::dirty::Dirty;
 use crate::state::epoch::Epoch;
 use crate::state::epoch::Epochs;
+use crate::state::errors::Errors;
 use crate::state::handle::Handle;
 use crate::state::load::Load;
-use crate::state::load::Loads;
 use crate::state::loader::FindError;
 use crate::state::loader::LoaderFindCache;
 use crate::state::memory::MemoryFiles;
@@ -88,12 +91,14 @@ use crate::util::lock::RwLock;
 use crate::util::locked_map::LockedMap;
 use crate::util::no_hash::BuildNoHash;
 use crate::util::recurser::Recurser;
+use crate::util::small_set1::SmallSet1;
 use crate::util::task_heap::TaskHeap;
 use crate::util::thread_pool::ThreadPool;
 use crate::util::uniques::UniqueFactory;
 use crate::util::upgrade_lock::UpgradeLock;
 use crate::util::upgrade_lock::UpgradeLockExclusiveGuard;
 use crate::util::upgrade_lock::UpgradeLockWriteGuard;
+use crate::util::watcher::CategorizedEvents;
 
 /// `ModuleData` is a snapshot of `ArcId<ModuleDataMut>` in the main state.
 /// The snapshot is readonly most of the times. It will only be overwritten with updated information
@@ -103,7 +108,9 @@ struct ModuleData {
     handle: Handle,
     config: ArcId<ConfigFile>,
     state: ModuleDataInner,
-    deps: HashMap<ModuleName, Handle, BuildNoHash>,
+    /// The dependencies of this module.
+    /// Most modules exist in exactly one place, but it can be possible to load the same module multiple times with different paths.
+    deps: HashMap<ModuleName, SmallSet1<Handle>, BuildNoHash>,
     rdeps: HashSet<Handle>,
 }
 
@@ -112,7 +119,7 @@ struct ModuleDataMut {
     handle: Handle,
     config: RwLock<ArcId<ConfigFile>>,
     state: UpgradeLock<Step, ModuleDataInner>,
-    deps: RwLock<HashMap<ModuleName, Handle, BuildNoHash>>,
+    deps: RwLock<HashMap<ModuleName, SmallSet1<Handle>, BuildNoHash>>,
     /// The reverse dependencies of this module. This is used to invalidate on change.
     /// Note that if we are only running once, e.g. on the command line, this isn't valuable.
     /// But we create it anyway for simplicity, since it doesn't seem to add much overhead.
@@ -285,40 +292,58 @@ impl<'a> Transaction<'a> {
         self.with_module_inner(handle, |x| x.steps.ast.dupe())
     }
 
+    pub fn get_config(&self, handle: &Handle) -> Option<ArcId<ConfigFile>> {
+        // We ignore the ModuleDataInner, but no worries, this is not on a critical path
+        self.with_module_config_inner(handle, |c, _| Some(c.dupe()))
+    }
+
     pub fn get_load(&self, handle: &Handle) -> Option<Arc<Load>> {
         self.with_module_inner(handle, |x| x.steps.load.dupe())
     }
 
-    pub fn get_loads<'b>(&self, handles: impl IntoIterator<Item = &'b Handle>) -> Loads {
-        Loads::new(
+    pub fn get_errors<'b>(&self, handles: impl IntoIterator<Item = &'b Handle>) -> Errors {
+        Errors::new(
             handles
                 .into_iter()
-                .filter_map(|handle| self.with_module_inner(handle, |x| x.steps.load.dupe())),
+                .filter_map(|handle| {
+                    self.with_module_config_inner(handle, |config, x| {
+                        Some((x.steps.load.dupe()?, config.dupe()))
+                    })
+                })
+                .collect(),
         )
     }
 
-    pub fn get_all_loads(&self) -> Loads {
+    pub fn get_all_errors(&self) -> Errors {
         if self.data.updated_modules.is_empty() {
             // Optimised path
-            return Loads::new(
+            return Errors::new(
                 self.readable
                     .modules
                     .values()
-                    .filter_map(|x| x.state.steps.load.dupe()),
+                    .filter_map(|x| Some((x.state.steps.load.dupe()?, x.config.dupe())))
+                    .collect(),
             );
         }
         let mut res = self
             .data
             .updated_modules
             .iter_unordered()
-            .filter_map(|x| x.1.state.read().steps.load.dupe())
+            .filter_map(|x| {
+                Some((
+                    x.1.state.read().steps.load.dupe()?,
+                    x.1.config.read().dupe(),
+                ))
+            })
             .collect::<Vec<_>>();
         for (k, v) in self.readable.modules.iter() {
             if self.data.updated_modules.get(k).is_none() {
-                res.extend(v.state.steps.load.dupe());
+                if let Some(load) = v.state.steps.load.dupe() {
+                    res.push((load, v.config.dupe()));
+                }
             }
         }
-        Loads::new(res)
+        Errors::new(res)
     }
 
     pub fn get_module_info(&self, handle: &Handle) -> Option<ModuleInfo> {
@@ -441,7 +466,7 @@ impl<'a> Transaction<'a> {
                 // Downgrade to exclusive, so other people can read from us, or we lock up.
                 // But don't give up the lock entirely, so we don't recompute anything
                 let _exclusive = w.exclusive();
-                for dep_handle in deps.values() {
+                for dep_handle in deps.values().flatten() {
                     let removed = self
                         .get_module(dep_handle)
                         .rdeps
@@ -493,7 +518,7 @@ impl<'a> Transaction<'a> {
         if exclusive.dirty.find {
             let loader = self.get_cached_loader(&module_data.config.read());
             let mut is_dirty = false;
-            for dependency_handle in module_data.deps.read().values() {
+            for dependency_handle in module_data.deps.read().values().flatten() {
                 match loader.find_import(dependency_handle.module()) {
                     Ok(path) if &path == dependency_handle.path() => {}
                     _ => {
@@ -666,6 +691,21 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Like `with_module_inner`, but also gives access to the config.
+    fn with_module_config_inner<R>(
+        &self,
+        handle: &Handle,
+        f: impl FnOnce(&ArcId<ConfigFile>, &ModuleDataInner) -> Option<R>,
+    ) -> Option<R> {
+        if let Some(v) = self.data.updated_modules.get(handle) {
+            f(&v.config.read(), &v.state.read())
+        } else if let Some(v) = self.readable.modules.get(handle) {
+            f(&v.config, &v.state)
+        } else {
+            None
+        }
+    }
+
     fn get_module(&self, handle: &Handle) -> ArcId<ModuleDataMut> {
         self.get_module_ex(handle).0
     }
@@ -680,11 +720,7 @@ impl<'a> Transaction<'a> {
                 if let Some(m) = self.readable.modules.get(handle) {
                     ArcId::new(m.clone_for_mutation())
                 } else {
-                    let config = self
-                        .data
-                        .state
-                        .config_finder
-                        .python_file(handle.module(), handle.path());
+                    let config = self.data.state.get_config(handle.module(), handle.path());
                     let res = ArcId::new(ModuleDataMut::new(handle.dupe(), config, self.data.now));
                     created = Some(res.dupe());
                     res
@@ -825,7 +861,7 @@ impl<'a> Transaction<'a> {
     }
 
     fn compute_stdlib(&mut self, sys_infos: SmallSet<SysInfo>) {
-        let loader = self.get_cached_loader(&ConfigFile::empty());
+        let loader = self.get_cached_loader(&BundledTypeshed::config());
         for k in sys_infos.into_iter_hashed() {
             self.data
                 .stdlib
@@ -893,7 +929,7 @@ impl<'a> Transaction<'a> {
                 false
             } else {
                 stack.insert(x.handle.dupe());
-                let res = x.deps.values().any(|y| {
+                let res = x.deps.values().flatten().any(|y| {
                     f(
                         state,
                         dirty_handles,
@@ -1013,6 +1049,27 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Invalidate based on what a watcher told you.
+    pub fn invalidate_events(&mut self, events: &CategorizedEvents) {
+        // If any files were added or removed, we need to invalidate the find step.
+        if !events.created.is_empty() && !events.removed.is_empty() && !events.unknown.is_empty() {
+            self.invalidate_find();
+        }
+
+        // Any files that change need to be invalidated
+        let files = events.iter().cloned().collect::<Vec<_>>();
+        self.invalidate_disk(&files);
+
+        // If any config files changed, we need to invalidate the config step.
+        if events.iter().any(|x| {
+            x.file_name()
+                .and_then(|x| x.to_str())
+                .is_some_and(|x| ConfigFile::CONFIG_FILE_NAMES.contains(&x))
+        }) {
+            self.invalidate_config();
+        }
+    }
+
     /// Called if the `find` portion of loading might have changed.
     /// E.g. you have include paths, and a new file appeared earlier on the path.
     pub fn invalidate_find(&mut self) {
@@ -1038,11 +1095,7 @@ impl<'a> Transaction<'a> {
         // If they change, set find to dirty.
         let mut dirty_set = self.data.dirty.lock();
         for (handle, module_data) in self.data.updated_modules.iter_unordered() {
-            let config2 = self
-                .data
-                .state
-                .config_finder
-                .python_file(handle.module(), handle.path());
+            let config2 = self.data.state.get_config(handle.module(), handle.path());
             if config2 != *module_data.config.read() {
                 *module_data.config.write() = config2;
                 module_data.state.write(Step::Load).unwrap().dirty.find = true;
@@ -1051,11 +1104,7 @@ impl<'a> Transaction<'a> {
         }
         for (handle, module_data) in self.readable.modules.iter() {
             if self.data.updated_modules.get(handle).is_none() {
-                let config2 = self
-                    .data
-                    .state
-                    .config_finder
-                    .python_file(handle.module(), handle.path());
+                let config2 = self.data.state.get_config(handle.module(), handle.path());
                 if module_data.config != config2 {
                     let module_data = self.get_module(handle);
                     *module_data.config.write() = config2;
@@ -1202,7 +1251,9 @@ impl<'a> TransactionHandle<'a> {
         module: ModuleName,
         path: Option<&ModulePath>,
     ) -> Result<ArcId<ModuleDataMut>, FindError> {
-        if let Some(res) = self.module_data.deps.read().get(&module) {
+        if let Some(res) = self.module_data.deps.read().get(&module).map(|x| x.first())
+            && path.is_none_or(|path| path == res.path())
+        {
             return Ok(self.transaction.get_module(res));
         }
 
@@ -1211,7 +1262,13 @@ impl<'a> TransactionHandle<'a> {
             .import_handle(&self.module_data.handle, module, path)?;
         let res = self.transaction.get_module(&handle);
         let mut write = self.module_data.deps.write();
-        let did_insert = write.insert(module, handle).is_none();
+        let did_insert = match write.entry(module) {
+            Entry::Vacant(e) => {
+                e.insert(SmallSet1::new(handle));
+                true
+            }
+            Entry::Occupied(mut e) => e.get_mut().insert(handle),
+        };
         drop(write);
         if did_insert {
             res.rdeps.lock().insert(self.module_data.handle.dupe());
@@ -1291,6 +1348,14 @@ impl State {
 
     pub fn config_finder(&self) -> &ConfigFinder {
         &self.config_finder
+    }
+
+    fn get_config(&self, name: ModuleName, path: &ModulePath) -> ArcId<ConfigFile> {
+        if matches!(path.details(), ModulePathDetails::BundledTypeshed(_)) {
+            BundledTypeshed::config()
+        } else {
+            self.config_finder.python_file(name, path)
+        }
     }
 
     pub fn new_transaction<'a>(

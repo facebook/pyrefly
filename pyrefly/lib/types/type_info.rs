@@ -112,6 +112,8 @@ impl TypeInfo {
         }
     }
 
+    /// Add a narrow to the TypeInfo. This is used for narrowing conditions, not assignment - it
+    /// only adds a new narrow (possibly overwriting any prexisting narrow), without changing subtrees.
     fn add_narrow(&mut self, names: &Vec1<Name>, ty: Type) {
         if let Some((name, more_names)) = names.split_first() {
             if let Some(attrs) = &mut self.attrs {
@@ -123,6 +125,29 @@ impl TypeInfo {
                     ty,
                 )));
             }
+        } else {
+            unreachable!(
+                "We know the Vec1 will split. But the safe API, split_off_first, is not ref-based."
+            )
+        }
+    }
+
+    /// Update for an assignment. This is different from `add_narrow` for two reasons:
+    /// - It invalidates any existing subtree at that attribute chain in addition to narrowing.
+    /// - There may not be a type available for the assignment (in which case we *just* invalidate)
+    pub fn update_for_assignment(&mut self, names: &Vec1<Name>, ty: Option<Type>) {
+        if let Some((name, more_names)) = names.split_first() {
+            if let Some(attrs) = &mut self.attrs {
+                // If there might be an existing narrow, we need to recurse down the chain of names and update.
+                attrs.update_for_assignment(name, more_names, ty);
+            } else if let Some(ty) = ty {
+                // If there is no existing narrow and a Type is available, we should create a narrow.
+                self.attrs = Some(Box::new(NarrowedAttrs::of_narrow(
+                    name.clone(),
+                    more_names,
+                    ty,
+                )));
+            } // ... else we have no type nor an existing narrow, nothing to do
         } else {
             unreachable!(
                 "We know the Vec1 will split. But the safe API, split_off_first, is not ref-based."
@@ -179,6 +204,24 @@ impl NarrowedAttrs {
                 attrs.insert(name, NarrowedAttr::new(more_names, ty));
             }
         };
+    }
+
+    fn update_for_assignment(&mut self, name: &Name, more_names: &[Name], ty: Option<Type>) {
+        let attrs = &mut self.0;
+        match more_names {
+            [] => {
+                if let Some(ty) = ty {
+                    attrs.insert(name.clone(), NarrowedAttr::new(more_names, ty));
+                } else {
+                    attrs.shift_remove(name);
+                }
+            }
+            [name, more_names @ ..] => {
+                if let Some(attr) = attrs.get_mut(name) {
+                    attr.update_for_assignment(name, more_names, ty);
+                } // ... else there is no existing narrow and no narrow type, so do nothing.
+            }
+        }
     }
 
     fn get(&self, name: &Name) -> Option<&NarrowedAttr> {
@@ -359,6 +402,15 @@ impl NarrowedAttr {
                         Self::WithRoot(root_ty, attrs)
                     }
                 }
+            }
+        }
+    }
+
+    fn update_for_assignment(&mut self, name: &Name, more_names: &[Name], ty: Option<Type>) {
+        match self {
+            Self::Leaf(..) => {}
+            Self::WithoutRoot(attrs) | Self::WithRoot(_, attrs) => {
+                attrs.update_for_assignment(name, more_names, ty);
             }
         }
     }

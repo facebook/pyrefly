@@ -103,7 +103,7 @@ impl<'a> BindingsBuilder<'a> {
             |ann| {
                 Binding::TypeVar(
                     ann,
-                    Identifier::new(name.id.clone(), name.range()),
+                    Ast::expr_name_identifier(name.clone()),
                     Box::new(call.clone()),
                 )
             },
@@ -134,7 +134,7 @@ impl<'a> BindingsBuilder<'a> {
             |ann| {
                 Binding::ParamSpec(
                     ann,
-                    Identifier::new(name.id.clone(), name.range()),
+                    Ast::expr_name_identifier(name.clone()),
                     Box::new(call.clone()),
                 )
             },
@@ -149,7 +149,7 @@ impl<'a> BindingsBuilder<'a> {
             |ann| {
                 Binding::TypeVarTuple(
                     ann,
-                    Identifier::new(name.id.clone(), name.range()),
+                    Ast::expr_name_identifier(name.clone()),
                     Box::new(call.clone()),
                 )
             },
@@ -171,7 +171,7 @@ impl<'a> BindingsBuilder<'a> {
         }
         self.check_functional_definition_name(&name.id, arg_name);
         self.synthesize_enum_def(
-            Identifier::new(name.id.clone(), name.range()),
+            Ast::expr_name_identifier(name.clone()),
             func.clone(),
             members,
         );
@@ -188,7 +188,7 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_expr(func);
         self.check_functional_definition_name(&name.id, arg_name);
         self.synthesize_typed_dict_def(
-            Identifier::new(name.id.clone(), name.range),
+            Ast::expr_name_identifier(name.clone()),
             func.clone(),
             args,
             keywords,
@@ -205,7 +205,7 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_expr(func);
         self.check_functional_definition_name(&name.id, arg_name);
         self.synthesize_typing_named_tuple_def(
-            Identifier::new(name.id.clone(), name.range()),
+            Ast::expr_name_identifier(name.clone()),
             func.clone(),
             members,
         );
@@ -222,7 +222,7 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_expr(func);
         self.check_functional_definition_name(&name.id, arg_name);
         self.synthesize_collections_named_tuple_def(
-            Identifier::new(name.id.clone(), name.range()),
+            Ast::expr_name_identifier(name.clone()),
             members,
             keywords,
         );
@@ -232,10 +232,7 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_expr(new_type_name);
         self.check_functional_definition_name(&name.id, new_type_name);
         self.ensure_type(base, &mut None);
-        self.synthesize_typing_new_type(
-            Identifier::new(name.id.clone(), name.range()),
-            base.clone(),
-        );
+        self.synthesize_typing_new_type(Ast::expr_name_identifier(name.clone()), base.clone());
     }
 
     pub fn ensure_mutable_name(&mut self, x: &ExprName) {
@@ -561,10 +558,7 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     if let Some(box mut v) = x.value {
                         self.ensure_expr(&mut v);
-                        self.table.insert(
-                            KeyExpect(v.range()),
-                            BindingExpect::CheckAssignToAttribute(Box::new((attr, value))),
-                        );
+                        self.bind_attr_assign(attr, value);
                     }
                 }
                 mut target => {

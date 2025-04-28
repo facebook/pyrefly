@@ -804,3 +804,25 @@ class E:
 E.EXAMPLE_VALUE # E: Class `E` has no class attribute `EXAMPLE_VALUE`
     "#,
 );
+
+testcase!(
+    test_type_magic_dunder_compare,
+    r#"
+def test(x: type[int], y: type[int]) -> None:
+    # These are OK because `type` inherits `__eq__` and `__ne__` from `object`.
+    x == y
+    x != y
+
+    # These are always OK
+    x is y
+    x is not y
+
+    # These are not OK because the corresponding dunder methods are not defined on `type`
+    x < y       # E: `<` is not supported between `type[int]` and `type[int]`
+    x <= y      # E: `<=` is not supported between `type[int]` and `type[int]`
+    x > y       # E: `>` is not supported between `type[int]` and `type[int]`
+    x >= y      # E: `>=` is not supported between `type[int]` and `type[int]`
+    x in y      # E: `in` is not supported between `type[int]` and `type[int]`
+    x not in y  # E: `not in` is not supported between `type[int]` and `type[int]`
+    "#,
+);

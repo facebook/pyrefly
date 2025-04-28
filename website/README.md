@@ -3,6 +3,10 @@
 The website is a combination of static content (built using
 [Docusaurus 2](https://docusaurus.io/)) and a sandbox built with Rust/WASM.
 
+## Docs
+
+The docs are written in markdown (with JSX) and are located in the `docs` directory. Note that you should not explicitly add H1 headers to the docs, because docusaurus does not support this by default (https://github.com/facebook/docusaurus/issues/5036).
+
 ## Development
 
 ### Prerequisites
@@ -14,8 +18,7 @@ yarn install-with-wasm-deps
 ```
 
 This builds the wasm dependencies and installs the yarn dependencies.
-If you are running into issues with compiling zstd on your mac when running `build.sh` or `start.sh`, you'll need to install
-clang following the instructions here: https://github.com/briansmith/ring/issues/1824.
+If you are running into issues with compiling zstd on your mac when running `build.sh` or `start.sh`, see the readme in that directory.
 
 ### Running the Website
 

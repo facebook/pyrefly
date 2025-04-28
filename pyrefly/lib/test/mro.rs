@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::binding::binding::KeyClassMetadata;
-use crate::config::error::ErrorConfigs;
 use crate::state::handle::Handle;
 use crate::state::state::State;
 use crate::test::util::get_class;
@@ -38,8 +37,8 @@ fn assert_no_errors(handle: &Handle, state: &State) {
     assert_eq!(
         state
             .transaction()
-            .get_loads([handle])
-            .collect_errors(&ErrorConfigs::default())
+            .get_errors([handle])
+            .collect_errors()
             .shown
             .len(),
         0,
@@ -50,8 +49,8 @@ fn assert_no_errors(handle: &Handle, state: &State) {
 fn assert_has_error(handle: &Handle, state: &State, error_msg: &str, assertion_msg: &str) {
     state
         .transaction()
-        .get_loads([handle])
-        .collect_errors(&ErrorConfigs::default())
+        .get_errors([handle])
+        .collect_errors()
         .shown
         .iter()
         .find(|e| e.msg().contains(error_msg))

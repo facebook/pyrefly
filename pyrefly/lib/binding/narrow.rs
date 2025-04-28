@@ -15,6 +15,7 @@ use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprNamed;
 use ruff_python_ast::ExprUnaryOp;
+use ruff_python_ast::Identifier;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -24,6 +25,7 @@ use starlark_map::smallmap;
 use vec1::Vec1;
 
 use crate::assert_words;
+use crate::ruff::ast::Ast;
 use crate::types::types::Type;
 use crate::util::prelude::SliceExt;
 
@@ -59,9 +61,9 @@ pub enum AtomicNarrowOp {
 }
 
 #[derive(Clone, Debug)]
-pub struct NarrowedAttribute(pub Box<Vec1<Name>>);
+pub struct AttributeChain(pub Box<Vec1<Name>>);
 
-impl NarrowedAttribute {
+impl AttributeChain {
     pub fn new(chain: Vec1<Name>) -> Self {
         Self(Box::new(chain))
     }
@@ -75,7 +77,7 @@ impl NarrowedAttribute {
 
 #[derive(Clone, Debug)]
 pub enum NarrowOp {
-    Atomic(Option<NarrowedAttribute>, AtomicNarrowOp),
+    Atomic(Option<AttributeChain>, AtomicNarrowOp),
     And(Vec<NarrowOp>),
     Or(Vec<NarrowOp>),
 }
@@ -107,7 +109,7 @@ impl AtomicNarrowOp {
 #[derive(Clone, Debug)]
 enum NarrowingSubject {
     Name(Name),
-    Attribute(Name, NarrowedAttribute),
+    Attribute(Name, AttributeChain),
 }
 
 impl NarrowOp {
@@ -293,15 +295,20 @@ impl NarrowOps {
     }
 }
 
-fn subject_for_attribute(expr: &ExprAttribute) -> Option<NarrowingSubject> {
-    fn f(expr: &ExprAttribute, mut rev_attr_chain: Vec<Name>) -> Option<NarrowingSubject> {
+pub fn identifier_and_chain_for_attribute(
+    expr: &ExprAttribute,
+) -> Option<(Identifier, AttributeChain)> {
+    fn f(
+        expr: &ExprAttribute,
+        mut rev_attr_chain: Vec<Name>,
+    ) -> Option<(Identifier, AttributeChain)> {
         match &*expr.value {
             Expr::Name(name) => {
                 let mut final_chain = Vec1::from_vec_push(rev_attr_chain, expr.attr.id.clone());
                 final_chain.reverse();
-                Some(NarrowingSubject::Attribute(
-                    name.id.clone(),
-                    NarrowedAttribute::new(final_chain),
+                Some((
+                    Ast::expr_name_identifier(name.clone()),
+                    AttributeChain::new(final_chain),
                 ))
             }
             Expr::Attribute(x) => {
@@ -312,6 +319,11 @@ fn subject_for_attribute(expr: &ExprAttribute) -> Option<NarrowingSubject> {
         }
     }
     f(expr, Vec::new())
+}
+
+fn subject_for_attribute(expr: &ExprAttribute) -> Option<NarrowingSubject> {
+    identifier_and_chain_for_attribute(expr)
+        .map(|(identifier, attr)| NarrowingSubject::Attribute(identifier.id, attr))
 }
 
 fn expr_to_subjects(expr: &Expr) -> Vec<NarrowingSubject> {

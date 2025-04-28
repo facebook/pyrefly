@@ -27,8 +27,6 @@ use crate::commands::run::CommandExitStatus;
 use crate::commands::suppress;
 use crate::commands::util::module_from_path;
 use crate::config::config::ConfigFile;
-use crate::config::error::ErrorConfig;
-use crate::config::error::ErrorConfigs;
 use crate::config::finder::ConfigFinder;
 use crate::config::util::set_if_some;
 use crate::config::util::set_option_if_some;
@@ -184,15 +182,12 @@ struct Handles {
     /// A mapping from a file to all other information needed to create a `Handle`.
     /// The value type is basically everything else in `Handle` except for the file path.
     path_data: HashMap<PathBuf, (ModuleName, SysInfo)>,
-    /// A the underlying HashMap that will be used to create an `ErrorConfigs` when requested.
-    module_to_error_config: HashMap<ModulePath, ErrorConfig>,
 }
 
 impl Handles {
     fn new(files: Vec<PathBuf>, config_finder: &ConfigFinder) -> Self {
         let mut handles = Self {
             path_data: HashMap::new(),
-            module_to_error_config: HashMap::new(),
         };
         for file in files {
             handles.register_file(file, config_finder);
@@ -207,13 +202,6 @@ impl Handles {
     ) -> &(ModuleName, SysInfo) {
         let module_path = ModulePath::filesystem(path.clone());
         let config = config_finder.python_file(ModuleName::unknown(), &module_path);
-        self.module_to_error_config.insert(
-            module_path,
-            ErrorConfig::new(
-                config.errors().clone(),
-                config.ignore_errors_in_generated_code(),
-            ),
-        );
         let module_name = module_from_path(&path, &config.search_path);
         self.path_data
             .entry(path)
@@ -236,10 +224,6 @@ impl Handles {
             .collect()
     }
 
-    fn error_configs(&self) -> ErrorConfigs {
-        ErrorConfigs::new(self.module_to_error_config.clone())
-    }
-
     fn update<'a>(
         &mut self,
         created_files: impl Iterator<Item = &'a PathBuf>,
@@ -251,9 +235,6 @@ impl Handles {
         }
         for file in removed_files {
             self.path_data.remove(file);
-            self.module_to_error_config
-                .remove(&ModulePath::filesystem(file.to_path_buf()));
-            // NOTE: Need to garbage-collect unreachable Loaders at some point
         }
     }
 }
@@ -299,11 +280,7 @@ impl Args {
                 .new_transaction(require_levels.default, None),
             allow_forget,
         );
-        self.run_inner(
-            transaction.as_mut(),
-            &handles.all(require_levels.specified),
-            &handles.error_configs(),
-        )
+        self.run_inner(transaction.as_mut(), &handles.all(require_levels.specified))
     }
 
     pub async fn run_watch(
@@ -320,11 +297,7 @@ impl Args {
         let state = State::new(config_finder);
         let mut transaction = state.new_committable_transaction(require_levels.default, None);
         loop {
-            let res = self.run_inner(
-                transaction.as_mut(),
-                &handles.all(require_levels.specified),
-                &handles.error_configs(),
-            );
+            let res = self.run_inner(transaction.as_mut(), &handles.all(require_levels.specified));
             state.commit_transaction(transaction);
             if let Err(e) = res {
                 eprintln!("{e:#}");
@@ -335,10 +308,7 @@ impl Args {
                 Some(Box::new(ProgressBarSubscriber::new())),
             );
             let new_transaction_mut = transaction.as_mut();
-            new_transaction_mut.invalidate_disk(&events.modified);
-
-            new_transaction_mut.invalidate_disk(&events.created);
-            new_transaction_mut.invalidate_disk(&events.removed);
+            new_transaction_mut.invalidate_events(&events);
             // File addition and removal may affect the list of files/handles to check. Update
             // the handles accordingly.
             handles.update(
@@ -346,7 +316,6 @@ impl Args {
                 events.removed.iter().filter(|p| files_to_check.covers(p)),
                 state.config_finder(),
             );
-            new_transaction_mut.invalidate_find();
         }
     }
 
@@ -402,7 +371,6 @@ impl Args {
         &self,
         transaction: &mut Transaction,
         handles: &[(Handle, Require)],
-        error_configs: &ErrorConfigs,
     ) -> anyhow::Result<CommandExitStatus> {
         let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
         let start = Instant::now();
@@ -412,12 +380,12 @@ impl Args {
         transaction.set_subscriber(None);
 
         let loads = if self.check_all {
-            transaction.get_all_loads()
+            transaction.get_all_errors()
         } else {
-            transaction.get_loads(handles.iter().map(|(handle, _)| handle))
+            transaction.get_errors(handles.iter().map(|(handle, _)| handle))
         };
         let computing = start.elapsed();
-        let errors = loads.collect_errors(error_configs);
+        let errors = loads.collect_errors();
         if let Some(path) = &self.output {
             self.output_format
                 .write_errors_to_file(path, &errors.shown)?;
@@ -434,10 +402,9 @@ impl Args {
         let shown_errors_count = errors.shown.len();
         let printing = start.elapsed();
         info!(
-            "{} errors shown, {} errors disabled, {} errors suppressed, {} modules, {} lines, took {printing:.2?} ({computing:.2?} without printing errors), peak memory {}",
+            "{} errors shown, {} errors ignored, {} modules, {} lines, took {printing:.2?} ({computing:.2?} without printing errors), peak memory {}",
             number_thousands(shown_errors_count),
-            number_thousands(errors.disabled.len()),
-            number_thousands(errors.suppressed.len()),
+            number_thousands(errors.disabled.len() + errors.suppressed.len()),
             number_thousands(transaction.module_count()),
             number_thousands(transaction.line_count()),
             memory_trace.peak()
@@ -455,7 +422,6 @@ impl Args {
                 report::debug_info::debug_info(
                     transaction,
                     &handles.map(|x| x.0.dupe()),
-                    error_configs,
                     is_javascript,
                 )
                 .as_bytes(),
@@ -513,7 +479,7 @@ impl Args {
             suppress::remove_unused_ignores(unused_ignores);
         }
         if self.expectations {
-            loads.check_against_expectations(error_configs)?;
+            loads.check_against_expectations()?;
             Ok(CommandExitStatus::Success)
         } else if shown_errors_count > 0 {
             Ok(CommandExitStatus::UserError)

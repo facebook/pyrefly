@@ -35,7 +35,6 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
-use crate::error::style::ErrorStyle;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
 use crate::types::callable::BoolKeywords;
@@ -750,8 +749,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 {
                     // We already type-checked this expression as part of computing the type for the ClassField,
                     // so we can ignore any errors encountered here.
-                    let ignore_errors =
-                        ErrorCollector::new(self.module_info().dupe(), ErrorStyle::Never);
+                    let ignore_errors = self.error_swallower();
                     let func_ty = self.expr_infer(func, &ignore_errors);
                     if matches!(
                         func_ty.callee_kind(),
@@ -1018,7 +1016,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             let attr_check =
                 self.is_attr_subset(got_attr.as_ref().unwrap(), &want_attr, &mut |got, want| {
-                    self.solver().is_subset_eq(got, want, self.type_order())
+                    self.is_subset_eq(got, want)
                 });
             if !attr_check {
                 self.error(

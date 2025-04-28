@@ -18,6 +18,7 @@ use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::callable::CallArg;
 use crate::alt::types::class_metadata::EnumMetadata;
+use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::KeyExport;
 use crate::dunder;
 use crate::error::collector::ErrorCollector;
@@ -25,7 +26,6 @@ use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
-use crate::error::style::ErrorStyle;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::module::module_info::ModuleInfo;
@@ -344,10 +344,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    /// Compute the get (i.e. read) type of an attribute, if it can be found. If read is not
-    /// permitted, error and return `Some(Any)`. If no attribute is found, return `None`. Use this
-    /// to infer special methods where we can fall back if it is missing (for example binary operators).
-    pub fn type_of_attr_get_if_found(
+    /// Compute the get (i.e., read) type of a magic dunder attribute, if it can be found. If reading is not
+    /// permitted, return an error and `Some(Any)`. If no attribute is found, return `None`.
+    ///
+    /// Note that this method is only expected to be used for magic attr lookups and is not expected to
+    /// produce correct results for arbitrary kinds of attributes. If you don't know whether an attribute lookup
+    /// is magic or not, it's highly likely that this method isn't the right thing to do for you.
+    ///
+    /// Magic attrs are almost always dunder names, e.g. `__getattr__`, `__eq__`, `__contains__`, etc.
+    pub fn type_of_magic_dunder_attr(
         &self,
         base: &Type,
         attr_name: &Name,
@@ -359,7 +364,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut not_found = false;
         let mut attr_tys = Vec::new();
         self.map_over_union(base, |base| {
-            match self.lookup_attr_no_union(base, attr_name) {
+            match self.lookup_magic_dunder_attr_no_union(base, attr_name) {
                 LookupResult::Found(attr) => attr_tys.push(
                     self.resolve_get_access(attr, range, errors, context)
                         .unwrap_or_else(|e| {
@@ -408,21 +413,74 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// Here `got` can be either an Expr or a Type so that we can support contextually
-    /// typing whenever the expression is available.
-    fn check_attr_set(
+    /// Check whether a type or expression is assignable to an attribute, using contextual
+    /// typing in the expression case.
+    ///
+    /// If (and only if) an attribute is a simple read-write attribute, returns the
+    /// type of the term to which we set it which may be used for narrowing.
+    pub fn check_assign_to_attribute_and_infer_narrow(
+        &self,
+        base: &Type,
+        name: &Name,
+        got: &ExprOrBinding,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let got = match got {
+            ExprOrBinding::Expr(value) => Either::Left(value),
+            ExprOrBinding::Binding(got) => {
+                Either::Right(self.solve_binding(got, errors).arc_clone_ty())
+            }
+        };
+        self.check_attr_set_and_infer_narrow(
+            base,
+            name,
+            got,
+            range,
+            errors,
+            None,
+            "attr::check_assign_to_attribute_and_infer_narrow",
+        )
+    }
+
+    fn check_attr_set_and_infer_narrow(
         &self,
         base: &Type,
         attr_name: &Name,
-        got: Either<&Expr, &Type>,
+        got: Either<&Expr, Type>,
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         todo_ctx: &str,
-    ) {
+    ) -> Option<Type> {
+        let mut narrowed_types = Some(Vec::new());
         self.map_over_union(base, |base| {
             match self.lookup_attr_no_union(base, attr_name) {
                 LookupResult::Found(attr) => match attr.inner {
+                    AttributeInner::Simple(want, Visibility::ReadWrite) => {
+                        let ty = match &got {
+                            Either::Left(got) => self.expr(
+                                got,
+                                Some((&want, &|| TypeCheckContext {
+                                    kind: TypeCheckKind::Attribute(attr_name.clone()),
+                                    context: context.map(|ctx| ctx()),
+                                })),
+                                errors,
+                            ),
+                            Either::Right(got) => {
+                                self.check_type(&want, got, range, errors, &|| TypeCheckContext {
+                                    kind: TypeCheckKind::Attribute(attr_name.clone()),
+                                    context: context.map(|ctx| ctx()),
+                                });
+                                got.clone()
+                            }
+                        };
+                        if let Some(narrowed_types) = &mut narrowed_types {
+                            narrowed_types.push(ty)
+                        }
+                        // Exit early to avoid the hook where we wipe `narrowed_types` in all other cases.
+                        return;
+                    }
                     AttributeInner::NoAccess(e) => {
                         self.error(
                             errors,
@@ -432,24 +490,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             e.to_error_msg(attr_name),
                         );
                     }
-                    AttributeInner::Simple(want, Visibility::ReadWrite) => match got {
-                        Either::Left(got) => {
-                            self.expr(
-                                got,
-                                Some((&want, &|| TypeCheckContext {
-                                    kind: TypeCheckKind::Attribute(attr_name.clone()),
-                                    context: context.map(|ctx| ctx()),
-                                })),
-                                errors,
-                            );
-                        }
-                        Either::Right(got) => {
-                            self.check_type(&want, got, range, errors, &|| TypeCheckContext {
-                                kind: TypeCheckKind::Attribute(attr_name.clone()),
-                                context: context.map(|ctx| ctx()),
-                            });
-                        }
-                    },
                     AttributeInner::Simple(_, Visibility::ReadOnly) => {
                         self.error(
                             errors,
@@ -542,49 +582,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
             }
+            // If we hit anything other than a simple, read-write attribute then we will not infer
+            // a type for narrowing.
+            narrowed_types = None;
         });
-    }
-
-    pub fn check_attr_set_with_expr(
-        &self,
-        base: Type,
-        attr_name: &Name,
-        got: &Expr,
-        range: TextRange,
-        errors: &ErrorCollector,
-        context: Option<&dyn Fn() -> ErrorContext>,
-        todo_ctx: &str,
-    ) {
-        self.check_attr_set(
-            &base,
-            attr_name,
-            Either::Left(got),
-            range,
-            errors,
-            context,
-            todo_ctx,
-        )
-    }
-
-    pub fn check_attr_set_with_type(
-        &self,
-        base: Type,
-        attr_name: &Name,
-        got: &Type,
-        range: TextRange,
-        errors: &ErrorCollector,
-        context: Option<&dyn Fn() -> ErrorContext>,
-        todo_ctx: &str,
-    ) {
-        self.check_attr_set(
-            &base,
-            attr_name,
-            Either::Right(got),
-            range,
-            errors,
-            context,
-            todo_ctx,
-        )
+        narrowed_types.map(|ts| self.unions(ts))
     }
 
     pub fn check_attr_delete(
@@ -896,6 +898,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(attr) => LookupResult::Found(attr),
                     None => {
                         // Classes are instances of their metaclass, which defaults to `builtins.type`.
+                        // NOTE(grievejia): This lookup serves as fallback for normal class attribute lookup for regular
+                        // attributes, but for magic dunder methods it needs to supersede normal class attribute lookup.
+                        // See `lookup_magic_dunder_attr()`.
                         let metadata = self.get_metadata_for_class(&class);
                         let instance_attr = match metadata.metaclass() {
                             Some(meta) => self.get_instance_attribute(meta, attr_name),
@@ -990,20 +995,68 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn lookup_getattr(&self, base: AttributeBase) -> LookupResult {
+    /// A magic dunder attribute differs from a normal attribute in one crucial aspect:
+    /// if looked up from a base of `type[A]` directly, the attribute needs to be defined
+    /// on the metaclass instead of class `A` (i.e. we are looking for `type.__magic_dunder_attr__`
+    /// instead of `A.__magic_dunder_attr__`).
+    fn lookup_magic_dunder_attr(&self, base: AttributeBase, dunder_name: &Name) -> LookupResult {
         match base {
             AttributeBase::ClassObject(class) => {
-                // A `__getattr__` method defined on a class never impacts lookups directly
-                // on the class itself - those will only use a metaclass `__getattr__`. But
-                // the class-defined `__getattr__` *exists* on the class (it can be accessed
-                // directly), so we cannot use the default lookup logic for this case.
-                self.get_metadata_for_class(&class)
-                    .metaclass()
-                    .and_then(|metaclass| self.get_instance_attribute(metaclass, &dunder::GETATTR))
-                    .map(LookupResult::Found)
-                    .unwrap_or(LookupResult::NotFound(NotFound::Attribute(class)))
+                let metadata = self.get_metadata_for_class(&class);
+                let metaclass = metadata.metaclass().unwrap_or(self.stdlib.builtins_type());
+                match self.get_instance_attribute(metaclass, dunder_name) {
+                    Some(attr) => LookupResult::Found(attr),
+                    None => LookupResult::NotFound(NotFound::Attribute(
+                        metaclass.class_object().clone(),
+                    )),
+                }
             }
-            base => self.lookup_attr_from_attribute_base(base, &dunder::GETATTR),
+            base => self.lookup_attr_from_attribute_base(base, dunder_name),
+        }
+    }
+
+    fn lookup_attr_from_base_getattr_fallback(
+        &self,
+        base: AttributeBase,
+        attr_name: &Name,
+        direct_lookup_result: LookupResult,
+    ) -> LookupResult {
+        match direct_lookup_result {
+            LookupResult::Found(_) | LookupResult::InternalError(_) => direct_lookup_result,
+            LookupResult::NotFound(not_found) => {
+                let getattr_lookup_result = self.lookup_magic_dunder_attr(base, &dunder::GETATTR);
+                match getattr_lookup_result {
+                    LookupResult::NotFound(_) | LookupResult::InternalError(_) => {
+                        LookupResult::NotFound(not_found)
+                    }
+                    LookupResult::Found(attr) => {
+                        LookupResult::Found(Attribute::getattr(not_found, attr, attr_name.clone()))
+                    }
+                }
+            }
+        }
+    }
+
+    fn lookup_attr_from_base_no_union(
+        &self,
+        base: AttributeBase,
+        attr_name: &Name,
+    ) -> LookupResult {
+        let direct_lookup_result = self.lookup_attr_from_attribute_base(base.clone(), attr_name);
+        self.lookup_attr_from_base_getattr_fallback(base, attr_name, direct_lookup_result)
+    }
+
+    // This function is intended as a low-level building block
+    // Unions or intersections should be handled by callers
+    fn lookup_magic_dunder_attr_no_union(&self, base: &Type, attr_name: &Name) -> LookupResult {
+        match self.as_attribute_base_no_union(base.clone()) {
+            None => {
+                LookupResult::InternalError(InternalError::AttributeBaseUndefined(base.clone()))
+            }
+            Some(base) => {
+                let direct_lookup_result = self.lookup_magic_dunder_attr(base.clone(), attr_name);
+                self.lookup_attr_from_base_getattr_fallback(base, attr_name, direct_lookup_result)
+            }
         }
     }
 
@@ -1014,26 +1067,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None => {
                 LookupResult::InternalError(InternalError::AttributeBaseUndefined(base.clone()))
             }
-            Some(base) => {
-                let direct_lookup_result =
-                    self.lookup_attr_from_attribute_base(base.clone(), attr_name);
-                match direct_lookup_result {
-                    LookupResult::Found(_) | LookupResult::InternalError(_) => direct_lookup_result,
-                    LookupResult::NotFound(not_found) => {
-                        let getattr_lookup_result = self.lookup_getattr(base);
-                        match getattr_lookup_result {
-                            LookupResult::NotFound(_) | LookupResult::InternalError(_) => {
-                                LookupResult::NotFound(not_found)
-                            }
-                            LookupResult::Found(attr) => LookupResult::Found(Attribute::getattr(
-                                not_found,
-                                attr,
-                                attr_name.clone(),
-                            )),
-                        }
-                    }
-                }
-            }
+            Some(base) => self.lookup_attr_from_base_no_union(base, attr_name),
         }
     }
 
@@ -1361,6 +1395,7 @@ impl<'a, Ans: LookupAnswer + LookupExport> AnswersSolver<'a, Ans> {
     }
 
     /// List all the attributes available from a type. Used to power completion.
+    /// Not all usages need types, so we can skip type computation with `include_types=false`.
     pub fn completions(&self, base: Type, include_types: bool) -> Vec<AttrInfo> {
         let mut res = Vec::new();
         // TODO: expose attributes shared across all union members
@@ -1391,14 +1426,13 @@ impl<'a, Ans: LookupAnswer + LookupExport> AnswersSolver<'a, Ans> {
                 }
             }
             if include_types {
-                let errors = ErrorCollector::new(self.module_info().dupe(), ErrorStyle::Never);
                 for info in &mut res {
                     if let Some(range) = info.range {
                         info.ty =
                             match self.lookup_attr_from_attribute_base(base.clone(), &info.name) {
-                                LookupResult::Found(attr) => {
-                                    self.resolve_get_access(attr, range, &errors, None).ok()
-                                }
+                                LookupResult::Found(attr) => self
+                                    .resolve_get_access(attr, range, &self.error_swallower(), None)
+                                    .ok(),
                                 _ => None,
                             };
                     }

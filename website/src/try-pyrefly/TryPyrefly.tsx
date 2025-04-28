@@ -89,6 +89,7 @@ export default function TryPyrefly({
     const [isRunning, setIsRunning] = useState(false);
     const [pythonOutput, setPythonOutput] = useState<string>('');
     const [activeTab, setActiveTab] = useState<string>('errors');
+    const [isHovered, setIsHovered] = useState(false);
 
     // Only run for initial render, and not on subsequent updates
     useEffect(() => {
@@ -196,6 +197,8 @@ export default function TryPyrefly({
             <div
                 id="tryPyrefly-code-editor-container"
                 {...stylex.props(styles.codeEditorContainer)}
+                onMouseEnter={() => setIsHovered(true)}
+                onMouseLeave={() => setIsHovered(false)}
             >
                 {getPyreflyEditor(
                     isCodeSnippet,
@@ -206,7 +209,19 @@ export default function TryPyrefly({
                     editorHeightforCodeSnippet
                 )}
                 {
-                    <div {...stylex.props(styles.buttonContainer)}>
+                    <div
+                        {...stylex.props(
+                            styles.buttonContainerBase,
+                            isMobile()
+                                ? styles.mobileButtonContainer
+                                : styles.desktopButtonContainer,
+                            // show button if it's in sandbox or if it's hovered or if it's mobile
+                            // We only want to hide this if it's a code snippet not hovered on mobile
+                            !isCodeSnippet || isHovered || isMobile()
+                                ? styles.visibleButtonContainer
+                                : styles.hiddenButtonContainer
+                        )}
+                    >
                         {!isCodeSnippet
                             ? getRunPythonButton(
                                   model,
@@ -220,13 +235,16 @@ export default function TryPyrefly({
                         {isCodeSnippet ? (
                             <OpenSandboxButton model={model} />
                         ) : null}
+                        {isCodeSnippet ? getCopyButton(model) : null}
                         {/* Hide reset button if it's readonly, which is when it's a code snippet on mobile */}
-                        {!(isCodeSnippet && isMobile()) ? getResetButton(
-                            model,
-                            forceRecheck,
-                            codeSample,
-                            isCodeSnippet
-                        ): null}
+                        {!(isCodeSnippet && isMobile())
+                            ? getResetButton(
+                                  model,
+                                  forceRecheck,
+                                  codeSample,
+                                  isCodeSnippet
+                              )
+                            : null}
                     </div>
                 }
             </div>
@@ -419,6 +437,24 @@ function getRunPythonButton(
     );
 }
 
+function getCopyButton(model: editor.ITextModel): React.ReactElement {
+    return (
+        <MonacoEditorButton
+            id="copy-code-button"
+            onClick={async () => {
+                if (model) {
+                    const currentCode = model.getValue();
+                    await navigator.clipboard.writeText(currentCode);
+                }
+                return Promise.resolve();
+            }}
+            defaultLabel="📋 Copy"
+            runningLabel="✓ Copied!"
+            ariaLabel="copy code to clipboard"
+        />
+    );
+}
+
 function getResetButton(
     model: editor.ITextModel | null,
     forceRecheck: () => void,
@@ -475,20 +511,35 @@ const styles = stylex.create({
         background: '#fff',
         height: '100%',
     },
-    buttonContainer: {
+    buttonContainerBase: {
         position: 'absolute',
         display: 'flex',
         flexDirection: 'row', // Buttons start from left and go right
-        zIndex: 1000,
-        // Mobile styles (max-width: 768px)
-        '@media (max-width: 768px)': {
-            bottom: '16px',
-            right: '16px',
-        },
-        // Desktop styles (min-width: 769px)
-        '@media (min-width: 769px)': {
-            top: '20px',
-            right: '20px',
-        },
+        zIndex: 10,
+    },
+    // Style for mobile buttons (always visible)
+    mobileButtonContainer: {
+        // Position at bottom right for mobile
+        bottom: '16px',
+        right: '16px',
+    },
+    // Style for desktop buttons (hidden by default, visible on hover)
+    desktopButtonContainer: {
+        // Position at top right for desktop
+        top: '20px',
+        right: '20px',
+    },
+    // Style for hidden button Container
+    hiddenButtonContainer: {
+        opacity: 0,
+        visibility: 'hidden',
+        transition: 'opacity 0.2s ease-in-out, visibility 0.2s ease-in-out',
+    },
+    // Style for visible button Container
+    visibleButtonContainer: {
+        // Visible when hovered
+        opacity: 1,
+        visibility: 'visible',
+        transition: 'opacity 0.2s ease-in-out, visibility 0.2s ease-in-out',
     },
 });
