@@ -20,7 +20,7 @@ use crate::util::arc_id::ArcId;
 use crate::util::lock::Mutex;
 
 /// Create a standard `ConfigFinder`. The `configure` function is expected to set any additional options,
-/// then call `configure` and `valiate`.
+/// then call `configure` and `validate`.
 /// The `path` to `configure` is a directory, either to the python file or the config file.
 #[allow(clippy::field_reassign_with_default)] // ConfigFile default is dubious
 pub fn standard_config_finder(

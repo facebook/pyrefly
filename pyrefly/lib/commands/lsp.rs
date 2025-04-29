@@ -145,7 +145,7 @@ impl<'a> IDETransactionManager<'a> {
         if let Some(transaction) = state.try_new_committable_transaction(Require::Exports, None) {
             // If we can commit in-memory changes, then there is no point of holding the
             // non-commitable transaction with a possibly outdated view of the `ReadableState`
-            // so we can destory the saved state.
+            // so we can destroy the saved state.
             self.saved_state = None;
             Ok(transaction)
         } else {
@@ -159,7 +159,7 @@ impl<'a> IDETransactionManager<'a> {
 
     /// Produce a `Transaction` to power readonly IDE services.
     /// This transaction will never be able to be committed.
-    /// After using it, the state should be saved by caling the `save` method.
+    /// After using it, the state should be saved by calling the `save` method.
     ///
     /// The `Transaction` will always contain the handles of all open files with the latest content.
     /// It might be created fresh from state, or reused from previously saved state.
@@ -677,7 +677,7 @@ impl Server {
     }
 
     /// Perform an invalidation of elements on `State` and commit them.
-    /// Runs asyncronously. Returns immediately and may wait a while for a commitable transaction.
+    /// Runs asynchronously. Returns immediately and may wait a while for a committable transaction.
     fn invalidate(&self, f: impl FnOnce(&mut Transaction) + Send + 'static) {
         let state = self.state.dupe();
         let immediately_handled_events = self.immediately_handled_events.dupe();

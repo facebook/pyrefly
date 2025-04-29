@@ -501,7 +501,7 @@ impl Linearization {
         // Merge the base class ancestors into a single Vec, in MRO order.
         //
         // The merge rule says we take the first available "head" of a chain (which are represented
-        // as revered vecs) that is not in the "tail" of any chain, then strip it from all chains.
+        // as reversed vecs) that is not in the "tail" of any chain, then strip it from all chains.
         let mut ancestors = Vec::new();
         while !ancestor_chains.is_empty() {
             // Identify a candidate for the next MRO entry: it must be the next ancestor in some chain,

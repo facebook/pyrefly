@@ -110,7 +110,7 @@ impl ModuleName {
     }
 
     /// The "unknown" module name, which corresponds to `__unknown__`.
-    /// Used for files directly openned or passed on the command line which aren't on the search path.
+    /// Used for files directly opened or passed on the command line which aren't on the search path.
     pub fn unknown() -> Self {
         Self::from_str("__unknown__")
     }

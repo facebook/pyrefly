@@ -113,7 +113,7 @@ impl TypeInfo {
     }
 
     /// Add a narrow to the TypeInfo. This is used for narrowing conditions, not assignment - it
-    /// only adds a new narrow (possibly overwriting any prexisting narrow), without changing subtrees.
+    /// only adds a new narrow (possibly overwriting any preexisting narrow), without changing subtrees.
     fn add_narrow(&mut self, names: &Vec1<Name>, ty: Type) {
         if let Some((name, more_names)) = names.split_first() {
             if let Some(attrs) = &mut self.attrs {

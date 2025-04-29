@@ -51,7 +51,7 @@ fn unions_internal(xs: Vec<Type>, stdlib: Option<&Stdlib>) -> Type {
         if let Some(stdlib) = stdlib {
             collapse_literals(&mut res, stdlib);
         }
-        // `res` is collapsable again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
+        // `res` is collapsible again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
         try_collapse(res).unwrap_or_else(Type::Union)
     })
 }

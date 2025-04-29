@@ -796,9 +796,9 @@ mod tests {
             "project_includes",
             "project_excludes",
             "python_interpreter",
-            // values we won't be geting
+            // values we won't be getting
             "extras",
-            // values that must be Some (if flattend, their contents will be checked)
+            // values that must be Some (if flattened, their contents will be checked)
             "python_environment",
         ]
         .into_iter()

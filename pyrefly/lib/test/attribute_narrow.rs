@@ -178,7 +178,7 @@ class C:
     def x(self, value: int) -> None: ...
 def f(c: C):
     assert_type(c.x, int | None)
-    # No narrowing occurs on assignment to a descriptor. This is debateable, although
+    # No narrowing occurs on assignment to a descriptor. This is debatable, although
     # in the case where the set type is mismatched vs get it would be absurd to narrow,
     # and it could be very difficult in the presence of overloads.
     c.x = 42
@@ -191,7 +191,7 @@ def f(c: C):
 );
 
 testcase!(
-    bug = "PyTorch TODO: Implement gettitem narrowing",
+    bug = "PyTorch TODO: Implement getitem narrowing",
     test_attr_arg,
     r#"
 from typing import Any, Optional, reveal_type

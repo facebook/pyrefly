@@ -686,7 +686,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             f: F,
             /// Arguments we have already used for the function.
             /// If we see the same element twice in a union (perhaps due to nested Var expansion),
-            /// we only need to process it once. Aviods O(n^2) for certain flow patterns.
+            /// we only need to process it once. Avoids O(n^2) for certain flow patterns.
             done: SmallSet<Type>,
             /// Have we seen a union node? If not, we can skip the cache
             /// as there will only be exactly one call to `f` (the common case).
