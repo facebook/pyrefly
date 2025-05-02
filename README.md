@@ -13,8 +13,9 @@ of 2025.
 
 ### GitHub developers
 
-`cd pyrefly` then use the normal `cargo` commands (e.g. `cargo build`,
-`cargo test`).
+- Install or update Rust nightly `rustup install nightly`
+- `cd pyrefly` then use the normal `cargo +nightly` commands (e.g. `cargo +nightly build`,
+  `cargo +nightly test`).
 
 ### Meta internal developers
 
