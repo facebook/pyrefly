@@ -52,7 +52,7 @@ y = x
 );
 
 testcase!(
-    test_class_var_assign,
+    test_class_var_assign_via_instance,
     r#"
 from typing import ClassVar
 
@@ -60,6 +60,18 @@ class C:
     x: ClassVar[int] = 1
 c = C()
 c.x = 2  # E: Cannot assign to read-only field `x`
+"#,
+);
+
+testcase!(
+    test_class_var_assign,
+    r#"
+from typing import ClassVar
+
+class C:
+    x: ClassVar[int] = 1
+c = C()
+C.x = 2
 "#,
 );
 
