@@ -19,8 +19,16 @@ $ $PYREFLY check $TEST_PY -a
 ## Error on a non-existent file
 
 ```scrut {output_stream: stderr}
-$ $PYREFLY check $TMPDIR/does_not_exist --python-version 3.13.0 --search-path $TMPDIR/does_not_exist
+$ $PYREFLY check $TMPDIR/does_not_exist --python-version 3.13.0
 No files matched pattern `*/does_not_exist` (glob)
+[1]
+```
+
+## Error on a non-existent search path
+
+```scrut {output_stream: stderr}
+$ echo "" > $TMPDIR/empty.py && $PYREFLY check $TMPDIR/empty.py --search-path $TMPDIR/does_not_exist
+Invalid --search-path: `*/does_not_exist` does not exist (glob)
 [1]
 ```
 
@@ -97,10 +105,10 @@ All found `project_includes` files were filtered by `project_excludes` patterns.
 ## Error on a non-existent search-path/site-package-path
 
 ```scrut {output_stream: stderr}
-$ echo "" > $TMPDIR/empty.py && $PYREFLY check --python-version 3.13.0 $TMPDIR/empty.py \
-> --search-path $TMPDIR/abcd --site-package-path $TMPDIR/abcd
+$ echo "" > $TMPDIR/empty.py && echo -e "project_includes = [\"$TMPDIR/empty.py\"]\nsite_package_path = [\"$TMPDIR/abcd\"]\nsearch_path = [\"$TMPDIR/abcd\"]" > $TMPDIR/pyrefly.toml && $PYREFLY check -c $TMPDIR/pyrefly.toml --python-version 3.13.0 && rm $TMPDIR/pyrefly.toml
 *WARN Invalid site_package_path: * does not exist (glob)
 *WARN Invalid search_path: * does not exist (glob)
+* INFO * (glob)
 * INFO * errors* (glob)
 [0]
 ```

@@ -33,6 +33,7 @@ use crate::commands::suppress;
 use crate::commands::util::module_from_path;
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
+use crate::config::config::validate_path;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
 use crate::error::error::print_error_counts;
@@ -440,6 +441,20 @@ impl Args {
                 state.config_finder(),
             );
         }
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        fn validate_arg(arg_name: &str, paths: Option<&Vec<PathBuf>>) -> anyhow::Result<()> {
+            if let Some(paths) = paths {
+                for path in paths {
+                    validate_path(path).with_context(|| format!("Invalid {}", arg_name))?;
+                }
+            }
+            Ok(())
+        }
+        validate_arg("--site-package-path", self.site_package_path.as_ref())?;
+        validate_arg("--search-path", self.search_path.as_ref())?;
+        Ok(())
     }
 
     pub fn override_config(&self, mut config: ConfigFile) -> ConfigFile {

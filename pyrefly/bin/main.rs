@@ -200,6 +200,7 @@ fn get_globs_and_config(
         ));
     }
     args.absolute_search_path();
+    args.validate()?;
     if files.is_empty() {
         get_globs_and_config_for_project(config, project_excludes, args)
     } else {
