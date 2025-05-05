@@ -192,7 +192,7 @@ impl Glob {
             .with_context(|| format!("When resolving pattern `{pattern_str}`"))?;
         if result.is_empty() {
             return Err(anyhow::anyhow!(
-                "No files matched pattern `{}`",
+                "No Python files matched pattern `{}`",
                 pattern_str
             ));
         }
@@ -317,7 +317,7 @@ impl Globs {
             match self.files_eden() {
                 Ok(files) if files.is_empty() => {
                     return Err(anyhow::anyhow!(
-                        "No files matched pattern(s) {}",
+                        "No Python files matched pattern(s) {}",
                         self.0
                             .map(|p| format!("`{}`", p.0.to_string_lossy()))
                             .join(", "),

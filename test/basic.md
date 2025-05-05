@@ -20,7 +20,7 @@ $ $PYREFLY check $TEST_PY -a
 
 ```scrut {output_stream: stderr}
 $ $PYREFLY check $TMPDIR/does_not_exist --python-version 3.13.0
-No files matched pattern `*/does_not_exist` (glob)
+No Python files matched pattern `*/does_not_exist` (glob)
 [1]
 ```
 
