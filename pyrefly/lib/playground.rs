@@ -114,9 +114,8 @@ pub struct Playground {
 
 impl Playground {
     pub fn new() -> Self {
-        let mut config = ConfigFile::default();
+        let mut config = ConfigFile::empty();
         config.python_environment.set_empty_to_default();
-        config.search_path = Vec::new();
         config.configure();
         let config = ArcId::new(config);
 

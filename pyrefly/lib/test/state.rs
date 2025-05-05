@@ -94,9 +94,8 @@ fn test_multiple_path() {
         ("main", "main.py", MAIN_PY),
     ];
 
-    let mut config = ConfigFile::default();
+    let mut config = ConfigFile::empty();
     config.python_environment.set_empty_to_default();
-    config.search_path = Vec::new();
     for (name, path, _) in FILES.iter().rev() {
         config.custom_module_paths.insert(
             ModuleName::from_str(name),
@@ -144,9 +143,8 @@ impl Incremental {
         init_test();
         let data = IncrementalData::default();
 
-        let mut config = ConfigFile::default();
+        let mut config = ConfigFile::empty();
         config.python_environment.set_empty_to_default();
-        config.search_path = Vec::new();
         for file in ["main", "foo", "bar", "baz"] {
             config.custom_module_paths.insert(
                 ModuleName::from_str(file),
