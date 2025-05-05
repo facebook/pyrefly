@@ -100,16 +100,21 @@ impl Glob {
         ext.is_some_and(|e| e == "py" || e == "pyi")
     }
 
+    fn resolve_path(path: PathBuf, results: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+        if path.is_dir() {
+            Self::resolve_dir(&path, results)?;
+        } else if Self::is_python_extension(path.extension()) {
+            results.push(path);
+        }
+        Ok(())
+    }
+
     fn resolve_dir(path: &Path, results: &mut Vec<PathBuf>) -> anyhow::Result<()> {
         for entry in fs_anyhow::read_dir(path)? {
             let entry = entry
                 .with_context(|| format!("When iterating over directory `{}`", path.display()))?;
             let path = entry.path();
-            if path.is_dir() {
-                Self::resolve_dir(&path, results)?;
-            } else if Self::is_python_extension(path.extension()) {
-                results.push(path);
-            }
+            Self::resolve_path(path, results)?;
         }
         Ok(())
     }
@@ -119,11 +124,7 @@ impl Glob {
         let paths = glob::glob(pattern)?;
         for path in paths {
             let path = path?;
-            if path.is_dir() {
-                Self::resolve_dir(&path, &mut result)?;
-            } else if Self::is_python_extension(path.extension()) {
-                result.push(path);
-            }
+            Self::resolve_path(path, &mut result)?;
         }
         Ok(result)
     }
@@ -302,7 +303,7 @@ impl Globs {
                         line.to_str_lossy()
                     )
                 })?;
-                result.push(root.join(path))
+                Glob::resolve_path(root.join(path), &mut result)?;
             }
             Ok(result)
         }
