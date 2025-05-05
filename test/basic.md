@@ -99,8 +99,8 @@ All found `project_includes` files were filtered by `project_excludes` patterns.
 ```scrut {output_stream: stderr}
 $ echo "" > $TMPDIR/empty.py && $PYREFLY check --python-version 3.13.0 $TMPDIR/empty.py \
 > --search-path $TMPDIR/abcd --site-package-path $TMPDIR/abcd
-*WARN Nonexistent `site_package_path` found:* (glob)
-*WARN Nonexistent `search_path` found:* (glob)
+*WARN Invalid site_package_path: * does not exist (glob)
+*WARN Invalid search_path: * does not exist (glob)
 * INFO * errors* (glob)
 [0]
 ```

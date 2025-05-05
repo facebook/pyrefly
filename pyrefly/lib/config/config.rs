@@ -398,19 +398,9 @@ impl ConfigFile {
 
     pub fn validate(&self) {
         fn warn_on_invalid(p: &Path, field: &str) {
-            match p.try_exists() {
-                Ok(true) => return,
-                Err(err) => {
-                    debug!(
-                        "Error checking for existence of path {}: {}",
-                        p.display(),
-                        err
-                    );
-                    return;
-                }
-                _ => (),
+            if let Some(e) = validate_path(p).err() {
+                warn!("Invalid {}: {}", field, e);
             }
-            warn!("Nonexistent `{field}` found: {}", p.display());
         }
         if !self.python_environment.site_package_path_from_interpreter {
             self.python_environment
@@ -497,6 +487,22 @@ impl Display for ConfigFile {
                 .map(|r| { r.iter().map(|p| p.as_str()).join(", ") })
                 .unwrap_or_default(),
         )
+    }
+}
+
+/// Returns an error if the path is definitely invalid.
+pub fn validate_path(path: &Path) -> anyhow::Result<()> {
+    match path.try_exists() {
+        Ok(true) => Ok(()),
+        Err(err) => {
+            debug!(
+                "Error checking for existence of path {}: {}",
+                path.display(),
+                err
+            );
+            Ok(())
+        }
+        Ok(false) => Err(anyhow!("`{}` does not exist", path.display())),
     }
 }
 
