@@ -120,20 +120,17 @@ pub struct ConfigFile {
 
 impl Default for ConfigFile {
     /// Gets a default ConfigFile, with all paths rewritten relative to cwd.
-    fn default() -> ConfigFile {
-        let mut result = Self::default_no_path_rewrite();
+    fn default() -> Self {
         match std::env::current_dir() {
-            Ok(cwd) => {
-                result.rewrite_with_path_to_config(&cwd);
-            }
+            Ok(cwd) => Self::default_at_root(&cwd),
             Err(err) => {
                 debug!(
                     "Cannot identify current dir for default config path rewriting: {}",
                     err
                 );
+                Self::default_no_path_rewrite()
             }
         }
-        result
     }
 }
 
@@ -145,6 +142,13 @@ impl ConfigFile {
         result.project_includes = Self::default_project_includes();
         result.project_excludes = Self::default_project_excludes();
         result.search_path = Self::default_search_path();
+        result
+    }
+
+    /// Gets a default ConfigFile, with all paths rewritten relative to a root dir.
+    fn default_at_root(root: &Path) -> Self {
+        let mut result = Self::default_no_path_rewrite();
+        result.rewrite_with_path_to_config(root);
         result
     }
 
@@ -413,12 +417,26 @@ impl ConfigFile {
                 .with_context(|| format!("Path `{}` cannot be absolutized", config_path.display()))?
                 .into_owned();
             let config_str = fs_anyhow::read_to_string(&config_path)?;
-            let mut config =
+            // The parent must exist because we read the file contents successfully.
+            let config_root = config_path.parent().ok_or_else(|| {
+                anyhow!("Could not find parent of path `{}`", config_path.display())
+            })?;
+            let maybe_config =
                 if config_path.file_name() == Some(OsStr::new(ConfigFile::PYPROJECT_FILE_NAME)) {
-                    ConfigFile::parse_pyproject_toml(&config_str)
+                    ConfigFile::parse_pyproject_toml(&config_str)?
                 } else {
-                    ConfigFile::parse_config(&config_str)
-                }?;
+                    Some(ConfigFile::parse_config(&config_str)?)
+                };
+            let mut config = if let Some(mut config) = maybe_config {
+                config.rewrite_with_path_to_config(config_root);
+                // push config to search path to make sure we can fall back to the config directory as an import path
+                if !config.search_path.iter().any(|p| p == config_root) {
+                    config.search_path.push(config_root.to_path_buf());
+                }
+                config
+            } else {
+                ConfigFile::default_at_root(config_root)
+            };
             config.source = ConfigSource::File(config_path.to_owned());
 
             if error_on_extras {
@@ -436,13 +454,6 @@ impl ConfigFile {
                     }
                 }
             }
-
-            if let Some(config_root) = config_path.parent() {
-                config.rewrite_with_path_to_config(config_root);
-                // push config to search path to make sure we can fall back to the config directory as an import path
-                config.search_path.push(config_root.to_path_buf());
-            }
-
             Ok(config)
         }
         f(config_path, error_on_extras).map_err(|err| {
@@ -455,11 +466,10 @@ impl ConfigFile {
         toml::from_str::<ConfigFile>(config_str).map_err(|err| anyhow::Error::msg(err.to_string()))
     }
 
-    fn parse_pyproject_toml(config_str: &str) -> anyhow::Result<ConfigFile> {
-        let maybe_config = toml::from_str::<super::util::PyProject>(config_str)
+    fn parse_pyproject_toml(config_str: &str) -> anyhow::Result<Option<ConfigFile>> {
+        Ok(toml::from_str::<super::util::PyProject>(config_str)
             .map_err(|err| anyhow::Error::msg(err.to_string()))?
-            .pyrefly();
-        Ok(maybe_config.unwrap_or_else(ConfigFile::default))
+            .pyrefly())
     }
 }
 
@@ -501,8 +511,10 @@ pub fn validate_path(path: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::fs;
     use std::path;
 
+    use tempfile::TempDir;
     use toml::Table;
     use toml::Value;
 
@@ -623,7 +635,9 @@ mod tests {
             python_platform = "darwin"
             python_version = "1.2.3"
         "#;
-        let config = ConfigFile::parse_pyproject_toml(config_str).unwrap();
+        let config = ConfigFile::parse_pyproject_toml(config_str)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             config,
             ConfigFile {
@@ -646,7 +660,7 @@ mod tests {
     fn deserialize_pyproject_toml_defaults() {
         let config_str = "";
         let config = ConfigFile::parse_pyproject_toml(config_str).unwrap();
-        assert_eq!(config, ConfigFile::default());
+        assert!(config.is_none());
     }
 
     #[test]
@@ -660,7 +674,9 @@ mod tests {
             [tool.pyrefly]
             python_version = "1.2.3"
         "#;
-        let config = ConfigFile::parse_pyproject_toml(config_str).unwrap();
+        let config = ConfigFile::parse_pyproject_toml(config_str)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             config,
             ConfigFile {
@@ -686,7 +702,7 @@ mod tests {
             pysa_value = 2
         ";
         let config = ConfigFile::parse_pyproject_toml(config_str).unwrap();
-        assert_eq!(config, ConfigFile::default());
+        assert!(config.is_none());
     }
 
     #[test]
@@ -701,7 +717,9 @@ mod tests {
             python_version = "1.2.3"
             inzo = "overthinker"
         "#;
-        let config = ConfigFile::parse_pyproject_toml(config_str).unwrap();
+        let config = ConfigFile::parse_pyproject_toml(config_str)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             config.root.extras.0,
             Table::from_iter([("inzo".to_owned(), Value::String("overthinker".to_owned()))])
@@ -915,5 +933,23 @@ mod tests {
             let config = ConfigFile::default();
             assert_eq!(config.search_path, vec![cwd]);
         }
+    }
+
+    #[test]
+    fn test_pyproject_toml_search_path() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join(ConfigFile::PYPROJECT_FILE_NAME);
+        fs::write(&path, "[tool.pyrefly]").unwrap();
+        let config = ConfigFile::from_file(&path, true).unwrap();
+        assert_eq!(config.search_path, vec![root.path().to_path_buf()]);
+    }
+
+    #[test]
+    fn test_pyproject_toml_no_pyrefly_search_path() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join(ConfigFile::PYPROJECT_FILE_NAME);
+        fs::write(&path, "").unwrap();
+        let config = ConfigFile::from_file(&path, true).unwrap();
+        assert_eq!(config.search_path, vec![root.path().to_path_buf()]);
     }
 }
