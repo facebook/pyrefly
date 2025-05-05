@@ -410,11 +410,6 @@ impl ConfigFile {
                 }
                 _ => (),
             }
-            let p = if p == Path::new("") {
-                Path::new("./")
-            } else {
-                p
-            };
             warn!("Nonexistent `{field}` found: {}", p.display());
         }
         if !self.python_environment.site_package_path_from_interpreter {
