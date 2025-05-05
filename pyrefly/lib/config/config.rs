@@ -229,8 +229,8 @@ impl ConfigFile {
     }
 
     pub fn default_search_path() -> Vec<PathBuf> {
-        // Note that rewrite_with_path_to_config() always adds the path to the config file to the search path.
-        Vec::new()
+        // Note that rewrite_with_path_to_config() converts this to the config file's containing directory.
+        vec![PathBuf::from("")]
     }
 
     pub fn default_true() -> bool {
@@ -366,9 +366,6 @@ impl ConfigFile {
             base.push(search_root.as_path());
             *search_root = base;
         });
-        // push config to search path to make sure we can fall back to the config directory as an import path
-        // if users forget to add it
-        self.search_path.push(config_root.to_path_buf());
         self.python_environment
             .site_package_path
             .iter_mut()
@@ -442,6 +439,8 @@ impl ConfigFile {
 
             if let Some(config_root) = config_path.parent() {
                 config.rewrite_with_path_to_config(config_root);
+                // push config to search path to make sure we can fall back to the config directory as an import path
+                config.search_path.push(config_root.to_path_buf());
             }
 
             Ok(config)
@@ -744,7 +743,7 @@ mod tests {
             path_str.clone() + &with_sep("/path2/path3"),
         ];
         let project_excludes_vec = vec![path_str.clone() + &with_sep("/tests/untyped/**")];
-        let search_path = vec![test_path.join("../.."), test_path.clone()];
+        let search_path = vec![test_path.join("../..")];
         python_environment.site_package_path =
             Some(vec![test_path.join("venv/lib/python1.2.3/site-packages")]);
 
