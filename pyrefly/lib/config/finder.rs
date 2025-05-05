@@ -47,10 +47,23 @@ impl<T: Dupe + Debug + Send + Sync + 'static> ConfigFinder<T> {
         Self::new_custom(Box::new(|_, _| Ok(None)), load, fallback)
     }
 
+    /// Create a new ConfigFinder that always returns the same constant.
+    pub fn new_constant(constant: T) -> Self {
+        let c1 = constant.dupe();
+        let c2 = constant.dupe();
+        let c3 = constant;
+
+        Self::new_custom(
+            Box::new(move |_, _| Ok(Some(c1.dupe()))),
+            Box::new(move |_| Ok(c2.dupe())),
+            Box::new(move |_, _| c3.dupe()),
+        )
+    }
+
     /// Create a new ConfigFinder, but with a custom way to produce a result from a Python file.
     /// If the `before` function fails to produce a config, then the other methods will be used.
     /// The `before` function is not cached in any way.
-    pub fn new_custom(
+    fn new_custom(
         before: Box<dyn Fn(ModuleName, &ModulePath) -> anyhow::Result<Option<T>> + Send + Sync>,
         load: Box<dyn Fn(&Path) -> anyhow::Result<T> + Send + Sync>,
         fallback: Box<dyn Fn(ModuleName, &ModulePath) -> T + Send + Sync>,
@@ -73,19 +86,6 @@ impl<T: Dupe + Debug + Send + Sync + 'static> ConfigFinder<T> {
             before,
             fallback,
         }
-    }
-
-    /// Create a new ConfigFinder that always returns the same constant.
-    pub fn new_constant(constant: T) -> Self {
-        let c1 = constant.dupe();
-        let c2 = constant.dupe();
-        let c3 = constant;
-
-        Self::new_custom(
-            Box::new(move |_, _| Ok(Some(c1.dupe()))),
-            Box::new(move |_| Ok(c2.dupe())),
-            Box::new(move |_, _| c3.dupe()),
-        )
     }
 
     /// Invalidate all data stored in the config.
