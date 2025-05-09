@@ -323,7 +323,7 @@ fn test_completion() {
                         "uri": Url::from_file_path(root.path().join("foo.py")).unwrap().to_string()
                     },
                     "position": {
-                        "line": 7,
+                        "line": 11,
                         "character": 1
                     }
                 }),
@@ -336,7 +336,7 @@ fn test_completion() {
                         "uri": Url::from_file_path(root.path().join("foo.py")).unwrap().to_string()
                     },
                     "position": {
-                        "line": 7,
+                        "line": 11,
                         "character": 2
                     }
                 }),
