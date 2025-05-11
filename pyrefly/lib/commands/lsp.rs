@@ -221,8 +221,45 @@ enum ServerEvent {
     LspRequest(Request),
 }
 
+#[derive(Clone, Dupe)]
+struct ServerConnection(Arc<Connection>);
+
+impl ServerConnection {
+    fn send(&self, msg: Message) {
+        if self.0.sender.send(msg).is_err() {
+            // On error, we know the channel is closed.
+            // https://docs.rs/crossbeam/latest/crossbeam/channel/struct.Sender.html#method.send
+            eprintln!("Connection closed.");
+        };
+    }
+
+    fn publish_diagnostics_for_uri(
+        &self,
+        uri: Url,
+        diags: Vec<Diagnostic>,
+        version: Option<i32>,
+    ) {
+        self.send(Message::Notification(
+            new_notification::<PublishDiagnostics>(PublishDiagnosticsParams::new(uri, diags, version)),
+        ));
+    }
+
+    fn publish_diagnostics(
+        &self,
+        diags: SmallMap<PathBuf, Vec<Diagnostic>>,
+    ) {
+        for (path, diags) in diags {
+            let path = std::fs::canonicalize(&path).unwrap_or(path);
+            match Url::from_file_path(&path) {
+                Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, None),
+                Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
+            }
+        }
+    }
+}
+
 struct Server {
-    send: Arc<dyn Fn(Message) + Send + Sync + 'static>,
+    connection: ServerConnection,
     /// A thread pool of size one for heavy read operations on the State
     async_state_read_threads: ThreadPool,
     priority_events_sender: Arc<Sender<ServerEvent>>,
@@ -445,14 +482,6 @@ pub fn run_lsp(
             return Err(e.into());
         }
     };
-    let connection_for_send = connection.dupe();
-    let send = move |msg| {
-        if connection_for_send.sender.send(msg).is_err() {
-            // On error, we know the channel is closed.
-            // https://docs.rs/crossbeam/latest/crossbeam/channel/struct.Sender.html#method.send
-            eprintln!("Connection closed.");
-        };
-    };
     eprintln!("Reading messages");
     let connection_for_dispatcher = connection.dupe();
     let (queued_events_sender, queued_events_receiver) = crossbeam_channel::unbounded();
@@ -464,7 +493,7 @@ pub fn run_lsp(
     let priority_receiver_index = event_receiver_selector.recv(&priority_events_receiver);
     let queued_events_receiver_index = event_receiver_selector.recv(&queued_events_receiver);
     let server = Server::new(
-        Arc::new(send),
+        connection,
         priority_events_sender.dupe(),
         initialization_params,
     );
@@ -491,6 +520,8 @@ pub fn run_lsp(
             break;
         }
     }
+    eprintln!("waiting for connection to close");
+    drop(server);  // close connection
     wait_on_connection()?;
 
     // Shut down gracefully.
@@ -555,30 +586,6 @@ fn module_info_to_uri_with_document_content_provider(module_info: &ModuleInfo) -
                 general_purpose::STANDARD.encode(module_info.contents().as_str())
             ))
             .ok()
-        }
-    }
-}
-
-fn publish_diagnostics_for_uri(
-    send: &Arc<dyn Fn(Message) + Send + Sync + 'static>,
-    uri: Url,
-    diags: Vec<Diagnostic>,
-    version: Option<i32>,
-) {
-    send(Message::Notification(
-        new_notification::<PublishDiagnostics>(PublishDiagnosticsParams::new(uri, diags, version)),
-    ));
-}
-
-fn publish_diagnostics(
-    send: Arc<dyn Fn(Message) + Send + Sync + 'static>,
-    diags: SmallMap<PathBuf, Vec<Diagnostic>>,
-) {
-    for (path, diags) in diags {
-        let path = std::fs::canonicalize(&path).unwrap_or(path);
-        match Url::from_file_path(&path) {
-            Ok(uri) => publish_diagnostics_for_uri(&send, uri, diags, None),
-            Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
         }
     }
 }
@@ -709,7 +716,7 @@ impl Server {
     }
 
     fn new(
-        send: Arc<dyn Fn(Message) + Send + Sync + 'static>,
+        connection: Arc<Connection>,
         priority_events_sender: Arc<Sender<ServerEvent>>,
         initialize_params: InitializeParams,
     ) -> Self {
@@ -729,7 +736,7 @@ impl Server {
 
         let config_finder = Workspaces::config_finder(&workspaces);
         let s = Self {
-            send,
+            connection: ServerConnection(connection),
             async_state_read_threads: ThreadPool::with_thread_count(ThreadCount::NumThreads(
                 NonZero::new(1).unwrap(),
             )),
@@ -749,7 +756,7 @@ impl Server {
     }
 
     fn send_response(&self, x: Response) {
-        (self.send)(Message::Response(x))
+        self.connection.send(Message::Response(x))
     }
 
     fn send_request<T>(&self, params: T::Params)
@@ -762,16 +769,8 @@ impl Server {
             method: T::METHOD.to_owned(),
             params: serde_json::to_value(params).unwrap(),
         };
-        (self.send)(Message::Request(request.clone()));
+        self.connection.send(Message::Request(request.clone()));
         self.outgoing_requests.lock().insert(id, request);
-    }
-
-    fn publish_diagnostics_for_uri(&self, uri: Url, diags: Vec<Diagnostic>, version: Option<i32>) {
-        publish_diagnostics_for_uri(&self.send, uri, diags, version);
-    }
-
-    fn publish_diagnostics(&self, diags: SmallMap<PathBuf, Vec<Diagnostic>>) {
-        publish_diagnostics(self.send.dupe(), diags);
     }
 
     fn validate_in_memory_for_transaction(
@@ -834,7 +833,7 @@ impl Server {
                     }
                 }
             }
-            self.publish_diagnostics(diags);
+            self.connection.publish_diagnostics(diags);
         };
 
         match possibly_committable_transaction {
@@ -1012,7 +1011,7 @@ impl Server {
     fn did_close(&self, params: DidCloseTextDocumentParams) -> anyhow::Result<()> {
         let uri = params.text_document.uri.to_file_path().unwrap();
         self.open_files.write().remove(&uri);
-        self.publish_diagnostics_for_uri(params.text_document.uri, Vec::new(), None);
+        self.connection.publish_diagnostics_for_uri(params.text_document.uri, Vec::new(), None);
         Ok(())
     }
 
@@ -1189,7 +1188,8 @@ impl Server {
         let state = self.state.dupe();
         let open_files = self.open_files.dupe();
         let cancellation_handles = self.cancellation_handles.dupe();
-        let send = self.send.dupe();
+
+        let connection = self.connection.dupe();
         self.async_state_read_threads.async_spawn(move || {
             let mut transaction = state.cancellable_transaction();
             cancellation_handles
@@ -1213,7 +1213,7 @@ impl Server {
                             }
                         };
                     }
-                    send(Message::Response(new_response(
+                    connection.send(Message::Response(new_response(
                         request_id,
                         Ok(Some(locations)),
                     )))
@@ -1221,7 +1221,7 @@ impl Server {
                 Err(Cancelled) => {
                     let message = format!("Find reference request {} is canceled", request_id);
                     eprintln!("{message}");
-                    send(Message::Response(Response::new_err(
+                    connection.send(Message::Response(Response::new_err(
                         request_id,
                         ErrorCode::RequestCanceled as i32,
                         message,
