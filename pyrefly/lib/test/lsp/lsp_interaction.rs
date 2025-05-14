@@ -971,8 +971,8 @@ fn test_file_watcher() {
             "registrations": [{"id": "FILEWATCHER", "method": "workspace/didChangeWatchedFiles", "registerOptions": {"watchers": [
                 {"globPattern": root.path().join("**/*.py").to_str().unwrap(), "kind": 7},
                 {"globPattern": root.path().join("**/*.pyi").to_str().unwrap(), "kind": 7},
-                {"globPattern": format!("{}/**/pyrefly.toml", root.path().display()), "kind": 7},
-                {"globPattern": format!("{}/**/pyproject.toml", root.path().display()), "kind": 7}
+                {"globPattern": root.path().join("**/pyrefly.toml"), "kind": 7},
+                {"globPattern": root.path().join("**/pyproject.toml"), "kind": 7}
             ]}}]}),
         })],
         workspace_folders: Some(vec![(
