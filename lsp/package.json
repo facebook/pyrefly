@@ -10,7 +10,7 @@
     "version": "0.0.1",
     "repository": {
         "type": "git",
-        "url": "https://github.com/facebook/pyre"
+        "url": "https://github.com/facebook/pyrefly"
     },
     "publisher": "meta",
     "categories": [],
