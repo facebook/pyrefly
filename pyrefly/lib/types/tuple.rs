@@ -24,9 +24,7 @@ Eventually this will have to be generalized enough to handle at least four cases
 4. indefinite-length tuples tuple[int, ...] (whose length is supposed to be treated soundly, not gradually, IIRC)
 */
 
-#[derive(
-    Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash
-)]
+#[derive(Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Tuple {
     // tuple[t1, t2]
     Concrete(Vec<Type>),

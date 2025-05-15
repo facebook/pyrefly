@@ -41,7 +41,7 @@ use serde::Serialize;
     Display,
     Sequence,
     Deserialize,
-    Serialize
+    Serialize,
 )]
 #[serde(rename_all = "kebab-case")]
 pub enum ErrorKind {

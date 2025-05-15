@@ -45,18 +45,14 @@ impl Display for TypeVar {
     }
 }
 
-#[derive(
-    Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq, Ord, PartialOrd, Hash
-)]
+#[derive(Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum Restriction {
     Constraints(Vec<Type>),
     Bound(Type),
     Unrestricted,
 }
 
-#[derive(
-    Debug, Clone, Copy, Visit, VisitMut, TypeEq, PartialEq, Eq, Ord, PartialOrd, Hash
-)]
+#[derive(Debug, Clone, Copy, Visit, VisitMut, TypeEq, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum Variance {
     Covariant,
     Contravariant,

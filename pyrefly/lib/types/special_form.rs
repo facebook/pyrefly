@@ -25,8 +25,20 @@ use crate::types::types::NeverStyle;
 use crate::types::types::Type;
 
 #[derive(
-    Debug, Clone, Copy, Dupe, Visit, VisitMut, TypeEq, PartialEq, Eq, Hash, PartialOrd, Ord,
-    Display, FromStr
+    Debug,
+    Clone,
+    Copy,
+    Dupe,
+    Visit,
+    VisitMut,
+    TypeEq,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Display,
+    FromStr,
 )]
 pub enum SpecialForm {
     Annotated,

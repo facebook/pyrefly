@@ -23,9 +23,7 @@ use crate::types::types::Type;
 use crate::util::uniques::Unique;
 use crate::util::uniques::UniqueFactory;
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, TypeEq, Hash, Visit, Ord, PartialOrd, VisitMut
-)]
+#[derive(Debug, Clone, PartialEq, Eq, TypeEq, Hash, Visit, Ord, PartialOrd, VisitMut)]
 pub struct QuantifiedInfo {
     pub name: Name,
     pub kind: QuantifiedKind,
@@ -97,9 +95,7 @@ impl QuantifiedInfo {
     }
 }
 
-#[derive(
-    Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq, Ord, PartialOrd, Hash
-)]
+#[derive(Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub struct Quantified {
     /// Unique identifier
     unique: Unique,
@@ -107,7 +103,7 @@ pub struct Quantified {
 }
 
 #[derive(
-    Debug, Clone, Copy, Visit, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash, Display
+    Debug, Clone, Copy, Visit, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash, Display,
 )]
 pub enum QuantifiedKind {
     TypeVar,

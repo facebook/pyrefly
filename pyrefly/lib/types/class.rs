@@ -210,9 +210,7 @@ impl Eq for ClassFieldProperties {}
 impl TypeEq for ClassFieldProperties {}
 
 /// The index of a class within the file, used as a reference to data associated with the class.
-#[derive(
-    Debug, Clone, Dupe, Copy, TypeEq, Eq, PartialEq, Hash, PartialOrd, Ord, Display
-)]
+#[derive(Debug, Clone, Dupe, Copy, TypeEq, Eq, PartialEq, Hash, PartialOrd, Ord, Display)]
 pub struct ClassIndex(pub u32);
 
 impl ClassFieldProperties {
@@ -277,9 +275,7 @@ impl Display for ClassInner {
     }
 }
 
-#[derive(
-    Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash, Default
-)]
+#[derive(Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct TArgs(Box<[Type]>);
 
 impl TArgs {
@@ -339,9 +335,7 @@ impl Substitution {
     }
 }
 
-#[derive(
-    Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash
-)]
+#[derive(Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClassType(Class, TArgs);
 
 impl Display for ClassType {

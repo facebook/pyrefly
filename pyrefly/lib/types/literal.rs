@@ -30,9 +30,7 @@ use crate::types::types::Type;
 assert_words!(Lit, 3);
 
 /// A literal value.
-#[derive(
-    Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash
-)]
+#[derive(Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Lit {
     Str(Box<str>),
     Int(LitInt),
