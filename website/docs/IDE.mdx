@@ -84,3 +84,17 @@ let g:ale_linters = {
     ...
   \ }
 ```
+
+### Helix
+In `~/.config/helix/langues.toml` add the pyrefly language server then add pyrefly to the list of language servers for python.
+
+```toml
+[language-server.pyrefly]
+command = "pyrefly"
+args = ["lsp"]
+
+[[language]]
+name = "python"
+language-servers = ["pyrefly"]
+```
+
