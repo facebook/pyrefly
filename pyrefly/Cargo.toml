@@ -4,7 +4,7 @@
 name = "pyrefly"
 version = "0.15.1"
 authors = ["Meta"]
-edition = "2021"
+edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
 license = "MIT"
 build = "build.rs"
