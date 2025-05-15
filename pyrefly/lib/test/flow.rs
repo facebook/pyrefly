@@ -841,7 +841,7 @@ from typing import assert_type
 x: list[int] = [1, 2, 3]
 
 match x:
-    case [a] | a:
+    case [a] | a: # E: name capture `a` makes remaining patterns unreachable
         assert_type(a, list[int] | int)
     case [b] | _:  # E: Could not find flow binding for `b`
         assert_type(b, list[int] | int)

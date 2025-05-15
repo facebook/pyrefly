@@ -24,6 +24,7 @@ use crate::module::ignore::Ignore;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
 use crate::ruff::ast::Ast;
+use crate::sys_info::PythonVersion;
 
 pub static GENERATED_TOKEN: &str = concat!("@", "generated");
 
@@ -150,7 +151,7 @@ impl ModuleInfo {
         &self.0.contents
     }
 
-    pub fn parse(&self, errors: &ErrorCollector) -> ModModule {
+    pub fn parse(&self, version: PythonVersion, errors: &ErrorCollector) -> ModModule {
         let (module, parse_errors) = Ast::parse(self.contents());
         for err in parse_errors {
             errors.add(
@@ -160,6 +161,7 @@ impl ModuleInfo {
                 None,
             );
         }
+        SemanticSyntaxContext::new(version, errors).visit(&module);
         module
     }
 
@@ -193,5 +195,49 @@ pub struct TextRangeWithModuleInfo {
 impl TextRangeWithModuleInfo {
     pub fn new(module_info: ModuleInfo, range: TextRange) -> Self {
         Self { module_info, range }
+    }
+}
+
+pub struct SemanticSyntaxContext<'me> {
+    version: ruff_python_ast::PythonVersion,
+    errors: &'me ErrorCollector,
+}
+
+impl<'me> SemanticSyntaxContext<'me> {
+    pub fn new(version: PythonVersion, errors: &'me ErrorCollector) -> Self {
+        Self {
+            version: ruff_python_ast::PythonVersion {
+                major: version.major as u8,
+                minor: version.minor as u8,
+            },
+            errors,
+        }
+    }
+
+    pub fn visit(&self, module: &ModModule) {
+        let mut checker = ruff_python_parser::semantic_errors::SemanticSyntaxChecker::new();
+        module.body.iter().for_each(|stmt| {
+            checker.visit_stmt(stmt, self);
+        });
+    }
+}
+
+impl<'me> ruff_python_parser::semantic_errors::SemanticSyntaxContext
+    for SemanticSyntaxContext<'me>
+{
+    fn seen_docstring_boundary(&self) -> bool {
+        false
+    }
+
+    fn python_version(&self) -> ruff_python_ast::PythonVersion {
+        self.version
+    }
+
+    fn report_semantic_error(
+        &self,
+        error: ruff_python_parser::semantic_errors::SemanticSyntaxError,
+    ) {
+        self.errors
+            .add(error.range, error.to_string(), ErrorKind::InvalidSyntax, None);
     }
 }

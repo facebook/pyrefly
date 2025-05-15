@@ -37,9 +37,9 @@ use crate::util::with_hash::WithHash;
 
 #[derive(Debug, Clone, Copy, Dupe, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PythonVersion {
-    major: u32,
-    minor: u32,
-    micro: u32,
+    pub major: u32,
+    pub minor: u32,
+    pub micro: u32,
 }
 
 impl Default for PythonVersion {

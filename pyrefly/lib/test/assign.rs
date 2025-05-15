@@ -642,6 +642,7 @@ from typing import assert_type, Literal
 
 a1+a2 = 7 # E: Could not find name `a1` # E: Could not find name `a2` # E: Parse error: Invalid assignment target
 f() = 12 # E: Could not find name `f` # E: Parse error: Invalid assignment target
+(42,) += (42,) # E:Cannot unpack tuple[Literal[42], Literal[42]] (of size 2) into 1 value # E: Parse error: Invalid augmented assignment target
 
 type (b) = int # E: Could not find name `b` # E: Parse error: Invalid assignment target
 
