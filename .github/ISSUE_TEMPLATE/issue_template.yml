@@ -17,7 +17,7 @@ body:
     id: sandbox
     attributes:
       label: Sandbox Link
-      description: If possible, please provide a reproducible sample of the code you are experiencing the issue in the [Pyrefly Sandbox](https://pyrefly.org/try/).
+      description: If possible, please provide a reproducible sample of the code you are experiencing the issue in the [Pyrefly Sandbox](https://pyrefly.org/sandbox/).
       placeholder: Pyrefly Sandbox link
     validations:
       required: false
