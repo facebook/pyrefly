@@ -29,9 +29,7 @@ jobs:
       with:
         toolchain: nightly-2025-02-16
         components: clippy, rustfmt
-    # We use rustfmt 2.0 for formatting, which differs from the released
-    # version installed by Cargo
-    # - run: cargo fmt -- --check
+    - run: cargo fmt -- --check
     - run: cargo clippy --release
     - run: cargo build --release
     - run: cargo test --release
