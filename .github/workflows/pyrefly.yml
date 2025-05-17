@@ -31,7 +31,4 @@ jobs:
         components: clippy, rustfmt
     # We use rustfmt 2.0 for formatting, which differs from the released
     # version installed by Cargo
-    # - run: cargo fmt -- --check
-    - run: cargo clippy --release
-    - run: cargo build --release
-    - run: cargo test --release
+    - run: ./test.py --mode cargo --no-fmt --no-conformance
