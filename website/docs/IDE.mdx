@@ -85,3 +85,15 @@ let g:ale_linters = {
     ...
   \ }
 ```
+
+### Helix
+Ensure that pyrefly is on `$PATH`. Add this snippet to your `languages.toml` file
+```toml
+[language-server.pyrefly]
+command = "pyrefly"
+args = ["lsp"]
+
+[[language]]
+name = "python"
+language-servers = ["pyrefly"]
+```
