@@ -272,50 +272,6 @@ async def test() -> None:
         # main.py
 5 |     z = await foo()
         ^
-Hover Result: `Any`
-"#
-        .trim(),
-        report.trim(),
-    );
-}
-
-#[test]
-fn synthesized_vars_for_awaitable_any_test() {
-    let code = r#"
-from typing import Any
-async def foo() -> Any: ...
-async def test() -> None:
-    z = await foo()
-#   ^
-"#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
-    assert_eq!(
-        r#"
-        # main.py
-5 |     z = await foo()
-        ^
-Hover Result: `@_`
-"#
-        .trim(),
-        report.trim(),
-    );
-}
-
-#[test]
-fn synthesized_vars_for_awaitable_any_test() {
-    let code = r#"
-from typing import Any
-async def foo() -> Any: ...
-async def test() -> None:
-    z = await foo()
-#   ^
-"#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
-    assert_eq!(
-        r#"
-        # main.py
-5 |     z = await foo()
-        ^
 Hover Result: `@_`
 "#
         .trim(),
