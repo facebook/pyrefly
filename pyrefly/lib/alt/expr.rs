@@ -957,6 +957,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                 ),
                 Type::Any(style) => style.propagate(),
+                Type::Literal(Lit::Bytes(_)) => self.stdlib.bytes().clone().to_type(),
                 Type::LiteralString | Type::Literal(Lit::Str(_)) if xs.len() <= 3 => {
                     // We could have a more precise type here, but this matches Pyright.
                     self.stdlib.str().clone().to_type()

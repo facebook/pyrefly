@@ -175,3 +175,16 @@ bad1: Literal # E: Expected a type argument for `Literal`
 bad2: list[Literal]  # E: Expected a type argument for `Literal`
 "#,
 );
+
+testcase!(
+    test_literal_with_byte,
+    r#"
+from typing import assert_type, Literal
+x = b"foo"
+assert_type(x[0], bytes)
+assert_type(x[0:1], bytes)
+
+# TODO: assert type for literal
+# assert_type(x[0], Literal[b"f"])
+"#,
+);
