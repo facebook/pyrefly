@@ -957,7 +957,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                 ),
                 Type::Any(style) => style.propagate(),
-                Type::Literal(Lit::Bytes(_)) => self.stdlib.bytes().clone().to_type(),
+                Type::Literal(Lit::Bytes(bytes)) => {
+                    self.index_bytes_literal(&bytes, slice, errors, range)
+                }
                 Type::LiteralString | Type::Literal(Lit::Str(_)) if xs.len() <= 3 => {
                     // We could have a more precise type here, but this matches Pyright.
                     self.stdlib.str().clone().to_type()
@@ -1585,6 +1587,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                 }
             }
+        }
+    }
+
+    fn index_bytes_literal(
+        &self,
+        bytes: &Box<[u8]>,
+        index_expr: &Expr,
+        errors: &ErrorCollector,
+        range: TextRange,
+    ) -> Type {
+        match index_expr {
+            Expr::NumberLiteral(ExprNumberLiteral { value, .. }) => {
+                if let Number::Int(int_value) = value {
+                    if let Some(byte) = bytes.get(int_value.as_usize().unwrap_or_default()) {
+                        Type::Literal(Lit::Bytes(Box::new([*byte])))
+                    } else {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::IndexError,
+                            None,
+                            format!(
+                                "Index {int_value} out of range bytes with {} elements",
+                                bytes.len()
+                            ),
+                        )
+                    }
+                } else {
+                    self.stdlib.bytes().clone().to_type()
+                }
+            }
+            _ => self.stdlib.bytes().clone().to_type(),
         }
     }
 }

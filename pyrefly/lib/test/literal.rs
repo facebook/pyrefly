@@ -180,11 +180,9 @@ testcase!(
     test_literal_with_byte,
     r#"
 from typing import assert_type, Literal
-x = b"foo"
-assert_type(x[0], bytes)
+x = b"far"
+assert_type(x[0], Literal[b"f"])
+assert_type(x[-1], bytes)
 assert_type(x[0:1], bytes)
-
-# TODO: assert type for literal
-# assert_type(x[0], Literal[b"f"])
 "#,
 );
