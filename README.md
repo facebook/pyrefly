@@ -40,7 +40,7 @@ for information on how to contribute to Pyrefly.
 
 ## Choices
 
-There are a number of choices when writing a Python type checker. We are take
+There are a number of choices when writing a Python type checker. We are taking
 inspiration from [Pyre1](https://pyre-check.org/),
 [Pyright](https://github.com/microsoft/pyright) and
 [MyPy](https://mypy.readthedocs.io/en/stable/). Some notable choices:
