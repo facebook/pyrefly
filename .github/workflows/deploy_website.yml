@@ -4,9 +4,8 @@ name: Deploy Website
 on:
   # Run every morning at 9am EST (14:00 UTC)
   # Documentation: https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#schedule
-  # TODO (T224494564): re-enable automatic deploy on 05/21/2025
-  # schedule:
-  #   - cron: '0 14 * * *'
+  schedule:
+    - cron: '0 14 * * *'
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
   # Allow this workflow to be called by other workflows
