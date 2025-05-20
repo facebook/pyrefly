@@ -59,6 +59,7 @@ use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
 use crate::types::types::CalleeKind;
 use crate::types::types::Type;
+use crate::util::display::DisplayWithCtx;
 use crate::util::prelude::SliceExt;
 use crate::util::prelude::VecExt;
 use crate::util::visit::Visit;
@@ -1623,7 +1624,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ErrorKind::IndexError,
                             None,
                             format!(
-                                "Index {int_value} out of range bytes with {} elements",
+                                "Index `{int_value}` out of range bytes with {} elements",
                                 bytes.len()
                             ),
                         )
@@ -1634,7 +1635,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         range,
                         ErrorKind::IndexError,
                         None,
-                        format!("Index {value:?} into bytearray is not an int"),
+                        format!(
+                            "Index `{}` into bytearray is not an int",
+                            index_expr.display_with(self.module_info())
+                        ),
                     )
                 }
             }
