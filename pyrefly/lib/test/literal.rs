@@ -181,7 +181,7 @@ testcase!(
     r#"
 from typing import assert_type, Literal
 x = b"far"
-assert_type(x[0], int)
+assert_type(x[0], Literal[102])
 
 # TODO: add support for negative indices case which should match `Expr::UnaryOp(...)`
 assert_type(x[-1], bytes)
