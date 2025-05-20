@@ -75,6 +75,21 @@ end
 lspconfig.pyrefly.setup({})
 ```
 
+### Vim/Neovim + coc.nvim
+
+Ensure the pyrefly is on `$PATH`, add following snippet to your `coc-settings.json`:
+
+```json
+"languageserver": {
+  "pyrefly": {
+    "command": "pyrefly",
+    "args": ["lsp"],
+    "filetypes": ["python"],
+    "rootPatterns": ["pyrefly.toml", "pyproject.toml", ".git"],
+  }
+},
+```
+
 ### Vim + ALE
 Pull the latest version of ALE and add the following lines to your configuration
 to enable Pyrefly in Vim with ALE:
