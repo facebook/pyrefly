@@ -186,7 +186,8 @@ assert_type(x[0], Literal[102])
 x[3.14]  # E: Index `3.14` into bytearray is not an int
 
 # TODO: add support for negative indices case which should match `Expr::UnaryOp(...)`
-assert_type(x[-1], bytes)
+assert_type(x[-1], Literal[114])
+x[-6.28]  # E: Index `-6.28` into bytearray is not an int
 
 assert_type(x[0:1], bytes)
 "#,

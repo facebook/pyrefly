@@ -1612,7 +1612,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
     ) -> Type {
         match index_expr {
-            // TODO: add support for negative indices case which should match `Expr::UnaryOp(...)`
             Expr::NumberLiteral(ExprNumberLiteral { value, .. }) => {
                 if let Number::Int(int_value) = value {
                     if let Some(byte) = bytes.get(int_value.as_usize().unwrap_or_default()) {
@@ -1625,6 +1624,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             None,
                             format!(
                                 "Index `{int_value}` out of range bytes with {} elements",
+                                bytes.len()
+                            ),
+                        )
+                    }
+                } else {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::IndexError,
+                        None,
+                        format!(
+                            "Index `{}` into bytearray is not an int",
+                            index_expr.display_with(self.module_info())
+                        ),
+                    )
+                }
+            }
+            // Support for negative indexes, e.g. x[-1]
+            Expr::UnaryOp(ruff_python_ast::ExprUnaryOp {
+                op: ruff_python_ast::UnaryOp::USub,
+                operand: box Expr::NumberLiteral(ExprNumberLiteral { value, .. }),
+                ..
+            }) => {
+                if let Number::Int(int_value) = value {
+                    if let Some(byte) =
+                        bytes.get(bytes.len() - int_value.as_usize().unwrap_or_default())
+                    {
+                        Type::Literal(Lit::Int(LitInt::new((*byte).into())))
+                    } else {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::IndexError,
+                            None,
+                            format!(
+                                "Index `-{int_value}` out of range bytes with {} elements",
                                 bytes.len()
                             ),
                         )
