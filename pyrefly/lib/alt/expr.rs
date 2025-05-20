@@ -1616,7 +1616,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Number::Int(int_value) = value {
                     if let Some(byte) = bytes.get(int_value.as_usize().unwrap_or_default()) {
                         Type::Literal(Lit::Int(LitInt::new((*byte).into())))
-                        // Type::Literal(Lit::Bytes(Box::new([*byte])))
                     } else {
                         self.error(
                             errors,
