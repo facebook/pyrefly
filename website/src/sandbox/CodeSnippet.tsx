@@ -103,8 +103,8 @@ const styles = stylex.create({
         overflow: 'auto',
         padding: '16px',
 
-        color: 'var(--code-snipet-placeholder-text-color)',
-        backgroundColor: 'var(--code-snipet-placeholder-background)',
+        color: 'var(--code-snippet-placeholder-text-color)',
+        backgroundColor: 'var(--code-snippet-placeholder-background)',
     },
     placeholderContent: {
         overflow: 'hidden',
