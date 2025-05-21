@@ -128,11 +128,11 @@ class CargoExecutor(Executor):
         run(["cargo", "fmt"])
 
     def clippy(self) -> None:
-        run(["cargo", "clippy", "--release"])
+        run(["cargo", "clippy"])
 
     def test(self) -> None:
-        run(["cargo", "build", "--release"])
-        run(["cargo", "test", "--release"])
+        run(["cargo", "build"])
+        run(["cargo", "test"])
 
     def conformance(self) -> None:
         run(

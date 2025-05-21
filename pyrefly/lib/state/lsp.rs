@@ -592,7 +592,7 @@ impl<'a> Transaction<'a> {
                     let mut children = Vec::new();
                     children.append(&mut recursed_symbols);
                     // todo(kylei): better approach to filtering out "" for all symbols
-                    let name = match stmt_function_def.name.to_string().as_str() {
+                    let name = match stmt_function_def.name.as_str() {
                         "" => "unknown".to_owned(),
                         name => name.to_owned(),
                     };
@@ -614,7 +614,7 @@ impl<'a> Transaction<'a> {
                 Stmt::ClassDef(stmt_class_def) => {
                     let mut children = Vec::new();
                     children.append(&mut recursed_symbols);
-                    let name = match stmt_class_def.name.to_string().as_str() {
+                    let name = match stmt_class_def.name.as_str() {
                         "" => "unknown".to_owned(),
                         name => name.to_owned(),
                     };

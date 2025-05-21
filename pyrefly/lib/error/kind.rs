@@ -15,6 +15,13 @@ use parse_display::Display;
 use serde::Deserialize;
 use serde::Serialize;
 
+#[derive(Debug, Clone, Dupe, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub enum Severity {
+    Info,
+    Warn,
+    Error,
+}
+
 /// ErrorKind categorizes an error by the part of the spec the error is related to.
 /// They are used in suppressions to identify which error should be suppressed.
 //
@@ -168,6 +175,13 @@ impl ErrorKind {
 
     pub fn to_name(self) -> &'static str {
         ERROR_KIND_CACHE[self as usize].as_str()
+    }
+
+    pub fn severity(self) -> Severity {
+        match self {
+            ErrorKind::RevealType => Severity::Info,
+            _ => Severity::Error,
+        }
     }
 }
 #[cfg(test)]

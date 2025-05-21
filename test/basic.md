@@ -20,7 +20,7 @@ $ $PYREFLY check $TEST_PY
 
 ```scrut
 $ echo "x: str = 42" > $TMPDIR/test.py && $PYREFLY check $TMPDIR/test.py
-*/test.py:1:* (glob)
+ERROR */test.py:1:* (glob)
 [1]
 ```
 
@@ -38,8 +38,8 @@ $ echo "x: str = 42" > $TMPDIR/test.py && $PYREFLY check $TMPDIR/test.py --outpu
 $ echo "x: str = 12" > $TMPDIR/same_name.py && \
 > echo "x: str = True" > $TMPDIR/same_name.pyi && \
 > $PYREFLY check --python-version 3.13.0 $TMPDIR/same_name.py $TMPDIR/same_name.pyi
-*/same_name.py*:1:10-* (glob)
-*/same_name.py*:1:10-* (glob)
+ERROR */same_name.py*:1:10-* (glob)
+ERROR */same_name.py*:1:10-* (glob)
 [1]
 ```
 
@@ -49,7 +49,7 @@ $ echo "x: str = 12" > $TMPDIR/same_name.py && \
 $ echo "x: str = 12" > $TMPDIR/hidden1.py && \
 > echo "import hidden1; y: int = hidden1.x" > $TMPDIR/hidden2.py && \
 > $PYREFLY check --python-version 3.13.0 $TMPDIR/hidden2.py
-*/hidden2.py:1:26-35: `str` is not assignable to `int` [bad-assignment] (glob)
+ERROR */hidden2.py:1:26-35: `str` is not assignable to `int` [bad-assignment] (glob)
 [1]
 ```
 

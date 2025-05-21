@@ -125,6 +125,7 @@ use crate::config::config::ConfigSource;
 use crate::config::environment::environment::PythonEnvironment;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
+use crate::error::kind::Severity;
 use crate::module::module_info::ModuleInfo;
 use crate::module::module_info::TextRangeWithModuleInfo;
 use crate::module::module_name::ModuleName;
@@ -920,7 +921,11 @@ impl Server {
                     path.to_path_buf(),
                     Diagnostic {
                         range: source_range_to_range(e.source_range()),
-                        severity: Some(lsp_types::DiagnosticSeverity::ERROR),
+                        severity: Some(match e.error_kind().severity() {
+                            Severity::Error => lsp_types::DiagnosticSeverity::ERROR,
+                            Severity::Warn => lsp_types::DiagnosticSeverity::WARNING,
+                            Severity::Info => lsp_types::DiagnosticSeverity::INFORMATION,
+                        }),
                         source: Some("Pyrefly".to_owned()),
                         message: e.msg().to_owned(),
                         code: Some(lsp_types::NumberOrString::String(

@@ -346,3 +346,17 @@ def f():
      pass
 "#,
 );
+
+testcase!(
+    test_tuple_equivalence,
+    r#"
+from typing import assert_type
+
+def f(x: tuple):
+    assert_type(x, tuple)
+
+def g(x):
+    if isinstance(x, tuple):
+        assert_type(x, tuple)
+"#,
+);

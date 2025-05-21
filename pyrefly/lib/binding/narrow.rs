@@ -72,6 +72,17 @@ pub enum AtomicNarrowOp {
     Placeholder,
 }
 
+/// The idea of "facet narrowing" is that for attribute narrowing, index narrowing,
+/// and some other cases we maintain a tree of "facets" (things like attributes, etc)
+/// for which we have narrowed types and we'll use these both for narrowing and for
+/// reading along "facet chains".
+///
+/// For example if I write
+/// `if x.y is not None and x.z is not None and x.y[0]["w"] is not None: ...`
+/// then we'll wind up with two facet chains narrowed in our tree, one at
+///   [Attribute(y), Index(0), Key("w")]
+/// and another at
+///   [Attribute(z)]
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, Hash)]
 pub enum FacetKind {
     Attribute(Name),

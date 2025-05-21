@@ -17,7 +17,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use anstream::eprintln;
-use anstream::println;
 use anstream::stdout;
 use anyhow::Context as _;
 use clap::Parser;
@@ -30,7 +29,6 @@ use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
-use yansi::Paint;
 
 use crate::commands::run::CommandExitStatus;
 use crate::commands::suppress;
@@ -157,7 +155,7 @@ impl OutputFormat {
     fn write_error_text_to_file(path: &Path, errors: &[Error]) -> anyhow::Result<()> {
         let mut file = BufWriter::new(File::create(path)?);
         for e in errors {
-            writeln!(file, "{e}")?;
+            e.write_line(&mut file)?;
         }
         file.flush()?;
         Ok(())
@@ -165,13 +163,7 @@ impl OutputFormat {
 
     fn write_error_text_to_console(errors: &[Error]) -> anyhow::Result<()> {
         for error in errors {
-            println!(
-                "{}:{}: {} {}",
-                Paint::red(&error.path().as_path().display()),
-                Paint::yellow(error.source_range()),
-                Paint::new(error.msg()),
-                Paint::magenta(format!("[{}]", error.error_kind().to_name()).as_str()),
-            )
+            error.print_colors();
         }
         Ok(())
     }

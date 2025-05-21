@@ -87,7 +87,6 @@ use crate::table;
 use crate::table_for_each;
 use crate::table_try_for_each;
 use crate::types::quantified::QuantifiedKind;
-use crate::types::types::Type;
 use crate::types::types::Var;
 use crate::util::display::DisplayWithCtx;
 use crate::util::uniques::UniqueFactory;
@@ -370,15 +369,15 @@ impl Bindings {
                     }
                 }
                 None => {
-                    // We think we have a binding for this, but we didn't encounter a flow element, so have no idea of what.
-                    // This might be because we haven't fully implemented all bindings, or because the two disagree. Just guess.
-                    errors.add(
-                        static_info.loc,
-                        format!("Could not find flow binding for `{k}`"),
-                        ErrorKind::InternalError,
-                        None,
-                    );
-                    Binding::Type(Type::any_error())
+                    // The variable is not in the flow scope, so probably it has not been defined
+                    // in any flow that reaches the end. So just use the anywhere version.
+                    Binding::Forward(
+                        builder
+                            .table
+                            .types
+                            .0
+                            .insert(static_info.as_key(k.into_key())),
+                    )
                 }
             };
             if exported.contains_key_hashed(k) {

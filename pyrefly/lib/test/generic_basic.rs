@@ -779,3 +779,27 @@ def g():
     x.update(a = 1) # E: No matching overload # E: Argument `dict[int, int]` is not assignable to parameter `self` with type `Mapping[str, int]`
 "#,
 );
+
+testcase!(
+    bug = "We shouldn't report [bad-specialization] when using a generic class if there was an issue when constructing it",
+    test_use_of_bad_generic,
+    r#"
+from typing import Generic
+class C(Generic[oops]):  # E:
+    pass
+def f(c: C[int]):  # E: Expected 0 type arguments for `C`, got 1
+    pass
+    "#,
+);
+
+testcase!(
+    bug = "Unexpected error",
+    test_generic_with_type_checking_constant,
+    r#"
+import typing
+if typing.TYPE_CHECKING: ...
+T = typing.TypeVar('T')
+class C(typing.Generic[T]):  # E: Expected a type form, got instance of `TypeVar`
+    pass
+    "#,
+);

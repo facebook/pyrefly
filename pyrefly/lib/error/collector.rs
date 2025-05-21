@@ -5,9 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::fmt;
 use std::fmt::Debug;
-use std::fmt::Display;
 
 use dupe::Dupe;
 use ruff_text_size::TextRange;
@@ -84,15 +82,6 @@ pub struct ErrorCollector {
     module_info: ModuleInfo,
     style: ErrorStyle,
     errors: Mutex<ModuleErrors>,
-}
-
-impl Display for ErrorCollector {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for err in self.errors.lock().iter() {
-            writeln!(f, "ERROR: {err}")?;
-        }
-        Ok(())
-    }
 }
 
 impl ErrorCollector {

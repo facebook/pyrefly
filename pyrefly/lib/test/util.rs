@@ -16,6 +16,7 @@ use std::thread::sleep;
 use std::time::Duration;
 use std::time::Instant;
 
+use anstream::ColorChoice;
 use anyhow::anyhow;
 use dupe::Dupe;
 use ruff_python_ast::name::Name;
@@ -394,6 +395,7 @@ pub fn get_batched_lsp_operations_report_no_cursor(
 }
 
 pub fn init_test() {
+    ColorChoice::write_global(ColorChoice::Always);
     init_tracing(true, true);
     // Enough threads to see parallelism bugs, but not too many to debug through.
     init_thread_pool(ThreadCount::NumThreads(NonZeroUsize::new(3).unwrap()));
@@ -416,11 +418,8 @@ pub fn testcase_for_macro(
     if !env.modules.is_empty() {
         start_line += 1;
     }
-    env.add_with_path(
-        "main",
-        file,
-        &format!("{}{}", "\n".repeat(start_line), contents),
-    );
+    let contents = format!("{}{}", "\n".repeat(start_line), contents);
+    env.add_with_path("main", file, &contents);
     // If any given test regularly takes > 10s, that's probably a bug.
     // Currently all are less than 3s in debug, even when running in parallel.
     let limit = 10;
@@ -437,7 +436,7 @@ pub fn testcase_for_macro(
             );
             t.set_memory(vec![(
                 PathBuf::from(file),
-                Some(Arc::new(contents.to_owned())),
+                Some(Arc::new(contents.clone())),
             )]);
             t.run(&[(h.dupe(), Require::Everything)]);
             let errors = t.get_errors([&h]);

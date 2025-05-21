@@ -14,7 +14,6 @@ use std::path::Path;
 
 use dupe::Dupe;
 use equivalent::Equivalent;
-use parse_display::Display;
 use ruff_python_ast::name::Name;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -29,7 +28,7 @@ use crate::dunder;
 static MODULE_NAME_INTERNER: Interner<String> = Interner::new();
 
 /// The name of a python module. Examples: `foo.bar.baz`, `.foo.bar`.
-#[derive(Clone, Dupe, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Display)]
+#[derive(Clone, Dupe, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ModuleName(Intern<String>);
 
 impl Serialize for ModuleName {
@@ -42,6 +41,16 @@ impl<'de> Deserialize<'de> for ModuleName {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s: &str = Deserialize::deserialize(deserializer)?;
         Ok(ModuleName::from_str(s))
+    }
+}
+
+impl Display for ModuleName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.is_empty() {
+            write!(f, ".")
+        } else {
+            write!(f, "{}", self.0)
+        }
     }
 }
 

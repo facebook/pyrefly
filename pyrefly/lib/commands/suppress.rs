@@ -142,7 +142,9 @@ pub fn find_unused_ignores<'a>(
 
 pub fn remove_unused_ignores(path_ignores: SmallMap<&PathBuf, SmallSet<OneIndexed>>) {
     let regex = Regex::new(r"# pyrefly: ignore.*$").unwrap();
+    let mut removed_ignores: SmallMap<&PathBuf, usize> = SmallMap::new();
     for (path, ignores) in path_ignores {
+        let mut unused_ignore_count = 0;
         let zero_index_ignores: SmallSet<usize> =
             ignores.iter().map(|i| i.to_zero_indexed()).collect();
         if let Ok(file) = fs_anyhow::read_to_string(path) {
@@ -150,6 +152,7 @@ pub fn remove_unused_ignores(path_ignores: SmallMap<&PathBuf, SmallSet<OneIndexe
             let lines = file.lines();
             for (idx, line) in lines.enumerate() {
                 if zero_index_ignores.contains(&idx) {
+                    unused_ignore_count += 1;
                     // TODO: Expand support of what we remove and thoroughly test
                     let new_string = regex.replace_all(line, "");
                     if !new_string.trim().is_empty() {
@@ -163,9 +166,16 @@ pub fn remove_unused_ignores(path_ignores: SmallMap<&PathBuf, SmallSet<OneIndexe
             }
             if let Err(e) = fs_anyhow::write(path, buf.as_bytes()) {
                 error!("Failed to remove unused error suppressions in {} files:", e);
+            } else if unused_ignore_count > 0 {
+                removed_ignores.insert(path, unused_ignore_count);
             }
         }
     }
+    eprintln!(
+        "Removed {} unused error suppression(s) in {} file(s)",
+        removed_ignores.values().sum::<usize>(),
+        removed_ignores.len(),
+    );
 }
 
 #[cfg(test)]

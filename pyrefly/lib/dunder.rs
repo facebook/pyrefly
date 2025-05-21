@@ -41,6 +41,7 @@ pub const NEXT: Name = Name::new_static("__next__");
 pub const POS: Name = Name::new_static("__pos__");
 pub const SET: Name = Name::new_static("__set__");
 pub const SETITEM: Name = Name::new_static("__setitem__");
+pub const BOOL: Name = Name::new_static("__bool__");
 
 pub const RICH_CMPS: &[Name] = &[LT, LE, EQ, NE, GT, GE];
 

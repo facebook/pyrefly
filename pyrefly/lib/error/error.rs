@@ -5,14 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::fmt;
 use std::fmt::Debug;
-use std::fmt::Display;
+use std::io;
+use std::io::Write;
 
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
+use yansi::Paint;
 
 use crate::error::kind::ErrorKind;
+use crate::error::kind::Severity;
 use crate::module::module_info::SourceRange;
 use crate::module::module_path::ModulePath;
 use crate::util::display::number_thousands;
@@ -26,23 +28,43 @@ pub struct Error {
     is_ignored: bool,
 }
 
-impl Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
+impl Error {
+    pub fn write_line(&self, mut f: impl Write) -> io::Result<()> {
+        writeln!(
             f,
-            "{}:{}: {} [{}]",
+            "{} {}:{}: {} [{}]",
+            match self.error_kind().severity() {
+                Severity::Error => "ERROR",
+                Severity::Warn => " WARN",
+                Severity::Info => " INFO",
+            },
             self.path,
             self.range,
             self.msg,
             self.error_kind.to_name()
         )
     }
+
+    pub fn print_colors(&self) {
+        anstream::println!(
+            "{} {}:{}: {} {}",
+            match self.error_kind().severity() {
+                Severity::Error => Paint::red("ERROR"),
+                Severity::Warn => Paint::yellow(" WARN"),
+                Severity::Info => Paint::green(" INFO"),
+            },
+            Paint::blue(&self.path().as_path().display()),
+            Paint::dim(self.source_range()),
+            Paint::new(self.msg()),
+            Paint::dim(format!("[{}]", self.error_kind().to_name()).as_str()),
+        );
+    }
 }
 
 #[cfg(test)]
 pub fn print_errors(errors: &[Error]) {
     for err in errors {
-        tracing::error!("{err}");
+        err.print_colors();
     }
 }
 

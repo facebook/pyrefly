@@ -1035,6 +1035,41 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
+    // TODO: Call this for statement-if and builtin bool() as well.
+    fn check_dunder_bool_is_callable(
+        &self,
+        condition_type: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let cond_bool_ty = self.type_of_magic_dunder_attr(
+            condition_type,
+            &dunder::BOOL,
+            range,
+            errors,
+            None,
+            "__bool__",
+        );
+        match cond_bool_ty {
+            None => (),
+            Some(ty) => match ty {
+                Type::Callable(_) | Type::BoundMethod(_) | Type::Function(_) => (),
+                _ => {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::InvalidArgument,
+                        None,
+                        format!(
+                            "{}.__bool__ is not callable",
+                            self.for_display(condition_type.clone())
+                        ),
+                    );
+                }
+            },
+        }
+    }
+
     /// This function should not be used directly: we want every expression to record a type trace,
     /// and that is handled in expr_infer_type_info_with_hint. This function should *only* be called
     /// via expr_infer_type_info_with_hint.
@@ -1056,6 +1091,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let condition_type = self.expr_infer(&x.test, errors);
                 let body_type = self.expr_infer_type_no_trace(&x.body, hint, errors);
                 let orelse_type = self.expr_infer_type_no_trace(&x.orelse, hint, errors);
+                self.check_dunder_bool_is_callable(&condition_type, x.range(), errors);
                 match condition_type.as_bool() {
                     Some(true) => body_type,
                     Some(false) => orelse_type,

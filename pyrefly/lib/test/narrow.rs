@@ -495,6 +495,20 @@ def f(x: str | int | None):
 );
 
 testcase!(
+    test_isinstance_of_tuple,
+    r#"
+from typing import assert_type
+def f(x):
+    if isinstance(x, tuple | int):
+        assert_type(x, tuple | int)
+        if isinstance(x, tuple):
+            assert_type(x, tuple)
+        else:
+            assert_type(x, int)
+"#,
+);
+
+testcase!(
     test_isinstance_tuple,
     r#"
 from typing import assert_type

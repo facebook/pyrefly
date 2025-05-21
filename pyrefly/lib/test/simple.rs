@@ -1355,3 +1355,13 @@ from typing import assert_type
 assert_type(__debug__, bool)
     "#,
 );
+
+testcase!(
+    test_invalid_dunder_bool,
+    r#"
+class NotBoolable:
+    __bool__: int = 3
+
+x = 0 if NotBoolable() else 1  # E: NotBoolable.__bool__ is not callable
+"#,
+);

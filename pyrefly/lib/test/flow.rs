@@ -1111,3 +1111,23 @@ def func():
     baz: str = foo or bar
 "#,
 );
+
+testcase!(
+    test_export_not_in_flow,
+    r#"
+if 0.1:
+    vari = "test"
+    raise SystemExit
+"#,
+);
+
+testcase!(
+    test_assert_not_in_flow,
+    r#"
+from typing import assert_type, Literal
+if 0.1:
+    vari = "test"
+    raise SystemExit
+assert_type(vari, Literal["test"])
+"#,
+);
