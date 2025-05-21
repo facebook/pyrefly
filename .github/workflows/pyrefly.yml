@@ -7,9 +7,6 @@ on:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        working-directory: pyrefly
 
     strategy:
       fail-fast: false
