@@ -101,6 +101,27 @@ let g:ale_linters = {
   \ }
 ```
 
+### Emacs
+
+There are several emacs packages that implement the language server protocol; the `eglot` package
+is built into recent versions of emacs. You can tell `eglot` to use `pyrefly` (which we assume
+is on your `$PATH`) with the following configuration:
+```
+(add-to-list 'eglot-server-programs
+  `((python-ts-mode python-mode) . ("pyrefly" "lsp")))
+```
+
+If you are using `use-package`, this command would run inside of the `:config` block; a minimal
+example would look like this:
+```
+(use-package eglot
+  :ensure t
+  :hook ((python-mode python-ts-mode) . eglot-ensure)
+  :config
+  (add-to-list 'eglot-server-programs
+    `((python-ts-mode python-mode) . ("pyrefly" "lsp"))))
+```
+
 ### Helix
 
 Ensure that pyrefly is on `$PATH` (If you got Pyrefly using `pip install pyrefly`, it should already be on your path).
@@ -1585,9 +1606,8 @@ We also have a special comment that will ignore all errors in a file.
 
 from typing import *
 
-
 def test(x: int):
-  return f"{x}"
+    return f"{x}"
 
 def bar() -> int:
     # this error won't be reported
@@ -1646,7 +1666,7 @@ description: How Pyrefly finds and resolves imports
 This doc describes how imports in a given file are found and their bindings are
 resolved, including files that are being type checked.
 
-NOTE: This document helps describe the internal behavior of Pyrefly and how we attempt to resolve imports. You should not need to know how this works, to use Pyrefly but may assist in debugging issues with Pyrefly not finding your imports. If you encounter a bug, please leave an issue for us on GitHub.
+NOTE: This document helps describe the internal behavior of Pyrefly and how we attempt to resolve imports. You should not need to know how this works to use Pyrefly but it may assist in debugging issues with Pyrefly not finding your imports. If you encounter a bug, please leave an issue for us on GitHub.
 
 NOTE: see the [Configuration documentation](./configuration.mdx) for more info on
 the config items referenced below.
@@ -1859,7 +1879,8 @@ pyrefly check --remove-unused-ignores
 ```
 Repeat the steps above until you get a clean formatting run and a clean type check.
 
-This will add ` # pyrefly: ignore` comments to your code that will enable you to silence errors, and come back and fix them at a later date. This can make the process of upgrading a large codebase much more manageable.
+This will add `# pyrefly: ignore` comments to your code that will enable you to silence errors, and come back and fix them at a later date. This can make the process of upgrading a large codebase much more manageable.
+
 ----
 
 ## Add Pyrefly to CI
