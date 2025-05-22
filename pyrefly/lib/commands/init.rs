@@ -115,7 +115,7 @@ impl Args {
             && Args::check_for_existing_config(dir, ConfigFileKind::Pyrefly)?
         {
             use std::io::{self, Write};
-            print!("The project at `{}` has already been initialized for pyrefly. Re-initialize and write a new section? (y/N): ", dir.display());
+            print!("The project at `{}` has already been initialized for pyrefly. Run `pyrefly check` to see type errors. Re-initialize and write a new section? (y/N): ", dir.display());
             io::stdout().flush().ok();
             let mut input = String::new();
             io::stdin().read_line(&mut input).ok();
