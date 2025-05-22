@@ -180,15 +180,21 @@ pub fn write_pyproject(pyproject_path: &Path, config: ConfigFile) -> anyhow::Res
         };
         let mut updated_content = doc.to_string();
         updated_content = updated_content.trim_end().to_string();
-        if let Some(start) = updated_content.find("[tool.pyrefly]") {
-            let end = updated_content[start+1..]
-                .find('[')
-                .map(|i| start + 1 + i)
-                .unwrap_or(updated_content.len());
-            let mut cleaned = String::new();
-            cleaned.push_str(&updated_content[..start]);
-            cleaned.push_str(&updated_content[end..]);
-            updated_content = cleaned.trim_end().to_string();
+        loop {
+            if let Some(start) = updated_content.find("[tool.pyrefly]") {
+                let after = &updated_content[start + 1..];
+                let next_section = after.find('\n').and_then(|nl| {
+                    let rest = &after[nl + 1..];
+                    rest.find("\n[").map(|i| nl + 1 + i)
+                });
+                let end = next_section.map(|i| start + 1 + i + 1).unwrap_or(updated_content.len());
+                let mut cleaned = String::new();
+                cleaned.push_str(&updated_content[..start]);
+                cleaned.push_str(&updated_content[end..]);
+                updated_content = cleaned.trim_end().to_string();
+            } else {
+                break;
+            }
         }
         if pyrefly_section.trim() == "[tool.pyrefly]" {
             if updated_content.is_empty() {

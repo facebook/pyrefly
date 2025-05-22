@@ -114,11 +114,15 @@ impl Args {
         if let Some(dir) = dir
             && Args::check_for_existing_config(dir, ConfigFileKind::Pyrefly)?
         {
-            error!(
-                "The project at `{}` has already been initialized for pyrefly. Run `pyrefly check` to see type errors.",
-                dir.display()
-            );
-            return Ok(CommandExitStatus::UserError);
+            use std::io::{self, Write};
+            print!("The project at `{}` has already been initialized for pyrefly. Re-initialize and write a new section? (y/N): ", dir.display());
+            io::stdout().flush().ok();
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).ok();
+            let input = input.trim();
+            if input != "y" && input != "Y" {
+                return Ok(CommandExitStatus::UserError);
+            }
         }
 
         // 1. Check for mypy configuration
