@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly"
-version = "0.16.1"
+version = "0.16.2"
 authors = ["Meta"]
 edition = "2021"
 repository = "https://github.com/facebook/pyrefly"
