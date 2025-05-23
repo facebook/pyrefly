@@ -168,8 +168,14 @@ pub fn write_pyproject(pyproject_path: &Path, config: ConfigFile) -> anyhow::Res
 
     if pyproject_path.exists() {
         let original_content = fs_anyhow::read_to_string(pyproject_path)?;
-        let doc = original_content.parse::<toml_edit::DocumentMut>()
-            .with_context(|| format!("Failed to parse {} as TOML document", pyproject_path.display()))?;
+        let doc = original_content
+            .parse::<toml_edit::DocumentMut>()
+            .with_context(|| {
+                format!(
+                    "Failed to parse {} as TOML document",
+                    pyproject_path.display()
+                )
+            })?;
 
         let config_pyproject = PyProject::new(config.clone());
         let toml = toml::to_string_pretty(&config_pyproject)?;
@@ -187,7 +193,9 @@ pub fn write_pyproject(pyproject_path: &Path, config: ConfigFile) -> anyhow::Res
                     let rest = &after[nl + 1..];
                     rest.find("\n[").map(|i| nl + 1 + i)
                 });
-                let end = next_section.map(|i| start + 1 + i + 1).unwrap_or(updated_content.len());
+                let end = next_section
+                    .map(|i| start + 1 + i + 1)
+                    .unwrap_or(updated_content.len());
                 let mut cleaned = String::new();
                 cleaned.push_str(&updated_content[..start]);
                 cleaned.push_str(&updated_content[end..]);
@@ -222,12 +230,15 @@ pub fn write_pyproject(pyproject_path: &Path, config: ConfigFile) -> anyhow::Res
         } else {
             serialized = serialized.trim().to_string();
             serialized = format!("{}\n", serialized);
-            if serialized.trim_start_matches('\n').starts_with("[tool.pyrefly]") && !serialized.trim_start_matches('\n').contains('\n') {
+            if serialized
+                .trim_start_matches('\n')
+                .starts_with("[tool.pyrefly]")
+                && !serialized.trim_start_matches('\n').contains('\n')
+            {
                 serialized = String::from("[tool.pyrefly]\n");
             }
         }
-        fs_anyhow::write(pyproject_path, serialized.as_bytes())
-            .with_context(|| ERR_WRITE_CONFIG)
+        fs_anyhow::write(pyproject_path, serialized.as_bytes()).with_context(|| ERR_WRITE_CONFIG)
     }
 }
 
