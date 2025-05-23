@@ -78,6 +78,18 @@ def f(a: A):
 );
 
 testcase!(
+    test_inherited_attribute_in_unrecognized_method,
+    r#"
+from typing import assert_type
+class A:
+    x: int
+class B(A):
+    def f(self, x: int):
+        self.x = x
+    "#,
+);
+
+testcase!(
     test_self_attribute_in_test_setup,
     r#"
 class MyTestCase:

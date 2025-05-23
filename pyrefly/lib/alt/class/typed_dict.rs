@@ -37,14 +37,14 @@ use crate::types::class::Class;
 use crate::types::class::Substitution;
 use crate::types::literal::Lit;
 use crate::types::quantified::Quantified;
-use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
+use crate::types::type_var::Variance;
 use crate::types::typed_dict::TypedDict;
 use crate::types::typed_dict::TypedDictField;
 use crate::types::types::Forall;
 use crate::types::types::Overload;
 use crate::types::types::OverloadType;
-use crate::types::types::TParamInfo;
+use crate::types::types::TParam;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
@@ -258,12 +258,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None,
                     Restriction::Unrestricted,
                 );
+
+                let tparams = vec![TParam {
+                    quantified: q.clone(),
+                    variance: Variance::Invariant,
+                }];
+
                 literal_signatures.push(OverloadType::Forall(Forall {
-                    tparams: TParams::new(vec![TParamInfo {
-                        quantified: q.clone(),
-                        variance: Self::pre_to_post_variance(PreInferenceVariance::PUndefined),
-                    }])
-                    .tparams,
+                    tparams: TParams::new(tparams),
                     body: Function {
                         signature: Callable::list(
                             ParamList::new(vec![

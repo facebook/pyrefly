@@ -275,7 +275,7 @@ mod tests {
     use crate::types::type_var::Restriction;
     use crate::types::type_var::Variance;
     use crate::types::types::Forallable;
-    use crate::types::types::TParamInfo;
+    use crate::types::types::TParam;
     use crate::types::types::TParams;
     use crate::types::types::Type;
     use crate::util::uniques::UniqueFactory;
@@ -359,6 +359,12 @@ mod tests {
                     default: None,
                 },
             );
+
+            let tparams = TParams::new(vec![TParam {
+                quantified: q.clone(),
+                variance: Variance::Invariant,
+            }]);
+
             Forallable::Function(Function {
                 signature: Callable::list(ParamList::everything(), q.clone().to_type()),
                 metadata: FuncMetadata {
@@ -366,13 +372,7 @@ mod tests {
                     flags: FuncFlags::default(),
                 },
             })
-            .forall(
-                TParams::new(vec![TParamInfo {
-                    quantified: q,
-                    variance: Variance::Invariant,
-                }])
-                .tparams,
-            )
+            .forall(tparams)
         }
 
         let a = mk_function(&uniques);

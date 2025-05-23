@@ -77,26 +77,11 @@ impl<'a> BindingsBuilder<'a> {
 
     fn class_indices(&mut self, class_name: &Identifier) -> ClassIndices {
         let def_index = self.def_index();
-        let class_idx = self
-            .table
-            .classes
-            .0
-            .insert(KeyClass(ShortIdentifier::new(class_name)));
-        let metadata_idx = self
-            .table
-            .class_metadata
-            .0
-            .insert(KeyClassMetadata(def_index));
-        let synthesized_fields_idx = self
-            .table
-            .class_synthesized_fields
-            .0
-            .insert(KeyClassSynthesizedFields(def_index));
         ClassIndices {
             def_index,
-            class_idx,
-            metadata_idx,
-            synthesized_fields_idx,
+            class_idx: self.idx_for_promise(KeyClass(ShortIdentifier::new(class_name))),
+            metadata_idx: self.idx_for_promise(KeyClassMetadata(def_index)),
+            synthesized_fields_idx: self.idx_for_promise(KeyClassSynthesizedFields(def_index)),
         }
     }
 
@@ -192,7 +177,8 @@ impl<'a> BindingsBuilder<'a> {
 
         let last_scope = self.scopes.pop();
         self.scopes.pop(); // annotation scope
-        let mut fields_defined_in_this_class = SmallMap::with_capacity(last_scope.stat.0.len());
+        let mut fields_possibly_defined_by_this_class =
+            SmallMap::with_capacity(last_scope.stat.0.len());
         for (name, info) in last_scope.flow.info.iter_hashed() {
             let is_function_without_return_annotation =
                 if let FlowStyle::FunctionDef(_, has_return_annotation) = info.style {
@@ -216,8 +202,9 @@ impl<'a> BindingsBuilder<'a> {
                     range: stat_info.loc,
                     initial_value,
                     is_function_without_return_annotation,
+                    implicit_def_method: None,
                 };
-                fields_defined_in_this_class.insert_hashed(
+                fields_possibly_defined_by_this_class.insert_hashed(
                     name.cloned(),
                     ClassFieldProperties::new(stat_info.annot.is_some(), stat_info.loc),
                 );
@@ -237,14 +224,13 @@ impl<'a> BindingsBuilder<'a> {
                 InstanceAttribute(value, annotation, range),
             ) in class_scope.method_defined_attributes()
             {
-                if !fields_defined_in_this_class.contains_key_hashed(name.as_ref()) {
-                    if !recognized_attribute_defining_method {
-                        self.error(
-                        range,
-                        format!("Attribute `{}` is implicitly defined by assignment in method `{method_name}`, which is not a constructor", &name),
-                        ErrorKind::ImplicitlyDefinedAttribute)
-                    }
-                    fields_defined_in_this_class.insert_hashed(
+                if !fields_possibly_defined_by_this_class.contains_key_hashed(name.as_ref()) {
+                    let implicit_def_method = if !recognized_attribute_defining_method {
+                        Some(method_name.clone())
+                    } else {
+                        None
+                    };
+                    fields_possibly_defined_by_this_class.insert_hashed(
                         name.clone(),
                         ClassFieldProperties::new(annotation.is_some(), range),
                     );
@@ -260,6 +246,7 @@ impl<'a> BindingsBuilder<'a> {
                                 method_name.clone(),
                             )),
                             is_function_without_return_annotation: false,
+                            implicit_def_method,
                         },
                     );
                 } else if annotation.is_some() {
@@ -277,13 +264,13 @@ impl<'a> BindingsBuilder<'a> {
             Binding::ClassDef(class_indices.class_idx, decorators.into_boxed_slice()),
             FlowStyle::None,
         );
-        fields_defined_in_this_class.reserve(0); // Attempt to shrink to capacity
+        fields_possibly_defined_by_this_class.reserve(0); // Attempt to shrink to capacity
         self.table.insert_idx(
             class_indices.class_idx,
             BindingClass::ClassDef(ClassBinding {
                 def_index: class_indices.def_index,
                 def: x,
-                fields: fields_defined_in_this_class,
+                fields: fields_possibly_defined_by_this_class,
                 bases: bases.into_boxed_slice(),
                 legacy_tparams: legacy_tparams.into_boxed_slice(),
             }),
@@ -470,6 +457,7 @@ impl<'a> BindingsBuilder<'a> {
                     range,
                     initial_value,
                     is_function_without_return_annotation: false,
+                    implicit_def_method: None,
                 },
             );
         }

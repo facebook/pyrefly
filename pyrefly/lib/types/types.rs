@@ -37,6 +37,7 @@ use crate::types::simplify::unions;
 use crate::types::special_form::SpecialForm;
 use crate::types::stdlib::Stdlib;
 use crate::types::tuple::Tuple;
+use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
 use crate::types::type_var::TypeVar;
 use crate::types::type_var::Variance;
@@ -78,8 +79,7 @@ impl Var {
 #[derive(Debug, Clone, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TParamInfo {
     pub quantified: Quantified,
-    /// The variance if known, or None for infer_variance=True or a scoped type parameter
-    pub variance: Variance,
+    pub variance: PreInferenceVariance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -109,13 +109,6 @@ impl TParam {
     }
 }
 
-/// TParams plus any validation errors
-#[derive(Debug)]
-pub struct ValidatedTParams {
-    pub tparams: TParams,
-    pub errors: Vec<String>,
-}
-
 /// Wraps a vector of type parameters.
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
@@ -128,75 +121,8 @@ impl Display for TParams {
 }
 
 impl TParams {
-    #[expect(clippy::new_ret_no_self)]
-    pub fn new(info: Vec<TParamInfo>) -> ValidatedTParams {
-        let mut errors = Vec::new();
-        let mut tparams: Vec<TParam> = Vec::with_capacity(info.len());
-        let mut seen = SmallSet::new();
-        let mut typevartuple = None;
-        for tparam in info {
-            if let Some(p) = tparams.last()
-                && p.quantified.default().is_some()
-            {
-                // Check for missing default
-                if tparam.quantified.default().is_none() {
-                    errors.push(format!(
-                        "Type parameter `{}` without a default cannot follow type parameter `{}` with a default",
-                        tparam.quantified.name(),
-                        p.name()
-                    ));
-                }
-            }
-            if let Some(default) = tparam.quantified.default() {
-                let mut out_of_scope_names = Vec::new();
-                default.universe(&mut |t| {
-                    let name = match t {
-                        Type::TypeVar(t) => t.qname().id(),
-                        Type::TypeVarTuple(t) => t.qname().id(),
-                        Type::ParamSpec(p) => p.qname().id(),
-                        _ => return,
-                    };
-                    if !seen.contains(name) {
-                        out_of_scope_names.push(name);
-                    }
-                });
-                if !out_of_scope_names.is_empty() {
-                    errors.push(format!(
-                        "Default of type parameter `{}` refers to out-of-scope type parameter{} {}",
-                        tparam.quantified.name(),
-                        if out_of_scope_names.len() != 1 {
-                            "s"
-                        } else {
-                            ""
-                        },
-                        out_of_scope_names.map(|n| format!("`{n}`")).join(", "),
-                    ));
-                }
-                if tparam.quantified.is_type_var()
-                    && let Some(tvt) = &typevartuple
-                {
-                    errors.push(format!(
-                        "TypeVar `{}` with a default cannot follow TypeVarTuple `{}`",
-                        tparam.quantified.name(),
-                        tvt
-                    ))
-                }
-            }
-            seen.insert(tparam.quantified.name().clone());
-            if tparam.quantified.is_type_var_tuple() {
-                typevartuple = Some(tparam.quantified.name().clone());
-            }
-            tparams.push(TParam {
-                quantified: tparam.quantified,
-                // Classes set the variance before getting here. For functions and aliases, the variance isn't meaningful;
-                // it doesn't matter what we set it to as long as we make it non-None to indicate that it's not missing.
-                variance: tparam.variance,
-            });
-        }
-        ValidatedTParams {
-            tparams: Self(tparams),
-            errors,
-        }
+    pub fn new(tparams: Vec<TParam>) -> TParams {
+        Self(tparams)
     }
 
     pub fn len(&self) -> usize {

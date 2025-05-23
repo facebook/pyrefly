@@ -533,6 +533,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         initial_value: &ClassFieldInitialValue,
         class: &Class,
         is_function_without_return_annotation: bool,
+        implicit_def_method: Option<&Name>,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> ClassField {
@@ -756,6 +757,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 range,
                 errors,
             );
+        }
+        if let Some(method_name) = implicit_def_method {
+            let mut defined_in_parent = false;
+            let metadata = self.get_metadata_for_class(class);
+            let parents = metadata.bases_with_metadata();
+            for (parent, _) in parents {
+                if self.get_class_member(parent.class_object(), name).is_some() {
+                    defined_in_parent = true;
+                    break;
+                };
+            }
+            if !defined_in_parent {
+                self.error(
+                errors,
+                range,
+                ErrorKind::ImplicitlyDefinedAttribute,
+                None,
+                format!("Attribute `{}` is implicitly defined by assignment in method `{method_name}`, which is not a constructor", &name),
+            );
+            }
         }
         class_field
     }

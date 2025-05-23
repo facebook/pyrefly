@@ -243,38 +243,28 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_name(&name, binding, LookupKind::Mutable)
     }
 
-    fn ensure_nonlocal_name(&mut self, name: &Identifier) {
-        let value = self
-            .lookup_name(&name.id, LookupKind::Nonlocal)
-            .map(Binding::Forward);
+    fn define_nonlocal_name(&mut self, name: &Identifier) {
         let key = Key::Definition(ShortIdentifier::new(name));
-        match value {
-            Ok(value) => {
-                self.table.insert(key, value);
-            }
+        let binding = match self.lookup_name(&name.id, LookupKind::Nonlocal) {
+            Ok(found) => Binding::Forward(found),
             Err(error) => {
-                // Record a type error and fall back to `Any`.
                 self.error(name.range, error.message(name), ErrorKind::UnknownName);
-                self.table.insert(key, Binding::Type(Type::any_error()));
+                Binding::Type(Type::any_error())
             }
-        }
+        };
+        self.table.insert(key, binding);
     }
 
-    fn ensure_global_name(&mut self, name: &Identifier) {
-        let value = self
-            .lookup_name(&name.id, LookupKind::Global)
-            .map(Binding::Forward);
+    fn define_global_name(&mut self, name: &Identifier) {
         let key = Key::Definition(ShortIdentifier::new(name));
-        match value {
-            Ok(value) => {
-                self.table.insert(key, value);
-            }
+        let binding = match self.lookup_name(&name.id, LookupKind::Global) {
+            Ok(found) => Binding::Forward(found),
             Err(error) => {
-                // Record a type error and fall back to `Any`.
                 self.error(name.range, error.message(name), ErrorKind::UnknownName);
-                self.table.insert(key, Binding::Type(Type::any_error()));
+                Binding::Type(Type::any_error())
             }
-        }
+        };
+        self.table.insert(key, binding);
     }
 
     /// If someone does `x = C["test"]`, that might be a type alias, it might not.
@@ -919,12 +909,12 @@ impl<'a> BindingsBuilder<'a> {
             }
             Stmt::Global(x) => {
                 for name in x.names {
-                    self.ensure_global_name(&name);
+                    self.define_global_name(&name);
                 }
             }
             Stmt::Nonlocal(x) => {
                 for name in x.names {
-                    self.ensure_nonlocal_name(&name);
+                    self.define_nonlocal_name(&name);
                 }
             }
             Stmt::Expr(mut x) => {

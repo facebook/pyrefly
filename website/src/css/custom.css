@@ -157,8 +157,8 @@
     --color-shadow: rgba(0, 0, 0, 0.1);
     --color-shadow-hovered: rgba(0, 0, 0, 0.15);
     --code-snippet-background: #e0e0e0;
-    --code-snipet-placeholder-background: #f1f5f9;
-    --code-snipet-placeholder-text-color: #f1f5f9;
+    --code-snippet-placeholder-background: #f1f5f9;
+    --code-snippet-placeholder-text-color: #f1f5f9;
     --color-landing-page-card-background: rgba(255, 255, 255, 0.05);
     --color-landing-page-card-background-hovered: rgba(255, 255, 255, 0.08);
     --color-landing-page-card-border: rgba(255, 255, 255, 0.1);
@@ -189,8 +189,8 @@ html[data-theme='dark'] {
     --color-shadow: rgba(255, 255, 255, 0.1);
     --color-shadow-hovered: rgba(255, 255, 255, 0.15);
     --code-snippet-background: rgba(255, 255, 255, 0.1);
-    --code-snipet-placeholder-background: #282a36;
-    --code-snipet-placeholder-text-color: #f8f8f2;
+    --code-snippet-placeholder-background: #282a36;
+    --code-snippet-placeholder-text-color: #f8f8f2;
 
     /* Adjust docusaurus color specific variables for dark mode */
     --ifm-background-color: var(--color-background);

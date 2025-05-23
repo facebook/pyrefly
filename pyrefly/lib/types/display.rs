@@ -7,7 +7,6 @@
 
 //! Display a type. The complexity comes from if we have two classes with the same name,
 //! we want to display disambiguating information (e.g. module name or location).
-
 use std::fmt;
 use std::fmt::Display;
 
@@ -366,27 +365,28 @@ pub mod tests {
     use crate::types::type_var::TypeVar;
     use crate::types::type_var::Variance;
     use crate::types::typed_dict::TypedDict;
-    use crate::types::types::TParamInfo;
+    use crate::types::types::TParam;
     use crate::types::types::TParams;
     use crate::util::uniques::UniqueFactory;
 
-    pub fn fake_class(name: &str, module: &str, range: u32, tparams: Vec<TParamInfo>) -> Class {
+    pub fn fake_class(name: &str, module: &str, range: u32, tparams: Vec<TParam>) -> Class {
         let mi = ModuleInfo::new(
             ModuleName::from_str(module),
             ModulePath::filesystem(PathBuf::from(module)),
             Arc::new("1234567890".to_owned()),
         );
+
         Class::new(
             ClassDefIndex(0),
             Identifier::new(Name::new(name), TextRange::empty(TextSize::new(range))),
             mi,
-            TParams::new(tparams).tparams,
+            TParams::new(tparams),
             SmallMap::new(),
         )
     }
 
-    fn fake_tparam(uniques: &UniqueFactory, name: &str, kind: QuantifiedKind) -> TParamInfo {
-        TParamInfo {
+    fn fake_tparam(uniques: &UniqueFactory, name: &str, kind: QuantifiedKind) -> TParam {
+        TParam {
             quantified: Quantified::new(
                 uniques.fresh(),
                 QuantifiedInfo {

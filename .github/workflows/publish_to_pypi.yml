@@ -11,10 +11,15 @@ jobs:
   build-binaries:
     name: Build binaries
     uses: ./.github/workflows/build_binaries.yml
+  test:
+    name: Test
+    uses: ./.github/workflows/pyrefly.yml
   pypi-publish:
     name: Upload to PyPI
     runs-on: ubuntu-latest
-    needs: build-binaries
+    needs:
+      - build-binaries
+      - test
     environment:
       name: pypi
       url: https://pypi.org/p/pyrefly

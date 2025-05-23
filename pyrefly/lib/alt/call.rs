@@ -365,11 +365,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         // Based on https://typing.readthedocs.io/en/latest/spec/constructors.html.
         let instance_ty = Type::ClassType(cls.clone());
-        if let Some(ret) = self.call_metaclass(&cls, range, args, keywords, errors, context)
-            && !self.is_compatible_constructor_return(&ret, cls.class_object())
-        {
-            // Got something other than an instance of the class under construction.
-            return ret;
+        let mut overall_ret = None;
+        if let Some(ret) = self.call_metaclass(&cls, range, args, keywords, errors, context) {
+            if self.is_compatible_constructor_return(&ret, cls.class_object()) {
+                overall_ret = Some(ret);
+            } else {
+                // Got something other than an instance of the class under construction.
+                return ret;
+            }
         }
         let (overrides_new, dunder_new_has_errors) =
             if let Some(new_method) = self.get_dunder_new(&cls) {
@@ -394,7 +397,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 let has_errors = !dunder_new_errors.is_empty();
                 errors.extend(dunder_new_errors);
-                if !self.is_compatible_constructor_return(&ret, cls.class_object()) {
+                if self.is_compatible_constructor_return(&ret, cls.class_object()) {
+                    overall_ret = Some(ret);
+                } else {
                     // Got something other than an instance of the class under construction.
                     return ret;
                 }
@@ -426,7 +431,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors.extend(dunder_init_errors);
             }
         }
-        cls.to_type()
+        if let Some(mut ret) = overall_ret {
+            ret.subst_self_type_mut(&instance_ty, &|_, _| true);
+            ret
+        } else {
+            instance_ty
+        }
     }
 
     fn construct_typed_dict(

@@ -7,7 +7,7 @@ import CodeSnippet from '@site/src/sandbox/CodeSnippet'
 
 The Python type system allows you to suppress errors with a comment. This feature can be helpful in many scenarios. For example, after enabling a type checker, suppressions can allow you to get a clean type check signal without having to stop and fix every pre-existing error in your code.
 
-There are mutliple ways to do this in Pyrefly.
+There are multiple ways to do this in Pyrefly.
 
 ```python
 def foo() -> int:
@@ -71,6 +71,6 @@ pyrefly check --suppress-errors
 # step 3
 pyrefly check --remove-unused-ignores
 ```
-Repeat the steps above until you get a clean fomatting run and a clean type check.
+Repeat the steps above until you get a clean formatting run and a clean type check.
 
 This will add ` # pyrefly: ignore` comments to your code that will enable you to silence errors, and come back and fix them at a later date. This can make the process of upgrading a large codebase much more manageable.

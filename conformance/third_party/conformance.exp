@@ -2792,26 +2792,6 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "assert_type(Class8[int], Class8[list[int]]) failed",
-      "description": "assert_type(Class8[int], Class8[list[int]]) failed",
-      "line": 116,
-      "name": "assert-type",
-      "stop_column": 46,
-      "stop_line": 116
-    },
-    {
-      "code": -2,
-      "column": 1,
-      "concise_description": "assert_type(Class8[str], Class8[list[str]]) failed",
-      "description": "assert_type(Class8[str], Class8[list[str]]) failed",
-      "line": 117,
-      "name": "assert-type",
-      "stop_column": 46,
-      "stop_line": 117
-    },
-    {
-      "code": -2,
-      "column": 1,
       "concise_description": "Argument `type[Class11[str]]` is not assignable to parameter `cls` with type `type[Class11[int]]` in function `Class11.__new__`",
       "description": "Argument `type[Class11[str]]` is not assignable to parameter `cls` with type `type[Class11[int]]` in function `Class11.__new__`",
       "line": 145,

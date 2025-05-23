@@ -30,7 +30,9 @@ jobs:
       - name: Test sdist
         run: |
           pip install pyrefly/dist/"${PACKAGE_NAME}"-*.tar.gz --force-reinstall
+          "${BINARY_NAME}" --version
           "${BINARY_NAME}" --help
+          "${BINARY_NAME}" check test.py
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
@@ -65,7 +67,9 @@ jobs:
         if: ${{ startsWith(matrix.target, 'aarch64') }}
         run: |
           pip install pyrefly/dist/"${PACKAGE_NAME}"-*.whl --force-reinstall
+          "${BINARY_NAME}" --version
           "${BINARY_NAME}" --help
+          "${BINARY_NAME}" check test.py
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -107,7 +111,9 @@ jobs:
         shell: bash
         run: |
           python -m pip install pyrefly/dist/"${PACKAGE_NAME}"-*.whl --force-reinstall
+          "${BINARY_NAME}" --version
           "${BINARY_NAME}" --help
+          "${BINARY_NAME}" check test.py
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -142,7 +148,9 @@ jobs:
         if: ${{ startsWith(matrix.target, 'x86_64') }}
         run: |
           pip install pyrefly/dist/"${PACKAGE_NAME}"-*.whl --force-reinstall
+          "${BINARY_NAME}" --version
           "${BINARY_NAME}" --help
+          "${BINARY_NAME}" check test.py
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:

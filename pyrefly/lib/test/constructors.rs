@@ -386,12 +386,11 @@ assert_type(C2(), C2[int])
 );
 
 testcase!(
-    bug = "Wrong asserted type",
     test_specialize_in_new,
     r#"
 from typing import assert_type
 class C[T]:
     def __new__[T2](cls, x: T2) -> C[T2]: ...
-assert_type(C(0), C[int])  # E: assert_type(C[Any], C[int])
+assert_type(C(0), C[int])
     "#,
 );

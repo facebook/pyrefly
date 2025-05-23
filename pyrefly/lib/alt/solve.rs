@@ -21,11 +21,13 @@ use ruff_text_size::TextRange;
 use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassField;
+use crate::alt::class::variance_inference::pre_to_post_variance;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::types::decorated_function::DecoratedFunction;
@@ -69,7 +71,6 @@ use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
-use crate::error::style::ErrorStyle;
 use crate::module::short_identifier::ShortIdentifier;
 use crate::ruff::ast::Ast;
 use crate::types::annotation::Annotation;
@@ -93,12 +94,12 @@ use crate::types::type_info::TypeInfo;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
 use crate::types::type_var::TypeVar;
-use crate::types::type_var::Variance;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
 use crate::types::types::CalleeKind;
 use crate::types::types::Forallable;
 use crate::types::types::SuperObj;
+use crate::types::types::TParam;
 use crate::types::types::TParamInfo;
 use crate::types::types::TParams;
 use crate::types::types::Type;
@@ -161,7 +162,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 Arc::new(LegacyTypeParameterLookup::Parameter(TParamInfo {
                     quantified: q,
-                    variance: Self::pre_to_post_variance(x.variance()),
+                    variance: x.variance(),
                 }))
             }
             Type::Type(box Type::TypeVarTuple(x)) => {
@@ -172,7 +173,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 Arc::new(LegacyTypeParameterLookup::Parameter(TParamInfo {
                     quantified: q,
-                    variance: Variance::Invariant,
+                    variance: PreInferenceVariance::PInvariant,
                 }))
             }
             Type::Type(box Type::ParamSpec(x)) => {
@@ -183,7 +184,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 Arc::new(LegacyTypeParameterLookup::Parameter(TParamInfo {
                     quantified: q,
-                    variance: Variance::Invariant,
+                    variance: PreInferenceVariance::PInvariant,
                 }))
             }
             ty => Arc::new(LegacyTypeParameterLookup::NotParameter(ty.clone())),
@@ -316,16 +317,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         } else {
             None
-        }
-    }
-
-    pub fn pre_to_post_variance(pre_variance: PreInferenceVariance) -> Variance {
-        match pre_variance {
-            PreInferenceVariance::PCovariant => Variance::Covariant,
-            PreInferenceVariance::PContravariant => Variance::Contravariant,
-            PreInferenceVariance::PInvariant => Variance::Invariant,
-            // TODO: we should infer variance for this case
-            PreInferenceVariance::PUndefined => Variance::Invariant,
         }
     }
 
@@ -691,7 +682,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         e.insert(q.clone());
                         tparams.push(TParamInfo {
                             quantified: q.clone(),
-                            variance: Self::pre_to_post_variance(ty_var.variance()),
+                            variance: ty_var.variance(),
                         });
                         q
                     }
@@ -710,7 +701,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         e.insert(q.clone());
                         tparams.push(TParamInfo {
                             quantified: q.clone(),
-                            variance: Variance::Invariant,
+                            variance: PreInferenceVariance::PInvariant,
                         });
                         q
                     }
@@ -729,7 +720,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         e.insert(q.clone());
                         tparams.push(TParamInfo {
                             quantified: q.clone(),
-                            variance: Variance::Invariant,
+                            variance: PreInferenceVariance::PInvariant,
                         });
                         q
                     }
@@ -956,7 +947,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         get_quantified(self.get(&Key::Definition(ShortIdentifier::new(name))).ty());
                     params.push(TParamInfo {
                         quantified,
-                        variance: Self::pre_to_post_variance(PreInferenceVariance::PUndefined),
+                        variance: PreInferenceVariance::PUndefined,
                     });
                 }
                 params
@@ -965,17 +956,85 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn construct_and_validate_type_params(info: Vec<TParamInfo>) -> (Vec<TParam>, Vec<String>) {
+        let mut errors = Vec::new();
+        let mut tparams: Vec<TParam> = Vec::with_capacity(info.len());
+        let mut seen = SmallSet::new();
+        let mut typevartuple = None;
+        for tparam in info {
+            if let Some(p) = tparams.last()
+                && p.quantified.default().is_some()
+            {
+                // Check for missing default
+                if tparam.quantified.default().is_none() {
+                    errors.push(format!(
+                        "Type parameter `{}` without a default cannot follow type parameter `{}` with a default",
+                        tparam.quantified.name(),
+                        p.name()
+                    ));
+                }
+            }
+            if let Some(default) = tparam.quantified.default() {
+                let mut out_of_scope_names = Vec::new();
+                default.universe(&mut |t| {
+                    let name = match t {
+                        Type::TypeVar(t) => t.qname().id(),
+                        Type::TypeVarTuple(t) => t.qname().id(),
+                        Type::ParamSpec(p) => p.qname().id(),
+                        _ => return,
+                    };
+                    if !seen.contains(name) {
+                        out_of_scope_names.push(name);
+                    }
+                });
+                if !out_of_scope_names.is_empty() {
+                    errors.push(format!(
+                        "Default of type parameter `{}` refers to out-of-scope type parameter{} {}",
+                        tparam.quantified.name(),
+                        if out_of_scope_names.len() != 1 {
+                            "s"
+                        } else {
+                            ""
+                        },
+                        out_of_scope_names.map(|n| format!("`{n}`")).join(", "),
+                    ));
+                }
+                if tparam.quantified.is_type_var()
+                    && let Some(tvt) = &typevartuple
+                {
+                    errors.push(format!(
+                        "TypeVar `{}` with a default cannot follow TypeVarTuple `{}`",
+                        tparam.quantified.name(),
+                        tvt
+                    ))
+                }
+            }
+            seen.insert(tparam.quantified.name().clone());
+            if tparam.quantified.is_type_var_tuple() {
+                typevartuple = Some(tparam.quantified.name().clone());
+            }
+            tparams.push(TParam {
+                quantified: tparam.quantified,
+                // Classes set the variance before getting here. For functions and aliases, the variance isn't meaningful;
+                // it doesn't matter what we set it to as long as we make it non-None to indicate that it's not missing.
+                variance: pre_to_post_variance(tparam.variance),
+            });
+        }
+
+        (tparams, errors)
+    }
+
     pub fn type_params(
         &self,
         range: TextRange,
         info: Vec<TParamInfo>,
         errors: &ErrorCollector,
     ) -> TParams {
-        let validated_tparams = TParams::new(info);
-        for error in validated_tparams.errors {
+        let (tparams, t_param_errors) = Self::construct_and_validate_type_params(info);
+        for error in t_param_errors {
             self.error(errors, range, ErrorKind::InvalidTypeVar, None, error);
         }
-        validated_tparams.tparams
+        TParams::new(tparams)
     }
 
     pub fn solve_binding(&self, binding: &Binding, errors: &ErrorCollector) -> Arc<TypeInfo> {
@@ -1012,9 +1071,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             BindingExpect::Bool(box x, range) => {
                 // See test::attribute_narrow::test_invalid_narrows_on_bad_attribute_access for a
                 // test that fails if we do not discard the errors from expr_infer() here.
-                let discarded_errors =
-                    ErrorCollector::new(errors.module_info().clone(), ErrorStyle::Delayed);
-                let ty = self.expr_infer(x, &discarded_errors);
+                let ty = self.expr_infer(x, &self.error_swallower());
                 self.check_dunder_bool_is_callable(&ty, *range, errors);
             }
             BindingExpect::Delete(box x) => match x {
@@ -1213,6 +1270,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &field.initial_value,
                     class,
                     field.is_function_without_return_annotation,
+                    field.implicit_def_method.as_ref(),
                     field.range,
                     errors,
                 )
@@ -1882,10 +1940,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     (None, ty_ref)
                         if Self::may_be_implicit_type_alias(ty_ref)
-                            && Self::is_valid_annotation(
-                                expr,
-                                &ErrorCollector::new(self.module_info().dupe(), ErrorStyle::Never),
-                            ) =>
+                            && Self::is_valid_annotation(expr, &self.error_swallower()) =>
                     {
                         self.as_type_alias(name, TypeAliasStyle::LegacyImplicit, ty, expr, errors)
                     }

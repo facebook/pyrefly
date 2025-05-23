@@ -494,6 +494,17 @@ pub enum LookupKind {
 }
 
 impl<'a> BindingsBuilder<'a> {
+    /// Given a `key: K = impl Keyed`, get an `Idx<K>` for it. The intended use case
+    /// is when creating a complex binding where the process of creating the binding
+    /// requires being able to identify what we are binding.
+    pub fn idx_for_promise<K>(&mut self, key: K) -> Idx<K>
+    where
+        K: Keyed,
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+    {
+        self.table.get_mut::<K>().0.insert(key)
+    }
+
     /// Allow access to an `Idx<Key>` given a `LastStmt` coming from a scan of a function body.
     /// This index will not be dangling under two assumptions:
     /// - we bind the function body (note that this isn't true for, e.g. a `@no_type_check` function!)
@@ -534,11 +545,8 @@ impl<'a> BindingsBuilder<'a> {
         }
         // Create the Idx<KeyFunction> at which we'll store the def we are ready to bind now.
         // The caller *must* eventually store a binding for it.
-        let function_idx = self
-            .table
-            .functions
-            .0
-            .insert(KeyFunction(ShortIdentifier::new(function_identifier)));
+        let function_idx =
+            self.idx_for_promise(KeyFunction(ShortIdentifier::new(function_identifier)));
         // If we found a previous def, we store a forward reference inside its `BindingFunction`.
         if let Some(pred_function_idx) = pred_function_idx {
             let pred_binding = self.table.functions.1.get_mut(pred_function_idx).unwrap();
@@ -777,14 +785,13 @@ impl<'a> BindingsBuilder<'a> {
         binding: impl FnOnce(Option<Idx<KeyAnnotation>>) -> Binding,
         style: FlowStyle,
     ) {
-        let key = Key::Definition(ShortIdentifier::expr_name(name));
-        let idx = self.table.types.0.insert(key);
+        let idx = self.idx_for_promise(Key::Definition(ShortIdentifier::expr_name(name)));
         let (ann, default) = self.bind_key(&name.id, idx, style);
         let mut binding = binding(ann);
         if let Some(default) = default {
             binding = Binding::Default(default, Box::new(binding));
         }
-        self.table.types.1.insert(idx, binding);
+        self.table.insert_idx(idx, binding);
     }
 
     /// In methods, we track assignments to `self` attribute targets so that we can
@@ -991,7 +998,8 @@ impl<'a> BindingsBuilder<'a> {
     /// Helper for loops, inserts a phi key for every name in the given flow.
     fn insert_phi_keys(&mut self, mut flow: Flow, range: TextRange) -> Flow {
         for (name, info) in flow.info.iter_mut() {
-            info.key = self.table.types.0.insert(Key::Phi(name.clone(), range));
+            // The promise is that we will insert a Phi binding when the control flow merges.
+            info.key = self.idx_for_promise(Key::Phi(name.clone(), range));
         }
         flow.no_next = false;
         flow
@@ -1101,7 +1109,12 @@ impl<'a> BindingsBuilder<'a> {
                 match names.entry_hashed(name) {
                     Entry::Occupied(mut e) => f(e.get_mut()),
                     Entry::Vacant(e) => {
-                        let key = self.table.types.0.insert(Key::Phi(e.key().clone(), range));
+                        // The promise is that the next block will create a binding for all names in `namesA`.
+                        //
+                        // Note that in some cases (e.g. variables defined above a loop) we already promised
+                        // a binding and this lookup will just give us back the same `Idx<Key::Phi(...)>` we
+                        // created initially.
+                        let key = self.idx_for_promise(Key::Phi(e.key().clone(), range));
                         f(e.insert((
                             key,
                             info.default,
