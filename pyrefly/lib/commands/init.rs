@@ -44,7 +44,7 @@ impl ConfigFileKind {
         match self {
             // This makes me question if pyproject should be a part of the enum at all
             Self::Pyproject => "".to_owned(),
-            _ => format!("[tool.{}]", self).to_lowercase(),
+            _ => format!("[tool.{self}]").to_lowercase(),
         }
     }
 }

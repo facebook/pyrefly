@@ -83,11 +83,11 @@ impl Args {
     }
 
     pub fn run(&self) -> anyhow::Result<CommandExitStatus> {
-        if let Some(path) = self.input_path.as_ref() {
-            if !path.exists() {
-                error!("Could not find or cannot access `{}`", path.display());
-                return Ok(CommandExitStatus::InfraError);
-            }
+        if let Some(path) = self.input_path.as_ref()
+            && !path.exists()
+        {
+            error!("Could not find or cannot access `{}`", path.display());
+            return Ok(CommandExitStatus::InfraError);
         }
 
         if self.output_path.as_ref().is_some_and(|p| {
@@ -180,44 +180,31 @@ pub fn write_pyproject(pyproject_path: &Path, config: ConfigFile) -> anyhow::Res
         let config_pyproject = PyProject::new(config.clone());
         let toml = toml::to_string_pretty(&config_pyproject)?;
         let pyrefly_section = if let Some(start) = toml.find("[tool.pyrefly]") {
-            toml[start..].trim_end().to_string()
+            toml[start..].trim_end().to_owned()
         } else {
             String::from("[tool.pyrefly]")
         };
         let mut updated_content = doc.to_string();
-        updated_content = updated_content.trim_end().to_string();
-        loop {
-            if let Some(start) = updated_content.find("[tool.pyrefly]") {
-                let after = &updated_content[start + 1..];
-                let next_section = after.find('\n').and_then(|nl| {
-                    let rest = &after[nl + 1..];
-                    rest.find("\n[").map(|i| nl + 1 + i)
-                });
-                let end = next_section
-                    .map(|i| start + 1 + i + 1)
-                    .unwrap_or(updated_content.len());
-                let mut cleaned = String::new();
-                cleaned.push_str(&updated_content[..start]);
-                cleaned.push_str(&updated_content[end..]);
-                updated_content = cleaned.trim_end().to_string();
-            } else {
-                break;
-            }
+        updated_content = updated_content.trim_end().to_owned();
+        while let Some(start) = updated_content.find("[tool.pyrefly]") {
+            let after = &updated_content[start + 1..];
+            let next_section = after.find('\n').and_then(|nl| {
+                let rest = &after[nl + 1..];
+                rest.find("\n[").map(|i| nl + 1 + i)
+            });
+            let end = next_section
+                .map(|i| start + 1 + i + 1)
+                .unwrap_or(updated_content.len());
+            let mut cleaned = String::new();
+            cleaned.push_str(&updated_content[..start]);
+            cleaned.push_str(&updated_content[end..]);
+            updated_content = cleaned.trim_end().to_owned();
         }
-        if pyrefly_section.trim() == "[tool.pyrefly]" {
-            if updated_content.is_empty() {
-                updated_content = pyrefly_section;
-            } else {
-                updated_content.push_str("\n\n");
-                updated_content.push_str(&pyrefly_section);
-            }
+        if updated_content.is_empty() {
+            updated_content = pyrefly_section;
         } else {
-            if updated_content.is_empty() {
-                updated_content = pyrefly_section;
-            } else {
-                updated_content.push_str("\n\n");
-                updated_content.push_str(&pyrefly_section);
-            }
+            updated_content.push_str("\n\n");
+            updated_content.push_str(&pyrefly_section);
         }
         updated_content.push('\n');
         fs_anyhow::write(pyproject_path, updated_content.as_bytes())
@@ -228,8 +215,8 @@ pub fn write_pyproject(pyproject_path: &Path, config: ConfigFile) -> anyhow::Res
         if !serialized.contains("[tool.pyrefly]") {
             serialized = String::from("[tool.pyrefly]\n");
         } else {
-            serialized = serialized.trim().to_string();
-            serialized = format!("{}\n", serialized);
+            serialized = serialized.trim().to_owned();
+            serialized = format!("{serialized}\n");
             if serialized
                 .trim_start_matches('\n')
                 .starts_with("[tool.pyrefly]")
@@ -475,69 +462,6 @@ files = ["mypy.py"]
         assert!(!tmp.path().join("pyrefly.toml").exists());
         Ok(())
     }
-
-    /*
-    #[ignore = "Cannot edit toml files in a way that preserves order and comments"]
-    #[test]
-    fn test_overwrite_existing_toolpyrefly() -> anyhow::Result<()> {
-        let tmp = tempfile::tempdir()?;
-        let input_path = tmp.path().join("pyrightconfig.json");
-        fs_anyhow::write(&input_path, b"{}")?;
-        let output_path = tmp.path().join("pyproject.toml");
-        fs_anyhow::write(
-            &output_path,
-            br#"[project]
-name = "test"
-
-[tool.a]
-test = true
-
-[tool.z]
-test = true
-
-# I'm a comment!
-
-[tool.pyrefly]
-incomplete = true
-
-[tool.b]
-test = true
-"#,
-        )?;
-        let args = Args {
-            input_path: Some(input_path),
-            output_path: Some(output_path.clone()),
-        };
-        let status = args.run()?;
-        assert!(matches!(status, CommandExitStatus::Success));
-
-        let output = fs_anyhow::read_to_string(&output_path)?;
-        let headers = output
-            .lines()
-            .filter(|l| l.starts_with(['[', '#']))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            headers,
-            vec![
-                "[project]",
-                "[tool.a]",
-                "[tool.z]",
-                "# I'm a comment!",
-                "[tool.pyrefly]",
-                "[tool.b]",
-            ]
-        );
-
-        let config = toml::from_str::<toml::Table>(&output)?;
-        assert!(
-            !config["tool"]["pyrefly"]
-                .as_table()
-                .is_some_and(|table| table.contains_key("incomplete"))
-        );
-
-        Ok(())
-    }
-    */
 
     #[test]
     fn test_output_path_must_be_file() -> anyhow::Result<()> {
