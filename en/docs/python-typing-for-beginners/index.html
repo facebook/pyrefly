@@ -25,9 +25,9 @@
 <link rel="stylesheet" href="/css/code-block-buttons.css">
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
-<script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.35cd6fea.css">
-<script src="/assets/js/runtime~main.55566910.js" defer="defer"></script>
-<script src="/assets/js/main.55035594.js" defer="defer"></script>
+<script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.4fdba471.css">
+<script src="/assets/js/runtime~main.6c52846d.js" defer="defer"></script>
+<script src="/assets/js/main.80ec0d27.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -47,7 +47,7 @@ Here&#x27;s an example of a simple function with type hints:</p>
 <li>Improve editor autocomplete &amp; refactors.</li>
 <li>Turn your code into living documentation.</li>
 </ul>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Without hints – is &quot;times&quot; a str, int, or list?
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Without hints – is &quot;times&quot; a str, int, or list?
 def repeat(text, times):
   return text * times
 
@@ -58,7 +58,7 @@ def repeat(text: str, times: int) -&gt; str:
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="can-you-spot-the-bug">Can you spot the bug?<a href="#can-you-spot-the-bug" class="hash-link" aria-label="Direct link to Can you spot the bug?" title="Direct link to Can you spot the bug?">​</a></h3>
 <div class="codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#F8F8F2;--prism-background-color:#282A36"><div class="codeBlockContent_biex"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#F8F8F2;background-color:#282A36"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#F8F8F2"><span class="token plain">class Rectangle:</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">    width: int</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">    height: int</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">    def __init__(self, width: int, height: int) -&gt; None:</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">        self.width = width</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">        self.height = height</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">rect = Rectangle(width=100, height=50)</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">area = rect.width * rect.hieght</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">print(area)</span><br></span></code></pre><div class="buttonGroup__atx"><button type="button" aria-label="Copy code to clipboard" title="Copy" class="clean-btn"><span class="copyButtonIcons_eSgA" aria-hidden="true"><svg viewBox="0 0 24 24" class="copyButtonIcon_y97N"><path fill="currentColor" d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"></path></svg><svg viewBox="0 0 24 24" class="copyButtonSuccessIcon_LjdS"><path fill="currentColor" d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"></path></svg></span></button></div></div></div>
 <p><strong>Spelling is hard!</strong> Let&#x27;s add the <code>dataclass</code> decorator to our class definition. This will generate a constructor for us, and also add a few other useful methods.</p>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh">#Pyrefly will catch this spelling error before you run the code
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh">#Pyrefly will catch this spelling error before you run the code
 from dataclasses import dataclass
 
 @dataclass
@@ -72,13 +72,13 @@ area = rect.width * rect.hieght
 </div></div></div>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="3-primitive-types">3. Primitive Types<a href="#3-primitive-types" class="hash-link" aria-label="Direct link to 3. Primitive Types" title="Direct link to 3. Primitive Types">​</a></h2>
 <p>Since Python 3.9 you can use all the <a href="https://docs.python.org/3/library/stdtypes.html" target="_blank" rel="noopener noreferrer">primitive types</a> directly as annotations.</p>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh">age: int = 30
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh">age: int = 30
 height: float = 1.85
 name: str = &quot;Tyler Typer&quot;
 is_admin: bool = False
 </div></div></div>
 <p>You can also specify a parameter as optional by using <code>Optional</code> type, or now with the <code>| None</code> syntax.</p>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Optional typing example
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Optional typing example
 
 from typing import Optional
 
@@ -95,19 +95,19 @@ nickname: str | None = None              # 3.10+ shorthand
 </ul>
 <p>Since Python 3.9 you can subscript built‑ins directly—no need for <code>from typing import List</code>.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="5-functions">5. Functions<a href="#5-functions" class="hash-link" aria-label="Direct link to 5. Functions" title="Direct link to 5. Functions">​</a></h2>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Simple function
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Simple function
 def add(a: int, b: int) -&gt; int:
   return a + b
 </div></div></div>
 <p>Default values keep their annotation:</p>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Function with default value
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Function with default value
 
 
 def greet(name: str, polite: bool = True) -&gt; str:
   return &quot;Hello!&quot; if polite else f&quot;Yo {name}&quot;
   </div></div></div>
 <p>Variable‑length arguments:</p>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Variable length functions
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Variable length functions
 from collections.abc import Callable
 
 Logger = Callable[[str], None]

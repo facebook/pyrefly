@@ -25,9 +25,9 @@
 <link rel="stylesheet" href="/css/code-block-buttons.css">
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
-<script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.35cd6fea.css">
-<script src="/assets/js/runtime~main.55566910.js" defer="defer"></script>
-<script src="/assets/js/main.55035594.js" defer="defer"></script>
+<script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.4fdba471.css">
+<script src="/assets/js/runtime~main.6c52846d.js" defer="defer"></script>
+<script src="/assets/js/main.80ec0d27.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -44,7 +44,7 @@
 </ul>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="types-with-inference">Types with Inference<a href="#types-with-inference" class="hash-link" aria-label="Direct link to Types with Inference" title="Direct link to Types with Inference">​</a></h3>
 <p>Static analyzers can often <em>infer</em> types from your code—no annotations required. Pyrefly takes this a step further.</p>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Basic Inference
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Basic Inference
 answer = 42
 reveal_type(answer) # hover to reveal type
 
@@ -62,7 +62,7 @@ message = greet(&quot;World&quot;)
 <li>List/tuple/dict literals with uniform elements (<code>names = [&quot;A&quot;, &quot;B&quot;] -&gt; list[str]</code>)</li>
 <li>Return types if parameter types are annotated:</li>
 </ul>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh">def add(a: int, b: int):   # ✅ param annotations
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh">def add(a: int, b: int):   # ✅ param annotations
   return a + b    # 🔍 return inferred -&gt; int
 </div></div></div>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="when-to-add-hints">When to Add Hints<a href="#when-to-add-hints" class="hash-link" aria-label="Direct link to When to Add Hints" title="Direct link to When to Add Hints">​</a></h3>
@@ -74,7 +74,7 @@ message = greet(&quot;World&quot;)
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="define-types-inline">Define Types Inline<a href="#define-types-inline" class="hash-link" aria-label="Direct link to Define Types Inline" title="Direct link to Define Types Inline">​</a></h2>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="the-basics">The Basics<a href="#the-basics" class="hash-link" aria-label="Direct link to The Basics" title="Direct link to The Basics">​</a></h3>
 <p>Python&#x27;s built-in types can be used to write many type hints.</p>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: Basic Types
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: Basic Types
 
 from typing import reveal_type
 
@@ -100,7 +100,7 @@ reveal_type(is_admin) # revealed type: Literal[True]
 </div></div></div>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="functions">Functions<a href="#functions" class="hash-link" aria-label="Direct link to Functions" title="Direct link to Functions">​</a></h3>
 <p>Defining the parameter and return types for a function doesn&#x27;t just help prevent bugs, but it makes it easier to navigate in other files. You don&#x27;t always need to define a return type - we&#x27;ll do our best to infer it for you! We can&#x27;t always get it right and an explicit return type will help your IDE navigate faster and more accurately.</p>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: Functions
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: Functions
 
 from typing import reveal_type
 
@@ -118,7 +118,7 @@ reveal_type(whatDoesThisFunctionReturnAgain(2, 3)) # revealed type: int
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="composing-types">Composing Types<a href="#composing-types" class="hash-link" aria-label="Direct link to Composing Types" title="Direct link to Composing Types">​</a></h3>
 <p>The real power comes from composing smaller pieces into richer shapes.</p>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="unions--optional">Unions &amp; Optional<a href="#unions--optional" class="hash-link" aria-label="Direct link to Unions &amp; Optional" title="Direct link to Unions &amp; Optional">​</a></h3>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Union and Optional Types
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Union and Optional Types
 
 from typing import Optional
 
@@ -131,7 +131,7 @@ def to_int(data: str | bytes | None) -&gt; Optional[int]:
 </div></div></div>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="generics">Generics<a href="#generics" class="hash-link" aria-label="Direct link to Generics" title="Direct link to Generics">​</a></h3>
 <p>Generics allow you to define reusable functions and classes that work with multiple types. This feature enables you to write more flexible and adaptable code.</p>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: Generic Classes
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: Generic Classes
 
 from typing import reveal_type
 
@@ -146,7 +146,7 @@ reveal_type(c.box())  # revealed type: list[int]
 </div></div></div>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="protocols">Protocols<a href="#protocols" class="hash-link" aria-label="Direct link to Protocols" title="Direct link to Protocols">​</a></h3>
 <p>Protocols enable structural typing, which allows you to define interfaces without explicit inheritance. This feature helps you write more modular and composable code.</p>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: Structural Typing with Protocols
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: Structural Typing with Protocols
 
 from typing import Iterable, Protocol
 
@@ -170,7 +170,7 @@ f(BadWorld())  # ERROR!
 <p>Python also employs a structural type system, often referred to as &quot;duck typing.&quot; This concept is based on the idea that if two objects have the same shape or attributes, they can be treated as being of the same type.</p>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="dataclasses">Dataclasses<a href="#dataclasses" class="hash-link" aria-label="Direct link to Dataclasses" title="Direct link to Dataclasses">​</a></h3>
 <p>Dataclasses allow you to create type-safe data structures while minimizing boilerplate.</p>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: Dataclasses
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: Dataclasses
 
 from dataclasses import dataclass
 
@@ -184,7 +184,7 @@ Point(x=0.0, y=&quot;oops&quot;) # ERROR!
 </div></div></div>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="typeddict">TypedDict<a href="#typeddict" class="hash-link" aria-label="Direct link to TypedDict" title="Direct link to TypedDict">​</a></h3>
 <p>Typed dictionaries enable you to define dictionaries with specific key-value types. This feature lets you bring type safety to ad-hoc dictionary structures without major refactoring.</p>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: TypedDict
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: TypedDict
 
 from typing import TypedDict
 
@@ -197,7 +197,7 @@ bad_movie: Movie = {&quot;name&quot;: &quot;The Room&quot;, &quot;year&quot;: &q
 </div></div></div>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="overloads">Overloads<a href="#overloads" class="hash-link" aria-label="Direct link to Overloads" title="Direct link to Overloads">​</a></h3>
 <p>Overloads allow you to define multiple function signatures for a single function. Like generics, this feature helps you write more flexible and adaptable code.</p>
-<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1fbbalw xktofde"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: Overloads
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: Overloads
 
 from typing import overload, reveal_type
 

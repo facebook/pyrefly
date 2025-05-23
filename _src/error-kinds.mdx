@@ -446,7 +446,7 @@ from typing import TypeVar
 Wrong = TypeVar("Name")
 
 # PEP 695-style TypeVars can be constrained, but there must be at least two:
-def only_one_constriant[T: (int,)](x: T) -> T:
+def only_one_constraint[T: (int,)](x: T) -> T:
   ...
 
 # It's also illegal to mix the two styles together.
