@@ -570,15 +570,30 @@ impl Args {
             print_error_summary(&errors.shown, path_index);
         }
         let shown_errors_count = config_errors_count + errors.shown.len();
+        let ignored_errors_count = errors.disabled.len() + errors.suppressed.len();
+        let transitive_dependencies_count = transaction.module_count() - handles.len();
         timings.report_errors = report_errors_start.elapsed();
 
         info!(
-            "{} errors shown, {} errors ignored, {} modules, {} transitive dependencies, {} lines, took {timings}, peak memory {}",
+            "{} error{} shown, {} error{} ignored, {} module{}, {} transitive dependenc{}, {} line{}, took {timings}, peak memory {}",
             number_thousands(shown_errors_count),
-            number_thousands(errors.disabled.len() + errors.suppressed.len()),
+            if shown_errors_count == 1 { "" } else { "s" },
+            number_thousands(ignored_errors_count),
+            if ignored_errors_count == 1 { "" } else { "s" },
             number_thousands(handles.len()),
-            number_thousands(transaction.module_count() - handles.len()),
+            if handles.len() == 1 { "" } else { "s" },
+            number_thousands(transitive_dependencies_count),
+            if transitive_dependencies_count == 1 {
+                "y"
+            } else {
+                "ies"
+            },
             number_thousands(transaction.line_count()),
+            if transaction.line_count() == 1 {
+                ""
+            } else {
+                "s"
+            },
             memory_trace.peak()
         );
         if let Some(timings) = &self.report_timings {
