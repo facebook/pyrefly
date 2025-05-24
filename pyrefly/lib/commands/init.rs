@@ -44,7 +44,7 @@ impl ConfigFileKind {
         match self {
             // This makes me question if pyproject should be a part of the enum at all
             Self::Pyproject => "".to_owned(),
-            _ => format!("[tool.{}]", self).to_lowercase(),
+            _ => format!("[tool.{self}]").to_lowercase(),
         }
     }
 }
@@ -114,11 +114,19 @@ impl Args {
         if let Some(dir) = dir
             && Args::check_for_existing_config(dir, ConfigFileKind::Pyrefly)?
         {
-            error!(
-                "The project at `{}` has already been initialized for pyrefly. Run `pyrefly check` to see type errors.",
+            use std::io::Write;
+            use std::io::{self};
+            print!(
+                "The project at `{}` has already been initialized for pyrefly. Run `pyrefly check` to see type errors. Re-initialize and write a new section? (y/N): ",
                 dir.display()
             );
-            return Ok(CommandExitStatus::UserError);
+            io::stdout().flush().ok();
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).ok();
+            let input = input.trim();
+            if input != "y" && input != "Y" {
+                return Ok(CommandExitStatus::UserError);
+            }
         }
 
         // 1. Check for mypy configuration
