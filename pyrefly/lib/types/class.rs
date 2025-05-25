@@ -258,6 +258,7 @@ impl ClassKind {
             ("builtins", "classmethod") => Self::ClassMethod,
             ("builtins", "property") => Self::Property,
             ("functools", "cached_property") => Self::Property,
+            ("cached_property", "cached_property") => Self::Property,
             ("cinder", "cached_property") => Self::Property,
             ("cinder", "async_cached_property") => Self::Property,
             ("enum", "member") => Self::EnumMember,
