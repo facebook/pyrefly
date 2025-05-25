@@ -133,3 +133,49 @@ Completion Results:
         report.trim(),
     );
 }
+
+#[test]
+fn complete_multi_module() {
+    let code = r#"
+import lib
+
+def foo(x: lib.Foo):
+  x.
+#   ^
+"#;
+
+    let lib = r#"
+# This file needs to be much longer than main, in order to provoke a crash.
+# Therefore, we pad it with a bunch of nonsense. This is the first line.
+# This is the second line.
+from typing import overload
+
+class Foo:
+    @property
+    @overload
+    def magic(x, y) -> bool:
+        return True
+    @overload
+    def magic(x, y, z) -> int:
+        return True
+"#;
+
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("lib", lib)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+5 |   x.
+        ^
+Completion Results:
+- (Field) magic: Unknown
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}

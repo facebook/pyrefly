@@ -1533,17 +1533,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 for info in &mut res {
                     if let Some(definition) = &info.definition {
                         match definition {
-                            AttrDefinition::FullyResolved(TextRangeWithModuleInfo {
-                                module_info: _,
-                                range,
-                            }) => {
+                            AttrDefinition::FullyResolved(..) => {
                                 info.ty = match self
                                     .lookup_attr_from_attribute_base(base.clone(), &info.name)
                                 {
+                                    // Important we do not use the resolved TextRange, as it might be in a different module.
+                                    // Whereas the empty TextRange is valid for all modules.
                                     LookupResult::Found(attr) => self
                                         .resolve_get_access(
                                             attr,
-                                            *range,
+                                            TextRange::default(),
                                             &self.error_swallower(),
                                             None,
                                         )
@@ -1551,9 +1550,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     _ => None,
                                 };
                             }
-                            AttrDefinition::PartiallyResolvedImportedModuleAttribute {
-                                module_name: _,
-                            } => {}
+                            AttrDefinition::PartiallyResolvedImportedModuleAttribute { .. } => {}
                         }
                     }
                 }
