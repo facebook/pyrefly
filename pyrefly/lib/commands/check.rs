@@ -116,6 +116,10 @@ pub struct Args {
     )]
     summarize_errors: Option<usize>,
 
+    /// Flag that will remove time and memory usage in output.
+    #[clap(long = "no-timer", short = 't', env = clap_env("NO_TIMER_INFO"))]
+    no_timer_info: bool,
+
     // non-config type checker behavior
     /// Check all reachable modules, not just the ones that are passed in explicitly on CLI positional arguments.
     #[clap(long, short = 'a', env = clap_env("CHECK_ALL"))]
@@ -129,6 +133,7 @@ pub struct Args {
     /// Remove unused ignores from the input files.
     #[clap(long, env = clap_env("REMOVE_UNUSED_IGNORES"))]
     remove_unused_ignores: bool,
+
 
     // config overrides
     /// The list of directories where imports are imported from, including
@@ -572,15 +577,26 @@ impl Args {
         let shown_errors_count = config_errors_count + errors.shown.len();
         timings.report_errors = report_errors_start.elapsed();
 
-        info!(
-            "{} errors shown, {} errors ignored, {} modules, {} transitive dependencies, {} lines, took {timings}, peak memory {}",
-            number_thousands(shown_errors_count),
-            number_thousands(errors.disabled.len() + errors.suppressed.len()),
-            number_thousands(handles.len()),
-            number_thousands(transaction.module_count() - handles.len()),
-            number_thousands(transaction.line_count()),
-            memory_trace.peak()
-        );
+        if self.no_timer_info {
+            info!(
+                "{} errors shown, {} errors ignored, {} modules, {} transitive dependencies, {} lines",
+                number_thousands(shown_errors_count),
+                number_thousands(errors.disabled.len() + errors.suppressed.len()),
+                number_thousands(handles.len()),
+                number_thousands(transaction.module_count() - handles.len()),
+                number_thousands(transaction.line_count()),
+            );
+        } else {
+            info!(
+                "{} errors shown, {} errors ignored, {} modules, {} transitive dependencies, {} lines, took {timings}, peak memory {}",
+                number_thousands(shown_errors_count),
+                number_thousands(errors.disabled.len() + errors.suppressed.len()),
+                number_thousands(handles.len()),
+                number_thousands(transaction.module_count() - handles.len()),
+                number_thousands(transaction.line_count()),
+                memory_trace.peak()
+            );
+        }
         if let Some(timings) = &self.report_timings {
             eprintln!("Computing timing information");
             transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
