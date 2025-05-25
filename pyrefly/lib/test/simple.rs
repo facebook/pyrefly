@@ -988,6 +988,14 @@ f"{None for y}" # E: Parse # E: Parse # E: Parse # E: Parse # E: Parse
 );
 
 testcase!(
+    test_empty_if,
+    r#"
+# This parse error results in two identical Identifiers, which previously caused a panic.
+a = True if # E: Parse 
+"#,
+);
+
+testcase!(
     test_mangled_for,
     r#"
 # This has identical Identifiers in the AST, which seems like the right AST.

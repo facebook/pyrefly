@@ -537,6 +537,14 @@ impl<'a> BindingsBuilder<'a> {
         self.table.insert(key, value)
     }
 
+    /// Like `insert_binding` but will ignore subsequent calls
+    /// Should only be used in exceptional cases.
+    pub fn insert_binding_overwrite(&mut self, key: Key, value: Binding) -> Idx<Key> {
+        let idx = self.table.types.0.insert(key);
+        self.table.types.1.insert(idx, value);
+        idx
+    }
+
     /// Insert a binding into the bindings table, given the `idx` of a key that we obtained previously.
     pub fn insert_binding_idx<K: Keyed>(&mut self, idx: Idx<K>, value: K::Value) -> Idx<K>
     where

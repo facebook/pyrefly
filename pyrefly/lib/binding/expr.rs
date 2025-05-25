@@ -196,7 +196,7 @@ impl<'a> BindingsBuilder<'a> {
             // We still need to produce a `Key` here just to be safe, because other
             // code may rely on all `Identifier`s having `Usage` keys and we could panic
             // in an IDE setting if we don't ensure this is the case.
-            return self.insert_binding(key, Binding::Type(Type::any_error()));
+            return self.insert_binding_overwrite(key, Binding::Type(Type::any_error()));
         }
         match value {
             Ok(value) => {
