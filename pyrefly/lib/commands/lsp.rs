@@ -98,6 +98,7 @@ use lsp_types::notification::DidChangeWorkspaceFolders;
 use lsp_types::notification::DidCloseTextDocument;
 use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::notification::DidSaveTextDocument;
+use lsp_types::notification::Exit;
 use lsp_types::notification::Notification as _;
 use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::Completion;
@@ -244,6 +245,7 @@ enum ServerEvent {
     DidChangeConfiguration,
     LspResponse(Response),
     LspRequest(Request),
+    Exit,
 }
 
 #[derive(Clone, Dupe)]
@@ -520,6 +522,8 @@ fn dispatch_lsp_events(
                     priority_events_sender.send(ServerEvent::CancelRequest(id))
                 } else if as_notification::<DidChangeConfiguration>(&x).is_some() {
                     queued_events_sender.send(ServerEvent::DidChangeConfiguration)
+                } else if as_notification::<Exit>(&x).is_some() {
+                    queued_events_sender.send(ServerEvent::Exit)
                 } else {
                     eprintln!("Unhandled notification: {x:?}");
                     Ok(())
@@ -609,7 +613,14 @@ pub fn run_lsp(
             _ => unreachable!(),
         };
         if let Ok(event) = received {
-            server.process_event(&mut ide_transaction_manager, &mut canceled_requests, event)?;
+            match server.process_event(
+                &mut ide_transaction_manager,
+                &mut canceled_requests,
+                event,
+            )? {
+                ProcessEvent::Continue => {}
+                ProcessEvent::Exit => break,
+            }
         } else {
             break;
         }
@@ -684,16 +695,25 @@ fn module_info_to_uri_with_document_content_provider(module_info: &ModuleInfo) -
     }
 }
 
+enum ProcessEvent {
+    Continue,
+    Exit,
+}
+
 impl Server {
     const FILEWATCHER_ID: &str = "FILEWATCHER";
 
+    /// Process the event, return `true` to exit.
     fn process_event<'a>(
         &'a self,
         ide_transaction_manager: &mut IDETransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
         event: ServerEvent,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ProcessEvent> {
         match event {
+            ServerEvent::Exit => {
+                return Ok(ProcessEvent::Exit);
+            }
             ServerEvent::RecheckFinished => {
                 self.validate_in_memory(ide_transaction_manager)?;
             }
@@ -741,7 +761,7 @@ impl Server {
                         ErrorCode::RequestCanceled as i32,
                         message,
                     ));
-                    return Ok(());
+                    return Ok(ProcessEvent::Continue);
                 }
                 eprintln!("Handling non-canceled request {} ({})", x.method, x.id);
                 if let Some(params) = as_request::<GotoDefinition>(&x) {
@@ -814,7 +834,7 @@ impl Server {
                 }
             }
         }
-        Ok(())
+        Ok(ProcessEvent::Continue)
     }
 
     fn new(
