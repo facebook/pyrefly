@@ -116,9 +116,9 @@ pub struct Args {
     )]
     summarize_errors: Option<usize>,
 
-    /// Flag that will remove time and memory usage in output.
-    #[clap(long = "no-timer", short = 't', env = clap_env("NO_TIMER_INFO"))]
-    no_timer_info: bool,
+    /// Flag that will remove the summary in the output.
+    #[clap(long = "no-summary", short = 's', env = clap_env("NO_SUMMARY"))]
+    no_summary_info: bool,
 
     // non-config type checker behavior
     /// Check all reachable modules, not just the ones that are passed in explicitly on CLI positional arguments.
@@ -577,16 +577,7 @@ impl Args {
         let shown_errors_count = config_errors_count + errors.shown.len();
         timings.report_errors = report_errors_start.elapsed();
 
-        if self.no_timer_info {
-            info!(
-                "{} errors shown, {} errors ignored, {} modules, {} transitive dependencies, {} lines",
-                number_thousands(shown_errors_count),
-                number_thousands(errors.disabled.len() + errors.suppressed.len()),
-                number_thousands(handles.len()),
-                number_thousands(transaction.module_count() - handles.len()),
-                number_thousands(transaction.line_count()),
-            );
-        } else {
+        if !self.no_summary_info {
             info!(
                 "{} errors shown, {} errors ignored, {} modules, {} transitive dependencies, {} lines, took {timings}, peak memory {}",
                 number_thousands(shown_errors_count),
