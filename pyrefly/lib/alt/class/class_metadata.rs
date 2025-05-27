@@ -168,6 +168,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut protocol_metadata = if bases.iter().any(|x| matches!(x, BaseClass::Protocol(_))) {
             Some(ProtocolMetadata {
                 members: cls.fields().cloned().collect(),
+                is_runtime_checkable: false,
             })
         } else {
             None
@@ -237,6 +238,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             if let Some(proto) = &mut protocol_metadata {
                                 if let Some(base_proto) = base_class_metadata.protocol_metadata() {
                                     proto.members.extend(base_proto.members.iter().cloned());
+                                    if base_proto.is_runtime_checkable {
+                                        proto.is_runtime_checkable = true;
+                                    }
                                 } else {
                                     self.error(errors,
                                         range,
@@ -397,6 +401,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Some(CalleeKind::Function(FunctionKind::Final)) => {
                     is_final = true;
+                }
+                Some(CalleeKind::Function(FunctionKind::RuntimeCheckable)) => {
+                    if let Some(proto) = &mut protocol_metadata {
+                        proto.is_runtime_checkable = true;
+                    } else {
+                        self.error(
+                            errors,
+                            cls.range(),
+                            ErrorKind::InvalidArgument,
+                            None,
+                            "@runtime_checkable can only be applied to Protocol classes".to_owned(),
+                        );
+                    }
                 }
                 _ => {}
             }

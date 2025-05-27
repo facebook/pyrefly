@@ -223,6 +223,7 @@ pub enum FunctionKind {
     AssertType,
     RevealType,
     Final,
+    RuntimeCheckable,
     PropertySetter(Box<FuncId>),
     Def(Box<FuncId>),
     AbstractMethod,
@@ -485,6 +486,8 @@ impl FunctionKind {
             ("typing", None, "assert_type") => Self::AssertType,
             ("typing", None, "reveal_type") => Self::RevealType,
             ("typing", None, "final") => Self::Final,
+            ("typing", None, "runtime_checkable") => Self::RuntimeCheckable,
+            ("typing_extensions", None, "runtime_checkable") => Self::RuntimeCheckable,
             ("abc", None, "abstractmethod") => Self::AbstractMethod,
             _ => Self::Def(Box::new(FuncId {
                 module,
@@ -550,6 +553,11 @@ impl FunctionKind {
                 module: ModuleName::typing(),
                 cls: None,
                 func: Name::new_static("reveal_type"),
+            },
+            Self::RuntimeCheckable => FuncId {
+                module: ModuleName::typing(),
+                cls: None,
+                func: Name::new_static("runtime_checkable"),
             },
             Self::CallbackProtocol(cls) => FuncId {
                 module: cls.qname().module_name(),

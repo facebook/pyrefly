@@ -161,6 +161,13 @@ impl ClassMetadata {
         self.protocol_metadata.is_some()
     }
 
+    pub fn is_runtime_checkable_protocol(&self) -> bool {
+        self.protocol_metadata
+            .as_ref()
+            .map(|p| p.is_runtime_checkable)
+            .unwrap_or(false)
+    }
+
     pub fn is_new_type(&self) -> bool {
         self.is_new_type
     }
@@ -328,6 +335,8 @@ impl DataclassMetadata {
 pub struct ProtocolMetadata {
     /// All members of the protocol, excluding ones defined on `object` and not overridden in a subclass.
     pub members: SmallSet<Name>,
+    /// Whether this protocol is decorated with @runtime_checkable
+    pub is_runtime_checkable: bool,
 }
 
 /// A struct representing a class's ancestors, in method resolution order (MRO)
