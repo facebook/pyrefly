@@ -12,7 +12,7 @@ use std::sync::Once;
 
 use dupe::Dupe;
 
-use crate::util::lock::Mutex;
+use crate::lock::Mutex;
 
 /// Like a normal lock, but anyone who attempts to take the lock will block until the lock is
 /// released, and then not take the lock. They are expected to retry (after checking they

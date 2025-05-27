@@ -136,7 +136,7 @@ mod tests {
     use crate::config::environment::environment::PythonEnvironment;
     use crate::module::module_name::ModuleName;
     use crate::module::module_path::ModulePath;
-    use crate::test::util::TestPath;
+    use crate::util::test_path::TestPath;
 
     #[test]
     fn test_site_package_path_from_environment() {

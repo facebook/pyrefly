@@ -5,6 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#![feature(const_type_name)]
+#![feature(if_let_guard)]
+#![feature(let_chains)]
+
 //! Utility functions that are not specific to the things Pyre does.
 
 pub mod arc_id;
@@ -23,8 +27,10 @@ pub mod memory;
 pub mod no_hash;
 pub mod prelude;
 pub mod recurser;
+pub mod ruff_visitors;
 pub mod small_set1;
 pub mod task_heap;
+pub mod test_path;
 pub mod thread_pool;
 pub mod trace;
 pub mod uniques;

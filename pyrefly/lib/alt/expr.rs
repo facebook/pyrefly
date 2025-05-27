@@ -21,7 +21,6 @@ use ruff_python_ast::Number;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
@@ -788,42 +787,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> TypeInfo {
         let res = match x {
-            Expr::Name(x) => {
-                match x.id.as_str() {
-                    "" => TypeInfo::of_ty(Type::any_error()), // Must already have a parse error
-                    _ => self
-                        .get(&Key::Usage(ShortIdentifier::expr_name(x)))
-                        .arc_clone(),
-                }
-            }
+            Expr::Name(x) => self
+                .get(&Key::Usage(ShortIdentifier::expr_name(x)))
+                .arc_clone(),
             Expr::Attribute(x) => {
                 let base = self.expr_infer_type_info(&x.value, errors);
-                match (base.ty(), x.attr.id.as_str()) {
-                    (Type::Literal(Lit::Enum(box (_, member, _))), "_name_" | "name") => {
-                        TypeInfo::of_ty(Type::Literal(Lit::Str(member.as_str().into())))
-                    }
-                    (Type::Literal(Lit::Enum(box (_, _, raw_type))), "_value_" | "value") => {
-                        TypeInfo::of_ty(raw_type.clone())
-                    }
-                    (Type::SelfType(cls) | Type::ClassType(cls), "name")
-                        if self.get_metadata_for_class(cls.class_object()).is_enum() =>
-                    {
-                        self.attr_infer(&base, &Name::new_static("_name_"), x.range, errors, None)
-                    }
-                    (Type::SelfType(cls) | Type::ClassType(cls), "value")
-                        if self.get_metadata_for_class(cls.class_object()).is_enum() =>
-                    {
-                        self.attr_infer(&base, &Name::new_static("_value_"), x.range, errors, None)
-                    }
-                    _ => {
-                        self.record_external_attribute_definition_index(
-                            base.ty(),
-                            x.attr.id(),
-                            x.attr.range,
-                        );
-                        self.attr_infer(&base, &x.attr.id, x.range, errors, None)
-                    }
-                }
+                self.record_external_attribute_definition_index(
+                    base.ty(),
+                    x.attr.id(),
+                    x.attr.range,
+                );
+                self.attr_infer(&base, &x.attr.id, x.range, errors, None)
             }
             Expr::Subscript(x) => {
                 // TODO: We don't deal properly with hint here, we should.
@@ -857,23 +831,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 base = Type::type_form(Type::SpecialForm(SpecialForm::Tuple));
             }
             match base {
-                Type::Forall(forall) => {
+                Type::Forall(box forall) => {
                     let tys =
                         xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors));
-                    let targs = self.check_and_create_targs(
-                        &forall.body.name(),
-                        &forall.tparams,
-                        tys,
-                        range,
-                        errors,
-                    );
-                    let param_map = forall
-                        .tparams
-                        .quantified()
-                        .cloned()
-                        .zip(targs.as_slice().iter().cloned())
-                        .collect::<SmallMap<_, _>>();
-                    forall.body.as_type().subst(&param_map)
+                    self.specialize_forall(forall, tys, range, errors)
                 }
                 // Note that we have to check for `builtins.type` by name here because this code runs
                 // when we're bootstrapping the stdlib and don't have access to class objects yet.
@@ -1477,14 +1438,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .iter()
                     .filter_map(|e| e.map(|e| self.expr_infer(e, errors)))
                     .collect::<Vec<_>>();
-                let targs = self.check_and_create_targs(
-                    &Name::new_static("slice"),
-                    self.stdlib.slice_class_object().tparams(),
-                    elts,
-                    x.range(),
-                    errors,
-                );
-                self.stdlib.slice(targs.as_slice().to_vec()).to_type()
+                self.specialize(&self.stdlib.slice_class_object(), elts, x.range(), errors)
             }
             Expr::IpyEscapeCommand(x) => self.error(
                 errors,

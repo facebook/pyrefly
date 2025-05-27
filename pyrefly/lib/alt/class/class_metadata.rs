@@ -43,7 +43,6 @@ use crate::types::tuple::Tuple;
 use crate::types::types::AnyStyle;
 use crate::types::types::CalleeKind;
 use crate::types::types::TParamInfo;
-use crate::types::types::TParams;
 use crate::types::types::Type;
 use crate::util::prelude::SliceExt;
 
@@ -533,7 +532,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bases: Vec<BaseClass>,
         legacy: &[Idx<KeyLegacyTypeParam>],
         errors: &ErrorCollector,
-    ) -> TParams {
+    ) -> Vec<TParamInfo> {
         let legacy_tparams = legacy
             .iter()
             .filter_map(|key| self.get_idx(*key).deref().parameter().cloned())
@@ -632,7 +631,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 tparams.insert(p.clone());
             }
         }
-        self.type_params(name.range, tparams.into_iter().collect(), errors)
+
+        tparams.into_iter().collect()
     }
 
     fn calculate_metaclass(

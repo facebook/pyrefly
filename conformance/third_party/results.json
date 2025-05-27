@@ -1,10 +1,11 @@
 {
   "total": 136,
-  "pass": 54,
-  "fail": 82,
+  "pass": 55,
+  "fail": 81,
   "pass_rate": 0.4,
-  "differences": 425,
+  "differences": 421,
   "passing": [
+    "aliases_explicit.py",
     "aliases_newtype.py",
     "annotations_coroutines.py",
     "annotations_methods.py",
@@ -61,8 +62,7 @@
     "typeddicts_readonly_kwargs.py"
   ],
   "failing": {
-    "aliases_explicit.py": 1,
-    "aliases_implicit.py": 7,
+    "aliases_implicit.py": 6,
     "aliases_recursive.py": 17,
     "aliases_type_statement.py": 8,
     "aliases_typealiastype.py": 25,
@@ -106,7 +106,7 @@
     "generics_syntax_scoping.py": 7,
     "generics_typevartuple_basic.py": 1,
     "generics_typevartuple_concat.py": 1,
-    "generics_typevartuple_specialization.py": 7,
+    "generics_typevartuple_specialization.py": 5,
     "generics_upper_bound.py": 1,
     "generics_variance.py": 12,
     "generics_variance_inference.py": 10,

@@ -213,7 +213,7 @@ print(json.dumps({'python_platform': platform, 'python_version': version, 'site_
         INTERPRETER_ENV_REGISTRY.lock()
         .entry(interpreter.to_path_buf()).or_insert_with(move || {
             Self::get_env_from_interpreter(interpreter).inspect_err(|e| {
-                error!("Failed to query interpreter, falling back to default Python environment settings\n{}", e);
+                error!("Failed to query interpreter at {}, falling back to default Python environment settings\n{}", interpreter.display(), e);
             }).ok()
         }).clone().unwrap_or_else(Self::pyrefly_default)
     }

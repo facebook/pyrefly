@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::mem;
-
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Pattern;
@@ -101,7 +99,7 @@ impl<'a> BindingsBuilder<'a> {
                             } else {
                                 UnpackedPosition::Index(idx)
                             };
-                            let key = self.table.insert(
+                            let key = self.insert_binding(
                                 Key::Anon(x.range()),
                                 Binding::UnpackedValue(key, x.range(), position),
                             );
@@ -114,7 +112,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     SizeExpectation::Eq(num_patterns)
                 };
-                self.table.insert(
+                self.insert_binding(
                     KeyExpect(x.range),
                     BindingExpect::UnpackedLength(key, x.range, expect),
                 );
@@ -137,7 +135,7 @@ impl<'a> BindingsBuilder<'a> {
                                 .clone()
                                 .map(|s| s.with_facet(FacetKind::Key(key)))
                         });
-                        let binding_for_key = self.table.insert(
+                        let binding_for_key = self.insert_binding(
                             Key::Anon(key_expr.range()),
                             Binding::PatternMatchMapping(key_expr, key),
                         );
@@ -169,7 +167,7 @@ impl<'a> BindingsBuilder<'a> {
                     .into_iter()
                     .enumerate()
                     .for_each(|(idx, pattern)| {
-                        let attr_key = self.table.insert(
+                        let attr_key = self.insert_binding(
                             Key::Anon(pattern.range()),
                             Binding::PatternMatchClassPositional(
                                 x.cls.clone(),
@@ -186,7 +184,7 @@ impl<'a> BindingsBuilder<'a> {
                          attr,
                          pattern,
                      }| {
-                        let attr_key = self.table.insert(
+                        let attr_key = self.insert_binding(
                             Key::Anon(attr.range()),
                             Binding::PatternMatchClassKeyword(x.cls.clone(), attr, key),
                         );
@@ -208,17 +206,17 @@ impl<'a> BindingsBuilder<'a> {
                             ErrorKind::MatchError,
                         )
                     }
-                    let mut base = self.scopes.current().flow.clone();
+                    let mut base = self.scopes.clone_current_flow();
                     let new_narrow_ops = self.bind_pattern(match_subject.clone(), pattern, key);
                     if let Some(ref mut ops) = narrow_ops {
                         ops.or_all(new_narrow_ops)
                     } else {
                         narrow_ops = Some(new_narrow_ops);
                     }
-                    mem::swap(&mut self.scopes.current_mut().flow, &mut base);
+                    self.scopes.swap_current_flow_with(&mut base);
                     branches.push(base);
                 }
-                self.scopes.current_mut().flow = self.merge_flow(branches, range);
+                self.set_current_flow_to_merged_branches(branches, range);
                 narrow_ops.unwrap_or_default()
             }
             Pattern::MatchStar(_) => NarrowOps::new(),
@@ -228,7 +226,7 @@ impl<'a> BindingsBuilder<'a> {
     pub fn stmt_match(&mut self, mut x: StmtMatch) {
         self.ensure_expr(&mut x.subject);
         let match_subject = *x.subject.clone();
-        let key = self.table.insert(
+        let key = self.insert_binding(
             Key::Anon(x.subject.range()),
             Binding::Expr(None, *x.subject.clone()),
         );
@@ -245,7 +243,7 @@ impl<'a> BindingsBuilder<'a> {
         // is carried over to the fallback case.
         let mut negated_prev_ops = NarrowOps::new();
         for case in x.cases {
-            let mut base = self.scopes.current().flow.clone();
+            let mut base = self.scopes.clone_current_flow();
             if case.pattern.is_wildcard() || case.pattern.is_irrefutable() {
                 exhaustive = true;
             }
@@ -256,16 +254,20 @@ impl<'a> BindingsBuilder<'a> {
             negated_prev_ops.and_all(new_narrow_ops.negate());
             if let Some(mut guard) = case.guard {
                 self.ensure_expr(&mut guard);
-                self.table
-                    .insert(Key::Anon(guard.range()), Binding::Expr(None, *guard));
+                self.insert_binding(Key::Anon(guard.range()), Binding::Expr(None, *guard));
             }
             self.stmts(case.body);
-            mem::swap(&mut self.scopes.current_mut().flow, &mut base);
+            self.scopes.swap_current_flow_with(&mut base);
             branches.push(base);
         }
-        if !exhaustive {
-            branches.push(mem::take(&mut self.scopes.current_mut().flow));
+        // If the match branches cover all possibilities, then the flow after the match
+        // is just the merged branch flows.
+        //
+        // Otherwise, we need to merge the branches with the original `base` flow (which is current).
+        if exhaustive {
+            self.set_current_flow_to_merged_branches(branches, range);
+        } else {
+            self.merge_branches_into_current(branches, range);
         }
-        self.scopes.current_mut().flow = self.merge_flow(branches, range);
     }
 }

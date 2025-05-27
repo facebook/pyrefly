@@ -17,8 +17,8 @@ use dupe::Dupe;
 use human_bytes::human_bytes;
 use memory_stats::memory_stats;
 
-use crate::util::display::commas_iter;
-use crate::util::lock::Mutex;
+use crate::display::commas_iter;
+use crate::lock::Mutex;
 
 #[derive(Debug, Clone, Copy, Dupe, Default)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]

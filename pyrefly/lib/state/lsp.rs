@@ -57,6 +57,7 @@ pub enum DefinitionMetadata {
     Attribute(Name),
     Module,
     Variable,
+    VariableOrAttribute(Name),
 }
 
 impl<'a> Transaction<'a> {
@@ -247,8 +248,9 @@ impl<'a> Transaction<'a> {
                     docstring,
                 },
             ) = self.key_to_export(handle, &key, INITIAL_GAS)?;
+            let name = Name::new(self.get_module_info(&handle)?.code_at(location));
             return Some((
-                DefinitionMetadata::Variable,
+                DefinitionMetadata::VariableOrAttribute(name),
                 TextRangeWithModuleInfo::new(self.get_module_info(&handle)?, location),
                 docstring,
             ));
@@ -368,6 +370,16 @@ impl<'a> Transaction<'a> {
             DefinitionMetadata::Variable => self
                 .local_variable_references_from_definition(handle, &definition)
                 .unwrap_or_default(),
+            DefinitionMetadata::VariableOrAttribute(expected_name) => [
+                self.local_attribute_references_from_definition(
+                    handle,
+                    &definition,
+                    &expected_name,
+                ),
+                self.local_variable_references_from_definition(handle, &definition)
+                    .unwrap_or_default(),
+            ]
+            .concat(),
         };
         if definition.module_info.path() == handle.path() {
             references.push(definition.range);

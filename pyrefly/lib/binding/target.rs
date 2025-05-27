@@ -35,7 +35,7 @@ impl<'a> BindingsBuilder<'a> {
         range: TextRange,
     ) {
         // We are going to use this binding many times, so compute it once.
-        let key = self.table.insert(Key::Unpack(range), make_binding(None));
+        let key = self.insert_binding(Key::Unpack(range), make_binding(None));
 
         // An unpacking has zero or one splats (starred expressions).
         let mut splat = false;
@@ -49,19 +49,20 @@ impl<'a> BindingsBuilder<'a> {
                     let make_nested_binding = |_: Option<Idx<KeyAnnotation>>| {
                         Binding::UnpackedValue(key, range, UnpackedPosition::Slice(i, j))
                     };
-                    self.bind_target(&mut e.value, &make_nested_binding, None);
+                    self.bind_target(&mut e.value, &make_nested_binding);
                 }
                 _ => {
-                    let idx = if splat {
+                    let unpacked_position = if splat {
                         // If we've encountered a splat, we no longer know how many values have been consumed
                         // from the front, but we know how many are left at the back.
                         UnpackedPosition::ReverseIndex(len - i)
                     } else {
                         UnpackedPosition::Index(i)
                     };
-                    let make_nested_binding =
-                        |_: Option<Idx<KeyAnnotation>>| Binding::UnpackedValue(key, range, idx);
-                    self.bind_target(e, &make_nested_binding, None);
+                    let make_nested_binding = |_: Option<Idx<KeyAnnotation>>| {
+                        Binding::UnpackedValue(key, range, unpacked_position)
+                    };
+                    self.bind_target(e, &make_nested_binding);
                 }
             }
         }
@@ -70,7 +71,7 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             SizeExpectation::Eq(elts.len())
         };
-        self.table.insert(
+        self.insert_binding(
             KeyExpect(range),
             BindingExpect::UnpackedLength(key, range, expect),
         );
@@ -80,17 +81,16 @@ impl<'a> BindingsBuilder<'a> {
         if let Some((identifier, _)) =
             identifier_and_chain_prefix_for_expr(&Expr::Attribute(attr.clone()))
         {
-            let idx = self.table.insert(
+            let idx = self.insert_binding(
                 Key::PropertyAssign(ShortIdentifier::new(&identifier)),
                 Binding::AssignToAttribute(Box::new((attr, value))),
             );
             let name = Hashed::new(&identifier.id);
             if self.lookup_name_hashed(name, LookupKind::Regular).is_ok() {
-                self.scopes
-                    .update_flow_info_hashed(self.loop_depth, name, idx, None);
+                self.scopes.update_flow_info_hashed(name, idx, None);
             }
         } else {
-            self.table.insert(
+            self.insert_binding(
                 Key::Anon(attr.range),
                 Binding::AssignToAttribute(Box::new((attr, value))),
             );
@@ -101,17 +101,16 @@ impl<'a> BindingsBuilder<'a> {
         if let Some((identifier, _)) =
             identifier_and_chain_prefix_for_expr(&Expr::Subscript(subscript.clone()))
         {
-            let idx = self.table.insert(
+            let idx = self.insert_binding(
                 Key::PropertyAssign(ShortIdentifier::new(&identifier)),
                 Binding::AssignToSubscript(Box::new((subscript, value))),
             );
             let name = Hashed::new(&identifier.id);
             if self.lookup_name_hashed(name, LookupKind::Regular).is_ok() {
-                self.scopes
-                    .update_flow_info_hashed(self.loop_depth, name, idx, None);
+                self.scopes.update_flow_info_hashed(name, idx, None);
             }
         } else {
-            self.table.insert(
+            self.insert_binding(
                 Key::Anon(subscript.range),
                 Binding::AssignToSubscript(Box::new((subscript, value))),
             );
@@ -174,13 +173,17 @@ impl<'a> BindingsBuilder<'a> {
                 self.bind_attr_assign(x.clone(), attr_value.clone());
                 // If this is a self-assignment, record it because we may use it to infer
                 // the existence of an instance-only attribute.
-                self.record_self_attr_assign(x, attr_value, None);
+                self.scopes.record_self_attr_assign(x, attr_value, None);
             }
             Expr::Subscript(x) => {
-                let binding = make_binding(None);
+                let assigned_value = if let Some(value) = value {
+                    ExprOrBinding::Expr(value.clone())
+                } else {
+                    ExprOrBinding::Binding(make_binding(None))
+                };
                 // Create a binding to verify that the assignment is valid and potentially narrow
                 // the name assigned to.
-                self.bind_subscript_assign(x.clone(), ExprOrBinding::Binding(binding.clone()));
+                self.bind_subscript_assign(x.clone(), assigned_value);
             }
             Expr::Tuple(tup) if !is_aug_assign => {
                 self.bind_unpacking(&mut tup.elts, make_binding, tup.range);
@@ -194,7 +197,7 @@ impl<'a> BindingsBuilder<'a> {
                     "Starred assignment target must be in a list or tuple".to_owned(),
                     ErrorKind::InvalidSyntax,
                 );
-                self.bind_target(&mut x.value, make_binding, value);
+                self.bind_target_impl(&mut x.value, make_binding, value, false);
             }
             illegal_target => {
                 // Most structurally invalid targets become errors in the parser, which we propagate so there
@@ -209,17 +212,27 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         target: &mut Expr,
         make_binding: &dyn Fn(Option<Idx<KeyAnnotation>>) -> Binding,
-        value: Option<&Expr>,
     ) {
-        // A normal target should not ensure top level `Name`
-        self.bind_target_impl(target, make_binding, value, false);
+        self.bind_target_impl(target, make_binding, None, false);
+    }
+
+    /// Similar to `bind_target`, but specifically for assignments:
+    /// - Handles multi-target assignment
+    /// - Takes the value as an `Expr` rather than a `make_binding` callaback, which enables
+    ///   better contextual typing in cases where the assignment might actually invoke
+    ///   a method (like descriptor attribute assigns and `__setitem__` calls).
+    pub fn bind_targets_with_value(&mut self, targets: &mut Vec<Expr>, value: &mut Expr) {
+        self.ensure_expr(value);
+        let make_binding = |ann: Option<Idx<KeyAnnotation>>| Binding::Expr(ann, value.clone());
+        for target in targets {
+            self.bind_target_impl(target, &make_binding, Some(value), false);
+        }
     }
 
     pub fn bind_target_for_aug_assign(
         &mut self,
         target: &mut Expr,
         make_binding: &dyn Fn(Option<Idx<KeyAnnotation>>) -> Binding,
-        value: Option<&Expr>,
     ) {
         // A normal target should not ensure top level `Name`, since it will *define*
         // that name (overwriting any previous value) but an `AugAssign` is a mutation
@@ -229,6 +242,6 @@ impl<'a> BindingsBuilder<'a> {
         // AugAssign cannot be used with multi-target assignment so it does not interact
         // with the `bind_unpacking` recursion (if a user attempts to do so, we'll throw
         // an error and otherwise treat it as a normal assignment from a binding standpoint).
-        self.bind_target_impl(target, make_binding, value, true);
+        self.bind_target_impl(target, make_binding, None, true);
     }
 }

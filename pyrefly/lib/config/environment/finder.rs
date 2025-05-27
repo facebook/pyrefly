@@ -73,7 +73,7 @@ mod tests {
     use itertools::Itertools as _;
 
     use super::*;
-    use crate::test::util::TestPath;
+    use crate::util::test_path::TestPath;
 
     fn interp_name(version_suffix: &str) -> String {
         let windows_suffix = if cfg!(windows) { ".exe" } else { "" };

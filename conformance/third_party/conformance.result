@@ -1,16 +1,13 @@
 @generated
 {
-  "aliases_explicit.py": [
-    "Line 44: Unexpected errors ['Expected 1 type argument for `GoodTypeAlias12`, got 0']"
-  ],
+  "aliases_explicit.py": [],
   "aliases_implicit.py": [
     "Line 81: Expected 1 errors",
     "Line 106: Expected 1 errors",
     "Line 111: Expected 1 errors",
     "Line 112: Expected 1 errors",
     "Line 113: Expected 1 errors",
-    "Line 117: Expected 1 errors",
-    "Line 58: Unexpected errors ['Expected 1 type argument for `GoodTypeAlias13`, got 0']"
+    "Line 117: Expected 1 errors"
   ],
   "aliases_newtype.py": [],
   "aliases_recursive.py": [
@@ -372,8 +369,6 @@
   "generics_typevartuple_specialization.py": [
     "Line 51: Unexpected errors ['assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed']",
     "Line 59: Unexpected errors ['Class `Array2` uses type variables not specified in `Generic` or `Protocol` base']",
-    "Line 67: Unexpected errors ['Expected 1 type argument for `Array1D`, got 0']",
-    "Line 92: Unexpected errors ['Expected 2 type arguments for `VariadicTuple`, got 0']",
     "Line 94: Unexpected errors ['assert_type(tuple[float, *tuple[Any, ...]], tuple[float]) failed']",
     "Line 153: Unexpected errors ['Unpacked argument cannot be used for type parameter T1']",
     "Line 157: Unexpected errors ['assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed']"

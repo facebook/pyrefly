@@ -366,3 +366,23 @@ class defaulty[K, V]:
 badge: defaulty[bool, list[str]] = defaulty(list)
     "#,
 );
+
+testcase!(
+    test_pass_generic_class_to_overload,
+    r#"
+from typing import Iterable, Literal, overload, Self
+from _typeshed import SupportsAdd
+
+@overload
+def f(x: Iterable[Literal[1]]) -> None: ...
+@overload
+def f(x: Iterable[SupportsAdd]) -> None: ...
+def f(x) -> None: ...
+
+class C[T](Iterable[T]):
+    def __new__(cls, x: T) -> Self: ...
+
+def g(x: int):
+    f(C(x))
+    "#,
+);

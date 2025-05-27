@@ -149,7 +149,7 @@ impl<'a> BindingsBuilder<'a> {
             });
         }
 
-        self.table.insert_idx(
+        self.insert_binding_idx(
             class_indices.metadata_idx,
             BindingClassMetadata {
                 class_idx: class_indices.class_idx,
@@ -160,7 +160,7 @@ impl<'a> BindingsBuilder<'a> {
                 special_base: None,
             },
         );
-        self.table.insert_idx(
+        self.insert_binding_idx(
             class_indices.synthesized_fields_idx,
             BindingClassSynthesizedFields(class_indices.class_idx),
         );
@@ -208,7 +208,7 @@ impl<'a> BindingsBuilder<'a> {
                     name.cloned(),
                     ClassFieldProperties::new(stat_info.annot.is_some(), stat_info.loc),
                 );
-                self.table.insert(
+                self.insert_binding(
                     KeyClassField(class_indices.def_index, name.into_key().clone()),
                     binding,
                 );
@@ -234,7 +234,7 @@ impl<'a> BindingsBuilder<'a> {
                         name.clone(),
                         ClassFieldProperties::new(annotation.is_some(), range),
                     );
-                    self.table.insert(
+                    self.insert_binding(
                         KeyClassField(class_indices.def_index, name.key().clone()),
                         BindingClassField {
                             class_idx: class_indices.class_idx,
@@ -265,7 +265,7 @@ impl<'a> BindingsBuilder<'a> {
             FlowStyle::None,
         );
         fields_possibly_defined_by_this_class.reserve(0); // Attempt to shrink to capacity
-        self.table.insert_idx(
+        self.insert_binding_idx(
             class_indices.class_idx,
             BindingClass::ClassDef(ClassBinding {
                 def_index: class_indices.def_index,
@@ -350,7 +350,7 @@ impl<'a> BindingsBuilder<'a> {
         special_base: Option<Box<BaseClass>>,
     ) {
         let class_indices = self.class_indices(&class_name);
-        self.table.insert_idx(
+        self.insert_binding_idx(
             class_indices.metadata_idx,
             BindingClassMetadata {
                 class_idx: class_indices.class_idx,
@@ -361,7 +361,7 @@ impl<'a> BindingsBuilder<'a> {
                 special_base,
             },
         );
-        self.table.insert_idx(
+        self.insert_binding_idx(
             class_indices.synthesized_fields_idx,
             BindingClassSynthesizedFields(class_indices.class_idx),
         );
@@ -443,11 +443,11 @@ impl<'a> BindingsBuilder<'a> {
                         None,
                     )
                 };
-                Some(self.table.insert(ann_key, ann_val))
+                Some(self.insert_binding(ann_key, ann_val))
             } else {
                 None
             };
-            self.table.insert(
+            self.insert_binding(
                 KeyClassField(class_indices.def_index, member_name.clone()),
                 BindingClassField {
                     class_idx: class_indices.class_idx,
@@ -466,7 +466,7 @@ impl<'a> BindingsBuilder<'a> {
             Binding::ClassDef(class_indices.class_idx, Box::new([])),
             FlowStyle::None,
         );
-        self.table.insert_idx(
+        self.insert_binding_idx(
             class_indices.class_idx,
             BindingClass::FunctionalClassDef(class_indices.def_index, class_name, fields),
         );

@@ -1725,7 +1725,6 @@ impl Server {
         let mut workspaces = self.workspaces.workspaces.write();
         // Currently uses the default interpreter if the pythonPath is invalid
         let env = PythonEnvironment::get_interpreter_env(Path::new(python_path));
-        // TODO(kylei): warn if interpreter could not be found
         match scope_uri {
             Some(scope_uri) => {
                 let workspace_path = scope_uri.to_file_path().unwrap();

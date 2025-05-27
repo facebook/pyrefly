@@ -11,8 +11,8 @@ use std::sync::RwLock;
 use std::sync::RwLockReadGuard;
 use std::sync::RwLockWriteGuard;
 
-use crate::util::exclusive_lock::ExclusiveLock;
-use crate::util::exclusive_lock::ExclusiveLockGuard;
+use crate::exclusive_lock::ExclusiveLock;
+use crate::exclusive_lock::ExclusiveLockGuard;
 
 /// A lock which can be used in three modes:
 ///

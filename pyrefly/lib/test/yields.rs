@@ -326,3 +326,17 @@ async def test() -> None:
         pass
 "#,
 );
+
+testcase!(
+    bug = "We don't understand yield in lambda, and mis-attribute the yield to the surrounding function",
+    test_lambda_yield,
+    r#"
+from typing import assert_type
+def f(x: int):
+    callback = lambda: (yield x)  # E: Invalid `yield` outside of a function
+    l = [i for i in callback()]
+    assert_type(l, list[int])  # E: assert_type(list[Any], list[int])
+    return l
+assert_type(f(1), list[int])  # E: assert_type(list[Any], list[int])
+"#,
+);

@@ -189,6 +189,19 @@ assert_type(MyEnum.X.value, float)
 );
 
 testcase!(
+    test_value_of_union_of_enum_literals,
+    r#"
+from typing import Literal
+from enum import Enum
+class E(Enum):
+    X = 1
+    Y = 2
+def f(e: Literal[E.X, E.Y]) -> int:
+    return e.value
+    "#,
+);
+
+testcase!(
     test_flag,
     r#"
 from enum import Flag

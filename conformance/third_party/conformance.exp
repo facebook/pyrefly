@@ -3,16 +3,6 @@
   "aliases_explicit.py": [
     {
       "code": -2,
-      "column": 10,
-      "concise_description": "Expected 1 type argument for `GoodTypeAlias12`, got 0",
-      "description": "Expected 1 type argument for `GoodTypeAlias12`, got 0",
-      "line": 44,
-      "name": "bad-specialization",
-      "stop_column": 25,
-      "stop_line": 44
-    },
-    {
-      "code": -2,
       "column": 9,
       "concise_description": "Can't apply arguments to non-class, got TypeAlias[GoodTypeAlias2, type[int | None]]",
       "description": "Can't apply arguments to non-class, got TypeAlias[GoodTypeAlias2, type[int | None]]",
@@ -243,16 +233,6 @@
     }
   ],
   "aliases_implicit.py": [
-    {
-      "code": -2,
-      "column": 10,
-      "concise_description": "Expected 1 type argument for `GoodTypeAlias13`, got 0",
-      "description": "Expected 1 type argument for `GoodTypeAlias13`, got 0",
-      "line": 58,
-      "name": "bad-specialization",
-      "stop_column": 25,
-      "stop_line": 58
-    },
     {
       "code": -2,
       "column": 9,
@@ -4570,16 +4550,6 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "assert_type(property, Literal['BLUE', 'RED']) failed",
-      "description": "assert_type(property, Literal['BLUE', 'RED']) failed",
-      "line": 26,
-      "name": "assert-type",
-      "stop_column": 58,
-      "stop_line": 26
-    },
-    {
-      "code": -2,
-      "column": 5,
       "concise_description": "assert_type(str, Literal['BLUE', 'GREEN', 'RED']) failed",
       "description": "assert_type(str, Literal['BLUE', 'GREEN', 'RED']) failed",
       "line": 30,
@@ -4612,8 +4582,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "assert_type(property, Literal[1, 3]) failed",
-      "description": "assert_type(property, Literal[1, 3]) failed",
+      "concise_description": "assert_type(int, Literal[1, 3]) failed",
+      "description": "assert_type(int, Literal[1, 3]) failed",
       "line": 26,
       "name": "assert-type",
       "stop_column": 50,
@@ -6933,26 +6903,6 @@
       "name": "invalid-type-var",
       "stop_column": 13,
       "stop_line": 59
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "Expected 1 type argument for `Array1D`, got 0",
-      "description": "Expected 1 type argument for `Array1D`, got 0",
-      "line": 67,
-      "name": "bad-specialization",
-      "stop_column": 23,
-      "stop_line": 67
-    },
-    {
-      "code": -2,
-      "column": 67,
-      "concise_description": "Expected 2 type arguments for `VariadicTuple`, got 0",
-      "description": "Expected 2 type arguments for `VariadicTuple`, got 0",
-      "line": 92,
-      "name": "bad-specialization",
-      "stop_column": 80,
-      "stop_line": 92
     },
     {
       "code": -2,

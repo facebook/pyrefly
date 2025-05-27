@@ -85,6 +85,13 @@ enum Target {
     Any(AnyStyle),
 }
 
+struct CalledOverload {
+    signature: Callable,
+    arg_errors: ErrorCollector,
+    call_errors: ErrorCollector,
+    return_type: Type,
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn error_call_target(
         &self,
@@ -631,8 +638,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Type {
-        let mut closest_overload = None;
-        let mut fewest_errors: Option<ErrorCollector> = None;
+        let mut closest_overload: Option<CalledOverload> = None;
         for callable in overloads {
             let arg_errors = self.error_collector();
             let call_errors = self.error_collector();
@@ -650,42 +656,68 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // "No matching overloads" error with the necessary context.
                 None,
             );
-            if call_errors.is_empty() {
-                errors.extend(arg_errors);
+            if arg_errors.is_empty() && call_errors.is_empty() {
+                // It's only safe to return immediately if both arg_errors and call_errors are
+                // empty, as parameter types from the overload signature may be used as hints when
+                // evaluating arguments, producing arg_errors for some overloads but not others.
+                // See test::overload::test_pass_generic_class_to_overload for an example.
                 return res;
             }
-            match &fewest_errors {
-                Some(errs) if errs.len() <= call_errors.len() => {}
+            let called_overload = CalledOverload {
+                signature: callable,
+                arg_errors,
+                call_errors,
+                return_type: res,
+            };
+            match &closest_overload {
+                Some(overload)
+                    if overload.call_errors.len() <= called_overload.call_errors.len() => {}
                 _ => {
-                    closest_overload = Some(callable);
-                    fewest_errors = Some(call_errors);
+                    closest_overload = Some(called_overload);
                 }
             }
         }
         // We're guaranteed to have at least one overload.
         let closest_overload = closest_overload.unwrap();
-        let fewest_errors = fewest_errors.unwrap();
+        errors.extend(closest_overload.arg_errors);
         let signature = match self_arg {
             Some(_) => closest_overload
+                .signature
                 .drop_first_param()
-                .unwrap_or(closest_overload),
-            None => closest_overload,
+                .unwrap_or(closest_overload.signature),
+            None => closest_overload.signature,
         };
         let signature = self
             .solver()
             .for_display(Type::Callable(Box::new(signature)));
-        self.error(
-            errors,
-            range,
-            ErrorKind::NoMatchingOverload,
-            context,
-            format!(
-                "No matching overload found for function `{}`, reporting errors for closest overload: `{}`",
-                metadata.kind.as_func_id().format(self.module_info().name()), signature,
-            ),
-        );
-        errors.extend(fewest_errors);
-        Type::any_error()
+        if closest_overload.call_errors.is_empty() {
+            // No overload evaluated completely successfully, but we still say we found a match if
+            // there were only arg_errors, since they may be unrelated. For example, in:
+            //
+            //   @overload
+            //   def f(x: int) -> int: ...
+            //   @overload
+            //   def f(x: int, y: str) -> str: ...
+            //
+            //   f(1+"2")
+            //
+            // the call to f should match the first overload, even though `1 + "2"` generates an
+            // arg error for both overloads.
+            closest_overload.return_type
+        } else {
+            self.error(
+                errors,
+                range,
+                ErrorKind::NoMatchingOverload,
+                context,
+                format!(
+                    "No matching overload found for function `{}`, reporting errors for closest overload: `{}`",
+                    metadata.kind.as_func_id().format(self.module_info().name()), signature,
+                ),
+            );
+            errors.extend(closest_overload.call_errors);
+            Type::any_error()
+        }
     }
 
     /// Helper function hide details of call synthesis from the attribute resolution code.

@@ -74,7 +74,7 @@ pub enum Qualifier {
     ReadOnly,
     ClassVar,
     Final,
-    #[expect(dead_code)] // Will be used in the future
+    #[allow(dead_code)] // Will be used in the future
     InitVar,
     Annotated,
     TypeAlias,

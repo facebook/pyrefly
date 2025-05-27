@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use dupe::Dupe;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
@@ -16,9 +17,14 @@ use crate::error::kind::ErrorKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
+use crate::types::class::Class;
+use crate::types::class::ClassType;
 use crate::types::class::TArgs;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::tuple::Tuple;
+use crate::types::typed_dict::TypedDict;
+use crate::types::types::Forall;
+use crate::types::types::Forallable;
 use crate::types::types::TParam;
 use crate::types::types::TParams;
 use crate::types::types::Type;
@@ -26,7 +32,133 @@ use crate::util::display::count;
 use crate::util::prelude::SliceExt;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    pub fn check_and_create_targs(
+    /// Silently promotes a Class to a ClassType, using default type arguments. It is up to the
+    /// caller to ensure they are not calling this method on a TypedDict class, which should be
+    /// promoted to TypedDict instead of ClassType.
+    pub fn promote_nontypeddict_silently_to_classtype(&self, cls: &Class) -> ClassType {
+        ClassType::new(cls.dupe(), self.create_default_targs(cls.tparams(), None))
+    }
+
+    /// Given a class or typed dictionary and some (explicit) type arguments, construct a `Type`
+    /// that represents the type of an instance of the class or typed dictionary with those `targs`.
+    ///
+    /// Note how this differs from `promote` and `instantiate`:
+    /// specialize(list, [int]) == list[int]
+    /// promote(list) == list[Any]
+    /// instantiate(list) == list[T]
+    pub fn specialize(
+        &self,
+        cls: &Class,
+        targs: Vec<Type>,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let targs = if !targs.is_empty() && self.get_metadata_for_class(cls).has_unknown_tparams() {
+            // Accept any number of arguments (by ignoring them).
+            TArgs::default()
+        } else {
+            self.check_and_create_targs(cls.name(), cls.tparams(), targs, range, errors)
+        };
+        self.type_of_instance(cls, targs)
+    }
+
+    pub fn specialize_forall(
+        &self,
+        forall: Forall<Forallable>,
+        targs: Vec<Type>,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let targs =
+            self.check_and_create_targs(&forall.body.name(), &forall.tparams, targs, range, errors);
+        forall.subst(targs)
+    }
+
+    /// Given a class or typed dictionary, create a `Type` that represents to an instance annotated
+    /// with the class or typed dictionary's bare name. This will either have empty type arguments if the
+    /// class or typed dictionary is not generic, or type arguments populated with gradual types if
+    /// it is (e.g. applying an annotation of `list` to a variable means
+    /// `list[Any]`).
+    ///
+    /// We require a range because depending on the configuration we may raise
+    /// a type error when a generic class or typed dictionary is promoted using gradual types.
+    ///
+    /// Note how this differs from `specialize` and `instantiate`:
+    /// specialize(list, [int]) == list[int]
+    /// promote(list) == list[Any]
+    /// instantiate(list) == list[T]
+    pub fn promote(&self, cls: &Class, range: TextRange) -> Type {
+        let targs = self.create_default_targs(cls.tparams(), Some(range));
+        self.type_of_instance(cls, targs)
+    }
+
+    pub fn promote_forall(&self, forall: Forall<Forallable>, range: TextRange) -> Type {
+        let targs = self.create_default_targs(&forall.tparams, Some(range));
+        forall.subst(targs)
+    }
+
+    /// Version of `promote` that does not potentially raise errors.
+    /// Should only be used for unusual scenarios.
+    pub fn promote_silently(&self, cls: &Class) -> Type {
+        let targs = self.create_default_targs(cls.tparams(), None);
+        self.type_of_instance(cls, targs)
+    }
+
+    /// Given a class or typed dictionary, create a `Type` that represents a generic instance of
+    /// the class or typed dictionary.
+    ///
+    /// Note how this differs from `specialize` and `promote`:
+    /// specialize(list, [int]) == list[int]
+    /// promote(list) == list[Any]
+    /// instantiate(list) == list[T]
+    pub fn instantiate(&self, cls: &Class) -> Type {
+        self.type_of_instance(cls, cls.tparams_as_targs())
+    }
+
+    /// Instantiates a class or typed dictionary with fresh variables for its type parameters.
+    pub fn instantiate_fresh(&self, cls: &Class) -> Type {
+        self.solver()
+            .fresh_quantified(cls.tparams(), self.instantiate(cls), self.uniques)
+            .1
+    }
+
+    /// Creates default type arguments for a class, falling back to Any for type parameters without defaults.
+    fn create_default_targs(
+        &self,
+        tparams: &TParams,
+        // Placeholder for strict mode: we want to force callers to pass a range so
+        // that we don't refactor in a way where none is available, but this is unused
+        // because we do not have a strict mode yet.
+        _range: Option<TextRange>,
+    ) -> TArgs {
+        if tparams.is_empty() {
+            TArgs::default()
+        } else {
+            // TODO(stroxler): We should error here, but the error needs to be
+            // configurable in the long run, and also suppressed in dependencies
+            // no matter what the configuration is.
+            //
+            // Our plumbing isn't ready for that yet, so for now we are silently
+            // using gradual type arguments.
+            TArgs::new(
+                tparams
+                    .iter()
+                    .map(|x| x.quantified.as_gradual_type())
+                    .collect(),
+            )
+        }
+    }
+
+    fn type_of_instance(&self, cls: &Class, targs: TArgs) -> Type {
+        let metadata = self.get_metadata_for_class(cls);
+        if metadata.is_typed_dict() {
+            Type::TypedDict(TypedDict::new(cls.dupe(), targs))
+        } else {
+            Type::ClassType(ClassType::new(cls.dupe(), targs))
+        }
+    }
+
+    fn check_and_create_targs(
         &self,
         name: &Name,
         tparams: &TParams,

@@ -397,3 +397,17 @@ def f(x: X, y):
     x(0)
   "#,
 );
+
+testcase!(
+    test_in_alias,
+    r#"
+from typing import Callable, ParamSpec, TypeAlias
+P = ParamSpec("P")
+TA: TypeAlias = Callable[P, None]
+def f(f: TA):
+    # f can be called with anything
+    f()
+    f("")
+    f(1, 2, 3, 4, 5)
+    "#,
+);

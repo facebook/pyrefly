@@ -47,7 +47,7 @@ jobs:
             # necessary for glibc 2.31
             container: ubuntu:20.04
             github_env: $GITHUB_ENV
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             platform: linux
             arch: armhf
             # necessary for glibc 2.31

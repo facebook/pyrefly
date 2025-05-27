@@ -1595,6 +1595,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Binding::AssignToSubscript(box (subscript, value)) => {
+                // TODO: Solveing `test_context_assign_subscript` will require us to push
+                // this down further, so that we can use contextual typing to infer the Expr case.
                 let value_ty = match value {
                     ExprOrBinding::Expr(e) => self.expr_infer(e, errors),
                     ExprOrBinding::Binding(b) => self.solve_binding(b, errors).arc_clone_ty(),
@@ -2648,22 +2650,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// `type[int]`, then call `untype(type[int])` to get the `int` annotation.
     fn untype(&self, ty: Type, range: TextRange, errors: &ErrorCollector) -> Type {
         let mut ty = ty;
-        if let Type::Forall(forall) = ty {
-            // A generic type alias with no type arguments is OK if all the type params have defaults
-            let targs = self.check_and_create_targs(
-                &forall.body.name(),
-                &forall.tparams,
-                Vec::new(),
-                range,
-                errors,
-            );
-            let param_map = forall
-                .tparams
-                .quantified()
-                .cloned()
-                .zip(targs.as_slice().iter().cloned())
-                .collect::<SmallMap<_, _>>();
-            ty = forall.body.as_type().subst(&param_map)
+        if let Type::Forall(box forall) = ty {
+            ty = self.promote_forall(forall, range);
         };
         if let Some(t) = self.untype_opt(ty.clone(), range) {
             t

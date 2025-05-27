@@ -237,23 +237,7 @@ pub fn find_module_in_site_package_path(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test::util::TestPath;
-    use crate::test::util::TestPathKind;
-
-    impl TestPath {
-        fn partial_py_typed() -> Self {
-            Self {
-                name: "py.typed".to_owned(),
-                kind: TestPathKind::FileWithContents("partial\n".to_owned()),
-            }
-        }
-        fn py_typed() -> Self {
-            Self {
-                name: "py.typed".to_owned(),
-                kind: TestPathKind::FileWithContents("".to_owned()),
-            }
-        }
-    }
+    use crate::util::test_path::TestPath;
 
     #[test]
     fn test_find_module_simple() {
@@ -615,7 +599,10 @@ mod tests {
                         TestPath::dir("baz", vec![TestPath::file("__init__.pyi")]),
                     ],
                 ),
-                TestPath::dir("foo-stubs", vec![TestPath::partial_py_typed()]),
+                TestPath::dir(
+                    "foo-stubs",
+                    vec![TestPath::file_with_contents("py.typed", "partial\n")],
+                ),
             ],
         );
         assert_eq!(
@@ -661,7 +648,7 @@ mod tests {
             vec![TestPath::dir(
                 "foo",
                 vec![
-                    TestPath::py_typed(),
+                    TestPath::file("py.typed"),
                     TestPath::file("__init__.py"),
                     TestPath::dir("bar", vec![TestPath::file("__init__.py")]),
                     TestPath::dir("baz", vec![TestPath::file("__init__.pyi")]),

@@ -7,4 +7,3 @@
 
 //! Functions that could be part of the Ruff API, but aren't.
 pub mod ast;
-pub mod visitors;

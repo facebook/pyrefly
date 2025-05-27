@@ -24,12 +24,24 @@ use static_interner::Interner;
 use thiserror::Error;
 
 use crate::dunder;
+use crate::util::visit::Visit;
+use crate::util::visit::VisitMut;
 
 static MODULE_NAME_INTERNER: Interner<String> = Interner::new();
 
 /// The name of a python module. Examples: `foo.bar.baz`, `.foo.bar`.
 #[derive(Clone, Dupe, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ModuleName(Intern<String>);
+
+impl<To: 'static> Visit<To> for ModuleName {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a To)) {}
+}
+
+impl<To: 'static> VisitMut<To> for ModuleName {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut To)) {}
+}
 
 impl Serialize for ModuleName {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

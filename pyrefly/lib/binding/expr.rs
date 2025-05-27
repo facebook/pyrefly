@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::mem;
-
 use itertools::Either;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::BoolOp;
@@ -19,13 +17,19 @@ use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprLambda;
 use ruff_python_ast::ExprNoneLiteral;
 use ruff_python_ast::ExprSubscript;
+use ruff_python_ast::ExprYield;
+use ruff_python_ast::ExprYieldFrom;
 use ruff_python_ast::Identifier;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 
 use crate::binding::binding::Binding;
+use crate::binding::binding::BindingYield;
+use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyYield;
+use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::SuperStyle;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamBuilder;
@@ -185,7 +189,6 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         name: &Identifier,
         value: Result<Binding, LookupError>,
-        kind: LookupKind,
     ) -> Idx<Key> {
         let key = Key::Usage(ShortIdentifier::new(name));
         if name.is_empty() {
@@ -197,13 +200,11 @@ impl<'a> BindingsBuilder<'a> {
             // We still need to produce a `Key` here just to be safe, because other
             // code may rely on all `Identifier`s having `Usage` keys and we could panic
             // in an IDE setting if we don't ensure this is the case.
-            return self.table.insert(key, Binding::Type(Type::any_error()));
+            return self.insert_binding_overwrite(key, Binding::Type(Type::any_error()));
         }
         match value {
             Ok(value) => {
-                if !self.module_info.path().is_interface()
-                    && matches!(kind, LookupKind::Regular | LookupKind::Mutable)
-                {
+                if !self.module_info.path().is_interface() {
                     // Don't check flow for global/nonlocal lookups
                     if let Some(error_message) = self
                         .scopes
@@ -213,13 +214,13 @@ impl<'a> BindingsBuilder<'a> {
                         self.error(name.range, error_message, ErrorKind::UnboundName);
                     }
                 }
-                self.table.insert(key, value)
+                self.insert_binding(key, value)
             }
             Err(_) if name.id == dunder::FILE || name.id == dunder::NAME => {
-                self.table.insert(key, Binding::StrType)
+                self.insert_binding(key, Binding::StrType)
             }
-            Err(_) if name.id == dunder::DEBUG => self.table.insert(key, Binding::BoolType),
-            Err(_) if name.id == dunder::DOC => self.table.insert(
+            Err(_) if name.id == dunder::DEBUG => self.insert_binding(key, Binding::BoolType),
+            Err(_) if name.id == dunder::DOC => self.insert_binding(
                 key,
                 if self.has_docstring {
                     Binding::StrType
@@ -230,7 +231,7 @@ impl<'a> BindingsBuilder<'a> {
             Err(error) => {
                 // Record a type error and fall back to `Any`.
                 self.error(name.range, error.message(name), ErrorKind::UnknownName);
-                self.table.insert(key, Binding::Type(Type::any_error()))
+                self.insert_binding(key, Binding::Type(Type::any_error()))
             }
         }
     }
@@ -238,10 +239,10 @@ impl<'a> BindingsBuilder<'a> {
     fn bind_comprehensions(&mut self, range: TextRange, comprehensions: &mut [Comprehension]) {
         self.scopes.push(Scope::comprehension(range));
         for comp in comprehensions {
-            self.scopes.current_mut().stat.expr_lvalue(&comp.target);
+            self.scopes.add_lvalue_to_current_static(&comp.target);
             let make_binding =
-                |k| Binding::IterableValue(k, comp.iter.clone(), IsAsync::new(comp.is_async));
-            self.bind_target(&mut comp.target, &make_binding, None);
+                |ann| Binding::IterableValue(ann, comp.iter.clone(), IsAsync::new(comp.is_async));
+            self.bind_target(&mut comp.target, &make_binding);
             for x in comp.ifs.iter() {
                 let narrow_ops = NarrowOps::from_expr(self, Some(x));
                 self.bind_narrow_ops(&narrow_ops, comp.range);
@@ -249,11 +250,29 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    pub fn bind_lambda(&mut self, lambda: &ExprLambda) {
+    pub fn bind_lambda(&mut self, lambda: &mut ExprLambda) {
         self.scopes.push(Scope::function(lambda.range));
         if let Some(parameters) = &lambda.parameters {
             for x in parameters {
                 self.bind_lambda_param(x.name());
+            }
+        }
+        self.ensure_expr(&mut lambda.body);
+        // Pyrefly currently does not support `yield` in lambdas, but we cannot drop them
+        // entirely or we will panic at solve time.
+        //
+        // TODO: We should properly handle `yield` and `yield from`; lambdas can be generators.
+        // One example of this is in the standard library, in `_collections_abc.pyi`:
+        // https://github.com/python/cpython/blob/965662ee4a986605b60da470d9e7c1e9a6f922b3/Lib/_collections_abc.py#L92
+        let (yields_and_returns, _) = self.scopes.pop_function_scope();
+        for y in yields_and_returns.yields {
+            match y {
+                Either::Left(y) => {
+                    self.insert_binding(KeyYield(y.range), BindingYield::Invalid(y));
+                }
+                Either::Right(y) => {
+                    self.insert_binding(KeyYieldFrom(y.range), BindingYieldFrom::Invalid(y));
+                }
             }
         }
     }
@@ -268,12 +287,12 @@ impl<'a> BindingsBuilder<'a> {
         orelse: Option<&mut Expr>,
         range: TextRange,
     ) {
-        let if_branch = mem::take(&mut self.scopes.current_mut().flow);
-        self.scopes.current_mut().flow = base;
+        let if_branch = self.scopes.replace_current_flow(base);
         self.bind_narrow_ops(&ops.negate(), range);
         self.ensure_expr_opt(orelse);
-        let else_branch = mem::take(&mut self.scopes.current_mut().flow);
-        self.scopes.current_mut().flow = self.merge_flow(vec![if_branch, else_branch], range);
+        // Swap them back again, to make sure that the merge order is if, then else
+        let else_branch = self.scopes.replace_current_flow(if_branch);
+        self.merge_branches_into_current(vec![else_branch], range);
     }
 
     fn enclosing_class_name(&self) -> Option<&Identifier> {
@@ -321,12 +340,30 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    fn record_yield(&mut self, x: ExprYield) {
+        if let Err(oops_top_level) = self.scopes.record_or_reject_yield(x) {
+            self.insert_binding(
+                KeyYield(oops_top_level.range),
+                BindingYield::Invalid(oops_top_level),
+            );
+        }
+    }
+
+    fn record_yield_from(&mut self, x: ExprYieldFrom) {
+        if let Err(oops_top_level) = self.scopes.record_or_reject_yield_from(x) {
+            self.insert_binding(
+                KeyYieldFrom(oops_top_level.range),
+                BindingYieldFrom::Invalid(oops_top_level),
+            );
+        }
+    }
+
     /// Execute through the expr, ensuring every name has a binding.
     pub fn ensure_expr(&mut self, x: &mut Expr) {
         let new_scope = match x {
             Expr::If(x) => {
                 // Ternary operation. We treat it like an if/else statement.
-                let base = self.scopes.current().flow.clone();
+                let base = self.scopes.clone_current_flow();
                 self.ensure_expr(&mut x.test);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
                 self.bind_narrow_ops(&narrow_ops, x.body.range());
@@ -336,7 +373,7 @@ impl<'a> BindingsBuilder<'a> {
                 return;
             }
             Expr::BoolOp(ExprBoolOp { range, op, values }) => {
-                let base = self.scopes.current().flow.clone();
+                let base = self.scopes.clone_current_flow();
                 let mut narrow_ops = NarrowOps::new();
                 for value in values {
                     self.bind_narrow_ops(&narrow_ops, value.range());
@@ -455,8 +492,10 @@ impl<'a> BindingsBuilder<'a> {
                 } else if nargs == 2 {
                     let mut bind = |expr: &mut Expr| {
                         self.ensure_expr(expr);
-                        self.table
-                            .insert(Key::Anon(expr.range()), Binding::Expr(None, expr.clone()))
+                        self.insert_binding(
+                            Key::Anon(expr.range()),
+                            Binding::Expr(None, expr.clone()),
+                        )
                     };
                     let cls_key = bind(&mut posargs[0]);
                     let obj_key = bind(&mut posargs[1]);
@@ -476,7 +515,7 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     SuperStyle::Any
                 };
-                self.table.insert(
+                self.insert_binding(
                     Key::SuperInstance(*range),
                     Binding::SuperInstance(style, *range),
                 );
@@ -500,10 +539,14 @@ impl<'a> BindingsBuilder<'a> {
                 return;
             }
             Expr::Named(x) => {
-                self.scopes.current_mut().stat.expr_lvalue(&x.target);
-                let make_binding = |k| Binding::Expr(k, (*x.value).clone());
-                self.bind_target(&mut x.target, &make_binding, None);
+                self.scopes.add_lvalue_to_current_static(&x.target);
+                let make_binding = |ann| Binding::Expr(ann, (*x.value).clone());
+                self.bind_target(&mut x.target, &make_binding);
                 self.ensure_expr(&mut x.value);
+                return;
+            }
+            Expr::Lambda(x) => {
+                self.bind_lambda(x);
                 return;
             }
             Expr::Call(ExprCall {
@@ -516,13 +559,15 @@ impl<'a> BindingsBuilder<'a> {
             ) =>
             {
                 // Control flow doesn't proceed after sys.exit(), exit(), quit(), or os._exit().
-                self.scopes.current_mut().flow.no_next = true;
+                self.scopes.mark_flow_termination();
                 false
             }
             Expr::Name(x) => {
                 let name = Ast::expr_name_identifier(x.clone());
-                let binding = self.forward_lookup(&name);
-                self.ensure_name(&name, binding, LookupKind::Regular);
+                let binding = self
+                    .lookup_name(&name.id, LookupKind::Regular)
+                    .map(Binding::Forward);
+                self.ensure_name(&name, binding);
                 false
             }
             Expr::ListComp(x) => {
@@ -541,22 +586,12 @@ impl<'a> BindingsBuilder<'a> {
                 self.bind_comprehensions(x.range, &mut x.generators);
                 true
             }
-            Expr::Lambda(x) => {
-                self.bind_lambda(x);
-                true
-            }
             Expr::Yield(x) => {
-                self.function_yields_and_returns
-                    .last_mut()
-                    .yields
-                    .push(Either::Left(x.clone()));
+                self.record_yield(x.clone());
                 false
             }
             Expr::YieldFrom(x) => {
-                self.function_yields_and_returns
-                    .last_mut()
-                    .yields
-                    .push(Either::Right(x.clone()));
+                self.record_yield_from(x.clone());
                 false
             }
             _ => false,
@@ -581,11 +616,13 @@ impl<'a> BindingsBuilder<'a> {
                 let name = Ast::expr_name_identifier(x.clone());
                 let binding = match tparams_builder {
                     Some(legacy) => legacy
-                        .forward_lookup(self, &name)
+                        .intercept_lookup(self, &name)
                         .ok_or(LookupError::NotFound),
-                    None => self.forward_lookup(&name),
+                    None => self
+                        .lookup_name(&name.id, LookupKind::Regular)
+                        .map(Binding::Forward),
                 };
-                self.ensure_name(&name, binding, LookupKind::Regular);
+                self.ensure_name(&name, binding);
             }
             Expr::Subscript(ExprSubscript { value, .. })
                 if self.as_special_export(value) == Some(SpecialExport::Literal) =>
@@ -650,9 +687,7 @@ impl<'a> BindingsBuilder<'a> {
         let mut decorator_keys = Vec::with_capacity(decorators.len());
         for mut x in decorators {
             self.ensure_expr(&mut x.expression);
-            let k = self
-                .table
-                .insert(Key::Anon(x.range), Binding::Decorator(x.expression));
+            let k = self.insert_binding(Key::Anon(x.range), Binding::Decorator(x.expression));
             decorator_keys.push(k);
         }
         decorator_keys

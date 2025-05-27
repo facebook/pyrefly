@@ -446,7 +446,7 @@ impl Param {
         }
     }
 
-    #[expect(dead_code)]
+    #[allow(dead_code)]
     pub fn is_required(&self) -> bool {
         match self {
             Param::PosOnly(_, Required::Required)

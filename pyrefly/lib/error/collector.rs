@@ -106,22 +106,23 @@ impl ErrorCollector {
         kind: ErrorKind,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) {
+        if self.style == ErrorStyle::Never {
+            return;
+        }
         let source_range = self.module_info.source_range(range);
         let is_ignored = self.module_info.is_ignored(&source_range, &msg);
         let full_msg = match context {
             Some(ctx) => vec1![ctx().format(), msg],
             None => vec1![msg],
         };
-        if self.style != ErrorStyle::Never {
-            let err = Error::new(
-                self.module_info.path().dupe(),
-                source_range,
-                full_msg,
-                is_ignored,
-                kind,
-            );
-            self.errors.lock().push(err);
-        }
+        let err = Error::new(
+            self.module_info.path().dupe(),
+            source_range,
+            full_msg,
+            is_ignored,
+            kind,
+        );
+        self.errors.lock().push(err);
     }
 
     pub fn module_info(&self) -> &ModuleInfo {

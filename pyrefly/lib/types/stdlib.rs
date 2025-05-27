@@ -271,10 +271,6 @@ impl Stdlib {
         Self::primitive(&self.str)
     }
 
-    pub fn slice(&self, targs: Vec<Type>) -> ClassType {
-        Self::apply(&self.slice, targs)
-    }
-
     pub fn slice_class_object(&self) -> Class {
         Self::unwrap(&self.slice).dupe()
     }

@@ -15,7 +15,7 @@ use path_absolutize::Absolutize;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 
-use crate::util::lock::RwLock;
+use crate::lock::RwLock;
 
 /// A cached way to search the file system upwards for specific files.
 pub struct UpwardSearch<T> {
@@ -127,7 +127,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::util::lock::Mutex;
+    use crate::lock::Mutex;
 
     const NONE: &str = "__none__";
 
