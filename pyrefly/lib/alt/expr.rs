@@ -692,7 +692,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else if metadata.is_protocol() && metadata.is_runtime_checkable_protocol() {
                 // Additional validation for runtime checkable protocols:
                 // issubclass() can only be used with non-data protocols
-                if !is_isinstance && self.is_data_protocol(cls) {
+                if !is_isinstance && self.is_data_protocol(cls, range) {
                     self.error(
                         errors,
                         range,
@@ -730,26 +730,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Check if a protocol is a data protocol (has non-method members)
-    fn is_data_protocol(&self, cls: &Class) -> bool {
+    fn is_data_protocol(&self, cls: &Class, range: TextRange) -> bool {
         // A data protocol has at least one non-method member
-        // For simplicity, we consider any annotated field that's not a method to be a data member
-        // This is a conservative approach that works for most practical cases
-        for field_name in cls.fields() {
-            if cls.is_field_annotated(field_name) {
-                // Use the class type to access the field 
-                let class_type = cls.as_class_type();
-                let ty = self.type_of_attr_get(
-                    &class_type.to_type(),
-                    field_name,
-                    ruff_text_size::TextRange::default(),
-                    &ErrorCollector::new(self.module_info().dupe(), crate::error::style::ErrorStyle::Never),
-                    None,
-                    "is_data_protocol",
-                );
-                
-                // If it's not a callable type, it's a data member
-                if !matches!(ty, Type::Callable(_) | Type::Function(_) | Type::BoundMethod(_)) {
-                    return true;
+        // Use protocol metadata to get the member names
+        let metadata = self.get_metadata_for_class(cls);
+        if let Some(protocol_metadata) = metadata.protocol_metadata() {
+            for field_name in &protocol_metadata.members {
+                if cls.is_field_annotated(field_name) {
+                    // Use the class type to access the field 
+                    let class_type = cls.as_class_type();
+                    let ty = self.type_of_attr_get(
+                        &class_type.to_type(),
+                        field_name,
+                        range,
+                        &ErrorCollector::new(self.module_info().dupe(), crate::error::style::ErrorStyle::Never),
+                        None,
+                        "is_data_protocol",
+                    );
+                    
+                    // If it's not a callable type, it's a data member
+                    if !matches!(ty, Type::Callable(_) | Type::Function(_) | Type::BoundMethod(_)) {
+                        return true;
+                    }
                 }
             }
         }
@@ -773,14 +775,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 func_ty.callee_kind(),
                 Some(CalleeKind::Function(FunctionKind::IsInstance))
             );
-            
-            self.check_type_is_class_object(
-                isinstance_class_type,
-                contains_subscript,
-                x.range,
-                is_isinstance,
-                errors,
+            let is_issubclass = matches!(
+                func_ty.callee_kind(),
+                Some(CalleeKind::Function(FunctionKind::IsSubclass))
             );
+            
+            // Only check protocol validation for isinstance/issubclass calls
+            if is_isinstance || is_issubclass {
+                self.check_type_is_class_object(
+                    isinstance_class_type,
+                    contains_subscript,
+                    x.range,
+                    is_isinstance,
+                    errors,
+                );
+            }
         }
     }
 
