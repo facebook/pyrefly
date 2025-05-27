@@ -69,7 +69,7 @@ if not configs.pyrefly then
         return lspconfig.util.find_git_ancestor(fname) or vim.loop.os_homedir()
       end,
       settings = {},
-    },
+    }
 end
 
 lspconfig.pyrefly.setup({})
@@ -1822,23 +1822,45 @@ In this example, Pyrefly flags the second call to `greet()` because we're passin
 
 ---
 title: Installation
-
 description: How to install Pyrefly
 ---
 
-If you want to experiment with our tool, the easiest way to install Pyrefly is via `pip`.
+Pyrefly is available on [Pypi](https://pypi.org/project/pyrefly/) with a new release every Monday. We often release more frequently when shipping new features and bug fixes.
+
+## Install
+
+You can use `uv`, `poetry`, or `pip` to install the package if you want to experiment with our tool.
+
+Simply `cd` into your project directory and run:
+
+### Using UV
+
+```
+uvx pyrefly init
+uvx pyrefly check
+```
+
+This will install Pyrefly using UV, [migrate](../migrating-to-pyrefly) your existing type checker configuration, and run the Pyrefly type checker.
+
+### Using Poetry
+
+```
+poetry add --group dev pyrefly
+poetry run pyrefly init
+poetry run pyrefly check
+```
+
+### Using Pip
 
 ```
 pip install pyrefly
-```
-
-Then, `cd` into the directory or project you would like to type check and run
-
-```
+pyrefly init
 pyrefly check
 ```
 
-You'll want to set up a basic configuration file to type check your project. You can add configuration options to a `pyproject.toml` file, or create a `pyrefly.toml` file in your project directory.
+## Configure
+
+Set up a basic configuration file to type-check your project. You can add configuration options to a `pyproject.toml` file or create a `pyrefly.toml` file in your project directory. All [configuration options are documented here](../configuration).
 
 ```
 [tool.pyrefly]
@@ -1847,52 +1869,56 @@ search_path = [
 ]
 ```
 
-Then, simply run `pyrefly check`, this time the tool will use your configuration options.
+Then, run `pyrefly check` again, and the tool will use your configuration options.
 
-It's likely the tool will return a list of type errors, this is perfectly normal. At this point you have a few options:
+The tool may return a list of type errors; this is perfectly normal. You have a few options at this point:
 
-1. Silence the errors using `# pyrefly: ignore` comments. This will get your project to a clean type checking state and you can drive down the number of errors as you go. We've included a script that can do this for you:
+1. Use `# pyrefly: ignore` comments to silence the errors. This will get your project to a clean type-checking state, and you can reduce the number of errors as you go. We've included a script that can do this for you:
 
 ```
 pyrefly check --suppress-errors
 ```
-2. Use extra configuration options to silence specific categories of errors, or exclude files with more errors than average.
+
+2. Use extra configuration options to silence specific categories of errors or exclude files with more errors than average.
 
 ----
+
 ## Upgrading Pyrefly
 
-Upgrading the version of Pyrefly you're using, or a third party library you depend on can surface new type errors in your code. Fixing them all at once is often not realistic. We've written scripts to help you temporarily silence them.
+Upgrading the version of Pyrefly you're using or a third-party library you depend on can reveal new type errors in your code. Fixing them all at once is often unrealistic. We've written scripts to help you temporarily silence them.
 
 ```
-# step 1
+# Step 1
 pyrefly check --suppress-errors
 ```
 
 ```
-# step 2
+# Step 2
 <run your formatter of choice>
 ```
 
 ```
-# step 3
+# Step 3
 pyrefly check --remove-unused-ignores
 ```
-Repeat the steps above until you get a clean formatting run and a clean type check.
 
-This will add `# pyrefly: ignore` comments to your code that will enable you to silence errors, and come back and fix them at a later date. This can make the process of upgrading a large codebase much more manageable.
+Repeat these steps until you achieve a clean formatting run and a clean type check.
+
+This will add `# pyrefly: ignore` comments to your code, enabling you to silence errors and return to fix them later. This can make the process of upgrading a large codebase much more manageable.
 
 ----
 
 ## Add Pyrefly to CI
 
-Once your project passes type checks without errors, you can ensure no new bugs are introduced. This is best enforced through CI (Continuous Integration) to prevent other maintainers from merging code with errors. Here is an example for GitHub.
+After your project passes type checks without errors, you can prevent new bugs from being introduced. Enforce this through CI (Continuous Integration) to prevent other maintainers from merging code with errors. Here is an example for GitHub.
 
-Save your workflow in this path in your repository:
+Save your workflow in the following path within your repository:
+
 ```
 .github/workflows/typecheck.yml
 ```
 
-GitHub automatically detects any `.yml` files inside `.github/workflows/` and sets up the defined workflows.
+GitHub automatically detects `.yml` files within `.github/workflows/` and sets up the defined workflows.
 
 ```
 name: Pyrefly Type Check
@@ -1930,13 +1956,17 @@ jobs:
 ```
 
 ### A few notes about this setup:
+
 - Building your environment and installing dependencies will enhance type safety by checking the types of imports. *This is not required, but encouraged!*
 - Simply drop in `pyrefly check` to existing workflows that build and test your environment.
+
 ```
       - name: Run Pyrefly Type Checker
         run: pyrefly check
 ```
-- Your `pyrefly.toml` or pyrefly configs in your `pyproject.toml` will be automatically detected. Learn how to [configure pyrefly here](../configuration).
+
+- Your `pyrefly.toml` or Pyrefly configs in your `pyproject.toml` will be automatically detected. Learn how to [configure Pyrefly here](../configuration).
+```
 
 
 ---
