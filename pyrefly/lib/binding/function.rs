@@ -455,7 +455,7 @@ impl<'a> BindingsBuilder<'a> {
         function_idx: Idx<KeyFunction>,
         class_key: Option<Idx<KeyClass>>,
     ) -> (FunctionStubOrImpl, Option<SelfAssignments>) {
-        let stub_or_impl = if is_ellipse(&body) {
+        let stub_or_impl = if is_ellipse(&body) || is_docstring(&body[0]) {
             FunctionStubOrImpl::Stub
         } else {
             FunctionStubOrImpl::Impl
