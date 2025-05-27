@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 use dupe::Dupe;
 use lock_free_hashtable::sharded::ShardedLockFreeRawTable;
 
-use crate::util::with_hash::WithHash;
+use crate::with_hash::WithHash;
 
 pub struct LockedMap<K, V> {
     map: ShardedLockFreeRawTable<Box<(WithHash<K>, V)>, 64>,

@@ -7,8 +7,6 @@
 
 //! Utilities for setting up tests quickly.
 
-#![cfg(test)]
-
 use std::io::Write;
 use std::path::Path;
 

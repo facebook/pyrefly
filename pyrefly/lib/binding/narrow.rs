@@ -8,6 +8,7 @@
 use std::fmt;
 
 use pyrefly_derive::TypeEq;
+use pyrefly_util::assert_words;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::BoolOp;
 use ruff_python_ast::CmpOp;
@@ -29,7 +30,6 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 
-use crate::assert_words;
 use crate::binding::bindings::BindingsBuilder;
 use crate::export::special::SpecialExport;
 use crate::ruff::ast::Ast;

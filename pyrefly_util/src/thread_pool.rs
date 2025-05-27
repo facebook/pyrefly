@@ -13,7 +13,7 @@ use std::sync::LazyLock;
 
 use tracing::debug;
 
-use crate::util::lock::Mutex;
+use crate::lock::Mutex;
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ThreadCount {

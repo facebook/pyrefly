@@ -14,12 +14,12 @@ use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::assert_words;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
-use crate::assert_words;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
@@ -470,7 +470,7 @@ pub enum Type {
     /// An overloaded function.
     Overload(Overload),
     Union(Vec<Type>),
-    #[expect(dead_code)] // Not currently used, but may be in the future
+    #[allow(dead_code)] // Not currently used, but may be in the future
     Intersect(Vec<Type>),
     /// A class definition has type `Type::ClassDef(cls)`. This type
     /// has special value semantics, and can also be implicitly promoted

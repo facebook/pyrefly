@@ -14,10 +14,10 @@ use itertools::Itertools;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::assert_bytes;
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 
-use crate::assert_bytes;
 use crate::binding::narrow::FacetKind;
 use crate::types::types::Type;
 use crate::util::visit::Visit;

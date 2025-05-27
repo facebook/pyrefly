@@ -27,9 +27,9 @@ use serde::de::Visitor;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
 
-use crate::util::fs_anyhow;
-use crate::util::prelude::SliceExt;
-use crate::util::prelude::VecExt;
+use crate::fs_anyhow;
+use crate::prelude::SliceExt;
+use crate::prelude::VecExt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Default)]
 pub struct Glob(PathBuf);
@@ -389,7 +389,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::util::test_path::TestPath;
+    use crate::test_path::TestPath;
 
     #[test]
     fn test_roots() {

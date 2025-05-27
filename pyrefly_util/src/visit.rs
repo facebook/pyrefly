@@ -16,7 +16,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use vec1::Vec1;
 
-use crate::util::uniques::Unique;
+use crate::uniques::Unique;
 
 /// Visitors based on <https://ndmitchell.com/#uniplate_30_sep_2007>.
 ///
@@ -329,6 +329,7 @@ mod tests {
     use static_assertions::const_assert;
 
     use super::*;
+    use crate as pyrefly_util; // For the macro
 
     #[test]
     fn test_visit() {

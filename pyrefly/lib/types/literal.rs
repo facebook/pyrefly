@@ -12,6 +12,7 @@ use std::fmt::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::assert_words;
 use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprBytesLiteral;
 use ruff_python_ast::ExprFString;
@@ -21,7 +22,6 @@ use ruff_python_ast::FStringPart;
 use ruff_python_ast::Int;
 use ruff_python_ast::name::Name;
 
-use crate::assert_words;
 use crate::types::class::ClassType;
 use crate::types::lit_int::LitInt;
 use crate::types::stdlib::Stdlib;
