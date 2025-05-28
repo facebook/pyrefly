@@ -164,8 +164,7 @@ impl ClassMetadata {
     pub fn is_runtime_checkable_protocol(&self) -> bool {
         self.protocol_metadata
             .as_ref()
-            .map(|p| p.is_runtime_checkable)
-            .unwrap_or(false)
+            .is_some_and(|p| p.is_runtime_checkable)
     }
 
     pub fn is_new_type(&self) -> bool {

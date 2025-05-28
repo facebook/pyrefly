@@ -667,7 +667,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         if let Some(ts) = ty.as_decomposed_tuple_or_union() {
             for t in ts {
-                self.check_type_is_class_object(t, contains_subscript, range, is_isinstance, errors);
+                self.check_type_is_class_object(
+                    t,
+                    contains_subscript,
+                    range,
+                    is_isinstance,
+                    errors,
+                );
             }
         } else if let Type::ClassDef(cls) = &ty {
             let metadata = self.get_metadata_for_class(cls);
@@ -737,19 +743,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(protocol_metadata) = metadata.protocol_metadata() {
             for field_name in &protocol_metadata.members {
                 if cls.is_field_annotated(field_name) {
-                    // Use the class type to access the field 
+                    // Use the class type to access the field
                     let class_type = cls.as_class_type();
                     let ty = self.type_of_attr_get(
                         &class_type.to_type(),
                         field_name,
                         range,
-                        &ErrorCollector::new(self.module_info().dupe(), crate::error::style::ErrorStyle::Never),
+                        &ErrorCollector::new(
+                            self.module_info().dupe(),
+                            crate::error::style::ErrorStyle::Never,
+                        ),
                         None,
                         "is_data_protocol",
                     );
-                    
+
                     // If it's not a callable type, it's a data member
-                    if !matches!(ty, Type::Callable(_) | Type::Function(_) | Type::BoundMethod(_)) {
+                    if !matches!(
+                        ty,
+                        Type::Callable(_) | Type::Function(_) | Type::BoundMethod(_)
+                    ) {
                         return true;
                     }
                 }
@@ -768,27 +780,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     contains_subscript = true;
                 }
             });
-            
+
             // Determine if this is isinstance or issubclass
             let func_ty = self.expr_infer(&x.func, errors);
-            let is_isinstance = matches!(
-                func_ty.callee_kind(),
-                Some(CalleeKind::Function(FunctionKind::IsInstance))
-            );
-            let is_issubclass = matches!(
-                func_ty.callee_kind(),
-                Some(CalleeKind::Function(FunctionKind::IsSubclass))
-            );
-            
-            // Only check protocol validation for isinstance/issubclass calls
-            if is_isinstance || is_issubclass {
-                self.check_type_is_class_object(
-                    isinstance_class_type,
-                    contains_subscript,
-                    x.range,
-                    is_isinstance,
-                    errors,
-                );
+            match func_ty.callee_kind() {
+                Some(CalleeKind::Function(FunctionKind::IsInstance)) => {
+                    self.check_type_is_class_object(
+                        isinstance_class_type,
+                        contains_subscript,
+                        x.range,
+                        true, // is_isinstance = true
+                        errors,
+                    );
+                }
+                Some(CalleeKind::Function(FunctionKind::IsSubclass)) => {
+                    self.check_type_is_class_object(
+                        isinstance_class_type,
+                        contains_subscript,
+                        x.range,
+                        false, // is_isinstance = false
+                        errors,
+                    );
+                }
+                _ => {
+                    // Not isinstance or issubclass, no validation needed
+                }
             }
         }
     }
