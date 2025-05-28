@@ -211,14 +211,25 @@ impl ClassField {
 
     pub fn as_param(self, name: &Name, default: bool, kw_only: bool) -> Param {
         let ClassField(ClassFieldInner::Simple { ty, .. }) = self;
+
+        // For InitVar fields, use the inner type instead of InitVar[T]
+        let param_ty = if let Type::ClassType(cls) = &ty
+            && cls.has_qname("dataclasses", "InitVar")
+            && let [inner_ty] = cls.targs().as_slice()
+        {
+            inner_ty.clone()
+        } else {
+            ty
+        };
+
         let required = match default {
             true => Required::Optional,
             false => Required::Required,
         };
         if kw_only {
-            Param::KwOnly(name.clone(), ty, required)
+            Param::KwOnly(name.clone(), param_ty, required)
         } else {
-            Param::Pos(name.clone(), ty, required)
+            Param::Pos(name.clone(), param_ty, required)
         }
     }
 
