@@ -55,7 +55,7 @@ inspiration from [Pyre1](https://pyre-check.org/),
 - We use flow types which refine static types, e.g. `x: int = 4` will both know
   that `x` has type `int`, but also that the immediately next usage of `x` will
   be aware the type is `Literal[4]`.
-- We aim for large-scale incrementality (at the module level) and optimised
+- We aim for large-scale incrementality (at the module level) and optimized
   checking with parallelism, aiming to use the advantages of Rust to keep the
   code a bit simpler.
 - We expect large strongly connected components of modules, and do not attempt
@@ -78,8 +78,8 @@ insert placeholders which are filled in later.
 
 For each module, we solve the steps sequentially and completely. In particular,
 we do not try and solve a specific identifier first (like
-[Rosyln](https://github.com/dotnet/roslyn) or
-[TypeScript](https://www.typescriptlang.org/)), and do not used fine-grained
+[Roslyn](https://github.com/dotnet/roslyn) or
+[TypeScript](https://www.typescriptlang.org/)), and do not use fine-grained
 incrementality (like [Rust Analyzer](https://github.com/rust-lang/rust-analyzer)
 using [Salsa](https://github.com/salsa-rs/salsa)). Instead, we aim for raw
 performance and a simpler module-centric design - there's no need to solve a
@@ -110,8 +110,8 @@ Of note:
 - In many cases the value of a key refers to other keys.
 - Some keys are imported from other modules, via `export` keys and `import`
   values.
-- In order to disamiguate identifiers we use the textual position at which they
-  occur (in the example I've used `@line`, but in reality its the byte offset in
+- In order to disambiguate identifiers we use the textual position at which they
+  occur (in the example we've used `@line`, but in reality it's the byte offset in
   the file).
 
 ### Example of `Var`
