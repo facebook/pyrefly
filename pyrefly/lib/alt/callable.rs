@@ -807,6 +807,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         };
-        self.solver().expand(callable.ret)
+        
+        // Get the return type and expand it
+        let mut ret = self.solver().expand(callable.ret);
+        
+        // Check if this is an __init__ method call with a self argument
+        if callable_name.is_some_and(|id| id.name.as_str() == "__init__") && self_arg.is_some() {
+            // For __init__ methods, we need to substitute the self type in the return type
+            if let Some(CallArg::Type(self_type, _)) = &self_arg {
+                // Substitute the self type in the return type
+                ret.subst_self_type_mut(self_type, &|_, _| true);
+            }
+        }
+        
+        ret
     }
 }

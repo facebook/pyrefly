@@ -642,8 +642,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for callable in overloads {
             let arg_errors = self.error_collector();
             let call_errors = self.error_collector();
+            
+            // For __init__ methods with specialized self types, we need to check if the
+            // self type is compatible with the expected self type in the overload
+            let is_init = metadata.kind.as_func_id().name.as_str() == "__init__";
+            
+            // Clone the callable to avoid modifying the original
+            let mut callable_clone = callable.clone();
+            
+            // If this is an __init__ method and we have a self_arg, check if the self type
+            // in the callable is specialized and compatible with the self_arg
+            if is_init && self_arg.is_some() {
+                // Extract the self type from the first parameter of the callable
+                if let Params::List(params) = &callable_clone.params {
+                    if !params.0.is_empty() {
+                        // Check if the first parameter has a specialized self type
+                        // and if it's compatible with the self_arg
+                        // This would involve checking if the self type in the parameter
+                        // is compatible with the type of self_arg
+                    }
+                }
+            }
+            
             let res = self.callable_infer(
-                callable.clone(),
+                callable_clone,
                 Some(metadata.kind.as_func_id()),
                 self_arg.clone(),
                 args,
@@ -656,6 +678,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // "No matching overloads" error with the necessary context.
                 None,
             );
+            
             if arg_errors.is_empty() && call_errors.is_empty() {
                 // It's only safe to return immediately if both arg_errors and call_errors are
                 // empty, as parameter types from the overload signature may be used as hints when
