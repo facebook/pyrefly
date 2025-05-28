@@ -15,13 +15,13 @@ use num_traits::Num;
 use num_traits::cast::ToPrimitive;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::visit::Visit;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Int;
 
 use crate::types::equality::TypeEq;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
-use crate::util::visit::Visit;
-use crate::util::visit::VisitMut;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LitInt(LitIntInner);

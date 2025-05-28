@@ -236,8 +236,9 @@ pub fn find_module_in_site_package_path(
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_util::test_path::TestPath;
+
     use super::*;
-    use crate::util::test_path::TestPath;
 
     #[test]
     fn test_find_module_simple() {

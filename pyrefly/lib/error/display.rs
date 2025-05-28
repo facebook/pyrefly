@@ -190,7 +190,11 @@ impl TypeCheckKind {
             // In an annotated assignment, the variable, type, and assigned value are all in the
             // same statement, so we can make the error message more concise and assume the context
             // is clear from the surrounding code.
-            Self::AnnAssign => format!(
+            //
+            // TODO(stroxler): In an unpacked assignment to a name we would ideally provide the name in
+            // the error message, but without a refactor of `bind_target` we don't have easy access to
+            // that information when creating the binding, so we're stuck with just types for now.
+            Self::AnnAssign | Self::UnpackedAssign => format!(
                 "`{}` is not assignable to `{}`",
                 ctx.display(got),
                 ctx.display(want)

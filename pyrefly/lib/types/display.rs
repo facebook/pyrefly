@@ -10,6 +10,9 @@
 use std::fmt;
 use std::fmt::Display;
 
+use pyrefly_util::display::Fmt;
+use pyrefly_util::display::append;
+use pyrefly_util::display::commas_iter;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
@@ -27,9 +30,6 @@ use crate::types::types::NeverStyle;
 use crate::types::types::SuperObj;
 use crate::types::types::Type;
 use crate::types::types::TypeAliasStyle;
-use crate::util::display::Fmt;
-use crate::util::display::append;
-use crate::util::display::commas_iter;
 
 /// Information about the classes we have seen.
 /// Set to None to indicate we have seen different values, or Some if they are all the same.
@@ -342,6 +342,7 @@ pub mod tests {
     use std::sync::Arc;
 
     use dupe::Dupe;
+    use pyrefly_util::uniques::UniqueFactory;
     use ruff_python_ast::Identifier;
     use ruff_text_size::TextSize;
 
@@ -363,11 +364,9 @@ pub mod tests {
     use crate::types::type_var::PreInferenceVariance;
     use crate::types::type_var::Restriction;
     use crate::types::type_var::TypeVar;
-    use crate::types::type_var::Variance;
     use crate::types::typed_dict::TypedDict;
     use crate::types::types::TParam;
     use crate::types::types::TParams;
-    use crate::util::uniques::UniqueFactory;
 
     pub fn fake_class(name: &str, module: &str, range: u32, tparams: Vec<TParam>) -> Class {
         let mi = ModuleInfo::new(
@@ -396,7 +395,7 @@ pub mod tests {
                     default: None,
                 },
             ),
-            variance: Variance::Invariant,
+            variance: PreInferenceVariance::PInvariant,
         }
     }
 

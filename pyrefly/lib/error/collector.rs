@@ -8,6 +8,7 @@
 use std::fmt::Debug;
 
 use dupe::Dupe;
+use pyrefly_util::lock::Mutex;
 use ruff_text_size::TextRange;
 use vec1::vec1;
 
@@ -17,7 +18,6 @@ use crate::error::error::Error;
 use crate::error::kind::ErrorKind;
 use crate::error::style::ErrorStyle;
 use crate::module::module_info::ModuleInfo;
-use crate::util::lock::Mutex;
 
 #[derive(Debug, Default, Clone)]
 struct ModuleErrors {
@@ -170,6 +170,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use pyrefly_util::prelude::SliceExt;
     use ruff_python_ast::name::Name;
     use ruff_text_size::TextSize;
 
@@ -177,7 +178,6 @@ mod tests {
     use crate::config::error::ErrorDisplayConfig;
     use crate::module::module_name::ModuleName;
     use crate::module::module_path::ModulePath;
-    use crate::util::prelude::SliceExt;
 
     #[test]
     fn test_error_collector() {

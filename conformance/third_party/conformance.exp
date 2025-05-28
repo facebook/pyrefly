@@ -10432,22 +10432,22 @@
   "typeddicts_operations.py": [
     {
       "code": -2,
-      "column": 1,
-      "concise_description": "Expected `str`, got `Literal[1982]`",
-      "description": "Expected `str`, got `Literal[1982]`",
+      "column": 17,
+      "concise_description": "`Literal[1982]` is not assignable to TypedDict key `name` with type `str`",
+      "description": "`Literal[1982]` is not assignable to TypedDict key `name` with type `str`",
       "line": 22,
-      "name": "bad-assignment",
-      "stop_column": 14,
+      "name": "typed-dict-key-error",
+      "stop_column": 21,
       "stop_line": 22
     },
     {
       "code": -2,
-      "column": 1,
-      "concise_description": "Expected `int`, got `Literal['']`",
-      "description": "Expected `int`, got `Literal['']`",
+      "column": 17,
+      "concise_description": "`Literal['']` is not assignable to TypedDict key `year` with type `int`",
+      "description": "`Literal['']` is not assignable to TypedDict key `year` with type `int`",
       "line": 23,
-      "name": "bad-assignment",
-      "stop_column": 14,
+      "name": "typed-dict-key-error",
+      "stop_column": 19,
       "stop_line": 23
     },
     {
@@ -10728,12 +10728,12 @@
     },
     {
       "code": -2,
-      "column": 1,
-      "concise_description": "Expected `str`, got `Literal[3]`",
-      "description": "Expected `str`, got `Literal[3]`",
+      "column": 14,
+      "concise_description": "`Literal[3]` is not assignable to TypedDict key `ident` with type `str`",
+      "description": "`Literal[3]` is not assignable to TypedDict key `ident` with type `str`",
       "line": 82,
-      "name": "bad-assignment",
-      "stop_column": 11,
+      "name": "typed-dict-key-error",
+      "stop_column": 15,
       "stop_line": 82
     },
     {
@@ -10928,12 +10928,12 @@
     },
     {
       "code": -2,
-      "column": 1,
-      "concise_description": "Expected `int`, got `Literal['1982']`",
-      "description": "Expected `int`, got `Literal['1982']`",
+      "column": 17,
+      "concise_description": "`Literal['1982']` is not assignable to TypedDict key `year` with type `int`",
+      "description": "`Literal['1982']` is not assignable to TypedDict key `year` with type `int`",
       "line": 24,
-      "name": "bad-assignment",
-      "stop_column": 14,
+      "name": "typed-dict-key-error",
+      "stop_column": 23,
       "stop_line": 24
     },
     {

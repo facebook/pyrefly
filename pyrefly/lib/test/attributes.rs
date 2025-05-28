@@ -90,6 +90,27 @@ class B(A):
 );
 
 testcase!(
+    test_cls_attribute_in_constructor,
+    r#"
+from typing import ClassVar
+class A:
+    def __new__(cls, x: int):
+        cls.x = x
+class B:
+    def __init_subclass__(cls, x: int):
+        cls.x = x
+class C:
+    x: ClassVar[int]
+    def __new__(cls, x: int):
+        cls.x = x
+class D:
+    x: ClassVar[int]
+    def __init_subclass__(cls, x: int):
+        cls.x = x
+    "#,
+);
+
+testcase!(
     test_self_attribute_in_test_setup,
     r#"
 class MyTestCase:
@@ -911,5 +932,14 @@ class A[T]:
     def f(self, x: T | None) -> T: ...
     def f(self, x=None): ...
 assert_type(A.f(A[int]()), int)
+    "#,
+);
+
+testcase!(
+    test_invalid_augmented_assign_in_init,
+    r#"
+class C:
+    def __init__(self):
+        self.x += 5  # E: Object of class `C` has no attribute `x`
     "#,
 );

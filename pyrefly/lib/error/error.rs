@@ -9,6 +9,7 @@ use std::fmt::Debug;
 use std::io;
 use std::io::Write;
 
+use pyrefly_util::display::number_thousands;
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 use yansi::Paint;
@@ -17,7 +18,6 @@ use crate::error::kind::ErrorKind;
 use crate::error::kind::Severity;
 use crate::module::module_info::SourceRange;
 use crate::module::module_path::ModulePath;
-use crate::util::display::number_thousands;
 
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct Error {

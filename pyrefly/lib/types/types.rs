@@ -15,6 +15,12 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_util::assert_words;
+use pyrefly_util::display::commas_iter;
+use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::uniques::Unique;
+use pyrefly_util::uniques::UniqueFactory;
+use pyrefly_util::visit::Visit;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -41,15 +47,8 @@ use crate::types::tuple::Tuple;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
 use crate::types::type_var::TypeVar;
-use crate::types::type_var::Variance;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::typed_dict::TypedDict;
-use crate::util::display::commas_iter;
-use crate::util::prelude::SliceExt;
-use crate::util::uniques::Unique;
-use crate::util::uniques::UniqueFactory;
-use crate::util::visit::Visit;
-use crate::util::visit::VisitMut;
 
 /// An introduced synthetic variable to range over as yet unknown types.
 #[derive(Debug, Copy, Clone, Dupe, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -87,7 +86,7 @@ pub struct TParamInfo {
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct TParam {
     pub quantified: Quantified,
-    pub variance: Variance,
+    pub variance: PreInferenceVariance,
 }
 
 impl Display for TParam {
@@ -725,7 +724,7 @@ impl Type {
                 signature: callable,
                 metadata: _,
             }) => callable.is_typeguard(),
-            Type::Forall(box forall) => forall.body.is_typeguard(),
+            Type::Forall(forall) => forall.body.is_typeguard(),
             Type::BoundMethod(method) => method.func.is_typeguard(),
             Type::Overload(overload) => overload.is_typeguard(),
             _ => false,
@@ -739,7 +738,7 @@ impl Type {
                 signature: callable,
                 metadata: _,
             }) => callable.is_typeis(),
-            Type::Forall(box forall) => forall.body.is_typeis(),
+            Type::Forall(forall) => forall.body.is_typeis(),
             Type::BoundMethod(method) => method.func.is_typeis(),
             Type::Overload(overload) => overload.is_typeis(),
             _ => false,
@@ -914,7 +913,7 @@ impl Type {
 
     fn transform_callable(&mut self, mut f: impl FnMut(&mut Callable)) {
         match self {
-            Type::Callable(box callable) => f(callable),
+            Type::Callable(callable) => f(callable),
             Type::Function(box func)
             | Type::Forall(box Forall {
                 body: Forallable::Function(func),

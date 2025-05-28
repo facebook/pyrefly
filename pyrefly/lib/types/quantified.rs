@@ -12,6 +12,8 @@ use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::uniques::Unique;
+use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::name::Name;
 
 use crate::alt::solve::TypeFormContext;
@@ -20,8 +22,6 @@ use crate::types::class::ClassType;
 use crate::types::stdlib::Stdlib;
 use crate::types::type_var::Restriction;
 use crate::types::types::Type;
-use crate::util::uniques::Unique;
-use crate::util::uniques::UniqueFactory;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 #[derive(Visit, VisitMut, TypeEq)]

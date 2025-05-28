@@ -8,6 +8,7 @@
 use std::iter;
 use std::slice;
 
+use pyrefly_util::visit::Visit;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBooleanLiteral;
@@ -32,10 +33,6 @@ use ruff_python_parser::parse_expression_range;
 use ruff_python_parser::parse_unchecked_source;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
-use starlark_map::small_map::SmallMap;
-
-use crate::module::module_name::ModuleName;
-use crate::util::visit::Visit;
 
 /// Just used for convenient namespacing - not a real type
 pub struct Ast;
@@ -89,54 +86,6 @@ impl Ast {
                 | Expr::NoneLiteral(_)
                 | Expr::EllipsisLiteral(_)
         )
-    }
-
-    /// All the imports in this module, pointing to the first place that defines them.
-    pub fn imports(
-        module: &ModModule,
-        module_name: ModuleName,
-        is_init: bool,
-    ) -> SmallMap<ModuleName, TextRange> {
-        fn stmts(
-            xs: &[Stmt],
-            module_name: ModuleName,
-            is_init: bool,
-            imports: &mut SmallMap<ModuleName, TextRange>,
-        ) {
-            for x in xs {
-                stmt(x, module_name, is_init, imports);
-            }
-        }
-        fn stmt(
-            x: &Stmt,
-            module_name: ModuleName,
-            is_init: bool,
-            imports: &mut SmallMap<ModuleName, TextRange>,
-        ) {
-            match x {
-                Stmt::Import(x) => {
-                    for x in &x.names {
-                        imports
-                            .entry(ModuleName::from_name(&x.name.id))
-                            .or_insert(x.name.range);
-                    }
-                }
-                Stmt::ImportFrom(x) => {
-                    if let Some(module_name) = module_name.new_maybe_relative(
-                        is_init,
-                        x.level,
-                        x.module.as_ref().map(|x| &x.id),
-                    ) {
-                        imports.entry(module_name).or_insert(x.range);
-                    }
-                }
-                _ => {}
-            }
-            x.recurse(&mut |xs| stmt(xs, module_name, is_init, imports));
-        }
-        let mut imports = SmallMap::new();
-        stmts(&module.body, module_name, is_init, &mut imports);
-        imports
     }
 
     /// Iterates over the branches of an if statement, returning the test and body.

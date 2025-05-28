@@ -15,13 +15,13 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_util::assert_bytes;
+use pyrefly_util::visit::Visit;
+use pyrefly_util::visit::VisitMut;
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 
 use crate::binding::narrow::FacetKind;
 use crate::types::types::Type;
-use crate::util::visit::Visit;
-use crate::util::visit::VisitMut;
 
 assert_bytes!(TypeInfo, 40);
 
@@ -191,7 +191,7 @@ impl TypeInfo {
     }
 
     fn get_at_facet(&self, facet: &FacetKind) -> Option<&NarrowedFacet> {
-        if let Some(box narrowed_facets) = &self.facets {
+        if let Some(narrowed_facets) = &self.facets {
             narrowed_facets.get(facet)
         } else {
             None

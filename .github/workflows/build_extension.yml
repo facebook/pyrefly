@@ -22,7 +22,7 @@ jobs:
           echo "PYREFLY_VERSION=$VERSION" >> $GITHUB_OUTPUT
   build_extension:
     needs: get_version
-    if: success()
+    if: ${{ success() }}
     strategy:
       fail-fast: false
       matrix:
@@ -83,7 +83,7 @@ jobs:
         # https://stackoverflow.com/questions/66733076/github-actions-set-environment-variable-for-windows-build-with-powershell
         run: echo "toolchain=$(cat pyrefly/rust-toolchain)" && echo "toolchain=$(cat pyrefly/rust-toolchain)" >> ${{ matrix.github_env }}
       - name: install toolchain dependencies
-        if: matrix.container == 'ubuntu:20.04'
+        if: ${{ matrix.container == 'ubuntu:20.04' }}
         shell: bash
         run: |
           apt-get update && apt-get -y install curl build-essential

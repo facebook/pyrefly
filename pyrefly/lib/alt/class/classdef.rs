@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::StmtClassDef;
@@ -30,7 +31,6 @@ use crate::types::class::ClassFieldProperties;
 use crate::types::class::ClassType;
 use crate::types::types::TParams;
 use crate::types::types::Type;
-use crate::util::prelude::SliceExt;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // Given a constructor (__new__ or metaclass __call__) that returns `ty`, return true if the type is:

@@ -110,7 +110,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.solver()
                 .fresh_quantified(tparams, Type::Function(Box::new(func)), self.uniques);
         match t {
-            Type::Function(box func) => (qs, func),
+            Type::Function(func) => (qs, *func),
             // We passed a Function to fresh_quantified(), so we know we get a Function back out.
             _ => unreachable!(),
         }

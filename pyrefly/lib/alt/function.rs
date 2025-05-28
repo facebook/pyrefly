@@ -173,8 +173,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
 
         let defining_cls = class_key.and_then(|k| self.get_idx(*k).0.dupe());
-        let mut self_type = if def.name.id == dunder::NEW {
-            // __new__ is a staticmethod, and does not take a self parameter.
+        let mut self_type = if def.name.id == dunder::NEW || def.name.id == dunder::INIT_SUBCLASS {
+            // __new__ and __init_subclass__ are staticmethods, and do not take a self parameter.
             None
         } else {
             defining_cls
@@ -411,8 +411,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for x in decorators.into_iter().rev() {
             ty = match self.apply_decorator(*x, ty, errors) {
                 // Preserve function metadata, so things like method binding still work.
-                Type::Callable(box c) => Type::Function(Box::new(Function {
-                    signature: c,
+                Type::Callable(c) => Type::Function(Box::new(Function {
+                    signature: *c,
                     metadata: metadata.clone(),
                 })),
                 // Callback protocol. We convert it to a function so we can add function metadata.
@@ -484,7 +484,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Vec1<OverloadType> {
         ts.mapped(|(range, t)| match t {
-            Type::Callable(box callable) => OverloadType::Callable(callable),
+            Type::Callable(callable) => OverloadType::Callable(*callable),
             Type::Function(function) => OverloadType::Callable(function.signature),
             Type::Forall(box Forall {
                 tparams,

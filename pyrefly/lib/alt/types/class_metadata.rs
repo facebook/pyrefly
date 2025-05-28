@@ -13,6 +13,8 @@ use std::sync::Arc;
 
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::display::commas_iter;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -27,8 +29,6 @@ use crate::types::class::ClassType;
 use crate::types::qname::QName;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
-use crate::util::display::commas_iter;
-use crate::util::visit::VisitMut;
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct ClassMetadata {

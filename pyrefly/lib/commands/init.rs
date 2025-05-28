@@ -12,6 +12,7 @@ use anyhow::Context as _;
 use clap::Parser;
 use parse_display::Display;
 use path_absolutize::Absolutize;
+use pyrefly_util::fs_anyhow;
 use tracing::error;
 use tracing::info;
 
@@ -19,7 +20,6 @@ use crate::commands::config_migration;
 use crate::commands::config_migration::write_pyproject;
 use crate::commands::run::CommandExitStatus;
 use crate::config::config::ConfigFile;
-use crate::util::fs_anyhow;
 
 // This should likely be moved into config.rs
 #[derive(Clone, Debug, Parser, Copy, Display)]
@@ -197,10 +197,12 @@ mod test {
         if errs.is_empty() {
             Ok(())
         } else {
+            for e in errs {
+                e.print();
+            }
             Err(anyhow::anyhow!(format!(
-                "ConfigFile::from_file({}) failed: {:#?}",
+                "ConfigFile::from_file({}) failed",
                 path.display(),
-                errs
             )))
         }
     }

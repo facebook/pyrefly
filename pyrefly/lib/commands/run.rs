@@ -9,15 +9,15 @@ use std::process::ExitCode;
 
 use clap::ColorChoice;
 use clap::Parser;
+use pyrefly_util::args::clap_env;
+use pyrefly_util::thread_pool::ThreadCount;
+use pyrefly_util::thread_pool::init_thread_pool;
+use pyrefly_util::trace::init_tracing;
 
 pub use crate::commands::buck_check::Args as BuckCheckArgs;
 pub use crate::commands::check::Args as CheckArgs;
 pub use crate::commands::init::Args as InitArgs;
 pub use crate::commands::lsp::Args as LspArgs;
-use crate::util::args::clap_env;
-use crate::util::thread_pool::ThreadCount;
-use crate::util::thread_pool::init_thread_pool;
-use crate::util::trace::init_tracing;
 #[derive(Debug, Parser, Clone)]
 pub struct CommonGlobalArgs {
     /// Number of threads to use for parallelization.

@@ -6,6 +6,7 @@
  */
 
 use itertools::Either;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::BoolOp;
 use ruff_python_ast::Comprehension;
@@ -49,7 +50,6 @@ use crate::module::short_identifier::ShortIdentifier;
 use crate::ruff::ast::Ast;
 use crate::types::callable::unexpected_keyword;
 use crate::types::types::Type;
-use crate::util::visit::VisitMut;
 
 enum TestAssertion {
     AssertTrue,
@@ -239,11 +239,13 @@ impl<'a> BindingsBuilder<'a> {
     fn bind_comprehensions(&mut self, range: TextRange, comprehensions: &mut [Comprehension]) {
         self.scopes.push(Scope::comprehension(range));
         for comp in comprehensions {
+            self.ensure_expr(&mut comp.iter);
             self.scopes.add_lvalue_to_current_static(&comp.target);
             let make_binding =
                 |ann| Binding::IterableValue(ann, comp.iter.clone(), IsAsync::new(comp.is_async));
             self.bind_target(&mut comp.target, &make_binding);
-            for x in comp.ifs.iter() {
+            for x in comp.ifs.iter_mut() {
+                self.ensure_expr(x);
                 let narrow_ops = NarrowOps::from_expr(self, Some(x));
                 self.bind_narrow_ops(&narrow_ops, comp.range);
             }
@@ -360,7 +362,7 @@ impl<'a> BindingsBuilder<'a> {
 
     /// Execute through the expr, ensuring every name has a binding.
     pub fn ensure_expr(&mut self, x: &mut Expr) {
-        let new_scope = match x {
+        match x {
             Expr::If(x) => {
                 // Ternary operation. We treat it like an if/else statement.
                 let base = self.scopes.clone_current_flow();
@@ -560,7 +562,6 @@ impl<'a> BindingsBuilder<'a> {
             {
                 // Control flow doesn't proceed after sys.exit(), exit(), quit(), or os._exit().
                 self.scopes.mark_flow_termination();
-                false
             }
             Expr::Name(x) => {
                 let name = Ast::expr_name_identifier(x.clone());
@@ -568,38 +569,41 @@ impl<'a> BindingsBuilder<'a> {
                     .lookup_name(&name.id, LookupKind::Regular)
                     .map(Binding::Forward);
                 self.ensure_name(&name, binding);
-                false
             }
             Expr::ListComp(x) => {
                 self.bind_comprehensions(x.range, &mut x.generators);
-                true
+                self.ensure_expr(&mut x.elt);
+                self.scopes.pop();
+                return;
             }
             Expr::SetComp(x) => {
                 self.bind_comprehensions(x.range, &mut x.generators);
-                true
+                self.ensure_expr(&mut x.elt);
+                self.scopes.pop();
+                return;
             }
             Expr::DictComp(x) => {
                 self.bind_comprehensions(x.range, &mut x.generators);
-                true
+                self.ensure_expr(&mut x.key);
+                self.ensure_expr(&mut x.value);
+                self.scopes.pop();
+                return;
             }
             Expr::Generator(x) => {
                 self.bind_comprehensions(x.range, &mut x.generators);
-                true
+                self.ensure_expr(&mut x.elt);
+                self.scopes.pop();
+                return;
             }
             Expr::Yield(x) => {
                 self.record_yield(x.clone());
-                false
             }
             Expr::YieldFrom(x) => {
                 self.record_yield_from(x.clone());
-                false
             }
-            _ => false,
-        };
-        x.recurse_mut(&mut |x| self.ensure_expr(x));
-        if new_scope {
-            self.scopes.pop();
+            _ => {}
         }
+        x.recurse_mut(&mut |x| self.ensure_expr(x));
     }
 
     /// Execute through the expr, ensuring every name has a binding.

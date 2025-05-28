@@ -7,6 +7,9 @@
 
 use dupe::Dupe;
 use num_traits::ToPrimitive;
+use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::prelude::VecExt;
+use pyrefly_util::visit::Visit;
 use ruff_python_ast::BoolOp;
 use ruff_python_ast::Comprehension;
 use ruff_python_ast::Expr;
@@ -59,9 +62,6 @@ use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
 use crate::types::types::CalleeKind;
 use crate::types::types::Type;
-use crate::util::prelude::SliceExt;
-use crate::util::prelude::VecExt;
-use crate::util::visit::Visit;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // Helper method for inferring the type of a boolean operation over a sequence of values.
@@ -756,7 +756,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Vec<Type> {
         elts.map(|x| match x {
-            Expr::Starred(ExprStarred { box value, .. }) => {
+            Expr::Starred(ExprStarred { value, .. }) => {
                 let hint = elt_hint
                     .as_ref()
                     .map(|ty| self.stdlib.iterable(ty.clone()).to_type());
@@ -831,10 +831,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 base = Type::type_form(Type::SpecialForm(SpecialForm::Tuple));
             }
             match base {
-                Type::Forall(box forall) => {
+                Type::Forall(forall) => {
                     let tys =
                         xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors));
-                    self.specialize_forall(forall, tys, range, errors)
+                    self.specialize_forall(*forall, tys, range, errors)
                 }
                 // Note that we have to check for `builtins.type` by name here because this code runs
                 // when we're bootstrapping the stdlib and don't have access to class objects yet.
@@ -1060,7 +1060,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     _ => &Vec::new(),
                 };
                 let default_hint = match hint {
-                    Some(Type::Tuple(Tuple::Unbounded(box elt))) => Some(elt),
+                    Some(Type::Tuple(Tuple::Unbounded(elt))) => Some(&**elt),
                     _ => None,
                 };
                 let mut prefix = Vec::new();
@@ -1070,7 +1070,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let mut encountered_invalid_star = false;
                 for elt in x.elts.iter() {
                     match elt {
-                        Expr::Starred(ExprStarred { box value, .. }) => {
+                        Expr::Starred(ExprStarred { value, .. }) => {
                             let ty = self.expr_infer(value, errors);
                             match ty {
                                 Type::Tuple(Tuple::Concrete(elts)) => {
@@ -1428,8 +1428,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::BooleanLiteral(x) => Lit::from_boolean_literal(x).to_type(),
             Expr::NoneLiteral(_) => Type::None,
             Expr::EllipsisLiteral(_) => Type::Ellipsis,
-            Expr::Starred(ExprStarred { value: box x, .. }) => {
-                let ty = self.expr_untype(x, TypeFormContext::TypeArgument, errors);
+            Expr::Starred(ExprStarred { value, .. }) => {
+                let ty = self.expr_untype(value, TypeFormContext::TypeArgument, errors);
                 Type::Unpack(Box::new(ty))
             }
             Expr::Slice(x) => {
@@ -1485,7 +1485,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             }) => {
                 let lower_literal = match lower_expr {
-                    Some(box expr) => {
+                    Some(expr) => {
                         let lower_type = self.expr_infer(expr, errors);
                         match &lower_type {
                             Type::Literal(lit) => lit.as_index_i64(),
@@ -1495,7 +1495,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None => Some(0),
                 };
                 let upper_literal = match upper_expr {
-                    Some(box expr) => {
+                    Some(expr) => {
                         let upper_type = self.expr_infer(expr, errors);
                         match &upper_type {
                             Type::Literal(lit) => lit.as_index_i64(),

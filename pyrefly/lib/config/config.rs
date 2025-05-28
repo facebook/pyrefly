@@ -15,6 +15,11 @@ use anyhow::Context;
 use anyhow::anyhow;
 use itertools::Itertools;
 use path_absolutize::Absolutize;
+use pyrefly_util::fs_anyhow;
+use pyrefly_util::globs::FilteredGlobs;
+use pyrefly_util::globs::Glob;
+use pyrefly_util::globs::Globs;
+use pyrefly_util::prelude::VecExt;
 use serde::Deserialize;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
@@ -27,6 +32,7 @@ use crate::config::environment::environment::PythonEnvironment;
 use crate::config::environment::environment::SitePackagePathSource;
 use crate::config::error::ErrorConfig;
 use crate::config::error::ErrorDisplayConfig;
+use crate::config::finder::ConfigError;
 use crate::module::bundled::typeshed;
 use crate::module::finder::find_module_in_search_path;
 use crate::module::finder::find_module_in_site_package_path;
@@ -37,11 +43,6 @@ use crate::state::loader::FindError;
 use crate::sys_info::PythonPlatform;
 use crate::sys_info::PythonVersion;
 use crate::sys_info::SysInfo;
-use crate::util::fs_anyhow;
-use crate::util::globs::FilteredGlobs;
-use crate::util::globs::Glob;
-use crate::util::globs::Globs;
-use crate::util::prelude::VecExt;
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
 pub struct SubConfig {
@@ -535,7 +536,7 @@ impl ConfigFile {
             .for_each(|c| c.rewrite_with_path_to_config(config_root));
     }
 
-    pub fn validate(&self) -> Vec<anyhow::Error> {
+    pub fn validate(&self) -> Vec<ConfigError> {
         fn validate<'a>(
             paths: &'a [PathBuf],
             field: &'a str,
@@ -554,13 +555,13 @@ impl ConfigFile {
         }
         errors.extend(validate(&self.search_path_from_file, "search_path"));
         if let ConfigSource::File(path) = &self.source {
-            errors.into_map(|e| e.context(format!("{}", path.display())))
+            errors.into_map(|e| ConfigError::warn(e.context(format!("{}", path.display()))))
         } else {
-            errors
+            errors.into_map(ConfigError::warn)
         }
     }
 
-    pub fn from_file(config_path: &Path) -> (ConfigFile, Vec<anyhow::Error>) {
+    pub fn from_file(config_path: &Path) -> (ConfigFile, Vec<ConfigError>) {
         fn read_path(config_path: &Path) -> anyhow::Result<Option<ConfigFile>> {
             let config_str = fs_anyhow::read_to_string(config_path)?;
             if config_path.file_name() == Some(OsStr::new(ConfigFile::PYPROJECT_FILE_NAME)) {
@@ -628,7 +629,8 @@ impl ConfigFile {
             Ok(config_path) => (f(&config_path), config_path.into_owned()),
             Err(e) => ((ConfigFile::default(), vec![e]), config_path.to_path_buf()),
         };
-        let errors = errors.into_map(|err| err.context(format!("{}", config_path.display())));
+        let errors = errors
+            .into_map(|err| ConfigError::error(err.context(format!("{}", config_path.display()))));
         (config, errors)
     }
 

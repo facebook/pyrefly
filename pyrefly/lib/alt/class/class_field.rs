@@ -425,8 +425,8 @@ fn make_bound_method_helper(
             tparams: tparams.clone(),
             body: func.clone(),
         })),
-        Type::Function(box func) if should_bind(&func.metadata) => {
-            Some(BoundMethodType::Function(func.clone()))
+        Type::Function(func) if should_bind(&func.metadata) => {
+            Some(BoundMethodType::Function((**func).clone()))
         }
         Type::Overload(overload) if should_bind(&overload.metadata) => {
             Some(BoundMethodType::Overload(overload.clone()))
@@ -1004,9 +1004,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ty: &Type,
     ) -> Option<Attribute> {
         let mut foralled = match ty {
-            Type::Function(box func) => Type::Forall(Box::new(Forall {
+            Type::Function(func) => Type::Forall(Box::new(Forall {
                 tparams: cls.tparams().clone(),
-                body: Forallable::Function(func.clone()),
+                body: Forallable::Function((**func).clone()),
             })),
             Type::Forall(box Forall {
                 tparams,

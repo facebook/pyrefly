@@ -181,8 +181,13 @@ pub struct Flow {
 #[derive(Debug, Clone, PartialEq)]
 pub enum FlowStyle {
     /// Not one of the styles below.
-    None,
-    /// Am I an assignment in a class body?
+    Other,
+    /// I am a name defined by an Assign or AnnAssign in a class body.
+    /// - If `initial_value` is `None`, then I am defined by an `AnnAssign`
+    ///   with no value (in other words, I am an instance attribute annotation)
+    /// - If `initial_value` is `Some(_)`, then I am defined by an assignment,
+    ///   and the initial value may be needed later (if I turn out to be a dataclass
+    ///   field, which requires inspecting the actual expression).
     ClassField { initial_value: Option<Expr> },
     /// Am I the result of an import (which needs merging).
     /// E.g. `import foo.bar` and `import foo.baz` need merging.
@@ -216,7 +221,7 @@ impl FlowStyle {
 
     pub fn merged(styles: Vec<FlowStyle>) -> FlowStyle {
         let mut it = styles.into_iter();
-        let mut merged = it.next().unwrap_or(FlowStyle::None);
+        let mut merged = it.next().unwrap_or(FlowStyle::Other);
         for x in it {
             match (&merged, x) {
                 // If they're identical, keep it
@@ -230,7 +235,7 @@ impl FlowStyle {
                 }
                 // Unclear how to merge, default to None
                 _ => {
-                    merged = FlowStyle::None;
+                    merged = FlowStyle::Other;
                 }
             }
         }
@@ -362,7 +367,10 @@ impl ScopeClass {
 }
 
 fn is_attribute_defining_method(method_name: &Name, class_name: &Name) -> bool {
-    if method_name == &dunder::INIT {
+    if method_name == &dunder::INIT
+        || method_name == &dunder::INIT_SUBCLASS
+        || method_name == &dunder::NEW
+    {
         true
     } else {
         (class_name.contains("Test") || class_name.contains("test"))
@@ -711,22 +719,16 @@ impl Scopes {
             .fold(0, |depth, node| depth + node.scope.loops.len() as u32)
     }
 
-    /// Return the default to use, if inside a loop.
-    /// If `style` is `None`, try preserving the old flow style.
-    /// TODO(grievejia): Properly separate out `FlowStyle` from the keys
-    pub fn update_flow_info(
-        &mut self,
-        name: &Name,
-        key: Idx<Key>,
-        style: Option<FlowStyle>,
-    ) -> Option<Idx<Key>> {
-        self.update_flow_info_hashed(Hashed::new(name), key, style)
-    }
-
-    /// Return the default to use, if inside a loop.
-    /// /// If `style` is `None`, try preserving the old flow style.
+    /// Update the flow info to bind `name` to `key`, maybe with `FlowStyle` `style`
+    ///
+    /// - Return the `Idx<Key>` of the default binding, if inside a loop
+    /// - If `style` is `None` and a previous entry exists, preserve the old style
+    ///
+    /// A caller of this function promises to create a binding for `key`; the
+    /// binding may not exist yet (it might depend on the returned default).
+    ///
     /// TODO(grievejia): Properly separate out `FlowStyle` from the indices
-    pub fn update_flow_info_hashed(
+    pub fn update_flow_info(
         &mut self,
         name: Hashed<&Name>,
         key: Idx<Key>,
@@ -735,7 +737,7 @@ impl Scopes {
         let in_loop = self.loop_depth() != 0;
         match self.current_mut().flow.info.entry_hashed(name.cloned()) {
             Entry::Vacant(e) => {
-                let style = style.unwrap_or(FlowStyle::None);
+                let style = style.unwrap_or(FlowStyle::Other);
                 e.insert(FlowInfo {
                     key,
                     default: key,
@@ -745,11 +747,7 @@ impl Scopes {
             }
             Entry::Occupied(mut e) => {
                 let default = if in_loop { Some(e.get().default) } else { None };
-                let style = if let Some(style) = style {
-                    style
-                } else {
-                    e.get().style.clone()
-                };
+                let style = style.unwrap_or_else(|| e.get().style.clone());
                 *e.get_mut() = FlowInfo {
                     key,
                     default: default.unwrap_or(key),
@@ -773,7 +771,7 @@ impl Scopes {
     pub fn get_flow_style(&self, name: &Name) -> &FlowStyle {
         match self.get_flow_info(name) {
             Some(flow) => &flow.style,
-            None => &FlowStyle::None,
+            None => &FlowStyle::Other,
         }
     }
 

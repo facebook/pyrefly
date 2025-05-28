@@ -8,6 +8,9 @@
 use std::any::type_name_of_val;
 use std::sync::Arc;
 
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::display::DisplayWithCtx;
+use pyrefly_util::prelude::SliceExt;
 use serde::Deserialize;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
@@ -28,9 +31,6 @@ use crate::state::handle::Handle;
 use crate::state::load::Load;
 use crate::state::state::Transaction;
 use crate::table_for_each;
-use crate::util::arc_id::ArcId;
-use crate::util::display::DisplayWithCtx;
-use crate::util::prelude::SliceExt;
 
 pub fn debug_info(transaction: &Transaction, handles: &[Handle], is_javascript: bool) -> String {
     fn f(

@@ -11,6 +11,8 @@ use std::sync::Arc;
 use dupe::Dupe;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::prelude::VecExt;
 use ruff_source_file::SourceLocation;
 use serde::Serialize;
 
@@ -23,8 +25,6 @@ use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::sys_info::SysInfo;
-use crate::util::arc_id::ArcId;
-use crate::util::prelude::VecExt;
 
 #[derive(Serialize)]
 pub struct Position {

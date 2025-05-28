@@ -8,6 +8,7 @@
 use std::cmp;
 use std::sync::Arc;
 
+use pyrefly_util::visit::Visit;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -30,7 +31,6 @@ use crate::module::module_path::ModuleStyle;
 use crate::module::short_identifier::ShortIdentifier;
 use crate::ruff::ast::Ast;
 use crate::sys_info::SysInfo;
-use crate::util::visit::Visit;
 
 /// How a name is defined. If a name is defined outside of this
 /// module, we additionally store the module we got it from
@@ -468,8 +468,9 @@ impl<'a> DefinitionsBuilder<'a> {
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_util::prelude::SliceExt;
+
     use super::*;
-    use crate::util::prelude::SliceExt;
 
     #[test]
     fn test_implicitly_imported_submodule() {

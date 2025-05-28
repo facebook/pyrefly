@@ -16,6 +16,11 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_util::assert_bytes;
 use pyrefly_util::assert_words;
+use pyrefly_util::display::DisplayWith;
+use pyrefly_util::display::DisplayWithCtx;
+use pyrefly_util::display::commas_iter;
+use pyrefly_util::uniques::Unique;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
@@ -60,11 +65,6 @@ use crate::types::tuple::Tuple;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::Type;
 use crate::types::types::Var;
-use crate::util::display::DisplayWith;
-use crate::util::display::DisplayWithCtx;
-use crate::util::display::commas_iter;
-use crate::util::uniques::Unique;
-use crate::util::visit::VisitMut;
 
 assert_words!(Key, 5);
 assert_words!(KeyExpect, 1);
@@ -97,6 +97,10 @@ pub trait Keyed: Hash + Eq + Clone + DisplayWith<ModuleInfo> + Debug + Ranged + 
     type Answer: Clone + Debug + Display + TypeEq + VisitMut<Type>;
 }
 
+/// Should be equivalent to Keyed<EXPORTED=true>.
+/// Once `associated_const_equality` is stabilised, can switch to that.
+pub trait Exported: Keyed {}
+
 impl Keyed for Key {
     type Value = Binding;
     type Answer = TypeInfo;
@@ -114,16 +118,19 @@ impl Keyed for KeyClassField {
     type Value = BindingClassField;
     type Answer = ClassField;
 }
+impl Exported for KeyClassField {}
 impl Keyed for KeyClassSynthesizedFields {
     const EXPORTED: bool = true;
     type Value = BindingClassSynthesizedFields;
     type Answer = ClassSynthesizedFields;
 }
+impl Exported for KeyClassSynthesizedFields {}
 impl Keyed for KeyExport {
     const EXPORTED: bool = true;
     type Value = BindingExport;
     type Answer = Type;
 }
+impl Exported for KeyExport {}
 impl Keyed for KeyFunction {
     type Value = BindingFunction;
     type Answer = DecoratedFunction;
@@ -137,6 +144,7 @@ impl Keyed for KeyClassMetadata {
     type Value = BindingClassMetadata;
     type Answer = ClassMetadata;
 }
+impl Exported for KeyClassMetadata {}
 impl Keyed for KeyLegacyTypeParam {
     type Value = BindingLegacyTypeParam;
     type Answer = LegacyTypeParameterLookup;
@@ -295,13 +303,13 @@ impl DisplayWith<Bindings> for BindingExpect {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         let m = ctx.module_info();
         match self {
-            Self::TypeCheckExpr(box x) => {
+            Self::TypeCheckExpr(x) => {
                 write!(f, "type check expr {}", m.display(x))
             }
-            Self::Bool(box x, ..) => {
+            Self::Bool(x, ..) => {
                 write!(f, "check bool expr {}", m.display(x))
             }
-            Self::Delete(box x) => {
+            Self::Delete(x) => {
                 write!(f, "del {}", m.display(x))
             }
             Self::UnpackedLength(x, range, expect) => {
@@ -722,7 +730,12 @@ pub enum Binding {
     ContextValue(Option<Idx<KeyAnnotation>>, Idx<Key>, TextRange, IsAsync),
     /// A value at a specific position in an unpacked iterable expression.
     /// Example: UnpackedValue(('a', 'b')), 1) represents 'b'.
-    UnpackedValue(Idx<Key>, TextRange, UnpackedPosition),
+    UnpackedValue(
+        Option<Idx<KeyAnnotation>>,
+        Idx<Key>,
+        TextRange,
+        UnpackedPosition,
+    ),
     /// A type where we have an annotation, but also a type we computed.
     /// If the annotation has a type inside it (e.g. `int` then use the annotation).
     /// If the annotation doesn't (e.g. it's `Final`), then use the binding.
@@ -846,8 +859,8 @@ impl DisplayWith<Bindings> for Binding {
             Self::IterableValue(Some(k), x, IsAsync::Sync) => {
                 write!(f, "iter {}: {}", ctx.display(*k), m.display(x))
             }
-            Self::ExceptionHandler(box x, true) => write!(f, "except* {}", m.display(x)),
-            Self::ExceptionHandler(box x, false) => write!(f, "except {}", m.display(x)),
+            Self::ExceptionHandler(x, true) => write!(f, "except* {}", m.display(x)),
+            Self::ExceptionHandler(x, false) => write!(f, "except {}", m.display(x)),
             Self::ContextValue(_ann, x, _, kind) => {
                 let name = match kind {
                     IsAsync::Sync => "context",
@@ -855,7 +868,7 @@ impl DisplayWith<Bindings> for Binding {
                 };
                 write!(f, "{name} {}", ctx.display(*x))
             }
-            Self::UnpackedValue(x, range, pos) => {
+            Self::UnpackedValue(_ann, x, range, pos) => {
                 let pos = match pos {
                     UnpackedPosition::Index(i) => i.to_string(),
                     UnpackedPosition::ReverseIndex(i) => format!("-{i}"),
@@ -1044,8 +1057,8 @@ impl AnnotationWithTarget {
         let annotation_ty = self.annotation.ty.as_ref()?;
         match self.target {
             AnnotationTarget::ArgsParam(_) => {
-                if let Type::Unpack(box unpacked) = annotation_ty {
-                    Some(unpacked.clone())
+                if let Type::Unpack(unpacked) = annotation_ty {
+                    Some((**unpacked).clone())
                 } else if matches!(annotation_ty, Type::Args(_) | Type::Unpack(_)) {
                     Some(annotation_ty.clone())
                 } else {
@@ -1055,8 +1068,8 @@ impl AnnotationWithTarget {
                 }
             }
             AnnotationTarget::KwargsParam(_) => {
-                if let Type::Unpack(box unpacked) = annotation_ty {
-                    Some(unpacked.clone())
+                if let Type::Unpack(unpacked) = annotation_ty {
+                    Some((**unpacked).clone())
                 } else if matches!(annotation_ty, Type::Kwargs(_) | Type::Unpack(_)) {
                     Some(annotation_ty.clone())
                 } else {

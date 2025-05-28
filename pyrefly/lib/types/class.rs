@@ -19,6 +19,9 @@ use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::display::commas_iter;
+use pyrefly_util::visit::Visit;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -33,9 +36,6 @@ use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::types::TParams;
 use crate::types::types::Type;
-use crate::util::display::commas_iter;
-use crate::util::visit::Visit;
-use crate::util::visit::VisitMut;
 
 /// The name of a nominal type, e.g. `str`
 #[derive(Debug, Clone, TypeEq, Display, Dupe)]

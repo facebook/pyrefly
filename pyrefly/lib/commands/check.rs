@@ -23,11 +23,21 @@ use clap::Parser;
 use clap::ValueEnum;
 use dupe::Dupe;
 use path_absolutize::Absolutize;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::args::clap_env;
+use pyrefly_util::display;
+use pyrefly_util::display::number_thousands;
+use pyrefly_util::events::CategorizedEvents;
+use pyrefly_util::forgetter::Forgetter;
+use pyrefly_util::fs_anyhow;
+use pyrefly_util::globs::FilteredGlobs;
+use pyrefly_util::memory::MemoryUsageTrace;
+use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::watcher::Watcher;
 use ruff_source_file::OneIndexed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
-use tracing::error;
 use tracing::info;
 
 use crate::commands::run::CommandExitStatus;
@@ -36,6 +46,7 @@ use crate::commands::util::module_from_path;
 use crate::config::config::ConfigFile;
 use crate::config::config::validate_path;
 use crate::config::environment::environment::SitePackagePathSource;
+use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
 use crate::error::error::print_error_counts;
@@ -55,17 +66,6 @@ use crate::state::subscriber::ProgressBarSubscriber;
 use crate::sys_info::PythonPlatform;
 use crate::sys_info::PythonVersion;
 use crate::sys_info::SysInfo;
-use crate::util::arc_id::ArcId;
-use crate::util::args::clap_env;
-use crate::util::display;
-use crate::util::display::number_thousands;
-use crate::util::events::CategorizedEvents;
-use crate::util::forgetter::Forgetter;
-use crate::util::fs_anyhow;
-use crate::util::globs::FilteredGlobs;
-use crate::util::memory::MemoryUsageTrace;
-use crate::util::prelude::SliceExt;
-use crate::util::watcher::Watcher;
 
 #[derive(Debug, Clone, ValueEnum, Default)]
 enum OutputFormat {
@@ -486,10 +486,7 @@ impl Args {
         Ok(())
     }
 
-    pub fn override_config(
-        &self,
-        mut config: ConfigFile,
-    ) -> (ArcId<ConfigFile>, Vec<anyhow::Error>) {
+    pub fn override_config(&self, mut config: ConfigFile) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
         if let Some(x) = &self.python_platform {
             config.python_environment.python_platform = Some(x.clone());
         }
@@ -556,7 +553,7 @@ impl Args {
         let config_errors = transaction.get_config_errors();
         let config_errors_count = config_errors.len();
         for error in config_errors {
-            error!("{error:#}");
+            error.print();
         }
 
         let errors = loads.collect_errors();
@@ -672,7 +669,7 @@ impl Args {
 fn checkpoint<T>(result: anyhow::Result<T>, config_finder: &ConfigFinder) -> anyhow::Result<T> {
     if result.is_err() {
         for error in config_finder.errors() {
-            error!("{error:#}");
+            error.print();
         }
     }
     result

@@ -9,6 +9,7 @@ use std::fmt;
 
 use pyrefly_derive::TypeEq;
 use pyrefly_util::assert_words;
+use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::BoolOp;
 use ruff_python_ast::CmpOp;
@@ -34,7 +35,6 @@ use crate::binding::bindings::BindingsBuilder;
 use crate::export::special::SpecialExport;
 use crate::ruff::ast::Ast;
 use crate::types::types::Type;
-use crate::util::prelude::SliceExt;
 
 assert_words!(AtomicNarrowOp, 10);
 assert_words!(NarrowOp, 11);
@@ -119,7 +119,7 @@ impl FacetChain {
 
     pub fn facets(&self) -> &Vec1<FacetKind> {
         match self {
-            Self(box chain) => chain,
+            Self(chain) => chain,
         }
     }
 }
@@ -290,17 +290,15 @@ impl NarrowOps {
         match test {
             Some(Expr::Compare(ExprCompare {
                 range: _,
-                box left,
+                left,
                 ops: cmp_ops,
                 comparators,
             })) => {
                 // If the left expression is a call to len(), we're narrowing the argument
-                let mut left = left;
+                let mut left = &**left;
                 let mut lhs_is_len = false;
                 if let Expr::Call(ExprCall {
-                    box func,
-                    arguments,
-                    ..
+                    func, arguments, ..
                 }) = left
                     && builder.as_special_export(func) == Some(SpecialExport::Len)
                     && arguments.args.len() == 1
@@ -359,7 +357,7 @@ impl NarrowOps {
             Some(Expr::UnaryOp(ExprUnaryOp {
                 range: _,
                 op: UnaryOp::Not,
-                operand: box e,
+                operand: e,
             })) => Self::from_expr(builder, Some(e)).negate(),
             Some(Expr::Call(ExprCall {
                 range,

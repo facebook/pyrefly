@@ -71,9 +71,9 @@ pub trait Finder {
 #[cfg(test)]
 mod tests {
     use itertools::Itertools as _;
+    use pyrefly_util::test_path::TestPath;
 
     use super::*;
-    use crate::util::test_path::TestPath;
 
     fn interp_name(version_suffix: &str) -> String {
         let windows_suffix = if cfg!(windows) { ".exe" } else { "" };

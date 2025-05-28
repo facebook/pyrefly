@@ -17,6 +17,11 @@ use std::time::Instant;
 use anstream::ColorChoice;
 use anyhow::anyhow;
 use dupe::Dupe;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::thread_pool::ThreadCount;
+use pyrefly_util::thread_pool::init_thread_pool;
+use pyrefly_util::trace::init_tracing;
 use ruff_python_ast::name::Name;
 use ruff_source_file::LineIndex;
 use ruff_source_file::OneIndexed;
@@ -41,11 +46,6 @@ use crate::sys_info::PythonVersion;
 use crate::sys_info::SysInfo;
 use crate::types::class::Class;
 use crate::types::types::Type;
-use crate::util::arc_id::ArcId;
-use crate::util::prelude::SliceExt;
-use crate::util::thread_pool::ThreadCount;
-use crate::util::thread_pool::init_thread_pool;
-use crate::util::trace::init_tracing;
 
 #[macro_export]
 macro_rules! testcase {

@@ -11,6 +11,7 @@
  * file contains the implementations of a few special calls that need to be hard-coded.
  */
 
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Keyword;
 use ruff_text_size::Ranged;
@@ -24,7 +25,6 @@ use crate::error::kind::ErrorKind;
 use crate::types::callable::unexpected_keyword;
 use crate::types::special_form::SpecialForm;
 use crate::types::types::Type;
-use crate::util::visit::VisitMut;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn call_assert_type(

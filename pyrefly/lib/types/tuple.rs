@@ -11,9 +11,9 @@ use std::fmt::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::display::commas_iter;
 
 use crate::types::types::Type;
-use crate::util::display::commas_iter;
 
 /*
 Eventually this will have to be generalized enough to handle at least four cases:
@@ -73,7 +73,7 @@ impl Tuple {
                     format!("{}", commas_iter(|| elts.iter().map(&wrap)))
                 }
             }
-            Self::Unbounded(box ty) => format!("{}, ...", wrap(ty)),
+            Self::Unbounded(ty) => format!("{}, ...", wrap(ty)),
             Self::Unpacked(box (prefix, unpacked, suffix)) => {
                 let prefix = if prefix.is_empty() {
                     "".to_owned()

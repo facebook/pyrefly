@@ -112,6 +112,17 @@ use lsp_types::request::RegisterCapability;
 use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WorkspaceConfiguration;
 use path_absolutize::Absolutize;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::arc_id::WeakArcId;
+use pyrefly_util::args::clap_env;
+use pyrefly_util::events::CategorizedEvents;
+use pyrefly_util::lock::Mutex;
+use pyrefly_util::lock::RwLock;
+use pyrefly_util::prelude::VecExt;
+use pyrefly_util::task_heap::CancellationHandle;
+use pyrefly_util::task_heap::Cancelled;
+use pyrefly_util::thread_pool::ThreadCount;
+use pyrefly_util::thread_pool::ThreadPool;
 use serde::de::DeserializeOwned;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -140,17 +151,6 @@ use crate::state::state::TransactionData;
 use crate::types::lsp::position_to_text_size;
 use crate::types::lsp::source_range_to_range;
 use crate::types::lsp::text_size_to_position;
-use crate::util::arc_id::ArcId;
-use crate::util::arc_id::WeakArcId;
-use crate::util::args::clap_env;
-use crate::util::events::CategorizedEvents;
-use crate::util::lock::Mutex;
-use crate::util::lock::RwLock;
-use crate::util::prelude::VecExt;
-use crate::util::task_heap::CancellationHandle;
-use crate::util::task_heap::Cancelled;
-use crate::util::thread_pool::ThreadCount;
-use crate::util::thread_pool::ThreadPool;
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
 pub(crate) enum IndexingMode {

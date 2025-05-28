@@ -19,7 +19,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -63,11 +63,11 @@ def update_file(file_path: str, content: str) -> None:
 @dataclass(frozen=True)
 class ExpectedErrors:
     # line -> number of required errors on line
-    required_errors: Dict[int, int]
+    required_errors: dict[int, int]
     # line -> number of optional errors on line
-    optional_errors: Dict[int, int]
+    optional_errors: dict[int, int]
     # error tag -> lines where that error may appear
-    error_groups: Dict[str, List[int]]
+    error_groups: dict[str, list[int]]
 
 
 def get_expected_errors(test_case: str) -> ExpectedErrors:
@@ -97,9 +97,9 @@ def get_expected_errors(test_case: str) -> ExpectedErrors:
     # lint-ignore: NoUnsafeFilesystemRule
     with open(test_case, "r") as f:
         lines = f.readlines()
-    required_errors: Dict[int, int] = {}
-    optional_errors: Dict[int, int] = {}
-    error_groups: Dict[str, List[int]] = {}
+    required_errors: dict[int, int] = {}
+    optional_errors: dict[int, int] = {}
+    error_groups: dict[str, list[int]] = {}
     for i, line in enumerate(lines, start=1):
         line_without_comment, *_ = line.split("#")
         # Ignore lines with no non-comment content. This allows commenting out test cases.
@@ -129,7 +129,7 @@ def get_expected_errors(test_case: str) -> ExpectedErrors:
     )
 
 
-def diff_expected_errors(directory: str, test_case: str) -> List[str]:
+def diff_expected_errors(directory: str, test_case: str) -> list[str]:
     """
     Return a list of errors that were expected but not produced by the type checker.
 
@@ -172,8 +172,8 @@ def diff_expected_errors(directory: str, test_case: str) -> List[str]:
 
 
 def compare_conformance_output(
-    directory: str, conformance_output: Dict[str, List[dict[str, str]]]
-) -> Dict[str, List[str]]:
+    directory: str, conformance_output: dict[str, list[dict[str, str]]]
+) -> dict[str, list[str]]:
     """
     Compare conformance output with expected results in conformance test sources.
     Returns a mapping of files to error messages if there are discrepancies.
@@ -208,7 +208,7 @@ def get_pyrefly_command(executable: Path | None) -> list[str]:
 
 def get_conformance_output(
     directory: str, executable: Path | None
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> dict[str, list[dict[str, Any]]]:
     """
     Run minpyre on conformance test suite, parse and group the output by file
     """
@@ -249,7 +249,7 @@ def get_conformance_output(
 
 def get_conformance_output_separate(
     directory: str, executable: Path | None
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> dict[str, list[dict[str, Any]]]:
     """
     Run minpyre on conformance test suite, parse and group the output by file
     This function runs Pyrefly separately for each file, which is slower but more robust to failures
@@ -291,7 +291,7 @@ def get_conformance_output_separate(
     return outputs
 
 
-def collect_test_cases(directory: str) -> List[str]:
+def collect_test_cases(directory: str) -> list[str]:
     test_cases = []
     for root, _, files in os.walk(directory):
         for file in files:

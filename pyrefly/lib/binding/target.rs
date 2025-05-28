@@ -7,6 +7,7 @@
 
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
+use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprSubscript;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
@@ -28,6 +29,23 @@ use crate::graph::index::Idx;
 use crate::module::short_identifier::ShortIdentifier;
 
 impl<'a> BindingsBuilder<'a> {
+    /// Bind one level of an unpacked LHS target, for example in `x, (y, [*z]), q = foo`
+    /// - one level handles `x`, `(y, [*z])`, and `q`
+    /// - another level (called recursively via `bind_target`) handles `y` and `[*z]`
+    ///
+    /// Each potentially-recursive call results in two "levels" bindings:
+    /// - A single `Key::Unpack` -> binding pair from whatever the value we are unpacking is
+    /// - A `Binding::UnpackedValue` for each unpacked entry; these get passed back to
+    ///   `bind_target` and used in different ways depending on the context.
+    ///
+    /// A few notes on how this interacts with `bind_target`:
+    /// - We never contextually type unpacks, we do the unpacking at type level
+    ///   for simplicity (for now).
+    /// - Due to how `bind_target` works:
+    ///   - the `Binding::UnpackedValue` will include an `ann` to check against if and only if
+    ///     the individual unpack target is a name.
+    ///   - If the unpack target is an attribute or subscript, we will instead pass it along
+    ///     to the normal attribute-set or `__setitem__` call logic.
     fn bind_unpacking(
         &mut self,
         elts: &mut [Expr],
@@ -35,7 +53,7 @@ impl<'a> BindingsBuilder<'a> {
         range: TextRange,
     ) {
         // We are going to use this binding many times, so compute it once.
-        let key = self.insert_binding(Key::Unpack(range), make_binding(None));
+        let idx_of_unpack = self.insert_binding(Key::Unpack(range), make_binding(None));
 
         // An unpacking has zero or one splats (starred expressions).
         let mut splat = false;
@@ -46,8 +64,13 @@ impl<'a> BindingsBuilder<'a> {
                     splat = true;
                     // Counts how many elements are after the splat.
                     let j = len - i - 1;
-                    let make_nested_binding = |_: Option<Idx<KeyAnnotation>>| {
-                        Binding::UnpackedValue(key, range, UnpackedPosition::Slice(i, j))
+                    let make_nested_binding = |ann| {
+                        Binding::UnpackedValue(
+                            ann,
+                            idx_of_unpack,
+                            range,
+                            UnpackedPosition::Slice(i, j),
+                        )
                     };
                     self.bind_target(&mut e.value, &make_nested_binding);
                 }
@@ -59,9 +82,8 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         UnpackedPosition::Index(i)
                     };
-                    let make_nested_binding = |_: Option<Idx<KeyAnnotation>>| {
-                        Binding::UnpackedValue(key, range, unpacked_position)
-                    };
+                    let make_nested_binding =
+                        |ann| Binding::UnpackedValue(ann, idx_of_unpack, range, unpacked_position);
                     self.bind_target(e, &make_nested_binding);
                 }
             }
@@ -73,45 +95,73 @@ impl<'a> BindingsBuilder<'a> {
         };
         self.insert_binding(
             KeyExpect(range),
-            BindingExpect::UnpackedLength(key, range, expect),
+            BindingExpect::UnpackedLength(idx_of_unpack, range, expect),
         );
     }
 
-    pub fn bind_attr_assign(&mut self, attr: ExprAttribute, value: ExprOrBinding) {
+    // Create a binding to verify that an attribute assignment is valid and
+    // potentially narrow (or invalidate narrows on) the name assigned to.
+    //
+    // Return the value of the attribute assignment (as an ExprOrBinding);
+    // this might be used to record self-attribute assignments.
+    pub fn bind_attr_assign(
+        &mut self,
+        mut attr: ExprAttribute,
+        make_assigned_value: impl FnOnce(Option<Idx<KeyAnnotation>>) -> ExprOrBinding,
+    ) -> ExprOrBinding {
+        self.ensure_expr(&mut attr.value);
         if let Some((identifier, _)) =
             identifier_and_chain_prefix_for_expr(&Expr::Attribute(attr.clone()))
         {
-            let idx = self.insert_binding(
-                Key::PropertyAssign(ShortIdentifier::new(&identifier)),
-                Binding::AssignToAttribute(Box::new((attr, value))),
+            let idx = self.idx_for_promise(Key::PropertyAssign(ShortIdentifier::new(&identifier)));
+            let value = make_assigned_value(None);
+            self.insert_binding_idx(
+                idx,
+                Binding::AssignToAttribute(Box::new((attr, value.clone()))),
             );
             let name = Hashed::new(&identifier.id);
             if self.lookup_name_hashed(name, LookupKind::Regular).is_ok() {
-                self.scopes.update_flow_info_hashed(name, idx, None);
+                self.scopes.update_flow_info(name, idx, None);
             }
+            value
         } else {
-            self.insert_binding(
-                Key::Anon(attr.range),
-                Binding::AssignToAttribute(Box::new((attr, value))),
+            let idx = self.idx_for_promise(Key::Anon(attr.range));
+            let value = make_assigned_value(None);
+            self.insert_binding_idx(
+                idx,
+                Binding::AssignToAttribute(Box::new((attr, value.clone()))),
             );
+            value
         }
     }
 
-    fn bind_subscript_assign(&mut self, subscript: ExprSubscript, value: ExprOrBinding) {
+    // Create a binding to verify that a subscript assignment is valid and
+    // potentially narrow (or invalidate narrows on) the name assigned to.
+    pub fn bind_subscript_assign(
+        &mut self,
+        mut subscript: ExprSubscript,
+        make_assigned_value: impl FnOnce(Option<Idx<KeyAnnotation>>) -> ExprOrBinding,
+    ) {
+        self.ensure_expr(&mut subscript.slice);
+        self.ensure_expr(&mut subscript.value);
         if let Some((identifier, _)) =
             identifier_and_chain_prefix_for_expr(&Expr::Subscript(subscript.clone()))
         {
-            let idx = self.insert_binding(
-                Key::PropertyAssign(ShortIdentifier::new(&identifier)),
+            let idx = self.idx_for_promise(Key::PropertyAssign(ShortIdentifier::new(&identifier)));
+            let value = make_assigned_value(None);
+            self.insert_binding_idx(
+                idx,
                 Binding::AssignToSubscript(Box::new((subscript, value))),
             );
             let name = Hashed::new(&identifier.id);
             if self.lookup_name_hashed(name, LookupKind::Regular).is_ok() {
-                self.scopes.update_flow_info_hashed(name, idx, None);
+                self.scopes.update_flow_info(name, idx, None);
             }
         } else {
-            self.insert_binding(
-                Key::Anon(subscript.range),
+            let idx = self.idx_for_promise(Key::Anon(subscript.range));
+            let value = make_assigned_value(None);
+            self.insert_binding_idx(
+                idx,
                 Binding::AssignToSubscript(Box::new((subscript, value))),
             );
         }
@@ -133,71 +183,41 @@ impl<'a> BindingsBuilder<'a> {
     /// it enables contextual typing. At the moment it is only used in the attribute case (because
     /// the other cases instead rely on `make_binding` to handle contextual typing, which works
     /// when the form is not an unpacking but results in false negatives when it is).
-    ///
-    /// TODO(stroxler): The way this is wired up does not work well in
-    /// the general case of an unpacking. The attempt to pass around a `make_binding`
-    /// callable for both inference and checking does not compose properly with `bind_unpacking`,
-    /// because for an unpack target there is no annotation for the entire RHS.
-    /// As a result, for all cases except attributes we wind up ignoring type errors
-    /// when the target is an unpacking pattern.
     fn bind_target_impl(
         &mut self,
         target: &mut Expr,
-        make_binding: &dyn Fn(Option<Idx<KeyAnnotation>>) -> Binding,
-        value: Option<&Expr>,
-        is_aug_assign: bool,
+        make_assigned_value: &dyn Fn(Option<Idx<KeyAnnotation>>) -> ExprOrBinding,
     ) {
-        if is_aug_assign && let Expr::Name(name) = target {
-            // We normally should not ensure a top-level name, but if the target is for an
-            // AugAssign operation, then the name needs to already be in scope and will be used
-            // to resolve the target as a (possibly overwriting) mutation.
-            self.ensure_mutable_name(name);
-        } else if matches!(target, Expr::Subscript(..) | Expr::Attribute(..)) {
-            // We should always ensure a target that is an attribute or subscript, because
-            // the base needs to already be in scope and will be used to resolve the target as
-            // a mutation.
-            self.ensure_expr(target);
-        }
+        let make_binding = &|ann| match make_assigned_value(ann) {
+            ExprOrBinding::Expr(e) => Binding::Expr(ann, e),
+            ExprOrBinding::Binding(b) => b,
+        };
         match target {
-            Expr::Name(name) => self.bind_assign(name, make_binding, FlowStyle::None),
+            Expr::Name(name) => {
+                self.bind_assign(name, make_binding);
+            }
             Expr::Attribute(x) => {
-                // `make_binding` will give us a binding for inferring the value type, which we
-                // *might* use to compute the attribute type if there are no explicit annotations.
-                let attr_value = if let Some(value) = value {
-                    ExprOrBinding::Expr(value.clone())
-                } else {
-                    ExprOrBinding::Binding(make_binding(None))
-                };
-                // Create a binding to verify that the assignment is valid and potentially narrow
-                // the name assigned to.
-                self.bind_attr_assign(x.clone(), attr_value.clone());
+                let attr_value = self.bind_attr_assign(x.clone(), make_assigned_value);
                 // If this is a self-assignment, record it because we may use it to infer
                 // the existence of an instance-only attribute.
                 self.scopes.record_self_attr_assign(x, attr_value, None);
             }
             Expr::Subscript(x) => {
-                let assigned_value = if let Some(value) = value {
-                    ExprOrBinding::Expr(value.clone())
-                } else {
-                    ExprOrBinding::Binding(make_binding(None))
-                };
-                // Create a binding to verify that the assignment is valid and potentially narrow
-                // the name assigned to.
-                self.bind_subscript_assign(x.clone(), assigned_value);
+                self.bind_subscript_assign(x.clone(), make_assigned_value);
             }
-            Expr::Tuple(tup) if !is_aug_assign => {
+            Expr::Tuple(tup) => {
                 self.bind_unpacking(&mut tup.elts, make_binding, tup.range);
             }
-            Expr::List(lst) if !is_aug_assign => {
+            Expr::List(lst) => {
                 self.bind_unpacking(&mut lst.elts, make_binding, lst.range);
             }
-            Expr::Starred(x) if !is_aug_assign => {
+            Expr::Starred(x) => {
                 self.error(
                     x.range,
                     "Starred assignment target must be in a list or tuple".to_owned(),
                     ErrorKind::InvalidSyntax,
                 );
-                self.bind_target_impl(&mut x.value, make_binding, value, false);
+                self.bind_target_impl(&mut x.value, make_assigned_value);
             }
             illegal_target => {
                 // Most structurally invalid targets become errors in the parser, which we propagate so there
@@ -213,7 +233,10 @@ impl<'a> BindingsBuilder<'a> {
         target: &mut Expr,
         make_binding: &dyn Fn(Option<Idx<KeyAnnotation>>) -> Binding,
     ) {
-        self.bind_target_impl(target, make_binding, None, false);
+        // TODO(stroxler): Clean this up: we're wrapping the binding and then just unwrapping it later.
+        // Forcing all callers to produce an `ExprOrBinding` will also help us improve contextual typing.
+        let make_assigned_value = &|ann| ExprOrBinding::Binding(make_binding(ann));
+        self.bind_target_impl(target, make_assigned_value);
     }
 
     /// Similar to `bind_target`, but specifically for assignments:
@@ -223,25 +246,23 @@ impl<'a> BindingsBuilder<'a> {
     ///   a method (like descriptor attribute assigns and `__setitem__` calls).
     pub fn bind_targets_with_value(&mut self, targets: &mut Vec<Expr>, value: &mut Expr) {
         self.ensure_expr(value);
-        let make_binding = |ann: Option<Idx<KeyAnnotation>>| Binding::Expr(ann, value.clone());
+        let make_assigned_value = &|_| ExprOrBinding::Expr(value.clone());
         for target in targets {
-            self.bind_target_impl(target, &make_binding, Some(value), false);
+            self.bind_target_impl(target, make_assigned_value);
         }
     }
 
-    pub fn bind_target_for_aug_assign(
+    pub fn bind_assign(
         &mut self,
-        target: &mut Expr,
-        make_binding: &dyn Fn(Option<Idx<KeyAnnotation>>) -> Binding,
+        name: &ExprName,
+        make_binding: impl FnOnce(Option<Idx<KeyAnnotation>>) -> Binding,
     ) {
-        // A normal target should not ensure top level `Name`, since it will *define*
-        // that name (overwriting any previous value) but an `AugAssign` is a mutation
-        // (possibly in place, possibly overwriting) of an existing value so we do
-        // need to ensure names.
-        //
-        // AugAssign cannot be used with multi-target assignment so it does not interact
-        // with the `bind_unpacking` recursion (if a user attempts to do so, we'll throw
-        // an error and otherwise treat it as a normal assignment from a binding standpoint).
-        self.bind_target_impl(target, make_binding, None, true);
+        let idx = self.idx_for_promise(Key::Definition(ShortIdentifier::expr_name(name)));
+        let (ann, default) = self.bind_key(&name.id, idx, FlowStyle::Other);
+        let mut binding = make_binding(ann);
+        if let Some(default) = default {
+            binding = Binding::Default(default, Box::new(binding));
+        }
+        self.insert_binding_idx(idx, binding);
     }
 }

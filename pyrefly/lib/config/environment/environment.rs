@@ -15,6 +15,7 @@ use std::sync::LazyLock;
 use anyhow::Context;
 use anyhow::anyhow;
 use itertools::Itertools;
+use pyrefly_util::lock::Mutex;
 use serde::Deserialize;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
@@ -27,7 +28,6 @@ use crate::config::environment::finder::Finder as _;
 use crate::config::environment::venv::Venv;
 use crate::sys_info::PythonPlatform;
 use crate::sys_info::PythonVersion;
-use crate::util::lock::Mutex;
 
 static INTERPRETER_ENV_REGISTRY: LazyLock<Mutex<SmallMap<PathBuf, Option<PythonEnvironment>>>> =
     LazyLock::new(|| Mutex::new(SmallMap::new()));

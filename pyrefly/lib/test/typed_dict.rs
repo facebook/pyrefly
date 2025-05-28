@@ -105,9 +105,24 @@ class Coord(TypedDict):
     y: ReadOnly[int]
 def foo(c: Coord) -> None:
     c["x"] = 1
-    c["x"] = "foo"  # E: Expected `int`, got `Literal['foo']`
+    c["x"] = "foo"  # E: `Literal['foo']` is not assignable to TypedDict key `x` with type `int`
     c["y"] = 3  # E: Key `y` in TypedDict `Coord` is read-only
     c["z"] = 4  # E: TypedDict `Coord` does not have key `z`
+    "#,
+);
+
+testcase!(
+    test_typed_dict_contextual,
+    r#"
+from typing import TypedDict
+class MyDict(TypedDict, total=False):
+    data: list[str | int]
+def test():
+    s: MyDict = {}
+    s['data'] = []
+    s['data'] = [42]
+    s['data'] = [42, 'hello']
+    s['data'] = ['hello']  
     "#,
 );
 

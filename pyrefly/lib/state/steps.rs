@@ -11,6 +11,7 @@ use dupe::Dupe;
 use enum_iterator::Sequence;
 use parse_display::Display;
 use paste::paste;
+use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::ModModule;
 
 use crate::alt::answers::Answers;
@@ -29,7 +30,6 @@ use crate::state::memory::MemoryFilesLookup;
 use crate::state::require::Require;
 use crate::sys_info::SysInfo;
 use crate::types::stdlib::Stdlib;
-use crate::util::uniques::UniqueFactory;
 
 pub struct Context<'a, Lookup> {
     pub require: Require,

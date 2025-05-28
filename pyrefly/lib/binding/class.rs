@@ -8,6 +8,7 @@
 use std::mem;
 use std::sync::LazyLock;
 
+use pyrefly_util::prelude::SliceExt;
 use regex::Regex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprDict;
@@ -52,7 +53,6 @@ use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
 use crate::types::special_form::SpecialForm;
 use crate::types::types::Type;
-use crate::util::prelude::SliceExt;
 
 enum IllegalIdentifierHandling {
     Error,
@@ -92,7 +92,7 @@ impl<'a> BindingsBuilder<'a> {
             self.bind_definition(
                 &x.name,
                 Binding::Type(Type::type_form(Type::any_explicit())),
-                FlowStyle::None,
+                FlowStyle::Other,
             );
             return;
         }
@@ -262,7 +262,7 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_definition(
             &x.name,
             Binding::ClassDef(class_indices.class_idx, decorators.into_boxed_slice()),
-            FlowStyle::None,
+            FlowStyle::Other,
         );
         fields_possibly_defined_by_this_class.reserve(0); // Attempt to shrink to capacity
         self.insert_binding_idx(
@@ -464,7 +464,7 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_definition(
             &class_name,
             Binding::ClassDef(class_indices.class_idx, Box::new([])),
-            FlowStyle::None,
+            FlowStyle::Other,
         );
         self.insert_binding_idx(
             class_indices.class_idx,

@@ -17,6 +17,7 @@ use ruff_python_ast::StmtReturn;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 
 use crate::binding::binding::AnnotationStyle;
 use crate::binding::binding::AnnotationTarget;
@@ -53,7 +54,7 @@ impl<'a> BindingsBuilder<'a> {
             if &x.name != "*" {
                 let asname = x.asname.as_ref().unwrap_or(&x.name);
                 // We pass None as imported_from, since we are really faking up a local error definition
-                self.bind_definition(asname, Binding::Type(Type::any_error()), FlowStyle::None);
+                self.bind_definition(asname, Binding::Type(Type::any_error()), FlowStyle::Other);
             }
         }
     }
@@ -97,17 +98,13 @@ impl<'a> BindingsBuilder<'a> {
                 self.ensure_expr(&mut kw.value);
             }
         }
-        self.bind_assign(
-            name,
-            |ann| {
-                Binding::TypeVar(
-                    ann,
-                    Ast::expr_name_identifier(name.clone()),
-                    Box::new(call.clone()),
-                )
-            },
-            FlowStyle::None,
-        )
+        self.bind_assign(name, |ann| {
+            Binding::TypeVar(
+                ann,
+                Ast::expr_name_identifier(name.clone()),
+                Box::new(call.clone()),
+            )
+        })
     }
 
     fn ensure_type_var_tuple_and_param_spec_args(&mut self, call: &mut ExprCall) {
@@ -128,32 +125,24 @@ impl<'a> BindingsBuilder<'a> {
 
     fn assign_param_spec(&mut self, name: &ExprName, call: &mut ExprCall) {
         self.ensure_type_var_tuple_and_param_spec_args(call);
-        self.bind_assign(
-            name,
-            |ann| {
-                Binding::ParamSpec(
-                    ann,
-                    Ast::expr_name_identifier(name.clone()),
-                    Box::new(call.clone()),
-                )
-            },
-            FlowStyle::None,
-        )
+        self.bind_assign(name, |ann| {
+            Binding::ParamSpec(
+                ann,
+                Ast::expr_name_identifier(name.clone()),
+                Box::new(call.clone()),
+            )
+        })
     }
 
     fn assign_type_var_tuple(&mut self, name: &ExprName, call: &mut ExprCall) {
         self.ensure_type_var_tuple_and_param_spec_args(call);
-        self.bind_assign(
-            name,
-            |ann| {
-                Binding::TypeVarTuple(
-                    ann,
-                    Ast::expr_name_identifier(name.clone()),
-                    Box::new(call.clone()),
-                )
-            },
-            FlowStyle::None,
-        )
+        self.bind_assign(name, |ann| {
+            Binding::TypeVarTuple(
+                ann,
+                Ast::expr_name_identifier(name.clone()),
+                Box::new(call.clone()),
+            )
+        })
     }
 
     fn assign_enum(
@@ -280,6 +269,32 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    pub fn bind_name_assign(&mut self, name: &ExprName, mut value: Box<Expr>) {
+        let idx = self.idx_for_promise(Key::Definition(ShortIdentifier::expr_name(name)));
+        if self.is_definitely_type_alias_rhs(value.as_ref()) {
+            self.ensure_type(&mut value, &mut None);
+        } else {
+            self.ensure_expr(&mut value);
+        }
+        let style = if self.scopes.in_class_body() {
+            FlowStyle::ClassField {
+                initial_value: Some((*value).clone()),
+            }
+        } else {
+            FlowStyle::Other
+        };
+        let (ann, default) = self.bind_key(&name.id, idx, style);
+        let mut binding = Binding::NameAssign(
+            name.id.clone(),
+            ann.map(|k| (AnnotationStyle::Forwarded, k)),
+            value,
+        );
+        if let Some(default) = default {
+            binding = Binding::Default(default, Box::new(binding));
+        }
+        self.insert_binding_idx(idx, binding);
+    }
+
     /// Record a return statement for later analysis if we are in a function body, and mark
     /// that the flow has terminated.
     ///
@@ -319,8 +334,11 @@ impl<'a> BindingsBuilder<'a> {
                     );
                     if let Expr::Name(name) = target {
                         let idx = self.ensure_mutable_name(name);
-                        self.scopes
-                            .update_flow_info(&name.id, idx, Some(FlowStyle::Uninitialized));
+                        self.scopes.update_flow_info(
+                            Hashed::new(&name.id),
+                            idx,
+                            Some(FlowStyle::Uninitialized),
+                        );
                     } else {
                         self.ensure_expr(target);
                     }
@@ -331,7 +349,7 @@ impl<'a> BindingsBuilder<'a> {
                     && let Some((module, forward)) =
                         resolve_typeshed_alias(self.module_info.name(), &name.id, &x.value) =>
             {
-                self.bind_assign(name, |_| Binding::Import(module, forward), FlowStyle::None)
+                self.bind_assign(name, |_| Binding::Import(module, forward))
             }
             Stmt::Assign(mut x) => {
                 if let [Expr::Name(name)] = x.targets.as_slice() {
@@ -411,39 +429,35 @@ impl<'a> BindingsBuilder<'a> {
                             _ => {}
                         }
                     }
-                    if self.is_definitely_type_alias_rhs(&x.value) {
-                        self.ensure_type(&mut x.value, &mut None);
-                    } else {
-                        self.ensure_expr(&mut x.value);
-                    }
-                    let flow_style = if self.scopes.in_class_body() {
-                        FlowStyle::ClassField {
-                            initial_value: Some((*x.value).clone()),
-                        }
-                    } else {
-                        FlowStyle::None
-                    };
-                    self.bind_assign(
-                        name,
-                        |ann: Option<Idx<KeyAnnotation>>| {
-                            Binding::NameAssign(
-                                name.id.clone(),
-                                ann.map(|k| (AnnotationStyle::Forwarded, k)),
-                                x.value,
-                            )
-                        },
-                        flow_style,
-                    );
+                    self.bind_name_assign(name, x.value)
                 } else {
                     self.bind_targets_with_value(&mut x.targets, &mut x.value);
                 }
             }
             Stmt::AugAssign(mut x) => {
                 self.ensure_expr(&mut x.value);
-                let mut target = x.target.as_ref().clone();
-                let make_binding =
-                    |ann: Option<Idx<KeyAnnotation>>| Binding::AugAssign(ann, x.clone());
-                self.bind_target_for_aug_assign(&mut target, &make_binding);
+                let make_binding = |ann| Binding::AugAssign(ann, x.clone());
+                match x.target.as_ref() {
+                    Expr::Name(name) => {
+                        self.ensure_mutable_name(name);
+                        self.bind_assign(name, make_binding);
+                    }
+                    Expr::Attribute(x) => {
+                        let make_assigned_value = &|ann| ExprOrBinding::Binding(make_binding(ann));
+                        self.bind_attr_assign(x.clone(), make_assigned_value);
+                    }
+                    Expr::Subscript(x) => {
+                        let make_assigned_value = &|ann| ExprOrBinding::Binding(make_binding(ann));
+                        self.bind_subscript_assign(x.clone(), make_assigned_value);
+                    }
+                    illegal_target => {
+                        // Most structurally invalid targets become errors in the parser, which we propagate so there
+                        // is no need for duplicate errors. But we do want to catch unbound names (which the parser
+                        // will not catch)
+                        let mut e = illegal_target.clone();
+                        self.ensure_expr(&mut e);
+                    }
+                }
             }
             Stmt::AnnAssign(mut x) => match *x.target {
                 Expr::Name(name) => {
@@ -479,7 +493,7 @@ impl<'a> BindingsBuilder<'a> {
                         let initial_value = x.value.as_deref().cloned();
                         FlowStyle::ClassField { initial_value }
                     } else if x.value.is_some() {
-                        FlowStyle::None
+                        FlowStyle::Other
                     } else {
                         FlowStyle::Uninitialized
                     };
@@ -526,9 +540,8 @@ impl<'a> BindingsBuilder<'a> {
                         );
                     }
                 }
-                Expr::Attribute(mut attr) => {
+                Expr::Attribute(attr) => {
                     let attr_name = attr.attr.id.clone();
-                    self.ensure_expr(&mut attr.value);
                     self.ensure_type(&mut x.annotation, &mut None);
                     let ann_key = self.insert_binding(
                         KeyAnnotation::AttrAnnotation(x.annotation.range()),
@@ -539,11 +552,10 @@ impl<'a> BindingsBuilder<'a> {
                         ),
                     );
                     let value = match x.value {
-                        Some(box mut v) => {
+                        Some(mut v) => {
                             self.ensure_expr(&mut v);
-                            let value = ExprOrBinding::Expr(v);
-                            self.bind_attr_assign(attr.clone(), value.clone());
-                            value
+                            let make_value = |_| ExprOrBinding::Expr(*v);
+                            self.bind_attr_assign(attr.clone(), make_value)
                         }
                         _ => ExprOrBinding::Binding(Binding::Type(Type::any_implicit())),
                     };
@@ -599,7 +611,7 @@ impl<'a> BindingsBuilder<'a> {
                     self.bind_definition(
                         &Ast::expr_name_identifier(name),
                         binding,
-                        FlowStyle::None,
+                        FlowStyle::Other,
                     );
                 } else {
                     self.error(
@@ -703,9 +715,8 @@ impl<'a> BindingsBuilder<'a> {
                         Binding::Expr(None, item.context_expr),
                     );
                     if let Some(mut opts) = item.optional_vars {
-                        let make_binding = |ann: Option<Idx<KeyAnnotation>>| {
-                            Binding::ContextValue(ann, context_idx, expr_range, kind)
-                        };
+                        let make_binding =
+                            |ann| Binding::ContextValue(ann, context_idx, expr_range, kind);
                         self.bind_target(&mut opts, &make_binding);
                     } else {
                         self.insert_binding(
@@ -763,7 +774,7 @@ impl<'a> BindingsBuilder<'a> {
                         self.bind_definition(
                             &name,
                             Binding::ExceptionHandler(type_, x.is_star),
-                            FlowStyle::None,
+                            FlowStyle::Other,
                         );
                     } else if let Some(mut type_) = h.type_ {
                         self.ensure_expr(&mut type_);

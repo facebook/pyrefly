@@ -14,6 +14,8 @@ use std::path::Path;
 
 use dupe::Dupe;
 use equivalent::Equivalent;
+use pyrefly_util::visit::Visit;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -24,8 +26,6 @@ use static_interner::Interner;
 use thiserror::Error;
 
 use crate::dunder;
-use crate::util::visit::Visit;
-use crate::util::visit::VisitMut;
 
 static MODULE_NAME_INTERNER: Interner<String> = Interner::new();
 

@@ -25,7 +25,7 @@ jobs:
       run: echo "CARGO_HOME=C:\\cargo" >> ${{ matrix.github_env }}
     - uses: dtolnay/rust-toolchain@master
       with:
-        toolchain: nightly-2025-02-16
+        toolchain: nightly-2025-03-29
         components: clippy, rustfmt
     - run: cargo fmt -- --check
     - run: cargo clippy --release

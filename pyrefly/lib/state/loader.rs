@@ -12,14 +12,14 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use dupe::Dupe;
 use itertools::Itertools;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::locked_map::LockedMap;
 
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
 use crate::config::config::ImportLookupPathPart;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
-use crate::util::arc_id::ArcId;
-use crate::util::locked_map::LockedMap;
 
 #[derive(Debug, Clone, Dupe)]
 pub enum FindError {

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use itertools::Either;
 use itertools::Itertools;
+use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
@@ -44,7 +45,6 @@ use crate::types::types::AnyStyle;
 use crate::types::types::CalleeKind;
 use crate::types::types::TParamInfo;
 use crate::types::types::Type;
-use crate::util::prelude::SliceExt;
 
 /// Private helper type used to share part of the logic needed for the
 /// binding-level work of finding legacy type parameters versus the type-level
@@ -162,8 +162,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut enum_metadata = None;
         let mut dataclass_metadata = None;
         let mut bases: Vec<BaseClass> = bases.map(|x| self.base_class_of(x, errors));
-        if let Some(box special_base) = special_base {
-            bases.push(special_base.clone());
+        if let Some(special_base) = special_base {
+            bases.push((**special_base).clone());
         }
         let mut protocol_metadata = if bases.iter().any(|x| matches!(x, BaseClass::Protocol(_))) {
             Some(ProtocolMetadata {
@@ -501,7 +501,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut type_var_tuple_count = 0;
             let args = Ast::unpack_slice(&subscript.slice).map(|x| {
                 let ty = self.expr_untype(x, TypeFormContext::GenericBase, errors);
-                if let Type::Unpack(box unpacked) = &ty
+                if let Type::Unpack(unpacked) = &ty
                     && unpacked.is_kind_type_var_tuple()
                 {
                     if type_var_tuple_count == 1 {

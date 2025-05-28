@@ -4,10 +4,13 @@
 
 ### GitHub developers
 
-To build and test Pyrefly:
-
-`cd pyrefly` then use the normal `cargo` commands (e.g. `cargo build`,
+The [rust toolchain](https://www.rust-lang.org/tools/install) is required for
+development. You can use the normal `cargo` commands (e.g. `cargo build`,
 `cargo test`).
+
+You can also run `python3 test.py` from this directory to use our all-in-one
+test script that auto-formats your code, runs the tests, and updates the
+conformance test results. It requires Python 3.9+.
 
 ### Meta internal developers
 
@@ -32,7 +35,7 @@ distributions. This also means that you can pip install `maturin` and use
 `maturin build` and `maturin develop` for local development. `pip install .` in
 the `pyrefly/pyrefly` directory works as well.
 
-### Deploying to PyPI
+### Deploying to PyPI (Meta internal)
 
 Once a week, a
 [CodemodService job](https://www.internalfb.com/code/fbsource/xplat/scripts/codemod_service/configs/fbcode_pyrefly_version_upgrade.toml)

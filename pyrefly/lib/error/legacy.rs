@@ -5,10 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_util::prelude::SliceExt;
 use serde::Serialize;
 
 use crate::error::error::Error;
-use crate::util::prelude::SliceExt;
 
 /// Legacy error structure in Pyre1. Needs to be consistent with the following file:
 /// <https://www.internalfb.com/code/fbsource/fbcode/tools/pyre/facebook/arc/lib/error.rs>

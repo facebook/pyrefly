@@ -29,13 +29,13 @@ use lsp_types::Url;
 use lsp_types::WorkspaceFoldersServerCapabilities;
 use lsp_types::WorkspaceServerCapabilities;
 use pretty_assertions::assert_eq;
+use pyrefly_util::fs_anyhow;
 use tempfile::TempDir;
 
 use crate::commands::lsp::Args;
 use crate::commands::lsp::IndexingMode;
 use crate::commands::lsp::run_lsp;
 use crate::test::util::init_test;
-use crate::util::fs_anyhow;
 
 #[derive(Default)]
 pub struct TestCase {

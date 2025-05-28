@@ -67,11 +67,11 @@ impl<'a> BindingsBuilder<'a> {
                 // If there is a new name, refine that instead
                 let mut subject = match_subject;
                 if let Some(name) = &p.name {
-                    self.bind_definition(name, Binding::Forward(key), FlowStyle::None);
+                    self.bind_definition(name, Binding::Forward(key), FlowStyle::Other);
                     subject = Some(NarrowingSubject::Name(name.id.clone()));
                 };
-                if let Some(box pattern) = p.pattern {
-                    self.bind_pattern(subject, pattern, key)
+                if let Some(pattern) = p.pattern {
+                    self.bind_pattern(subject, *pattern, key)
                 } else {
                     NarrowOps::new()
                 }
@@ -87,8 +87,8 @@ impl<'a> BindingsBuilder<'a> {
                                 let position = UnpackedPosition::Slice(idx, num_patterns - idx - 1);
                                 self.bind_definition(
                                     name,
-                                    Binding::UnpackedValue(key, p.range, position),
-                                    FlowStyle::None,
+                                    Binding::UnpackedValue(None, key, p.range, position),
+                                    FlowStyle::Other,
                                 );
                             }
                             unbounded = true;
@@ -101,7 +101,7 @@ impl<'a> BindingsBuilder<'a> {
                             };
                             let key = self.insert_binding(
                                 Key::Anon(x.range()),
-                                Binding::UnpackedValue(key, x.range(), position),
+                                Binding::UnpackedValue(None, key, x.range(), position),
                             );
                             narrow_ops.and_all(self.bind_pattern(None, x, key));
                         }
@@ -146,7 +146,7 @@ impl<'a> BindingsBuilder<'a> {
                         ))
                     });
                 if let Some(rest) = x.rest {
-                    self.bind_definition(&rest, Binding::Forward(key), FlowStyle::None);
+                    self.bind_definition(&rest, Binding::Forward(key), FlowStyle::Other);
                 }
                 narrow_ops
             }

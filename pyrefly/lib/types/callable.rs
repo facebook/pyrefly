@@ -12,6 +12,10 @@ use std::fmt::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::display::commas_iter;
+use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::visit::Visit;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
@@ -22,10 +26,6 @@ use crate::module::module_name::ModuleName;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
-use crate::util::display::commas_iter;
-use crate::util::prelude::SliceExt;
-use crate::util::visit::Visit;
-use crate::util::visit::VisitMut;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]

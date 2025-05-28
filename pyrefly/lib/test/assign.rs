@@ -645,13 +645,12 @@ def foo(c: C):
 );
 
 testcase!(
-    bug = "We never validate that assignments to unpacked targets are valid",
     test_assign_unpacked_with_existing_annotations,
     r#"
 x: int
 y: str
 z: tuple[bool, ...]
-x, *z, y = True, 1, 2, "test"
+x, *z, y = True, 1, 2, "test" # E: list[Literal[1, 2]]` is not assignable to `tuple[bool, ...]
     "#,
 );
 

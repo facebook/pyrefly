@@ -58,7 +58,8 @@ use crate::types::types::Type;
 use crate::types::types::Var;
 
 pub trait SolveRecursive: Keyed {
-    type Recursive: Dupe = ();
+    // TODO: Make () the default once `associated_type_defaults` stabilises
+    type Recursive: Dupe;
 }
 impl SolveRecursive for Key {
     type Recursive = Var;
@@ -66,16 +67,36 @@ impl SolveRecursive for Key {
 impl SolveRecursive for KeyExport {
     type Recursive = Var;
 }
-impl SolveRecursive for KeyExpect {}
-impl SolveRecursive for KeyFunction {}
-impl SolveRecursive for KeyClass {}
-impl SolveRecursive for KeyClassField {}
-impl SolveRecursive for KeyClassSynthesizedFields {}
-impl SolveRecursive for KeyAnnotation {}
-impl SolveRecursive for KeyClassMetadata {}
-impl SolveRecursive for KeyLegacyTypeParam {}
-impl SolveRecursive for KeyYield {}
-impl SolveRecursive for KeyYieldFrom {}
+impl SolveRecursive for KeyExpect {
+    type Recursive = ();
+}
+impl SolveRecursive for KeyFunction {
+    type Recursive = ();
+}
+impl SolveRecursive for KeyClass {
+    type Recursive = ();
+}
+impl SolveRecursive for KeyClassField {
+    type Recursive = ();
+}
+impl SolveRecursive for KeyClassSynthesizedFields {
+    type Recursive = ();
+}
+impl SolveRecursive for KeyAnnotation {
+    type Recursive = ();
+}
+impl SolveRecursive for KeyClassMetadata {
+    type Recursive = ();
+}
+impl SolveRecursive for KeyLegacyTypeParam {
+    type Recursive = ();
+}
+impl SolveRecursive for KeyYield {
+    type Recursive = ();
+}
+impl SolveRecursive for KeyYieldFrom {
+    type Recursive = ();
+}
 
 pub trait Solve<Ans: LookupAnswer>: SolveRecursive {
     /// Solve the binding.

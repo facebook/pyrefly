@@ -413,6 +413,54 @@ if (x := f()) is None:
 );
 
 testcase!(
+    test_walrus_comprehension_if_simple,
+    r#"
+from typing import assert_type
+def f(xs: list[int | None]):
+    ys = [y111 for x in xs if (y111 := x)]
+    assert_type(ys, list[int])
+    "#,
+);
+
+testcase!(
+    test_walrus_comprehension_if_function,
+    r#"
+from typing import assert_type
+def get_y(x: int | None) -> int | None:
+    return x
+def f(xs: list[int | None]):
+    ys = [y111 for x in xs if (y111 := get_y(x))]
+    assert_type(ys, list[int])
+    "#,
+);
+
+testcase!(
+    test_walrus_generator_if,
+    r#"
+from typing import Sequence
+def foo(x: int) -> int | None:
+    return (x + 5) if x % 2 else None
+foos: Sequence[int] = tuple(
+    maybe_foo
+    for x in range(10)
+    if (maybe_foo := foo(x)) is not None
+)
+    "#,
+);
+
+testcase!(
+    test_walrus_ternary,
+    r#"
+from typing import assert_type
+def get_y(x: int | None) -> int | None:
+    return x
+def f(x: int | None):
+    val = y if (y := get_y(x)) else 0
+    assert_type(val, int)
+    "#,
+);
+
+testcase!(
     test_match_enum_fallback,
     r#"
 from typing import assert_type, Literal
@@ -548,28 +596,32 @@ def f(x: object, y: type[str]) -> None:
 );
 
 testcase!(
-    bug = "issubclass union narrowing is not yet supported",
     test_issubclass_union,
     r#"
 from typing import assert_type
-def f(x: type[int | str | bool]):
-    if issubclass(x, str | int):
-        assert_type(x, type[str] | type[int])  # E: assert_type(type[bool | int | str], type[int] | type[str])
+class A: ...
+class B: ...
+class C: ...
+def f(x: type[A | B | C]):
+    if issubclass(x, A | B):
+        assert_type(x, type[A] | type[B])
     else:
-        assert_type(x, type[bool])  # E: assert_type(type[bool | int | str], type[bool])
+        assert_type(x, type[C])
     "#,
 );
 
 testcase!(
-    bug = "issubclass tuple narrowing is not yet supported",
     test_issubclass_tuple,
     r#"
 from typing import assert_type
-def f(x: type[int | str | bool]):
-    if issubclass(x, (str, int)):
-        assert_type(x, type[str] | type[int])  # E: assert_type(type[bool | int | str], type[int] | type[str])
+class A: ...
+class B: ...
+class C: ...
+def f(x: type[A | B | C]):
+    if issubclass(x, (A, B)):
+        assert_type(x, type[A] | type[B])
     else:
-        assert_type(x, type[bool])  # E: assert_type(type[bool | int | str], type[bool])
+        assert_type(x, type[C])
     "#,
 );
 
@@ -723,6 +775,17 @@ def f(x:  A | B | C, y: A | C):
 );
 
 testcase!(
+    test_narrow_and,
+    r#"
+from typing import assert_type
+foo: dict[str, str] = {}
+if "foo" in foo and foo["foo"] is not "as":
+    val = foo["foo"]
+    assert_type(val, str)
+"#,
+);
+
+testcase!(
     test_issubclass,
     r#"
 from typing import assert_type
@@ -866,20 +929,16 @@ def f(x: Any):
 );
 
 testcase!(
-    bug = "TODO(stroxler): We are binding narrows too early and miss errors in missing attributes that get narrowed.",
     test_listcomp_if_control_flow,
     r#"
 class C: pass
 class D(C): pass
 def accepts_d(x: D) -> None: pass
 def f(x: list[C], z: C):
-    # if statement control flow works as expected, we get an error.
     if accepts_d(z) and isinstance(z, D):  # E: Argument `C` is not assignable to parameter `x` with type `D`
         pass
-    # But here we don't get an error, it appears the narrowed binding is applied too early.
-    [y for y in x if (accepts_d(y) and isinstance(y, D))]
-    # Here we don't get an error, for the same reason - we narrow too early, hiding the no-such-attribute error.
-    [None for y in x if C.error]
+    [y for y in x if (accepts_d(y) and isinstance(y, D))]  # E: Argument `C` is not assignable to parameter `x` with type `D` in function `accepts_d`
+    [None for y in x if C.error]  # E: Class `C` has no class attribute `error`
     "#,
 );
 

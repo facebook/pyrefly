@@ -10,6 +10,7 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
+use pyrefly_util::fs_anyhow;
 use ruff_text_size::TextRange;
 
 use crate::error::collector::ErrorCollector;
@@ -21,7 +22,6 @@ use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
 use crate::module::module_path::ModulePathDetails;
 use crate::state::memory::MemoryFilesLookup;
-use crate::util::fs_anyhow;
 
 /// The result of loading a module, including its `ModuleInfo` and `ErrorCollector`.
 #[derive(Debug)]

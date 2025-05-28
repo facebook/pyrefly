@@ -8,6 +8,8 @@
 use std::fmt;
 use std::fmt::Display;
 
+use pyrefly_util::display::DisplayWith;
+use pyrefly_util::display::DisplayWithCtx;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprYield;
@@ -18,8 +20,6 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::module::module_info::ModuleInfo;
-use crate::util::display::DisplayWith;
-use crate::util::display::DisplayWithCtx;
 
 // Special module-specific types
 

@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use itertools::Itertools;
+use pyrefly_util::globs::Glob;
+use pyrefly_util::globs::Globs;
 use serde::Deserialize;
 use serde_with::OneOrMany;
 use serde_with::serde_as;
@@ -21,8 +23,6 @@ use crate::config::mypy::regex_converter;
 use crate::module::wildcard::ModuleWildcard;
 use crate::sys_info::PythonPlatform;
 use crate::sys_info::PythonVersion;
-use crate::util::globs::Glob;
-use crate::util::globs::Globs;
 
 // A pyproject.toml Mypy config differs a bit from the INI format:
 // - The [mypy] section is written as [tool.mypy]

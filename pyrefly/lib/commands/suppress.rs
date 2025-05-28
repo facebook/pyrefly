@@ -9,6 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::anyhow;
+use pyrefly_util::fs_anyhow;
 use regex::Regex;
 use ruff_source_file::OneIndexed;
 use starlark_map::small_map::SmallMap;
@@ -18,7 +19,6 @@ use tracing::error;
 use crate::error::error::Error;
 use crate::module::module_info::GENERATED_TOKEN;
 use crate::ruff::ast::Ast;
-use crate::util::fs_anyhow;
 
 /// Combines all errors that affect one line into a single entry.
 // The current format is: `# pyrefly: ignore  # error1, error2, ...`

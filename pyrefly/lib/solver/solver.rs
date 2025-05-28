@@ -10,6 +10,11 @@ use std::fmt;
 use std::fmt::Display;
 use std::mem;
 
+use pyrefly_util::gas::Gas;
+use pyrefly_util::lock::RwLock;
+use pyrefly_util::recurser::Recurser;
+use pyrefly_util::uniques::UniqueFactory;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
@@ -31,11 +36,6 @@ use crate::types::simplify::unions_with_literals;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 use crate::types::types::Var;
-use crate::util::gas::Gas;
-use crate::util::lock::RwLock;
-use crate::util::recurser::Recurser;
-use crate::util::uniques::UniqueFactory;
-use crate::util::visit::VisitMut;
 
 /// Error message when a variable has leaked from one module to another.
 ///
@@ -218,18 +218,18 @@ impl Solver {
                 *x = simplify_tuples(mem::take(tuple));
             }
             // When a param spec is resolved, collapse any Concatenate and Callable types that use it
-            if let Type::Concatenate(box ts, box Type::ParamSpecValue(paramlist)) = x {
+            if let Type::Concatenate(ts, box Type::ParamSpecValue(paramlist)) = x {
                 let params = mem::take(paramlist).prepend_types(ts).into_owned();
                 *x = Type::ParamSpecValue(params);
             }
-            if let Type::Concatenate(box ts, box Type::Concatenate(ts2, pspec)) = x {
+            if let Type::Concatenate(ts, box Type::Concatenate(ts2, pspec)) = x {
                 *x = Type::Concatenate(
                     ts.iter().chain(ts2.iter()).cloned().collect(),
                     pspec.clone(),
                 );
             }
             let (callable, kind) = match x {
-                Type::Callable(box c) => (Some(c), None),
+                Type::Callable(c) => (Some(&mut **c), None),
                 Type::Function(box Function {
                     signature: c,
                     metadata: k,
@@ -237,7 +237,7 @@ impl Solver {
                 _ => (None, None),
             };
             if let Some(Callable {
-                params: Params::ParamSpec(box ts, pspec),
+                params: Params::ParamSpec(ts, pspec),
                 ret,
             }) = callable
             {
@@ -260,10 +260,10 @@ impl Solver {
                     Type::Ellipsis if ts.is_empty() => {
                         *x = new_callable(Callable::ellipsis(ret.clone()));
                     }
-                    Type::Concatenate(box ts2, box pspec) => {
+                    Type::Concatenate(ts2, pspec) => {
                         *x = new_callable(Callable::concatenate(
                             ts.iter().chain(ts2.iter()).cloned().collect(),
-                            pspec.clone(),
+                            (**pspec).clone(),
                             ret.clone(),
                         ));
                     }

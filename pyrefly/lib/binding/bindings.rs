@@ -14,10 +14,11 @@ use std::sync::Arc;
 use dupe::Dupe;
 use itertools::Either;
 use itertools::Itertools;
+use pyrefly_util::display::DisplayWithCtx;
+use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::AnyParameterRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
-use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
@@ -77,8 +78,6 @@ use crate::table_for_each;
 use crate::table_try_for_each;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::types::Var;
-use crate::util::display::DisplayWithCtx;
-use crate::util::uniques::UniqueFactory;
 
 #[derive(Clone, Dupe, Debug)]
 pub struct Bindings(Arc<BindingsInner>);
@@ -865,21 +864,6 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_key(&name.id, idx, style).0
     }
 
-    pub fn bind_assign(
-        &mut self,
-        name: &ExprName,
-        binding: impl FnOnce(Option<Idx<KeyAnnotation>>) -> Binding,
-        style: FlowStyle,
-    ) {
-        let idx = self.idx_for_promise(Key::Definition(ShortIdentifier::expr_name(name)));
-        let (ann, default) = self.bind_key(&name.id, idx, style);
-        let mut binding = binding(ann);
-        if let Some(default) = default {
-            binding = Binding::Default(default, Box::new(binding));
-        }
-        self.insert_binding_idx(idx, binding);
-    }
-
     /// Return a pair of:
     /// 1. The annotation that should be used at the moment, if one was provided.
     /// 2. The default that should be used if you are in a loop.
@@ -890,7 +874,7 @@ impl<'a> BindingsBuilder<'a> {
         style: FlowStyle,
     ) -> (Option<Idx<KeyAnnotation>>, Option<Idx<Key>>) {
         let name = Hashed::new(name);
-        let default = self.scopes.update_flow_info_hashed(name, idx, Some(style));
+        let default = self.scopes.update_flow_info(name, idx, Some(style));
         let info = self
             .scopes
             .current()
@@ -916,8 +900,8 @@ impl<'a> BindingsBuilder<'a> {
             let mut constraints = None;
             let kind = match x {
                 TypeParam::TypeVar(tv) => {
-                    if let Some(box bound_expr) = &mut tv.bound {
-                        if let Expr::Tuple(tuple) = bound_expr {
+                    if let Some(bound_expr) = &mut tv.bound {
+                        if let Expr::Tuple(tuple) = &mut **bound_expr {
                             let mut constraint_exprs = Vec::new();
                             for constraint in &mut tuple.elts {
                                 self.ensure_type(constraint, &mut None);
@@ -926,26 +910,26 @@ impl<'a> BindingsBuilder<'a> {
                             constraints = Some((constraint_exprs, bound_expr.range()))
                         } else {
                             self.ensure_type(bound_expr, &mut None);
-                            bound = Some(bound_expr);
+                            bound = Some((**bound_expr).clone());
                         }
                     }
-                    if let Some(box default_expr) = &mut tv.default {
+                    if let Some(default_expr) = &mut tv.default {
                         self.ensure_type(default_expr, &mut None);
-                        default = Some(default_expr);
+                        default = Some((**default_expr).clone());
                     }
                     QuantifiedKind::TypeVar
                 }
                 TypeParam::ParamSpec(x) => {
-                    if let Some(box default_expr) = &mut x.default {
+                    if let Some(default_expr) = &mut x.default {
                         self.ensure_type(default_expr, &mut None);
-                        default = Some(default_expr);
+                        default = Some((**default_expr).clone());
                     }
                     QuantifiedKind::ParamSpec
                 }
                 TypeParam::TypeVarTuple(x) => {
-                    if let Some(box default_expr) = &mut x.default {
+                    if let Some(default_expr) = &mut x.default {
                         self.ensure_type(default_expr, &mut None);
-                        default = Some(default_expr);
+                        default = Some((**default_expr).clone());
                     }
                     QuantifiedKind::TypeVarTuple
                 }
@@ -958,11 +942,11 @@ impl<'a> BindingsBuilder<'a> {
                     name: name.id.clone(),
                     unique: self.uniques.fresh(),
                     kind,
-                    default: default.cloned(),
-                    bound: bound.cloned(),
+                    default,
+                    bound,
                     constraints,
                 })),
-                FlowStyle::None,
+                FlowStyle::Other,
             );
         }
     }
@@ -986,20 +970,20 @@ impl<'a> BindingsBuilder<'a> {
                     Key::Narrow(name.into_key().clone(), *op_range, use_range),
                     Binding::Narrow(name_key, Box::new(op.clone()), use_range),
                 );
-                self.scopes.update_flow_info_hashed(name, binding_key, None);
+                self.scopes.update_flow_info(name, binding_key, None);
             }
         }
     }
 
     pub fn bind_lambda_param(&mut self, name: &Identifier) {
         let var = self.solver.fresh_contained(self.uniques);
-        let bind_key = self.insert_binding(
+        let idx = self.insert_binding(
             Key::Definition(ShortIdentifier::new(name)),
             Binding::LambdaParameter(var),
         );
         self.scopes
             .add_to_current_static(name.id.clone(), name.range, None);
-        self.bind_key(&name.id, bind_key, FlowStyle::None);
+        self.bind_key(&name.id, idx, FlowStyle::Other);
     }
 
     pub fn bind_function_param(
@@ -1033,7 +1017,7 @@ impl<'a> BindingsBuilder<'a> {
         );
         self.scopes
             .add_to_current_static(name.id.clone(), name.range, Some(annot));
-        self.bind_key(&name.id, key, FlowStyle::None);
+        self.bind_key(&name.id, key, FlowStyle::Other);
     }
 
     /// Helper for loops, inserts a phi key for every name in the given flow.
@@ -1123,7 +1107,7 @@ impl<'a> BindingsBuilder<'a> {
                 match names.entry_hashed(name) {
                     Entry::Occupied(mut e) => f(e.get_mut()),
                     Entry::Vacant(e) => {
-                        // The promise is that the next block will create a binding for all names in `namesA`.
+                        // The promise is that the next block will create a binding for all names in `names`.
                         //
                         // Note that in some cases (e.g. variables defined above a loop) we already promised
                         // a binding and this lookup will just give us back the same `Idx<Key::Phi(...)>` we
@@ -1264,7 +1248,7 @@ impl LegacyTParamBuilder {
                     // tparams, and we only want to do that once (which we do in
                     // the binding created by `forward_lookup`).
                     Binding::CheckLegacyTypeParam(*idx, None),
-                    FlowStyle::None,
+                    FlowStyle::Other,
                 );
             }
         }

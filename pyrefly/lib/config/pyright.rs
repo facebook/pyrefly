@@ -8,6 +8,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use pyrefly_util::globs::Glob;
+use pyrefly_util::globs::Globs;
 use serde::Deserialize;
 use serde_with::FromInto;
 use serde_with::serde_as;
@@ -19,8 +21,6 @@ use crate::config::error::ErrorDisplayConfig;
 use crate::error::kind::ErrorKind;
 use crate::sys_info::PythonPlatform;
 use crate::sys_info::PythonVersion;
-use crate::util::globs::Glob;
-use crate::util::globs::Globs;
 
 /// Represents a pyright executionEnvironment.
 /// pyright's ExecutionEnvironments allow you to specify a different Python environment for a subdirectory,

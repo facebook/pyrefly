@@ -8,6 +8,8 @@
 use std::mem;
 
 use itertools::Either;
+use pyrefly_util::prelude::VecExt;
+use pyrefly_util::visit::Visit;
 use ruff_python_ast::AnyParameterRef;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
@@ -54,8 +56,6 @@ use crate::module::short_identifier::ShortIdentifier;
 use crate::ruff::ast::Ast;
 use crate::sys_info::SysInfo;
 use crate::types::types::Type;
-use crate::util::prelude::VecExt;
-use crate::util::visit::Visit;
 
 struct Decorators {
     has_no_type_check: bool,
@@ -186,7 +186,7 @@ impl<'a> BindingsBuilder<'a> {
                 class_key,
             );
         }
-        if let Some(box args) = &x.vararg {
+        if let Some(args) = &x.vararg {
             self.bind_function_param(
                 AnnotationTarget::ArgsParam(args.name.id.clone()),
                 AnyParameterRef::Variadic(args),
@@ -194,7 +194,7 @@ impl<'a> BindingsBuilder<'a> {
                 class_key,
             );
         }
-        if let Some(box kwargs) = &x.kwarg {
+        if let Some(kwargs) = &x.kwarg {
             self.bind_function_param(
                 AnnotationTarget::KwargsParam(kwargs.name.id.clone()),
                 AnyParameterRef::Variadic(kwargs),
@@ -251,9 +251,8 @@ impl<'a> BindingsBuilder<'a> {
             }
         }
 
-        let return_ann_with_range = mem::take(&mut x.returns).map(|box e| {
-            self.to_return_annotation_with_range(e, func_name, class_key, &mut legacy)
-        });
+        let return_ann_with_range = mem::take(&mut x.returns)
+            .map(|e| self.to_return_annotation_with_range(*e, func_name, class_key, &mut legacy));
 
         let legacy_tparam_builder = legacy.unwrap();
         legacy_tparam_builder.add_name_definitions(self);

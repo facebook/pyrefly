@@ -1165,8 +1165,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(AttributeBase::ClassObject(class_type.class_object().dupe()))
             }
             Type::TypedDict(typed_dict) => Some(AttributeBase::TypedDict(typed_dict.clone())),
-            Type::Tuple(Tuple::Unbounded(box element)) => {
-                Some(AttributeBase::ClassInstance(self.stdlib.tuple(element)))
+            Type::Tuple(Tuple::Unbounded(element)) => {
+                Some(AttributeBase::ClassInstance(self.stdlib.tuple(*element)))
             }
             Type::Tuple(Tuple::Concrete(elements)) => {
                 Some(AttributeBase::ClassInstance(if elements.is_empty() {
@@ -1177,11 +1177,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Tuple(Tuple::Unpacked(box (
                 prefix,
-                Type::Tuple(Tuple::Unbounded(box middle)),
+                Type::Tuple(Tuple::Unbounded(middle)),
                 suffix,
             ))) => {
                 let mut elements = prefix;
-                elements.push(middle);
+                elements.push(*middle);
                 elements.extend(suffix);
                 Some(AttributeBase::ClassInstance(
                     self.stdlib.tuple(self.unions(elements)),

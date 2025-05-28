@@ -142,7 +142,7 @@ class CargoExecutor(Executor):
                 "conformance/conformance_output.py",
                 "conformance/third_party",
                 "--executable",
-                f"{cargo_target_dir}/release/pyrefly",
+                f"{cargo_target_dir}/debug/pyrefly",
             ]
         )
 
