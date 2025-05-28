@@ -69,20 +69,23 @@ def fetch_as_tarfile(
     url: str,
 ) -> tuple[tarfile.TarFile, FetchMetadata]:
     LOG.info(f"Fetch typeshed tarball from URL `{url}`...")
-    data = urllib.request.urlopen(url).read()
-    metadata = FetchMetadata(
-        url=url,
-        sha256=hashlib.sha256(data).hexdigest(),
-        timestamp=datetime.datetime.now().timestamp(),
-    )
-    return (
-        tarfile.open(
-            # Buffer the url data stream in memory so seeking in tarfile is possible
-            fileobj=io.BytesIO(data),
-            mode="r:gz",
-        ),
-        metadata,
-    )
+    try:
+        data = urllib.request.urlopen(url).read()
+        metadata = FetchMetadata(
+            url=url,
+            sha256=hashlib.sha256(data).hexdigest(),
+            timestamp=datetime.datetime.now().timestamp(),
+        )
+        return (
+            tarfile.open(
+                # Buffer the url data stream in memory so seeking in tarfile is possible
+                fileobj=io.BytesIO(data),
+                mode="r:gz",
+            ),
+            metadata,
+        )
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Failed to fetch typeshed from {url}: {e}") from e
 
 
 def should_include_member(info: tarfile.TarInfo) -> bool:
@@ -202,6 +205,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     # @lint-ignore FIXIT1: OSS scripts cannot take on fb-internal dependency
+    # This lint ignore is for compatibility with both internal and external builds
     logging.basicConfig(
         format="%(levelname)s %(asctime)s: %(message)s",
         level=logging.INFO,
