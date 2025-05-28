@@ -808,6 +808,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
         
+        
         // Get the return type and expand it
         let mut ret = self.solver().expand(callable.ret);
         
