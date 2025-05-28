@@ -53,3 +53,19 @@ class DC4(DC3):
 
     def __post_init__(self, _name: str, _age: int):
         ...
+
+
+@dataclass
+class DC5:
+    value: int = field(init=False)
+    mode: InitVar[str]
+
+    def __post_init__(self, mode: str):
+        if mode == "number":
+            self.value = 10
+        else:
+            self.value = 0
+
+
+# This should work - passing str to InitVar[str] parameter
+dc5 = DC5("number")  # Should not error, but Pyrefly incorrectly expects InitVar[str]
