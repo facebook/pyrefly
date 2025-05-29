@@ -546,3 +546,26 @@ class C(B):
         pass
     "#,
 );
+
+testcase!(
+    test_initvar_parameter_types,
+    r#"
+from dataclasses import dataclass, field, InitVar
+
+@dataclass
+class InitVarTest:
+    value: int = field(init=False)
+    mode: InitVar[str]
+    count: InitVar[int]
+
+    def __post_init__(self, mode: str, count: int):
+        if mode == "number":
+            self.value = count * 10
+        else:
+            self.value = 0
+
+# InitVar[str] should accept str arguments, not InitVar[str] arguments
+InitVarTest("number", 5)  # OK
+InitVarTest("text", 3)   # OK
+    "#,
+);
