@@ -935,19 +935,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // (https://typing.readthedocs.io/en/latest/spec/annotations.html#type-and-annotation-expressions)
                     Type::type_form(Type::type_form(targ))
                 }
-                // Handle dataclasses.InitVar[T] - should behave as just T
-                Type::ClassDef(cls) if cls.has_qname("dataclasses", "InitVar") => {
-                    match xs.len() {
-                        1 => self.expr_untype(&xs[0], TypeFormContext::TypeArgument, errors),
-                        _ => self.error(
-                            errors,
-                            range,
-                            ErrorKind::BadSpecialization,
-                            None,
-                            format!("Expected 1 type argument for `InitVar`, got {}", xs.len()),
-                        ),
-                    }
-                }
                 // TODO: pyre_extensions.PyreReadOnly is a non-standard type system extension that marks read-only
                 // objects. We don't support it yet.
                 Type::ClassDef(cls)
