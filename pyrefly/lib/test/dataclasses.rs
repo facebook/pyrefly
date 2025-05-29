@@ -569,3 +569,18 @@ InitVarTest("number", 5)  # OK
 InitVarTest("text", 3)   # OK
     "#,
 );
+
+testcase!(
+    test_initvar_multiple_type_arguments,
+    r#"
+from dataclasses import dataclass, InitVar
+
+@dataclass
+class C:
+    x: InitVar[int, str]  # E: Expected 1 type argument for `InitVar`, got 2
+
+@dataclass
+class D:
+    y: InitVar[int]  # OK
+    "#,
+);
