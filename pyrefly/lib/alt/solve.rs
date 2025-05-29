@@ -315,6 +315,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 _ => qualifier,
             }
+        } else if let Some(ty) = ty
+            && let Type::ClassDef(cls) = &ty
+            && cls.has_qname("dataclasses", "InitVar")
+        {
+            Some(Qualifier::InitVar)
         } else {
             None
         }

@@ -210,18 +210,18 @@ impl ClassField {
     }
 
     pub fn as_param(self, name: &Name, default: bool, kw_only: bool) -> Param {
-        let ClassField(ClassFieldInner::Simple { ty, .. }) = self;
-
+        let ClassField(ClassFieldInner::Simple { ty, annotation, .. }) = self;
+        
         // For InitVar fields, use the inner type instead of InitVar[T]
-        let param_ty = if let Type::ClassType(cls) = &ty
-            && cls.has_qname("dataclasses", "InitVar")
-            && let [inner_ty] = cls.targs().as_slice()
+        let param_ty = if let Some(annotation) = &annotation
+            && annotation.qualifiers.contains(&Qualifier::InitVar)
         {
-            inner_ty.clone()
+            // The type is already unwrapped by the qualifier processing
+            ty
         } else {
             ty
         };
-
+        
         let required = match default {
             true => Required::Optional,
             false => Required::Required,
