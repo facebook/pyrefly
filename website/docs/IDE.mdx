@@ -39,42 +39,75 @@ Support for other editors is community-driven. If you would like to set this up,
 ### Jetbrains
 An unofficial Jetbrains extension has been developed [here](https://plugins.jetbrains.com/plugin/26829-pyrefly)
 
-### Neovim 0.11+
-Place the following file under `~/.config/nvim/lsp`
+### Neovim
+
+Pyrefly supports native Neovim support through `lspconfig` on Neovim 0.11+. Install and setup Pyrefly using the settings below.
+
+#### Install Pyrefly for Neovim
+
+Ensure you have the [`neovim/nvim-lspconfig`](https://github.com/neovim/nvim-lspconfig) plugin (a repository of language server settings) installed and updated to get Pyrefly's default configuration.
+
+There are two methods we currently support for installing Pyrefly for your langauge server, and we'll describe setup below.
+
+##### mason.nvim
+
+[mason.nvim](https://github.com/mason-org/mason.nvim) is a plugin for installing and updating language servers, linters, and utilities, and having them easily configured and usable in Neovim.
+
+We recommend using this approach, since it makes interfacing with language utilities easy!
+
+NOTE: Installing a binary with Mason will take precedence over other system installations. It might be worth using system installations if you need to switch between different versions of Pyrefly between different projects.
+
+We also recommend installing the [mason-lspconfig.nvim](https://github.com/mason-org/mason-lspconfig.nvim) plugin , which provides other nice functionality when using Mason with `lspconfig`.
+
+To install Pyrefly, run `:MasonInstall pyrefly` in Neovim, and it will be installed! You can install a specific version of Pyrefly with `:MasonInstall pyrefly@<version>`, and manage Mason installations (including per-language-server-specific settings!) with `:Mason`.
+
+Continue onto [setup](#setup-pyrefly-for-neovim) below.
+
+##### System Installations
+
+Pyrefly can also work with Neovim's `lspconfig` when using a system installation. This will work as long as the Pyrefly binary you want to use is available on your `$PATH`, which you can check by making sure commands like `pyrefly --help` succeed. If an installation is available on your `$PATH`, continue on to [setup](#setup-pyrefly-for-neovim) below.
+
+To install Pyrefly, you can use the package manager of your choice. We support `uv`, `pip`, `Cargo`, and anything else that can interface with PyPI (see [Installation](./installation) for more info).
+
+NOTE: If you're installing Pyrefly into a virtual environment, please be aware that Pyrefly will only work within Neovim if the virtual environment is activated when you start Neovim.
+
+Before moving on, double check that you can access Pyrefly on your `$PATH`. If you can, then continue with [setup](#setup-pyrefly-for-neovim).
+
+If Pyrefly is not available on your `$PATH`, you can try the following:
+- If you're using a virtual environment, try `source .venv/bin/activate` to ensure your venv is running.
+- If you're using `uv`, you can ensure `uv`-installed tools are available on your path by running `uv tool update-shell`.
+- Configure `lspconfig` to use a specific executable/command by updating your Pyrefly-specific lspconfig settings.
+
+To run a specific executable/command, configure it with the following:
+
 ```lua
-return {
-  cmd = { "pyrefly", "lsp" },
-  filetypes = { "python" },
-  settings = {},
-  on_exit = function(code, _, _)
-    vim.notify("Closing Pyrefly LSP exited with code: " .. code, vim.log.levels.INFO)
-  end,
-}
+vim.lsp.config('pyrefly', {
+    -- the default
+    cmd = { 'pyrefly', 'lsp' }
+
+    -- run `uv` installed Pyrefly without adding to your path
+    -- cmd = { 'uvx', 'pyrefly', 'lsp' }
+
+    -- run `pyrefly` from a specific path location
+    -- cmd = { '/path/to/pyrefly', 'lsp' }
+})
 ```
-Then enable it in `init.lua`:
+
+#### Setup Pyrefly for Neovim
+
+If you're on Neovim 0.11+, you can just add the following to your Neovim configuration:
+
 ```lua
 vim.lsp.enable({"pyrefly"})
 ```
 
-### Neovim + `lspconfig`
-With the `lspconfig` [plugin](https://github.com/neovim/nvim-lspconfig) and `uv` installed, you can use this configuration:
+If you're on an older version of Neovim without native LSP support, you can enable Pyrefly with the following:
+
 ```lua
-local lspconfig = require("lspconfig")
-local configs = require("lspconfig.configs")
-
-if not configs.pyrefly then
-  configs.pyrefly = {
-      cmd = { "uv", "run", "pyrefly", "lsp" },
-      filetypes = { "python" },
-      root_dir = function(fname)
-        return lspconfig.util.find_git_ancestor(fname) or vim.loop.os_homedir()
-      end,
-      settings = {},
-    }
-end
-
-lspconfig.pyrefly.setup({})
+require'lspconfig'.pyrefly.setup{}
 ```
+
+NOTE: if you're using `init.vim`, you can use a [lua heredoc](https://neovim.io/doc/user/lua.html#%3Alua-heredoc) to execute lua and enable your config.
 
 ### Vim/Neovim + coc.nvim
 
