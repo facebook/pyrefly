@@ -345,10 +345,9 @@ impl ConfigFile {
 
     pub fn default_project_excludes() -> Globs {
         Globs::new(vec![
-            // match any hidden file, but don't match `.` or `..` (equivalent to regex: `\.[^/\.]{0,1}.*`)
-            "**/.[!/.]*".to_owned(),
             // match any `.venv` or `venv` directory
             "**/*venv/**".to_owned(),
+            // Note: dot files are now excluded at the Glob::files() level
         ])
     }
 
