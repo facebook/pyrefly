@@ -60,6 +60,7 @@ tar = "0.4.44"
 thiserror = "2.0.12"
 tokio = { version = "1.45.0", features = ["macros", "rt"] }
 toml = "0.8.22"
+toml_edit = "0.22.26"
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 vec1 = { version = "1", features = ["serde"] }
 walkdir = "2.3"
