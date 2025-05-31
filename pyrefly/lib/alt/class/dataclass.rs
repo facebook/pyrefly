@@ -31,6 +31,7 @@ use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
+use crate::types::types::AnyStyle;
 use crate::types::types::Type;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -68,6 +69,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             );
         }
+        let dataclass_fields_type = self.stdlib.dict(
+            self.stdlib.str().clone().to_type(),
+            Type::Any(AnyStyle::Implicit),
+        );
+        fields.insert(
+            dunder::DATACLASS_FIELDS,
+            ClassSynthesizedField::new(dataclass_fields_type.to_type()),
+        );
+
         if dataclass.kws.is_set(&DataclassKeywords::ORDER) {
             fields.extend(self.get_dataclass_rich_comparison_methods(cls));
         }
