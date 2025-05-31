@@ -93,6 +93,19 @@ D(0, b"1", 2.0)
 );
 
 testcase!(
+    test_asdict,
+    r#"
+import dataclasses
+
+@dataclasses.dataclass
+class A:
+    x: int
+
+print(dataclasses.asdict(A(x=3)))
+    "#,
+);
+
+testcase!(
     test_duplicate_field,
     r#"
 import dataclasses
