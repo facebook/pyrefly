@@ -64,6 +64,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let skip_implementation = self.module_info().path().style() == ModuleStyle::Interface
             || class_metadata.is_some_and(|idx| self.get_idx(*idx).is_protocol());
         let def = self.get_idx(idx);
+        if def.metadata.flags.is_deprecated{
+            self.error(
+                errors,
+                def.id_range,
+                ErrorKind::Deprecated,
+                None,
+                format!(
+                    "Function `{}` is deprecated",
+                    def.metadata.kind.as_func_id().func
+                ),
+            );
+        }
         if def.metadata.flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
             let successor = self.bindings().get(idx).successor;
@@ -164,6 +176,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut is_overload = false;
         let mut is_staticmethod = false;
         let mut is_classmethod = false;
+        let mut is_deprecated = false;
         let mut is_property_getter = false;
         let mut is_property_setter_with_getter = None;
         let mut has_enum_member_decoration = false;
@@ -173,6 +186,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter(|k| {
                 let decorator = self.get_idx(**k);
+
                 match decorator.ty().callee_kind() {
                     Some(CalleeKind::Function(FunctionKind::Overload)) => {
                         is_overload = true;
@@ -208,6 +222,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(CalleeKind::Function(FunctionKind::Final)) => {
                         has_final_decoration = true;
                         false
+                    }
+                    Some(CalleeKind::Function(FunctionKind::Def(func))) => {
+                        if func.func.as_str() == "deprecated" {
+                            is_deprecated = true;
+                            false
+                        } else {true}
                     }
                     _ => true,
                 }
@@ -408,6 +428,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 is_overload,
                 is_staticmethod,
                 is_classmethod,
+                is_deprecated,
                 is_property_getter,
                 is_property_setter_with_getter,
                 has_enum_member_decoration,
