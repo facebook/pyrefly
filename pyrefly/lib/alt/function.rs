@@ -186,7 +186,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter(|k| {
                 let decorator = self.get_idx(**k);
-
+                if decorator.ty().to_string() == "deprecated".to_string(){
+                    is_deprecated = true;
+                }
                 match decorator.ty().callee_kind() {
                     Some(CalleeKind::Function(FunctionKind::Overload)) => {
                         is_overload = true;
@@ -222,12 +224,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(CalleeKind::Function(FunctionKind::Final)) => {
                         has_final_decoration = true;
                         false
-                    }
-                    Some(CalleeKind::Function(FunctionKind::Def(func))) => {
-                        if func.func.as_str() == "deprecated" {
-                            is_deprecated = true;
-                            false
-                        } else {true}
                     }
                     _ => true,
                 }
