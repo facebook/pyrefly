@@ -186,7 +186,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter(|k| {
                 let decorator = self.get_idx(**k);
-                if decorator.ty().to_string() == "deprecated".to_string() {
+                if decorator.ty().to_string() == "deprecated".to_owned() {
                     is_deprecated = true;
                 }
                 match decorator.ty().callee_kind() {
