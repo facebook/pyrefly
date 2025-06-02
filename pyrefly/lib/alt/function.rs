@@ -64,7 +64,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let skip_implementation = self.module_info().path().style() == ModuleStyle::Interface
             || class_metadata.is_some_and(|idx| self.get_idx(*idx).is_protocol());
         let def = self.get_idx(idx);
-        if def.metadata.flags.is_deprecated{
+        if def.metadata.flags.is_deprecated {
             self.error(
                 errors,
                 def.id_range,
@@ -186,7 +186,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter(|k| {
                 let decorator = self.get_idx(**k);
-                if decorator.ty().to_string() == "deprecated".to_string(){
+                if decorator.ty().to_string() == "deprecated".to_string() {
                     is_deprecated = true;
                 }
                 match decorator.ty().callee_kind() {

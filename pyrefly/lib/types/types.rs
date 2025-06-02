@@ -885,7 +885,7 @@ impl Type {
     }
 
     pub fn is_deprecated(&self) -> bool {
-        self.check_func_metadata(&|meta|meta.flags.is_deprecated)
+        self.check_func_metadata(&|meta| meta.flags.is_deprecated)
     }
 
     pub fn has_final_decoration(&self) -> bool {
