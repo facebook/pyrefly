@@ -77,10 +77,10 @@ pub enum ErrorKind {
     BadUnpacking,
     /// Attempting to `del` something that cannot be deleted
     DeleteError,
+    /// An error rasied if a function that is deprecated is called.
+    Deprecated,
     /// An error related to the import machinery.
     /// e.g. failed to import a module.
-    Deprecated,
-    /// An error raised if a function that is deprecated is used.
     ImportError,
     /// Attempting to access a container with an incorrect index.
     /// This only occurs when pyre can statically verify that the index is incorrect.

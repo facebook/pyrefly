@@ -64,18 +64,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let skip_implementation = self.module_info().path().style() == ModuleStyle::Interface
             || class_metadata.is_some_and(|idx| self.get_idx(*idx).is_protocol());
         let def = self.get_idx(idx);
-        if def.metadata.flags.is_deprecated {
-            self.error(
-                errors,
-                def.id_range,
-                ErrorKind::Deprecated,
-                None,
-                format!(
-                    "Function `{}` is deprecated",
-                    def.metadata.kind.as_func_id().func
-                ),
-            );
-        }
         if def.metadata.flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
             let successor = self.bindings().get(idx).successor;
@@ -186,7 +174,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter(|k| {
                 let decorator = self.get_idx(**k);
-                if decorator.ty().to_string() == "deprecated".to_owned() {
+                if decorator.ty().to_string() == *"deprecated".to_owned() {
                     is_deprecated = true;
                 }
                 match decorator.ty().callee_kind() {
