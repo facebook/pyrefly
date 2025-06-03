@@ -909,58 +909,23 @@ mod tests {
             ],
         );
 
+        // Helper function to assert that a glob pattern returns no files
+        let assert_empty_glob = |pattern_str: &str, description: &str| {
+            let found_files = Glob::new_with_root(root, pattern_str.to_owned()).files().unwrap_or_else(|_| Vec::new());
+            assert!(
+                found_files.is_empty(),
+                "{} should be excluded, found: {:?}",
+                description,
+                found_files
+            );
+        };
+
         // Test explicit dot file exclusion
-        let dotfile_direct = Glob::new_with_root(root, "a/.dotfile.py".to_owned()).files();
-        match dotfile_direct {
-            Err(_) => {} // Expected: no files found
-            Ok(files) => assert!(
-                files.is_empty(),
-                "Direct dot file path should be excluded, found: {:?}",
-                files
-            ),
-        }
-
-        let dotfile_recursive = Glob::new_with_root(root, "**/.dotfile.py".to_owned()).files();
-        match dotfile_recursive {
-            Err(_) => {} // Expected: no files found
-            Ok(files) => assert!(
-                files.is_empty(),
-                "Recursive dot file pattern should be excluded, found: {:?}",
-                files
-            ),
-        }
-
-        let dotfile_wildcard = Glob::new_with_root(root, "**/.*.py".to_owned()).files();
-        match dotfile_wildcard {
-            Err(_) => {} // Expected: no files found
-            Ok(files) => assert!(
-                files.is_empty(),
-                "Dot file wildcard should be excluded, found: {:?}",
-                files
-            ),
-        }
-
-        // Test that top-level dot files are also excluded
-        let top_level_dot = Glob::new_with_root(root, ".top_level_dot.py".to_owned()).files();
-        match top_level_dot {
-            Err(_) => {} // Expected: no files found
-            Ok(files) => assert!(
-                files.is_empty(),
-                "Top-level dot file should be excluded, found: {:?}",
-                files
-            ),
-        }
-
-        // Test that nested dot files are excluded
-        let nested_dot = Glob::new_with_root(root, "a/c/.hidden.py".to_owned()).files();
-        match nested_dot {
-            Err(_) => {} // Expected: no files found
-            Ok(files) => assert!(
-                files.is_empty(),
-                "Nested dot file should be excluded, found: {:?}",
-                files
-            ),
-        }
+        assert_empty_glob("a/.dotfile.py", "Direct dot file path");
+        assert_empty_glob("**/.dotfile.py", "Recursive dot file pattern");
+        assert_empty_glob("**/.*.py", "Dot file wildcard");
+        assert_empty_glob(".top_level_dot.py", "Top-level dot file");
+        assert_empty_glob("a/c/.hidden.py", "Nested dot file");
 
         // Verify that normal files are still found
         let normal_files = Glob::new_with_root(root, "**/*.py".to_owned())
