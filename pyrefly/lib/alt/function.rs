@@ -174,9 +174,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter(|k| {
                 let decorator = self.get_idx(**k);
-                if decorator.ty().to_string() == *"deprecated".to_owned() {
-                    is_deprecated = true;
-                }
+
                 match decorator.ty().callee_kind() {
                     Some(CalleeKind::Function(FunctionKind::Overload)) => {
                         is_overload = true;
@@ -189,6 +187,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(CalleeKind::Class(ClassKind::ClassMethod)) => {
                         is_classmethod = true;
                         false
+                    }
+                    Some(CalleeKind::Function(FunctionKind::Deprecated)) => {
+                        is_deprecated = true;
+                        true
                     }
                     Some(CalleeKind::Class(ClassKind::Property)) => {
                         is_property_getter = true;
@@ -213,7 +215,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         has_final_decoration = true;
                         false
                     }
-                    _ => true,
+                    _ => {
+                        if decorator.ty().to_string() == *"deprecated".to_owned() {
+                            is_deprecated = true;
+                        }
+                        true
+                    }
                 }
             })
             .collect::<Vec<_>>();

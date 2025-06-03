@@ -222,7 +222,6 @@
   "directives_cast.py": [],
   "directives_deprecated.py": [
     "Line 18: Expected 1 errors",
-    "Line 24: Expected 1 errors",
     "Line 25: Expected 1 errors",
     "Line 30: Expected 1 errors",
     "Line 41: Expected 1 errors",
@@ -231,7 +230,6 @@
     "Line 47: Expected 1 errors",
     "Line 48: Expected 1 errors",
     "Line 58: Expected 1 errors",
-    "Line 69: Expected 1 errors",
     "Line 98: Expected 1 errors"
   ],
   "directives_no_type_check.py": [],

@@ -4308,7 +4308,28 @@
       "stop_line": 17
     }
   ],
-  "directives_deprecated.py": [],
+  "directives_deprecated.py": [
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Call to deprecated function `_directives_deprecated_library.norwegian_blue`",
+      "description": "Call to deprecated function `_directives_deprecated_library.norwegian_blue`",
+      "line": 24,
+      "name": "deprecated",
+      "stop_column": 23,
+      "stop_line": 24
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Call to deprecated function `lorem`",
+      "description": "Call to deprecated function `lorem`",
+      "line": 69,
+      "name": "deprecated",
+      "stop_column": 6,
+      "stop_line": 69
+    }
+  ],
   "directives_no_type_check.py": [
     {
       "code": -2,

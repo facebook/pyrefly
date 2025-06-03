@@ -77,7 +77,7 @@ pub enum ErrorKind {
     BadUnpacking,
     /// Attempting to `del` something that cannot be deleted
     DeleteError,
-    /// An error rasied if a function that is deprecated is called.
+    /// Calling a function marked with `@deprecated`
     Deprecated,
     /// An error related to the import machinery.
     /// e.g. failed to import a module.
