@@ -911,7 +911,9 @@ mod tests {
 
         // Helper function to assert that a glob pattern returns no files
         let assert_empty_glob = |pattern_str: &str, description: &str| {
-            let found_files = Glob::new_with_root(root, pattern_str.to_owned()).files().unwrap_or_else(|_| Vec::new());
+            let found_files = Glob::new_with_root(root, pattern_str.to_owned())
+                .files()
+                .unwrap_or_else(|_| Vec::new());
             assert!(
                 found_files.is_empty(),
                 "{} should be excluded, found: {:?}",
