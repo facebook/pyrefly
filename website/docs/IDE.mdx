@@ -124,7 +124,7 @@ require("mason-lspconfig").setup()
             ```lua
             vim.lsp.config('pyrefly', {
                 -- example of how to run `uv` installed Pyrefly without adding to your path
-                cmd = { 'uvx', 'pyrefly', 'lsp' }
+                cmd = { 'uvx', 'pyrefly', 'lsp' },
 
                 -- only enable for markdown files (probably a bad idea, but it's an example :) )
                 filetypes = { 'markdown' }
