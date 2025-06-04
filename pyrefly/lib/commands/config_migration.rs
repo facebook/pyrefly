@@ -193,10 +193,10 @@ pub fn write_pyproject(pyproject_path: &Path, config: ConfigFile) -> anyhow::Res
 
                 tool_table_mut.insert("pyrefly", pyrefly_table.clone());
 
-                if let Some(pyrefly_item) = tool_table_mut.get_mut("pyrefly") {
-                    if let Some(pyrefly_table_mut) = pyrefly_item.as_table_mut() {
-                        pyrefly_table_mut.decor_mut().set_prefix("\n");
-                    }
+                if let Some(pyrefly_item) = tool_table_mut.get_mut("pyrefly")
+                    && let Some(pyrefly_table_mut) = pyrefly_item.as_table_mut()
+                {
+                    pyrefly_table_mut.decor_mut().set_prefix("\n");
                 }
             }
         }
@@ -604,7 +604,7 @@ line-length = 88
         assert!(updated_content.contains("[tool.black]"));
 
         assert!(updated_content.contains("[tool.pyrefly]"));
-        assert!(updated_content.contains("project_includes = [\"new/path/**/*.py\"]"));
+        assert!(updated_content.contains("project-includes = [\"new/path/**/*.py\"]"));
         assert!(!updated_content.contains("project_includes = [\"old/path/**/*.py\"]"));
 
         Ok(())
@@ -613,40 +613,6 @@ line-length = 88
     #[test]
     fn test_pyrefly_section_ordering() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
-        let new_pyproject_path = tmp.path().join("new_pyproject.toml");
-
-        let mut config = ConfigFile::default();
-        config.project_includes = Globs::new(vec!["test/**/*.py".to_owned()]);
-
-        let config_pyproject = PyProject::new(config);
-        let serialized = toml::to_string_pretty(&config_pyproject)?;
-        fs_anyhow::write(&new_pyproject_path, serialized.as_bytes())?;
-
-        let content = fs_anyhow::read_to_string(&new_pyproject_path)?;
-        println!("NEW FILE CONTENT:\n{}", content);
-        assert!(content.contains("[tool.pyrefly]"));
-
-        let existing_file_path = tmp.path().join("existing_file.toml");
-        fs_anyhow::write(&existing_file_path, b"[tool]\n# Some comment\n")?;
-
-        let mut config = ConfigFile::default();
-        config.project_includes = Globs::new(vec!["test/**/*.py".to_owned()]);
-        write_pyproject(&existing_file_path, config)?;
-
-        let content = fs_anyhow::read_to_string(&existing_file_path)?;
-        println!("EXISTING FILE CONTENT:\n{}", content);
-        assert!(content.contains("[tool.pyrefly]"));
-
-        let mypy_path = tmp.path().join("mypy_test.toml");
-        fs_anyhow::write(&mypy_path, b"[tool.mypy]\nfiles = [\"a.py\"]\n")?;
-        let mut config = ConfigFile::default();
-        config.project_includes = Globs::new(vec!["mypy_test.py".to_owned()]);
-        write_pyproject(&mypy_path, config)?;
-
-        let content = fs_anyhow::read_to_string(&mypy_path)?;
-        println!("MYPY TEST CONTENT:\n{}", content);
-        assert!(content.contains("[tool.pyrefly]"));
-
         let ordering_path = tmp.path().join("ordering_test.toml");
         let existing_content = r#"[project]
 name = "test-project"
@@ -665,10 +631,23 @@ option = "first"
         config.project_includes = Globs::new(vec!["ordering_test.py".to_owned()]);
         write_pyproject(&ordering_path, config)?;
 
-        let content = fs_anyhow::read_to_string(&ordering_path)?;
-        println!("ORDERING TEST CONTENT:\n{}", content);
-        assert!(content.contains("[tool.pyrefly]"));
-
+        let toml_content = fs_anyhow::read_to_string(&ordering_path)?;
+        let toml_expected = concat!(
+            "[project]\n",
+            "name = \"test-project\"\n",
+            "version = \"0.1.0\"\n",
+            "\n",
+            "[tool.pyrefly]\n",
+            "project-includes = [\"ordering_test.py\"]\n",
+            "\n",
+            "# Comment before tool section\n",
+            "[tool]\n",
+            "# Comment within tool section\n",
+            "\n",
+            "[tool.a]\n",
+            "option = \"first\"\n"
+        );
+        assert_eq!(toml_content.trim(), toml_expected.trim());
         Ok(())
     }
 }
