@@ -107,7 +107,7 @@ impl Args {
 
     #[cfg(not(test))]
     fn prompt_user_confirmation(prompt: &str) -> bool {
-        print!("{}", prompt);
+        print!("{prompt}");
         io::stdout().flush().ok();
         let mut input = String::new();
         io::stdin().read_line(&mut input).ok();
