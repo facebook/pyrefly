@@ -345,7 +345,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn create_paramspec_value(&self, targs: &[Type]) -> Type {
-        let params: Vec<Param> = targs.map(|t| Param::PosOnly(t.clone(), Required::Required));
+        let params: Vec<Param> = targs.map(|t| Param::PosOnly(None, t.clone(), Required::Required));
         Type::ParamSpecValue(ParamList::new(params))
     }
 

@@ -22,6 +22,7 @@ pub enum UntypedDefBehavior {
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Default)]
+#[serde(rename_all = "kebab-case")]
 pub struct ConfigBase {
     /// Errors to silence (or not) when printing errors.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -29,16 +30,34 @@ pub struct ConfigBase {
 
     /// String-prefix-matched names of modules from which import errors should be ignored
     /// and the module should always be replaced with `typing.Any`
-    #[serde(default, skip_serializing_if = "crate::config::util::none_or_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::config::util::none_or_empty", 
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "replace_imports_with_any"
+    )]
     pub replace_imports_with_any: Option<Vec<ModuleWildcard>>,
 
-    /// analyze func
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// How should we handle analyzing and inferring the function signature if it's untyped?
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "untyped_def_behavior"
+    )]
     pub untyped_def_behavior: Option<UntypedDefBehavior>,
 
     /// Whether to ignore type errors in generated code. By default this is disabled.
     /// Generated code is defined as code that contains the marker string `@` immediately followed by `generated`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "ignore_errors_in_generated_code"
+    )]
     pub ignore_errors_in_generated_code: Option<bool>,
 
     /// Any unknown config items

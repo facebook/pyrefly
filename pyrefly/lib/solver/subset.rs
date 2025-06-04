@@ -16,7 +16,6 @@ use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
-use crate::alt::class::variance_inference::pre_to_post_variance;
 use crate::dunder;
 use crate::solver::solver::Subset;
 use crate::types::callable::Callable;
@@ -47,8 +46,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             match (l_arg, u_arg) {
                 (None, None) => return true,
                 (
-                    Some(Param::PosOnly(l, l_req) | Param::Pos(_, l, l_req)),
-                    Some(Param::PosOnly(u, u_req)),
+                    Some(Param::PosOnly(_, l, l_req) | Param::Pos(_, l, l_req)),
+                    Some(Param::PosOnly(_, u, u_req)),
                 ) if (*u_req == Required::Required || *l_req == Required::Optional) => {
                     if self.is_subset_eq(u, l) {
                         l_arg = l_args.next();
@@ -77,7 +76,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
                 (
                     Some(
-                        Param::PosOnly(_, Required::Optional)
+                        Param::PosOnly(_, _, Required::Optional)
                         | Param::Pos(_, _, Required::Optional)
                         | Param::KwOnly(_, _, Required::Optional)
                         | Param::VarArg(_, _)
@@ -89,11 +88,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
                 (
                     Some(Param::VarArg(_, Type::Unpack(l))),
-                    Some(Param::PosOnly(_, Required::Required)),
+                    Some(Param::PosOnly(_, _, Required::Required)),
                 ) => {
                     let mut u_types = Vec::new();
                     loop {
-                        if let Some(Param::PosOnly(u, Required::Required)) = u_arg {
+                        if let Some(Param::PosOnly(_, u, Required::Required)) = u_arg {
                             u_types.push(u.clone());
                             u_arg = u_args.next();
                         } else if let Some(Param::VarArg(_, Type::Unpack(u))) = u_arg {
@@ -131,12 +130,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                 }
                 (
-                    Some(Param::PosOnly(_, _) | Param::Pos(_, _, _)),
+                    Some(Param::PosOnly(_, _, _) | Param::Pos(_, _, _)),
                     Some(Param::VarArg(_, Type::Unpack(u))),
                 ) => {
                     let mut l_types = Vec::new();
                     loop {
-                        if let Some(Param::PosOnly(l, _) | Param::Pos(_, l, _)) = l_arg {
+                        if let Some(Param::PosOnly(_, l, _) | Param::Pos(_, l, _)) = l_arg {
                             l_types.push(l.clone());
                             l_arg = l_args.next();
                         } else if let Some(Param::VarArg(_, Type::Unpack(l))) = l_arg {
@@ -173,7 +172,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         }
                     }
                 }
-                (Some(Param::VarArg(_, l)), Some(Param::PosOnly(u, Required::Required))) => {
+                (Some(Param::VarArg(_, l)), Some(Param::PosOnly(_, u, Required::Required))) => {
                     if self.is_subset_eq(u, l) {
                         u_arg = u_args.next();
                     } else {
@@ -1010,11 +1009,22 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             // having a test setup to stress what happens on code change will help us make
             // Pyrefly incremental more robust.
         }
+
+        let variances = self
+            .type_order
+            .get_variance_from_class(got_class.class_object());
+
         for (got_arg, want_arg, param) in izip!(got, want, params.iter()) {
             let result = if param.quantified.kind() == QuantifiedKind::TypeVarTuple {
                 self.is_equal(got_arg, want_arg)
             } else {
-                let param_variance = pre_to_post_variance(param.variance);
+                let param_name = param.name().as_str();
+
+                let param_variance = match variances.0.get(param_name) {
+                    Some(variance) => *variance,
+                    None => Variance::Invariant,
+                };
+
                 match param_variance {
                     Variance::Covariant => self.is_subset_eq(got_arg, want_arg),
                     Variance::Contravariant => self.is_subset_eq(want_arg, got_arg),

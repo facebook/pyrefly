@@ -20,6 +20,7 @@
 #![deny(clippy::cloned_instead_of_copied)]
 #![deny(clippy::derive_partial_eq_without_eq)]
 #![deny(clippy::inefficient_to_string)]
+#![deny(clippy::mem_replace_option_with_some)]
 #![deny(clippy::str_to_string)]
 #![deny(clippy::string_to_string)]
 #![deny(clippy::trivially_copy_pass_by_ref)]

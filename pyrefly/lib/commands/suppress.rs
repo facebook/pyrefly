@@ -185,6 +185,8 @@ pub fn remove_unused_ignores(path_ignores: SmallMap<&PathBuf, SmallSet<OneIndexe
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use pretty_assertions::assert_str_eq;
     use ruff_source_file::OneIndexed;
     use ruff_source_file::SourceLocation;
@@ -193,7 +195,9 @@ mod tests {
 
     use super::*;
     use crate::error::kind::ErrorKind;
+    use crate::module::module_info::ModuleInfo;
     use crate::module::module_info::SourceRange;
+    use crate::module::module_name::ModuleName;
     use crate::module::module_path::ModulePath;
 
     fn sourcerange(row: usize, column: usize) -> SourceRange {
@@ -207,7 +211,11 @@ mod tests {
 
     fn error(path: PathBuf, row: usize, column: usize, error_kind: ErrorKind) -> Error {
         Error::new(
-            ModulePath::filesystem(path),
+            ModuleInfo::new(
+                ModuleName::unknown(),
+                ModulePath::filesystem(path),
+                Arc::new("".to_owned()),
+            ),
             sourcerange(row, column),
             Vec1::new("test message".to_owned()),
             false,

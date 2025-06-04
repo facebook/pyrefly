@@ -15,21 +15,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::report::glean::schema::*;
+// Schema version
+pub const VERSION: i64 = 1;
+pub const SCHEMA_ID: &str = "2949078f4a4a6db66b94e48ac9a0d6fb";
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct FileDigest {
-    pub id: u64,
-    pub key: Box<FileDigest_key>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct Digest {
-    pub hash: String,
-    pub size: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct FileDigest_key {
-    pub file: src::File,
-    pub digest: Digest,
-}
+pub struct Unit {}

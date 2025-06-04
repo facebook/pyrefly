@@ -9,6 +9,7 @@ use ruff_python_ast::name::Name;
 
 use crate::binding::binding::AnnotationTarget;
 use crate::error::kind::ErrorKind;
+use crate::module::module_name::ModuleName;
 use crate::types::callable::FuncId;
 use crate::types::types::Type;
 
@@ -44,6 +45,7 @@ pub enum ErrorContext {
     DelItem(Type),
     /// match x: case Foo(y): ...
     MatchPositional(Type),
+    ImportNotFound(ModuleName),
 }
 
 /// The context in which a got <: want type check occurs. This differs from ErrorContext in that

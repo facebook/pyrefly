@@ -48,6 +48,7 @@ use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
+use crate::types::class::Class;
 use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::param_spec::ParamSpec;
@@ -661,22 +662,51 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ty: Type,
         contains_subscript: bool,
         range: TextRange,
+        func_kind: &FunctionKind,
         errors: &ErrorCollector,
     ) {
         if let Some(ts) = ty.as_decomposed_tuple_or_union() {
             for t in ts {
-                self.check_type_is_class_object(t, contains_subscript, range, errors);
+                self.check_type_is_class_object(t, contains_subscript, range, func_kind, errors);
             }
         } else if let Type::ClassDef(cls) = &ty {
             let metadata = self.get_metadata_for_class(cls);
+            let func_display = || {
+                format!(
+                    "{}()",
+                    func_kind.as_func_id().format(self.module_info().name())
+                )
+            };
             if metadata.is_new_type() {
                 self.error(
                     errors,
                     range,
                     ErrorKind::InvalidArgument,
                     None,
-                    format!("NewType `{}` not allowed in isinstance", cls.name()),
+                    format!("NewType `{}` not allowed in {}", cls.name(), func_display(),),
                 );
+            }
+            // Check if this is a protocol that needs @runtime_checkable
+            if metadata.is_protocol() && !metadata.is_runtime_checkable_protocol() {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::InvalidArgument,
+                    None,
+                    format!("Protocol `{}` is not decorated with @runtime_checkable and cannot be used with {}", cls.name(), func_display()),
+                );
+            } else if metadata.is_protocol() && metadata.is_runtime_checkable_protocol() {
+                // Additional validation for runtime checkable protocols:
+                // issubclass() can only be used with non-data protocols
+                if *func_kind == FunctionKind::IsSubclass && self.is_data_protocol(cls, range) {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::InvalidArgument,
+                        None,
+                        format!("Protocol `{}` has non-method members and cannot be used with issubclass()", cls.name()),
+                    );
+                }
             }
         } else if contains_subscript
             && matches!(&ty, Type::Type(box Type::ClassType(cls)) if !cls.targs().is_empty())
@@ -705,20 +735,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn check_second_arg_is_class_object(&self, x: &ExprCall, errors: &ErrorCollector) {
-        if x.arguments.args.len() == 2 {
-            let arg_expr = &x.arguments.args[1];
-            let isinstance_class_type = self.expr_infer(arg_expr, errors);
+    /// Check if a protocol is a data protocol (has non-method members)
+    fn is_data_protocol(&self, cls: &Class, range: TextRange) -> bool {
+        // A data protocol has at least one non-method member
+        // Use protocol metadata to get the member names
+        let metadata = self.get_metadata_for_class(cls);
+        if let Some(protocol_metadata) = metadata.protocol_metadata() {
+            for field_name in &protocol_metadata.members {
+                // Use the class type to access the field
+                let class_type = cls.as_class_type();
+                let ty = self.type_of_attr_get(
+                    &class_type.to_type(),
+                    field_name,
+                    range,
+                    &self.error_swallower(),
+                    None,
+                    "is_data_protocol",
+                );
+
+                // If it's not a callable type, it's a data member
+                if !matches!(
+                    ty,
+                    Type::Callable(_) | Type::Function(_) | Type::BoundMethod(_)
+                ) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn check_second_arg_is_class_object(
+        &self,
+        args: &[Expr],
+        func_kind: &FunctionKind,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if args.len() == 2 {
+            let arg_expr = &args[1];
+            let arg_class_type = self.expr_infer(arg_expr, errors);
             let mut contains_subscript = false;
             arg_expr.visit(&mut |e| {
                 if matches!(e, Expr::Subscript(_)) {
                     contains_subscript = true;
                 }
             });
+
             self.check_type_is_class_object(
-                isinstance_class_type,
+                arg_class_type,
                 contains_subscript,
-                x.range,
+                range,
+                func_kind,
                 errors,
             );
         }
@@ -788,7 +856,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> TypeInfo {
         let res = match x {
             Expr::Name(x) => self
-                .get(&Key::Usage(ShortIdentifier::expr_name(x)))
+                .get(&Key::BoundName(ShortIdentifier::expr_name(x)))
                 .arc_clone(),
             Expr::Attribute(x) => {
                 let base = self.expr_infer_type_info(&x.value, errors);
@@ -932,7 +1000,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // We could have a more precise type here, but this matches Pyright.
                     self.stdlib.str().clone().to_type()
                 }
-                Type::ClassType(ref cls)
+                Type::ClassType(ref cls) | Type::SelfType(ref cls)
                     if let Some(elts) = self.named_tuple_element_types(cls) =>
                 {
                     self.infer_tuple_index(
@@ -943,7 +1011,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                     )
                 }
-                Type::ClassType(_) => self.call_method_or_error(
+                Type::ClassType(_) | Type::SelfType(_) => self.call_method_or_error(
                     &base,
                     &dunder::GETITEM,
                     range,
@@ -1371,13 +1439,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 errors,
                             ),
                         _ => {
-                            if matches!(
-                                ty_fun.callee_kind(),
-                                Some(CalleeKind::Function(
+                            if let Some(CalleeKind::Function(func_kind)) = ty_fun.callee_kind()
+                                && matches!(
+                                    func_kind,
                                     FunctionKind::IsInstance | FunctionKind::IsSubclass
-                                ))
-                            ) {
-                                self.check_second_arg_is_class_object(x, errors);
+                                )
+                            {
+                                self.check_second_arg_is_class_object(
+                                    &x.arguments.args,
+                                    &func_kind,
+                                    x.range,
+                                    errors,
+                                );
                             }
                             let args = x.arguments.args.map(|arg| match arg {
                                 Expr::Starred(x) => CallArg::Star(&x.value, x.range),

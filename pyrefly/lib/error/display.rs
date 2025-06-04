@@ -48,6 +48,9 @@ impl ErrorContext {
             Self::MatchPositional(ty) => {
                 format!("Cannot match positional sub-patterns in `{ty}`")
             }
+            Self::ImportNotFound(import) => {
+                format!("Could not find import of `{import}`")
+            }
         }
     }
 }

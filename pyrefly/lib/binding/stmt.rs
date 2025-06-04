@@ -9,12 +9,10 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
-use ruff_python_ast::Keyword;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtAssign;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::StmtReturn;
-use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
@@ -30,10 +28,12 @@ use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyExpect;
+use crate::binding::binding::LinkedKey;
 use crate::binding::binding::RaisedException;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LookupKind;
 use crate::binding::bindings::MutableCaptureLookupKind;
+use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
@@ -59,30 +59,13 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    // Check that the variable name in a functional definition matches the first argument string
-    fn check_functional_definition_name(&mut self, name: &Name, arg: &Expr) {
-        if let Expr::StringLiteral(x) = arg {
-            if x.value.to_str() != name.as_str() {
-                self.error(
-                    arg.range(),
-                    format!("Expected string literal \"{}\"", name),
-                    ErrorKind::InvalidArgument,
-                );
-            }
-        } else {
-            self.error(
-                arg.range(),
-                format!("Expected string literal \"{}\"", name),
-                ErrorKind::InvalidArgument,
-            );
-        }
-    }
-
     fn assign_type_var(&mut self, name: &ExprName, call: &mut ExprCall) {
-        self.ensure_expr(&mut call.func);
+        // Type var declarations are static types only; skip them for first-usage type inference.
+        let no_usage = Usage::NoUsageTracking;
+        self.ensure_expr(&mut call.func, no_usage);
         let mut iargs = call.arguments.args.iter_mut();
         if let Some(expr) = iargs.next() {
-            self.ensure_expr(expr);
+            self.ensure_expr(expr, no_usage);
         }
         // The constraints (i.e., any positional arguments after the first)
         // and some keyword arguments are types.
@@ -95,10 +78,10 @@ impl<'a> BindingsBuilder<'a> {
             {
                 self.ensure_type(&mut kw.value, &mut None);
             } else {
-                self.ensure_expr(&mut kw.value);
+                self.ensure_expr(&mut kw.value, no_usage);
             }
         }
-        self.bind_assign(name, |ann| {
+        self.bind_assign_no_expr(name, |ann| {
             Binding::TypeVar(
                 ann,
                 Ast::expr_name_identifier(name.clone()),
@@ -108,9 +91,11 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn ensure_type_var_tuple_and_param_spec_args(&mut self, call: &mut ExprCall) {
-        self.ensure_expr(&mut call.func);
+        // Type var declarations are static types only; skip them for first-usage type inference.
+        let no_usage = Usage::NoUsageTracking;
+        self.ensure_expr(&mut call.func, no_usage);
         for arg in call.arguments.args.iter_mut() {
-            self.ensure_expr(arg);
+            self.ensure_expr(arg, no_usage);
         }
         for kw in call.arguments.keywords.iter_mut() {
             if let Some(id) = &kw.arg
@@ -118,14 +103,14 @@ impl<'a> BindingsBuilder<'a> {
             {
                 self.ensure_type(&mut kw.value, &mut None);
             } else {
-                self.ensure_expr(&mut kw.value);
+                self.ensure_expr(&mut kw.value, no_usage);
             }
         }
     }
 
     fn assign_param_spec(&mut self, name: &ExprName, call: &mut ExprCall) {
         self.ensure_type_var_tuple_and_param_spec_args(call);
-        self.bind_assign(name, |ann| {
+        self.bind_assign_no_expr(name, |ann| {
             Binding::ParamSpec(
                 ann,
                 Ast::expr_name_identifier(name.clone()),
@@ -136,7 +121,7 @@ impl<'a> BindingsBuilder<'a> {
 
     fn assign_type_var_tuple(&mut self, name: &ExprName, call: &mut ExprCall) {
         self.ensure_type_var_tuple_and_param_spec_args(call);
-        self.bind_assign(name, |ann| {
+        self.bind_assign_no_expr(name, |ann| {
             Binding::TypeVarTuple(
                 ann,
                 Ast::expr_name_identifier(name.clone()),
@@ -145,88 +130,10 @@ impl<'a> BindingsBuilder<'a> {
         })
     }
 
-    fn assign_enum(
-        &mut self,
-        name: &ExprName,
-        func: &mut Expr,
-        arg_name: &mut Expr,
-        members: &mut [Expr],
-    ) {
-        self.ensure_expr(func);
-        self.ensure_expr(arg_name);
-        for arg in &mut *members {
-            self.ensure_expr(arg);
-        }
-        self.check_functional_definition_name(&name.id, arg_name);
-        self.synthesize_enum_def(
-            Ast::expr_name_identifier(name.clone()),
-            func.clone(),
-            members,
-        );
-    }
-
-    fn assign_typed_dict(
-        &mut self,
-        name: &ExprName,
-        func: &mut Expr,
-        arg_name: &Expr,
-        args: &mut [Expr],
-        keywords: &mut [Keyword],
-    ) {
-        self.ensure_expr(func);
-        self.check_functional_definition_name(&name.id, arg_name);
-        self.synthesize_typed_dict_def(
-            Ast::expr_name_identifier(name.clone()),
-            func.clone(),
-            args,
-            keywords,
-        );
-    }
-
-    fn assign_typing_named_tuple(
-        &mut self,
-        name: &ExprName,
-        func: &mut Expr,
-        arg_name: &Expr,
-        members: &[Expr],
-    ) {
-        self.ensure_expr(func);
-        self.check_functional_definition_name(&name.id, arg_name);
-        self.synthesize_typing_named_tuple_def(
-            Ast::expr_name_identifier(name.clone()),
-            func.clone(),
-            members,
-        );
-    }
-
-    fn assign_collections_named_tuple(
-        &mut self,
-        name: &ExprName,
-        func: &mut Expr,
-        arg_name: &Expr,
-        members: &mut [Expr],
-        keywords: &mut [Keyword],
-    ) {
-        self.ensure_expr(func);
-        self.check_functional_definition_name(&name.id, arg_name);
-        self.synthesize_collections_named_tuple_def(
-            Ast::expr_name_identifier(name.clone()),
-            members,
-            keywords,
-        );
-    }
-
-    fn assign_new_type(&mut self, name: &ExprName, new_type_name: &mut Expr, base: &mut Expr) {
-        self.ensure_expr(new_type_name);
-        self.check_functional_definition_name(&name.id, new_type_name);
-        self.ensure_type(base, &mut None);
-        self.synthesize_typing_new_type(Ast::expr_name_identifier(name.clone()), base.clone());
-    }
-
     pub fn ensure_mutable_name(&mut self, x: &ExprName) -> Idx<Key> {
         let name = Ast::expr_name_identifier(x.clone());
         let binding = self
-            .lookup_name(&name.id, LookupKind::Mutable)
+            .lookup_name(Hashed::new(&name.id), LookupKind::Mutable)
             .map(Binding::Forward);
         self.ensure_name(&name, binding)
     }
@@ -237,7 +144,12 @@ impl<'a> BindingsBuilder<'a> {
             match self.lookup_mutable_captured_name(&name.id, MutableCaptureLookupKind::Nonlocal) {
                 Ok(found) => Binding::Forward(found),
                 Err(error) => {
-                    self.error(name.range, error.message(name), ErrorKind::UnknownName);
+                    self.error(
+                        name.range,
+                        ErrorKind::UnknownName,
+                        None,
+                        error.message(name),
+                    );
                     Binding::Type(Type::any_error())
                 }
             };
@@ -250,7 +162,12 @@ impl<'a> BindingsBuilder<'a> {
             match self.lookup_mutable_captured_name(&name.id, MutableCaptureLookupKind::Global) {
                 Ok(found) => Binding::Forward(found),
                 Err(error) => {
-                    self.error(name.range, error.message(name), ErrorKind::UnknownName);
+                    self.error(
+                        name.range,
+                        ErrorKind::UnknownName,
+                        None,
+                        error.message(name),
+                    );
                     Binding::Type(Type::any_error())
                 }
             };
@@ -270,11 +187,11 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn bind_name_assign(&mut self, name: &ExprName, mut value: Box<Expr>) {
-        let idx = self.idx_for_promise(Key::Definition(ShortIdentifier::expr_name(name)));
+        let user = self.declare_user(Key::Definition(ShortIdentifier::expr_name(name)));
         if self.is_definitely_type_alias_rhs(value.as_ref()) {
             self.ensure_type(&mut value, &mut None);
         } else {
-            self.ensure_expr(&mut value);
+            self.ensure_expr(&mut value, user.usage());
         }
         let style = if self.scopes.in_class_body() {
             FlowStyle::ClassField {
@@ -283,7 +200,7 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             FlowStyle::Other
         };
-        let (ann, default) = self.bind_key(&name.id, idx, style);
+        let (ann, default) = self.bind_user(&name.id, &user, style);
         let mut binding = Binding::NameAssign(
             name.id.clone(),
             ann.map(|k| (AnnotationStyle::Forwarded, k)),
@@ -292,7 +209,7 @@ impl<'a> BindingsBuilder<'a> {
         if let Some(default) = default {
             binding = Binding::Default(default, Box::new(binding));
         }
-        self.insert_binding_idx(idx, binding);
+        self.insert_binding_user(user, binding);
     }
 
     /// Record a return statement for later analysis if we are in a function body, and mark
@@ -301,15 +218,17 @@ impl<'a> BindingsBuilder<'a> {
     /// If this is the top level, report a type error about the invalid return
     /// and also create a binding to ensure we type check the expression.
     fn record_return(&mut self, mut x: StmtReturn) {
-        self.ensure_expr_opt(x.value.as_deref_mut());
-        if let Err(oops_top_level) = self.scopes.record_or_reject_return(x) {
-            if let Some(x) = oops_top_level.value {
-                self.insert_binding(Key::Anon(x.range()), Binding::Expr(None, *x));
+        let user = self.declare_user(Key::ReturnExplicit(x.range()));
+        self.ensure_expr_opt(x.value.as_deref_mut(), user.usage());
+        if let Err((user, oops_top_level)) = self.scopes.record_or_reject_return(user, x) {
+            if let Some(v) = oops_top_level.value {
+                self.insert_binding_user(user, Binding::Expr(None, *v));
             }
             self.error(
                 oops_top_level.range,
-                "Invalid `return` outside of a function".to_owned(),
                 ErrorKind::BadReturn,
+                None,
+                "Invalid `return` outside of a function".to_owned(),
             );
         }
         self.scopes.mark_flow_termination();
@@ -328,10 +247,7 @@ impl<'a> BindingsBuilder<'a> {
             }
             Stmt::Delete(mut x) => {
                 for target in &mut x.targets {
-                    self.insert_binding(
-                        KeyExpect(target.range()),
-                        BindingExpect::Delete(Box::new(target.clone())),
-                    );
+                    let user = self.declare_user(Key::UsageLink(target.range()));
                     if let Expr::Name(name) = target {
                         let idx = self.ensure_mutable_name(name);
                         self.scopes.update_flow_info(
@@ -340,8 +256,16 @@ impl<'a> BindingsBuilder<'a> {
                             Some(FlowStyle::Uninitialized),
                         );
                     } else {
-                        self.ensure_expr(target);
+                        self.ensure_expr(target, user.usage());
                     }
+                    let delete_idx = self.insert_binding(
+                        KeyExpect(target.range()),
+                        BindingExpect::Delete(Box::new(target.clone())),
+                    );
+                    self.insert_binding_user(
+                        user,
+                        Binding::UsageLink(LinkedKey::Expect(delete_idx)),
+                    );
                 }
             }
             Stmt::Assign(ref x)
@@ -349,7 +273,8 @@ impl<'a> BindingsBuilder<'a> {
                     && let Some((module, forward)) =
                         resolve_typeshed_alias(self.module_info.name(), &name.id, &x.value) =>
             {
-                self.bind_assign(name, |_| Binding::Import(module, forward))
+                // TODO(stroxler): should we complain here if there's an existing annotation?
+                self.bind_assign_no_expr(name, |_| Binding::Import(module, forward))
             }
             Stmt::Assign(mut x) => {
                 if let [Expr::Name(name)] = x.targets.as_slice() {
@@ -375,7 +300,12 @@ impl<'a> BindingsBuilder<'a> {
                                 if let Some((arg_name, members)) =
                                     call.arguments.args.split_first_mut()
                                 {
-                                    self.assign_enum(name, &mut call.func, arg_name, members);
+                                    self.synthesize_enum_def(
+                                        name,
+                                        &mut call.func,
+                                        arg_name,
+                                        members,
+                                    );
                                     return;
                                 }
                             }
@@ -383,7 +313,7 @@ impl<'a> BindingsBuilder<'a> {
                                 if let Some((arg_name, members)) =
                                     call.arguments.args.split_first_mut()
                                 {
-                                    self.assign_typed_dict(
+                                    self.synthesize_typed_dict_def(
                                         name,
                                         &mut call.func,
                                         arg_name,
@@ -397,7 +327,7 @@ impl<'a> BindingsBuilder<'a> {
                                 if let Some((arg_name, members)) =
                                     call.arguments.args.split_first_mut()
                                 {
-                                    self.assign_typing_named_tuple(
+                                    self.synthesize_typing_named_tuple_def(
                                         name,
                                         &mut call.func,
                                         arg_name,
@@ -410,7 +340,7 @@ impl<'a> BindingsBuilder<'a> {
                                 if let Some((arg_name, members)) =
                                     call.arguments.args.split_first_mut()
                                 {
-                                    self.assign_collections_named_tuple(
+                                    self.synthesize_collections_named_tuple_def(
                                         name,
                                         &mut call.func,
                                         arg_name,
@@ -422,7 +352,7 @@ impl<'a> BindingsBuilder<'a> {
                             }
                             SpecialExport::NewType => {
                                 if let [new_type_name, base] = &mut *call.arguments.args {
-                                    self.assign_new_type(name, new_type_name, base);
+                                    self.synthesize_typing_new_type(name, new_type_name, base);
                                     return;
                                 }
                             }
@@ -435,27 +365,51 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             Stmt::AugAssign(mut x) => {
-                self.ensure_expr(&mut x.value);
-                let make_binding = |ann| Binding::AugAssign(ann, x.clone());
                 match x.target.as_ref() {
                     Expr::Name(name) => {
+                        // TODO(stroxler): Is this really a good key for an augmented assignment?
+                        // It works okay for type checking, but might have weird effects on the IDE.
+                        let user =
+                            self.declare_user(Key::Definition(ShortIdentifier::expr_name(name)));
+                        // Ensure the target name, which must already be in scope (it is part of the implicit dunder method call
+                        // used in augmented assignment).
                         self.ensure_mutable_name(name);
-                        self.bind_assign(name, make_binding);
+                        self.ensure_expr(&mut x.value, user.usage());
+                        // TODO(stroxler): Should we really be using `bind_key` here? This will update the
+                        // flow info to define the name, even if it was not previously defined.
+                        let (ann, default) = self.bind_user(&name.id, &user, FlowStyle::Other);
+                        let mut binding = Binding::AugAssign(ann, x.clone());
+                        if let Some(default) = default {
+                            binding = Binding::Default(default, Box::new(binding));
+                        }
+                        self.insert_binding_user(user, binding);
                     }
-                    Expr::Attribute(x) => {
-                        let make_assigned_value = &|ann| ExprOrBinding::Binding(make_binding(ann));
-                        self.bind_attr_assign(x.clone(), make_assigned_value);
+                    Expr::Attribute(attr) => {
+                        let mut x_cloned = x.clone();
+                        self.bind_attr_assign(attr.clone(), &mut x.value, move |expr, ann| {
+                            x_cloned.value = Box::new(expr.clone());
+                            ExprOrBinding::Binding(Binding::AugAssign(ann, x_cloned))
+                        });
                     }
-                    Expr::Subscript(x) => {
-                        let make_assigned_value = &|ann| ExprOrBinding::Binding(make_binding(ann));
-                        self.bind_subscript_assign(x.clone(), make_assigned_value);
+                    Expr::Subscript(subscr) => {
+                        let mut x_cloned = x.clone();
+                        self.bind_subscript_assign(
+                            subscr.clone(),
+                            &mut x.value,
+                            move |expr, ann| {
+                                x_cloned.value = Box::new(expr.clone());
+                                ExprOrBinding::Binding(Binding::AugAssign(ann, x_cloned))
+                            },
+                        );
                     }
                     illegal_target => {
                         // Most structurally invalid targets become errors in the parser, which we propagate so there
                         // is no need for duplicate errors. But we do want to catch unbound names (which the parser
                         // will not catch)
+                        //
+                        // We don't track first-usage in this context, since we won't analyze the usage anyway.
                         let mut e = illegal_target.clone();
-                        self.ensure_expr(&mut e);
+                        self.ensure_expr(&mut e, Usage::NoUsageTracking);
                     }
                 }
             }
@@ -509,12 +463,13 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         None
                     };
+                    let user = self.declare_user(Key::Definition(ShortIdentifier::new(&name)));
                     let binding = if let Some(mut value) = binding_value {
                         // Handle forward references in explicit type aliases.
                         if self.as_special_export(&x.annotation) == Some(SpecialExport::TypeAlias) {
                             self.ensure_type(&mut value, &mut None);
                         } else {
-                            self.ensure_expr(&mut value);
+                            self.ensure_expr(&mut value, user.usage());
                         }
                         Binding::NameAssign(
                             name.id.clone(),
@@ -527,7 +482,7 @@ impl<'a> BindingsBuilder<'a> {
                             Box::new(Binding::Type(Type::any_implicit())),
                         )
                     };
-                    if let Some(ann) = self.bind_definition(&name, binding, flow_style)
+                    if let Some(ann) = self.bind_definition_user(&name, user, binding, flow_style)
                         && ann != ann_key
                     {
                         self.insert_binding(
@@ -552,10 +507,10 @@ impl<'a> BindingsBuilder<'a> {
                         ),
                     );
                     let value = match x.value {
-                        Some(mut v) => {
-                            self.ensure_expr(&mut v);
-                            let make_value = |_| ExprOrBinding::Expr(*v);
-                            self.bind_attr_assign(attr.clone(), make_value)
+                        Some(mut assigned) => {
+                            self.bind_attr_assign(attr.clone(), &mut assigned, |v, _| {
+                                ExprOrBinding::Expr(v.clone())
+                            })
                         }
                         _ => ExprOrBinding::Binding(Binding::Type(Type::any_implicit())),
                     };
@@ -565,12 +520,14 @@ impl<'a> BindingsBuilder<'a> {
                     {
                         self.error(
                              x.range,
-                             format!(
-                                 "Type cannot be declared in assignment to non-self attribute `{}.{}`",
-                                 self.module_info.display(&attr.value),
-                                 attr_name,
-                             ),
                              ErrorKind::BadAssignment,
+                             None,
+                             format!(
+                                "Type cannot be declared in assignment to non-self attribute `{}.{}`",
+                                self.module_info.display(&attr.value),
+                                attr_name,
+                            ),
+
                          );
                     }
                 }
@@ -580,8 +537,9 @@ impl<'a> BindingsBuilder<'a> {
                         // but Mypy and Pyright both error here, so let's do the same.
                         self.error(
                             x.annotation.range(),
-                            "Subscripts should not be annotated".to_owned(),
                             ErrorKind::InvalidSyntax,
+                            None,
+                            "Subscripts should not be annotated".to_owned(),
                         );
                     }
                     // Try and continue as much as we can, by throwing away the type or just binding to error
@@ -592,7 +550,9 @@ impl<'a> BindingsBuilder<'a> {
                             value,
                         })),
                         None => {
-                            self.bind_target(&mut target, &|_| Binding::Type(Type::any_error()));
+                            self.bind_target_no_expr(&mut target, &|_| {
+                                Binding::Type(Type::any_error())
+                            });
                         }
                     }
                 }
@@ -616,26 +576,32 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.error(
                         x.range,
-                        "Invalid assignment target".to_owned(),
                         ErrorKind::InvalidSyntax,
+                        None,
+                        "Invalid assignment target".to_owned(),
                     );
                 }
             }
             Stmt::For(mut x) => {
-                self.ensure_expr(&mut x.iter);
+                self.bind_target_with_expr(&mut x.target, &mut x.iter, &|expr, ann| {
+                    Binding::IterableValue(ann, expr.clone(), IsAsync::new(x.is_async))
+                });
+                // Note that we set up the loop *after* the header is fully bound, because the
+                // loop iterator is only evaluated once before the loop begins.
                 self.setup_loop(x.range, &NarrowOps::new());
-                let make_binding =
-                    |ann| Binding::IterableValue(ann, *x.iter.clone(), IsAsync::new(x.is_async));
-                self.bind_target(&mut x.target, &make_binding);
                 self.stmts(x.body);
                 self.teardown_loop(x.range, &NarrowOps::new(), x.orelse);
             }
             Stmt::While(mut x) => {
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
                 self.setup_loop(x.range, &narrow_ops);
-                self.ensure_expr(&mut x.test);
+                // Note that is is important we ensure *after* we set up the loop, so that both the
+                // narrowing and type checking are aware that the test might be impacted by changes
+                // made in the loop (e.g. if we reassign the test variable).
                 let range = x.test.range();
-                self.insert_binding(Key::Anon(range), Binding::Expr(None, *x.test.clone()));
+                let user = self.declare_user(Key::Anon(range));
+                self.ensure_expr(&mut x.test, user.usage());
+                self.insert_binding_user(user, Binding::Expr(None, *x.test.clone()));
                 // Typecheck the test condition during solving.
                 self.insert_binding(
                     KeyExpect(range),
@@ -666,8 +632,9 @@ impl<'a> BindingsBuilder<'a> {
                     let mut base = self.scopes.clone_current_flow();
                     let new_narrow_ops = NarrowOps::from_expr(self, test.as_ref());
                     if let Some(mut e) = test {
-                        self.ensure_expr(&mut e);
-                        self.insert_binding(Key::Anon(e.range()), Binding::Expr(None, e.clone()));
+                        let user = self.declare_user(Key::Anon(e.range()));
+                        self.ensure_expr(&mut e, user.usage());
+                        self.insert_binding_user(user, Binding::Expr(None, e.clone()));
                         // Typecheck the test condition during solving.
                         self.insert_binding(
                             KeyExpect(e.range()),
@@ -707,17 +674,16 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::With(x) => {
                 let kind = IsAsync::new(x.is_async);
                 for mut item in x.items {
-                    self.ensure_expr(&mut item.context_expr);
                     let item_range = item.range();
                     let expr_range = item.context_expr.range();
-                    let context_idx = self.insert_binding(
-                        Key::ContextExpr(expr_range),
-                        Binding::Expr(None, item.context_expr),
-                    );
+                    let context_user = self.declare_user(Key::ContextExpr(expr_range));
+                    self.ensure_expr(&mut item.context_expr, context_user.usage());
+                    let context_idx = self
+                        .insert_binding_user(context_user, Binding::Expr(None, item.context_expr));
                     if let Some(mut opts) = item.optional_vars {
                         let make_binding =
                             |ann| Binding::ContextValue(ann, context_idx, expr_range, kind);
-                        self.bind_target(&mut opts, &make_binding);
+                        self.bind_target_no_expr(&mut opts, &make_binding);
                     } else {
                         self.insert_binding(
                             Key::Anon(item_range),
@@ -732,17 +698,19 @@ impl<'a> BindingsBuilder<'a> {
             }
             Stmt::Raise(x) => {
                 if let Some(mut exc) = x.exc {
-                    self.ensure_expr(&mut exc);
+                    let user = self.declare_user(Key::UsageLink(x.range));
+                    self.ensure_expr(&mut exc, user.usage());
                     let raised = if let Some(mut cause) = x.cause {
-                        self.ensure_expr(&mut cause);
+                        self.ensure_expr(&mut cause, user.usage());
                         RaisedException::WithCause(Box::new((*exc, *cause)))
                     } else {
                         RaisedException::WithoutCause(*exc)
                     };
-                    self.insert_binding(
+                    let idx = self.insert_binding(
                         KeyExpect(x.range),
                         BindingExpect::CheckRaisedException(raised),
                     );
+                    self.insert_binding_user(user, Binding::UsageLink(LinkedKey::Expect(idx)));
                 } else {
                     // If there's no exception raised, don't bother checking the cause.
                 }
@@ -770,18 +738,18 @@ impl<'a> BindingsBuilder<'a> {
                     if let Some(name) = h.name
                         && let Some(mut type_) = h.type_
                     {
-                        self.ensure_expr(&mut type_);
-                        self.bind_definition(
+                        let user = self.declare_user(Key::Definition(ShortIdentifier::new(&name)));
+                        self.ensure_expr(&mut type_, user.usage());
+                        self.bind_definition_user(
                             &name,
+                            user,
                             Binding::ExceptionHandler(type_, x.is_star),
                             FlowStyle::Other,
                         );
                     } else if let Some(mut type_) = h.type_ {
-                        self.ensure_expr(&mut type_);
-                        self.insert_binding(
-                            Key::Anon(range),
-                            Binding::ExceptionHandler(type_, x.is_star),
-                        );
+                        let user = self.declare_user(Key::Anon(range));
+                        self.ensure_expr(&mut type_, user.usage());
+                        self.insert_binding_user(user, Binding::ExceptionHandler(type_, x.is_star));
                     }
                     self.stmts(h.body);
                     self.scopes.swap_current_flow_with(&mut base);
@@ -792,22 +760,26 @@ impl<'a> BindingsBuilder<'a> {
                 self.stmts(x.finalbody);
             }
             Stmt::Assert(mut x) => {
-                self.ensure_expr(&mut x.test);
+                let test_user = self.declare_user(Key::Anon(x.test.range()));
+                self.ensure_expr(&mut x.test, test_user.usage());
                 self.bind_narrow_ops(&NarrowOps::from_expr(self, Some(&x.test)), x.range);
-                self.insert_binding(Key::Anon(x.test.range()), Binding::Expr(None, *x.test));
+                self.insert_binding_user(test_user, Binding::Expr(None, *x.test));
                 if let Some(mut msg_expr) = x.msg {
-                    self.ensure_expr(&mut msg_expr);
-                    self.insert_binding(
+                    let msg_user = self.declare_user(Key::UsageLink(msg_expr.range()));
+                    self.ensure_expr(&mut msg_expr, msg_user.usage());
+                    let idx = self.insert_binding(
                         KeyExpect(msg_expr.range()),
                         BindingExpect::TypeCheckExpr(Box::new(*msg_expr)),
                     );
+                    self.insert_binding_user(msg_user, Binding::UsageLink(LinkedKey::Expect(idx)));
                 };
             }
             Stmt::Import(x) => {
                 for x in x.names {
                     let m = ModuleName::from_name(&x.name.id);
                     if let Err(err @ FindError::NotFound(..)) = self.lookup.get(m) {
-                        self.error(x.range, err.display(), ErrorKind::ImportError);
+                        let (ctx, msg) = err.display();
+                        self.error_multiline(x.range, ErrorKind::ImportError, ctx.as_deref(), msg);
                     }
                     match x.asname {
                         Some(asname) => {
@@ -855,8 +827,9 @@ impl<'a> BindingsBuilder<'a> {
                                         } else {
                                             self.error(
                                                 x.range,
-                                                format!("Could not import `{name}` from `{m}`"),
                                                 ErrorKind::MissingModuleAttribute,
+                                                None,
+                                                format!("Could not import `{name}` from `{m}`"),
                                             );
                                             Binding::Type(Type::any_error())
                                         };
@@ -892,11 +865,12 @@ impl<'a> BindingsBuilder<'a> {
                                         } else {
                                             self.error(
                                                 x.range,
+                                                ErrorKind::MissingModuleAttribute,
+                                                None,
                                                 format!(
                                                     "Could not import `{}` from `{m}`",
                                                     x.name.id
                                                 ),
-                                                ErrorKind::MissingModuleAttribute,
                                             );
                                             Binding::Type(Type::any_error())
                                         }
@@ -915,18 +889,25 @@ impl<'a> BindingsBuilder<'a> {
                             | FindError::NoSource(_)
                             | FindError::NotFound(..)),
                         ) => {
-                            self.error(x.range, err.display(), ErrorKind::ImportError);
+                            let (ctx, msg) = err.display();
+                            self.error_multiline(
+                                x.range,
+                                ErrorKind::ImportError,
+                                ctx.as_deref(),
+                                msg,
+                            );
                             self.bind_unimportable_names(&x);
                         }
                     }
                 } else {
                     self.error(
                         x.range,
+                        ErrorKind::ImportError,
+                        None,
                         format!(
                             "Could not resolve relative import `{}`",
                             ".".repeat(x.level as usize)
                         ),
-                        ErrorKind::ImportError,
                     );
                     self.bind_unimportable_names(&x);
                 }
@@ -942,11 +923,9 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             Stmt::Expr(mut x) => {
-                self.ensure_expr(&mut x.value);
-                self.insert_binding(
-                    Key::StmtExpr(x.value.range()),
-                    Binding::Expr(None, *x.value),
-                );
+                let user = self.declare_user(Key::StmtExpr(x.value.range()));
+                self.ensure_expr(&mut x.value, user.usage());
+                self.insert_binding_user(user, Binding::Expr(None, *x.value));
             }
             Stmt::Pass(_) => { /* no-op */ }
             Stmt::Break(x) => {
@@ -957,8 +936,9 @@ impl<'a> BindingsBuilder<'a> {
             }
             Stmt::IpyEscapeCommand(x) => self.error(
                 x.range,
-                "IPython escapes are not supported".to_owned(),
                 ErrorKind::Unsupported,
+                None,
+                "IPython escapes are not supported".to_owned(),
             ),
         }
     }

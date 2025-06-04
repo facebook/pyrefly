@@ -492,6 +492,7 @@ impl<T> WithDefiningClass<T> {
     }
 }
 
+#[expect(clippy::large_enum_variant)] // the vast majority of `DataclassMember`s are `Field`
 /// The result of processing a raw dataclass member (any annotated assignment in its body).
 pub enum DataclassMember {
     /// A dataclass field
@@ -1252,22 +1253,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
     }
 
+    fn get_super_class_member(
+        &self,
+        cls: &Class,
+        start_lookup_cls: &ClassType,
+        name: &Name,
+    ) -> Option<WithDefiningClass<Arc<ClassField>>> {
+        // Skip ancestors in the MRO until we find the class we want to start at
+        let metadata = self.get_metadata_for_class(cls);
+        let ancestors = metadata
+            .ancestors(self.stdlib)
+            .skip_while(|ancestor| *ancestor != start_lookup_cls);
+        for ancestor in ancestors {
+            if let Some(found) = self
+                .get_field_from_current_class_only(ancestor.class_object(), name)
+                .map(|field| WithDefiningClass {
+                    value: Arc::new(field.instantiate_for(&Instance::of_class(ancestor))),
+                    defining_class: ancestor.class_object().dupe(),
+                })
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+
     /// Looks up an attribute on a super instance.
     pub fn get_super_attribute(
         &self,
-        lookup_cls: &ClassType,
+        start_lookup_cls: &ClassType,
         super_obj: &SuperObj,
         name: &Name,
     ) -> Option<Attribute> {
-        let member = self.get_class_member(lookup_cls.class_object(), name);
         match super_obj {
-            SuperObj::Instance(obj) => member.map(|member| {
-                self.as_instance_attribute(
-                    Arc::unwrap_or_clone(member.value),
-                    &Instance::of_class(obj),
-                )
-            }),
-            SuperObj::Class(obj) => member
+            SuperObj::Instance(obj) => self
+                .get_super_class_member(obj.class_object(), start_lookup_cls, name)
+                .map(|member| {
+                    self.as_instance_attribute(
+                        Arc::unwrap_or_clone(member.value),
+                        &Instance::of_class(obj),
+                    )
+                }),
+            SuperObj::Class(obj) => self
+                .get_super_class_member(obj, start_lookup_cls, name)
                 .map(|member| self.as_class_attribute(Arc::unwrap_or_clone(member.value), obj)),
         }
     }

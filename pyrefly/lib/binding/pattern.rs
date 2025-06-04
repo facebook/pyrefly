@@ -19,6 +19,7 @@ use crate::binding::binding::KeyExpect;
 use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::expr::Usage;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::FacetKind;
 use crate::binding::narrow::NarrowOps;
@@ -37,9 +38,12 @@ impl<'a> BindingsBuilder<'a> {
         pattern: Pattern,
         key: Idx<Key>,
     ) -> NarrowOps {
+        // In typical code, match patterns are more like static types than normal values, so
+        // we ignore match patterns for first-usage tracking.
+        let no_usage = Usage::NoUsageTracking;
         match pattern {
             Pattern::MatchValue(mut p) => {
-                self.ensure_expr(&mut p.value);
+                self.ensure_expr(&mut p.value, no_usage);
                 if let Some(subject) = match_subject {
                     NarrowOps::from_single_narrow_op_for_subject(
                         subject,
@@ -151,7 +155,7 @@ impl<'a> BindingsBuilder<'a> {
                 narrow_ops
             }
             Pattern::MatchClass(mut x) => {
-                self.ensure_expr(&mut x.cls);
+                self.ensure_expr(&mut x.cls, no_usage);
                 let mut narrow_ops = if let Some(subject) = match_subject {
                     NarrowOps::from_single_narrow_op_for_subject(
                         subject,
@@ -202,8 +206,9 @@ impl<'a> BindingsBuilder<'a> {
                     if pattern.is_irrefutable() && idx != n_subpatterns - 1 {
                         self.error(
                             pattern.range(),
-                            "Only the last subpattern in MatchOr may be irrefutable".to_owned(),
                             ErrorKind::MatchError,
+                            None,
+                            "Only the last subpattern in MatchOr may be irrefutable".to_owned(),
                         )
                     }
                     let mut base = self.scopes.clone_current_flow();
@@ -224,12 +229,10 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn stmt_match(&mut self, mut x: StmtMatch) {
-        self.ensure_expr(&mut x.subject);
+        let subject_user = self.declare_user(Key::Anon(x.subject.range()));
+        self.ensure_expr(&mut x.subject, subject_user.usage());
         let match_subject = *x.subject.clone();
-        let key = self.insert_binding(
-            Key::Anon(x.subject.range()),
-            Binding::Expr(None, *x.subject.clone()),
-        );
+        let key = self.insert_binding_user(subject_user, Binding::Expr(None, *x.subject.clone()));
         let mut exhaustive = false;
         let range = x.range;
         let mut branches = Vec::new();
@@ -253,8 +256,9 @@ impl<'a> BindingsBuilder<'a> {
             self.bind_narrow_ops(&new_narrow_ops, case.range);
             negated_prev_ops.and_all(new_narrow_ops.negate());
             if let Some(mut guard) = case.guard {
-                self.ensure_expr(&mut guard);
-                self.insert_binding(Key::Anon(guard.range()), Binding::Expr(None, *guard));
+                let guard_user = self.declare_user(Key::Anon(guard.range()));
+                self.ensure_expr(&mut guard, guard_user.usage());
+                self.insert_binding_user(guard_user, Binding::Expr(None, *guard));
             }
             self.stmts(case.body);
             self.scopes.swap_current_flow_with(&mut base);

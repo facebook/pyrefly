@@ -53,6 +53,7 @@ use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use vec1::vec1;
 
 use crate::alt::answers::AnswerEntry;
 use crate::alt::answers::AnswerTable;
@@ -788,7 +789,7 @@ impl<'a> Transaction<'a> {
         kind: ErrorKind,
     ) {
         let load = module_data.state.read().steps.load.dupe().unwrap();
-        load.errors.add(range, msg, kind, None);
+        load.errors.add(range, kind, None, vec1![msg]);
     }
 
     fn lookup<'b>(&'b self, module_data: ArcId<ModuleDataMut>) -> TransactionHandle<'b> {

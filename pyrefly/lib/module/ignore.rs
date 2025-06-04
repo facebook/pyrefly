@@ -11,8 +11,6 @@ use ruff_source_file::OneIndexed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
-use crate::module::module_info::SourceRange;
-
 #[derive(PartialEq, Debug, Clone, Hash, Eq, Dupe, Copy)]
 pub enum SuppressionKind {
     Ignore,
@@ -72,7 +70,7 @@ impl Ignore {
         false
     }
 
-    fn get_suppression_kind(line: &str) -> Option<SuppressionKind> {
+    pub fn get_suppression_kind(line: &str) -> Option<SuppressionKind> {
         fn match_pyrefly_ignore(line: &str) -> bool {
             let mut words = line.split_whitespace();
             if let Some("pyrefly:") = words.next() {
@@ -94,15 +92,13 @@ impl Ignore {
         None
     }
 
-    pub fn is_ignored(&self, range: &SourceRange, msg: &str) -> bool {
+    pub fn is_ignored(&self, start_line: OneIndexed, end_line: OneIndexed) -> bool {
         if self.ignore_all {
             true
         } else {
-            // for now, we ignore the msg
-            let _unused = msg;
             // We allow an ignore the line before the range, or on any line within the range.
             // We convert to/from zero-indexed because OneIndexed does not implement Step.
-            (range.start.row.to_zero_indexed().saturating_sub(1)..=range.end.row.to_zero_indexed())
+            (start_line.to_zero_indexed().saturating_sub(1)..=end_line.to_zero_indexed())
                 .any(|x| self.ignores.contains_key(&OneIndexed::from_zero_indexed(x)))
         }
     }

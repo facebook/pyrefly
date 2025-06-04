@@ -7,7 +7,7 @@ Pyrefly is available on [Pypi](https://pypi.org/project/pyrefly/) with a new rel
 
 ## Install
 
-You can use `uv`, `poetry`, or `pip` to install the package if you want to experiment with our tool.
+You can use `uv`, `poetry`, `pip`, `pixi` or `conda` to install the package if you want to experiment with our tool.
 
 Simply `cd` into your project directory and run:
 
@@ -32,6 +32,22 @@ poetry run pyrefly check
 
 ```
 pip install pyrefly
+pyrefly init
+pyrefly check
+```
+
+### Using Pixi
+
+```
+pixi add pyrefly
+pixi run pyrefly init
+pixi run pyrefly check
+```
+
+### Using Conda
+
+```
+conda install -c conda-forge pyrefly
 pyrefly init
 pyrefly check
 ```

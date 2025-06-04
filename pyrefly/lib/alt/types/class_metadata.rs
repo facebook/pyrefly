@@ -19,6 +19,7 @@ use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
+use vec1::vec1;
 
 use crate::alt::class::class_field::ClassField;
 use crate::error::collector::ErrorCollector;
@@ -159,6 +160,12 @@ impl ClassMetadata {
 
     pub fn is_protocol(&self) -> bool {
         self.protocol_metadata.is_some()
+    }
+
+    pub fn is_runtime_checkable_protocol(&self) -> bool {
+        self.protocol_metadata
+            .as_ref()
+            .is_some_and(|p| p.is_runtime_checkable)
     }
 
     pub fn is_new_type(&self) -> bool {
@@ -328,6 +335,8 @@ impl DataclassMetadata {
 pub struct ProtocolMetadata {
     /// All members of the protocol, excluding ones defined on `object` and not overridden in a subclass.
     pub members: SmallSet<Name>,
+    /// Whether this protocol is decorated with @runtime_checkable
+    pub is_runtime_checkable: bool,
 }
 
 /// A struct representing a class's ancestors, in method resolution order (MRO)
@@ -483,13 +492,13 @@ impl Linearization {
                 } => {
                     errors.add(
                         cls.range(),
-                        format!(
+                        ErrorKind::InvalidInheritance,
+                        None,
+                        vec1![format!(
                             "Class `{}` inheriting from `{}` creates a cycle",
                             ClassName(cls.qname()),
                             ClassName(base.qname()),
-                        ),
-                        ErrorKind::InvalidInheritance,
-                        None,
+                        )],
                     );
                     // Signal that we detected a cycle
                     return Linearization::Cyclic;
@@ -561,13 +570,13 @@ impl Linearization {
                 let first_candidate = &ancestor_chains.first().unwrap().0.last().class_object();
                 errors.add(
                     cls.range(),
-                    format!(
+                    ErrorKind::InvalidInheritance,
+                    None,
+                    vec1![format!(
                         "Class `{}` has a nonlinearizable inheritance chain detected at `{}`",
                         ClassName(cls.qname()),
                         ClassName(first_candidate.qname()),
-                    ),
-                    ErrorKind::InvalidInheritance,
-                    None,
+                    )],
                 );
 
                 ancestor_chains = Vec::new()

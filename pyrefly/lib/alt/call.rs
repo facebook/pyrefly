@@ -101,7 +101,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         error_kind: ErrorKind,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> CallTarget {
-        errors.add(range, msg, error_kind, context);
+        self.error(errors, range, error_kind, context, msg);
         CallTarget::new(Target::Any(AnyStyle::Error))
     }
 
@@ -552,6 +552,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 signature: mut callable,
                 metadata,
             }) => {
+                if metadata.flags.is_deprecated {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::Deprecated,
+                        context,
+                        format!(
+                            "Call to deprecated function `{}`",
+                            metadata.kind.as_func_id().format(self.module_info().name())
+                        ),
+                    );
+                }
                 // Most instances of typing.Self are replaced in as_call_target, but __new__ is a
                 // staticmethod, so we don't have access to the first argument until we get here.
                 let id = metadata.kind.as_func_id();

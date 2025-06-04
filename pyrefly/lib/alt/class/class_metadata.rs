@@ -43,7 +43,7 @@ use crate::types::special_form::SpecialForm;
 use crate::types::tuple::Tuple;
 use crate::types::types::AnyStyle;
 use crate::types::types::CalleeKind;
-use crate::types::types::TParamInfo;
+use crate::types::types::TParam;
 use crate::types::types::Type;
 
 /// Private helper type used to share part of the logic needed for the
@@ -168,6 +168,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut protocol_metadata = if bases.iter().any(|x| matches!(x, BaseClass::Protocol(_))) {
             Some(ProtocolMetadata {
                 members: cls.fields().cloned().collect(),
+                is_runtime_checkable: false,
             })
         } else {
             None
@@ -237,6 +238,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             if let Some(proto) = &mut protocol_metadata {
                                 if let Some(base_proto) = base_class_metadata.protocol_metadata() {
                                     proto.members.extend(base_proto.members.iter().cloned());
+                                    if base_proto.is_runtime_checkable {
+                                        proto.is_runtime_checkable = true;
+                                    }
                                 } else {
                                     self.error(errors,
                                         range,
@@ -398,6 +402,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(CalleeKind::Function(FunctionKind::Final)) => {
                     is_final = true;
                 }
+                Some(CalleeKind::Function(FunctionKind::RuntimeCheckable)) => {
+                    if let Some(proto) = &mut protocol_metadata {
+                        proto.is_runtime_checkable = true;
+                    } else {
+                        self.error(
+                            errors,
+                            cls.range(),
+                            ErrorKind::InvalidArgument,
+                            None,
+                            "@runtime_checkable can only be applied to Protocol classes".to_owned(),
+                        );
+                    }
+                }
                 _ => {}
             }
         }
@@ -528,11 +545,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn class_tparams(
         &self,
         name: &Identifier,
-        scoped_tparams: Vec<TParamInfo>,
+        scoped_tparams: Vec<TParam>,
         bases: Vec<BaseClass>,
         legacy: &[Idx<KeyLegacyTypeParam>],
         errors: &ErrorCollector,
-    ) -> Vec<TParamInfo> {
+    ) -> Vec<TParam> {
         let legacy_tparams = legacy
             .iter()
             .filter_map(|key| self.get_idx(*key).deref().parameter().cloned())
@@ -543,17 +560,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect::<SmallMap<_, _>>();
 
         let lookup_tparam = |t: &Type| {
-            let q = t.as_quantified();
-            if q.is_none() && !matches!(t, Type::Any(AnyStyle::Error) | Type::Unpack(_)) {
+            let (q, kind) = match t {
+                Type::Unpack(t) => (t.as_quantified(), "TypeVarTuple"),
+                _ => (t.as_quantified(), "type variable"),
+            };
+            if q.is_none() && !matches!(t, Type::Any(AnyStyle::Error)) {
                 self.error(
                     errors,
                     name.range,
                     ErrorKind::InvalidTypeVar,
                     None,
-                    format!(
-                        "Expected a type variable, got `{}`",
-                        self.for_display(t.clone())
-                    ),
+                    format!("Expected a {kind}, got `{}`", self.for_display(t.clone())),
                 );
             }
             q.and_then(|q| {

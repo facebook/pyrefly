@@ -8,7 +8,6 @@
 use std::fmt::Debug;
 use std::mem;
 
-use itertools::Either;
 use parse_display::Display;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -36,7 +35,11 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyFunction;
+use crate::binding::binding::KeyVariance;
+use crate::binding::binding::KeyYield;
+use crate::binding::binding::KeyYieldFrom;
 use crate::binding::bindings::BindingTable;
+use crate::binding::bindings::User;
 use crate::binding::function::SelfAssignments;
 use crate::dunder;
 use crate::export::definitions::DefinitionStyle;
@@ -82,14 +85,6 @@ impl StaticInfo {
         } else {
             Key::Anywhere(name.clone(), self.loc)
         }
-    }
-
-    pub fn is_global(&self) -> bool {
-        self.style == DefinitionStyle::Global
-    }
-
-    pub fn is_nonlocal(&self) -> bool {
-        self.style == DefinitionStyle::Nonlocal
     }
 }
 
@@ -286,6 +281,7 @@ pub struct ClassIndices {
     pub class_idx: Idx<KeyClass>,
     pub metadata_idx: Idx<KeyClassMetadata>,
     pub synthesized_fields_idx: Idx<KeyClassSynthesizedFields>,
+    pub variance_idx: Idx<KeyVariance>,
 }
 
 #[derive(Clone, Debug)]
@@ -389,8 +385,9 @@ fn is_test_setup_method(method_name: &Name) -> bool {
 /// Things we collect from inside a function
 #[derive(Default, Clone, Debug)]
 pub struct YieldsAndReturns {
-    pub returns: Vec<StmtReturn>,
-    pub yields: Vec<Either<ExprYield, ExprYieldFrom>>,
+    pub returns: Vec<(Idx<Key>, StmtReturn)>,
+    pub yields: Vec<(Idx<KeyYield>, ExprYield)>,
+    pub yield_froms: Vec<(Idx<KeyYieldFrom>, ExprYieldFrom)>,
 }
 
 #[derive(Clone, Debug)]
@@ -913,10 +910,31 @@ impl Scopes {
     /// Record a return in the enclosing function body there is one.
     ///
     /// Return `None` if this succeeded and Some(rejected_return) if we are at the top-level
-    pub fn record_or_reject_return(&mut self, x: StmtReturn) -> Result<(), StmtReturn> {
+    pub fn record_or_reject_return(
+        &mut self,
+        user: User,
+        x: StmtReturn,
+    ) -> Result<(), (User, StmtReturn)> {
         match self.current_yields_and_returns_mut() {
             Some(yields_and_returns) => {
-                yields_and_returns.returns.push(x);
+                yields_and_returns.returns.push((user.into_idx(), x));
+                Ok(())
+            }
+            None => Err((user, x)),
+        }
+    }
+
+    /// Record a yield in the enclosing function body there is one.
+    ///
+    /// Return `None` if this succeeded and Some(rejected_yield) if we are at the top-level
+    pub fn record_or_reject_yield(
+        &mut self,
+        idx: Idx<KeyYield>,
+        x: ExprYield,
+    ) -> Result<(), ExprYield> {
+        match self.current_yields_and_returns_mut() {
+            Some(yields_and_returns) => {
+                yields_and_returns.yields.push((idx, x));
                 Ok(())
             }
             None => Err(x),
@@ -926,23 +944,14 @@ impl Scopes {
     /// Record a yield in the enclosing function body there is one.
     ///
     /// Return `None` if this succeeded and Some(rejected_yield) if we are at the top-level
-    pub fn record_or_reject_yield(&mut self, x: ExprYield) -> Result<(), ExprYield> {
+    pub fn record_or_reject_yield_from(
+        &mut self,
+        idx: Idx<KeyYieldFrom>,
+        x: ExprYieldFrom,
+    ) -> Result<(), ExprYieldFrom> {
         match self.current_yields_and_returns_mut() {
             Some(yields_and_returns) => {
-                yields_and_returns.yields.push(Either::Left(x));
-                Ok(())
-            }
-            None => Err(x),
-        }
-    }
-
-    /// Record a yield in the enclosing function body there is one.
-    ///
-    /// Return `None` if this succeeded and Some(rejected_yield) if we are at the top-level
-    pub fn record_or_reject_yield_from(&mut self, x: ExprYieldFrom) -> Result<(), ExprYieldFrom> {
-        match self.current_yields_and_returns_mut() {
-            Some(yields_and_returns) => {
-                yields_and_returns.yields.push(Either::Right(x));
+                yields_and_returns.yield_froms.push((idx, x));
                 Ok(())
             }
             None => Err(x),

@@ -12,6 +12,10 @@ You can also run `python3 test.py` from this directory to use our all-in-one
 test script that auto-formats your code, runs the tests, and updates the
 conformance test results. It requires Python 3.9+.
 
+Refer to other sections of the document for
+[coding conventions](#coding-conventions) and where to add
+[new tests](#testing).
+
 ### Meta internal developers
 
 From this directory, you can run:
@@ -63,6 +67,23 @@ We follow the
 [Buck2 coding conventions](https://github.com/facebook/buck2/blob/main/HACKING.md#coding-conventions),
 with the caveat that we use our internal error framework for errors reported by
 the type checker.
+
+## Testing
+
+Here's where you can add new integration tests, based on the type of issue
+you're working on:
+
+- configurations: `test/`
+- type checking: `pyrefly/lib/test/`
+- language server: `pyrefly/lib/test/lsp/`
+
+Please do not add tests in `conformance/third_party`. Those test cases are a
+copy of the official Python typing conformance tests, and any changes you make
+there will be overwritten the next time we pull in the latest version of the
+tests.
+
+Running `./test.py` will re-generate Pyrefly's conformance test outputs. Those
+changes should be committed.
 
 ## Contributor License Agreement ("CLA")
 

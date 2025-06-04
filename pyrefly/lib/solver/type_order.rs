@@ -4,6 +4,7 @@
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
  */
+use std::sync::Arc;
 
 use dupe::Clone_;
 use dupe::Copy_;
@@ -15,6 +16,8 @@ use starlark_map::small_set::SmallSet;
 use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::attr::Attribute;
+use crate::alt::class::variance_inference::VarianceMap;
+use crate::binding::binding::KeyVariance;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
@@ -128,5 +131,9 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
 
     pub fn typed_dict_kw_param_info(self, typed_dict: &TypedDict) -> Vec<(Name, Type, Required)> {
         self.0.typed_dict_kw_param_info(typed_dict)
+    }
+
+    pub fn get_variance_from_class(self, cls: &Class) -> Arc<VarianceMap> {
+        self.0.get_from_class(cls, &KeyVariance(cls.index()))
     }
 }

@@ -32,6 +32,7 @@ use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
+use crate::types::callable::Params;
 use crate::types::class::Class;
 use crate::types::class::ClassKind;
 use crate::types::class::ClassType;
@@ -73,13 +74,6 @@ impl Var {
     fn zero(&mut self) {
         self.0 = Unique::zero();
     }
-}
-
-/// Bundles together type param info for passing around while building TParams.
-#[derive(Debug, Clone, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TParamInfo {
-    pub quantified: Quantified,
-    pub variance: PreInferenceVariance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -513,8 +507,8 @@ pub enum Type {
     Any(AnyStyle),
     Never(NeverStyle),
     TypeAlias(TypeAlias),
-    /// Represents the result of a super() call. The first ClassType is the class that attribute lookup
-    /// on the super instance should be done on (*not* the class passed to the super() call), and the second
+    /// Represents the result of a super() call. The first ClassType is the point in the MRO that attribute lookup
+    /// on the super instance should start at (*not* the class passed to the super() call), and the second
     /// ClassType is the second argument (implicit or explicit) to the super() call. For example, in:
     ///   class A: ...
     ///   class B(A): ...
@@ -891,6 +885,10 @@ impl Type {
         self.check_func_metadata(&|meta| meta.flags.is_overload)
     }
 
+    pub fn is_deprecated(&self) -> bool {
+        self.check_func_metadata(&|meta| meta.flags.is_deprecated)
+    }
+
     pub fn has_final_decoration(&self) -> bool {
         self.check_func_metadata(&|meta| meta.flags.has_final_decoration)
     }
@@ -1001,9 +999,26 @@ impl Type {
     }
 
     pub fn anon_callables(self) -> Self {
-        self.transform(&mut |ty| {
+        self.transform(&mut |mut ty| {
             if let Type::Function(func) = ty {
                 *ty = Type::Callable(Box::new(func.signature.clone()));
+            }
+            // Anonymize posonly parameters in callables and paramspec values.
+            fn transform_params(params: &mut ParamList) {
+                for param in params.items_mut() {
+                    if let Param::PosOnly(Some(_), ty, req) = param {
+                        *param = Param::PosOnly(None, ty.clone(), *req);
+                    }
+                }
+            }
+            ty.transform_callable(&mut |callable: &mut Callable| match &mut callable.params {
+                Params::List(params) => {
+                    transform_params(params);
+                }
+                _ => {}
+            });
+            if let Type::ParamSpecValue(params) = &mut ty {
+                transform_params(params);
             }
         })
     }

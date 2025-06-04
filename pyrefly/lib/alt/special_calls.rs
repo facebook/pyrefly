@@ -100,7 +100,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if args.len() == 1 {
             let mut type_info = self.expr_infer_type_info(&args[0], errors);
             type_info.visit_mut(&mut |ty| {
-                *ty = self.for_display(self.solver().expand(ty.clone()));
+                *ty = self.for_display(ty.clone());
             });
             self.error(
                 errors,

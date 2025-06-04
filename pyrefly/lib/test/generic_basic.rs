@@ -703,6 +703,42 @@ reveal_type(B[int, str, float]()) # E: B[tuple[int, str], float, [int, str]]
 );
 
 testcase!(
+    bug = "should raise an error on bad_curry",
+    test_functools_partial_pattern,
+    r#"
+from typing import Any, Callable, Concatenate, Generic, ParamSpec, TypeVar, TypeVarTuple, overload
+
+_P1 = ParamSpec("_P1")
+_P2 = ParamSpec("_P2")
+_T = TypeVar("_T")
+_R_co = TypeVar("_R_co", covariant=True)
+_Ts = TypeVarTuple("_Ts")
+
+class partial(Generic[_P1, _P2, _T, _R_co, *_Ts]):
+    @overload
+    def __new__(cls, __func: Callable[_P1, _R_co]) -> partial[_P1, _P1, Any, _R_co]: ...
+    @overload
+    def __new__(cls, __func: Callable[Concatenate[*_Ts, _P2], _R_co], *args: *_Ts) -> partial[Concatenate[*_Ts, _P2], _P2, Any, _R_co, *_Ts]: ...
+    @overload
+    def __new__(cls, __func: Callable[_P1, _R_co], *args: *_Ts, **kwargs: _T) -> partial[_P1, ..., _T, _R_co, *_Ts]: ...
+    def __new__(cls, __func, *args, **kwargs):
+        return super().__new__(cls)
+    def __call__(self, *args: _P2.args, **kwargs: _P2.kwargs) -> _R_co: ...
+
+def many_params(a: int, b: str, c: int, d: str) -> tuple[int, str]:
+    return a + c, b + d
+
+o1: tuple[int, str] = many_params(1, 'a', 2, 'b')
+
+curry = partial(many_params, 17, 'foo')
+o2a = curry(42, 'bar')
+
+bad_curry = partial(many_params, 1, 'a', 2, 'b', 3, 'c', 4, 'd')
+o2b = bad_curry(7, 11)
+    "#,
+);
+
+testcase!(
     test_typevartuple_default_is_typevartuple,
     r#"
 from typing import TypeVarTuple, Unpack

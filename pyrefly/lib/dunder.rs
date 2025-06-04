@@ -13,6 +13,7 @@ pub const AEXIT: Name = Name::new_static("__aexit__");
 pub const ALL: Name = Name::new_static("__all__");
 pub const CALL: Name = Name::new_static("__call__");
 pub const CONTAINS: Name = Name::new_static("__contains__");
+pub const DATACLASS_FIELDS: Name = Name::new_static("__dataclass_fields__");
 pub const DEBUG: Name = Name::new_static("__debug__");
 pub const DELITEM: Name = Name::new_static("__delitem__");
 pub const DOC: Name = Name::new_static("__doc__");

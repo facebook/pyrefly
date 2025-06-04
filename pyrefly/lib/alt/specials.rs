@@ -201,11 +201,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if is_valid_literal(&t) {
                     literals.push(t)
                 } else {
-                    errors.add(
+                    self.error(
+                        errors,
                         x.range(),
-                        format!("Invalid type inside literal, `{t}`"),
                         ErrorKind::InvalidLiteral,
                         None,
+                        format!("Invalid type inside literal, `{t}`"),
                     );
                     literals.push(Type::any_error())
                 }
@@ -225,15 +226,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     Type::Any(AnyStyle::Error) => literals.push(Type::any_error()),
                     _ => {
-                        errors.add(
+                        self.error(
+                            errors,
                             *range,
+                            ErrorKind::InvalidLiteral,
+                            None,
                             format!(
                                 "`{}.{}` is not a valid enum member",
                                 value.display_with(self.module_info()),
                                 member_name.id
                             ),
-                            ErrorKind::InvalidLiteral,
-                            None,
                         );
                         literals.push(Type::any_error())
                     }
@@ -245,22 +247,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::Type(box lit @ Type::Literal(_)) => literals.push(lit.clone()),
                     Type::Any(AnyStyle::Error) => literals.push(Type::any_error()),
                     _ => {
-                        errors.add(
+                        self.error(
+                            errors,
                             x.range(),
-                            "Invalid literal expression".to_owned(),
                             ErrorKind::InvalidLiteral,
                             None,
+                            "Invalid literal expression".to_owned(),
                         );
                         literals.push(Type::any_error())
                     }
                 });
             }
             _ => {
-                errors.add(
+                self.error(
+                    errors,
                     x.range(),
-                    "Invalid literal expression".to_owned(),
                     ErrorKind::InvalidLiteral,
                     None,
+                    "Invalid literal expression".to_owned(),
                 );
                 literals.push(Type::any_error())
             }
@@ -374,7 +378,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             )),
                             Some((Tuple::Concrete(elts), false)) => {
                                 Type::type_form(Type::callable(
-                                    elts.map(|t| Param::PosOnly(t.clone(), Required::Required)),
+                                    elts.map(|t| {
+                                        Param::PosOnly(None, t.clone(), Required::Required)
+                                    }),
                                     ret,
                                 ))
                             }

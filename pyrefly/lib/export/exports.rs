@@ -144,8 +144,6 @@ impl Exports {
             for (name, definition) in self.0.definitions.definitions.iter_hashed() {
                 let export = match definition.style {
                     DefinitionStyle::Local
-                    | DefinitionStyle::Nonlocal
-                    | DefinitionStyle::Global
                     // If the import is invalid, the final location is this module.
                     | DefinitionStyle::ImportInvalidRelative => {
                         ExportLocation::ThisModule(Export {location: definition.range, docstring: definition.docstring.clone() })

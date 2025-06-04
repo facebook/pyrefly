@@ -365,3 +365,200 @@ class P(Protocol):
         self.y = y  # E: Attribute `y` is implicitly defined by assignment in method `f`, which is not a constructor
     "#,
 );
+
+testcase!(
+    test_protocol_runtime_checkable_isinstance,
+    r#"
+from typing import Protocol, runtime_checkable
+
+# Protocol without @runtime_checkable
+class NonRuntimeProtocol(Protocol):
+    def method(self) -> int: ...
+
+# Protocol with @runtime_checkable
+@runtime_checkable
+class RuntimeProtocol(Protocol):
+    def method(self) -> int: ...
+
+class ConcreteClass:
+    def method(self) -> int:
+        return 42
+
+obj = ConcreteClass()
+
+# These should fail - protocol not decorated with @runtime_checkable
+isinstance(obj, NonRuntimeProtocol)  # E: Protocol `NonRuntimeProtocol` is not decorated with @runtime_checkable and cannot be used with isinstance()
+issubclass(ConcreteClass, NonRuntimeProtocol)  # E: Protocol `NonRuntimeProtocol` is not decorated with @runtime_checkable and cannot be used with issubclass()
+
+# These should work - protocol is decorated with @runtime_checkable
+isinstance(obj, RuntimeProtocol)
+issubclass(ConcreteClass, RuntimeProtocol)
+"#,
+);
+
+testcase!(
+    test_protocol_data_protocol_issubclass,
+    r#"
+from typing import Protocol, runtime_checkable
+
+# Data protocol (has non-method members)
+@runtime_checkable
+class DataProtocol(Protocol):
+    x: int
+    def method(self) -> str: ...
+
+# Non-data protocol (only methods)
+@runtime_checkable
+class NonDataProtocol(Protocol):
+    def method(self) -> str: ...
+
+class ConcreteClass:
+    x: int = 42
+    def method(self) -> str:
+        return "hello"
+
+obj = ConcreteClass()
+
+# isinstance should work for both data and non-data protocols
+isinstance(obj, DataProtocol)
+isinstance(obj, NonDataProtocol)
+
+# issubclass should work for non-data protocols
+issubclass(ConcreteClass, NonDataProtocol)
+
+# issubclass should fail for data protocols
+issubclass(ConcreteClass, DataProtocol)  # E: Protocol `DataProtocol` has non-method members and cannot be used with issubclass()
+"#,
+);
+
+testcase!(
+    test_protocol_union_isinstance,
+    r#"
+from typing import Protocol, runtime_checkable, Union
+
+@runtime_checkable
+class Protocol1(Protocol):
+    def method1(self) -> int: ...
+
+class NonRuntimeProtocol(Protocol):
+    def method2(self) -> str: ...
+
+@runtime_checkable
+class DataProtocol(Protocol):
+    x: int
+
+class ConcreteClass:
+    x: int = 42
+    def method1(self) -> int:
+        return 1
+    def method2(self) -> str:
+        return "hello"
+
+obj = ConcreteClass()
+
+# Union with non-runtime-checkable protocol should fail
+isinstance(obj, (Protocol1, NonRuntimeProtocol))  # E: Protocol `NonRuntimeProtocol` is not decorated with @runtime_checkable and cannot be used with isinstance()
+
+# issubclass with data protocol in union should fail
+issubclass(ConcreteClass, (Protocol1, DataProtocol))  # E: Protocol `DataProtocol` has non-method members and cannot be used with issubclass()
+"#,
+);
+
+testcase!(
+    test_protocol_narrowing_behavior_unions,
+    r#"
+from typing import Protocol, runtime_checkable, Union
+
+@runtime_checkable
+class ReadableProtocol(Protocol):
+    def read(self) -> str: ...
+
+@runtime_checkable
+class WritableProtocol(Protocol):
+    def write(self, data: str) -> None: ...
+
+class File:
+    def read(self) -> str:
+        return "data"
+    def write(self, data: str) -> None:
+        pass
+
+class ReadOnlyFile:
+    def read(self) -> str:
+        return "data"
+
+def process_file(f: Union[ReadableProtocol, WritableProtocol]) -> None:
+    if isinstance(f, ReadableProtocol):
+        data = f.read()
+    if isinstance(f, WritableProtocol):
+        f.write("test")
+
+# These should work
+process_file(File())
+process_file(ReadOnlyFile())
+"#,
+);
+
+testcase!(
+    test_protocol_difference_data_vs_non_data,
+    r#"
+from typing import Protocol, runtime_checkable
+
+# Data protocol with both data and methods
+@runtime_checkable
+class MixedDataProtocol(Protocol):
+    name: str
+    value: int
+    def process(self) -> None: ...
+
+# Non-data protocol with only methods
+@runtime_checkable
+class MethodOnlyProtocol(Protocol):
+    def process(self) -> None: ...
+    def validate(self) -> bool: ...
+
+# Protocol with only data (no methods)
+@runtime_checkable
+class DataOnlyProtocol(Protocol):
+    name: str
+    value: int
+
+class Implementation:
+    name: str = "test"
+    value: int = 42
+    
+    def process(self) -> None:
+        pass
+    
+    def validate(self) -> bool:
+        return True
+
+# isinstance should work for all
+isinstance(Implementation(), MixedDataProtocol)
+isinstance(Implementation(), MethodOnlyProtocol)
+isinstance(Implementation(), DataOnlyProtocol)
+
+# issubclass should only work for non-data protocols
+issubclass(Implementation, MethodOnlyProtocol)  # OK - only methods
+issubclass(Implementation, MixedDataProtocol)   # E: Protocol `MixedDataProtocol` has non-method members and cannot be used with issubclass()
+issubclass(Implementation, DataOnlyProtocol)   # E: Protocol `DataOnlyProtocol` has non-method members and cannot be used with issubclass()
+"#,
+);
+
+testcase!(
+    test_runtime_checkable_non_protocol,
+    r#"
+from typing import runtime_checkable
+
+# Applying @runtime_checkable to a non-protocol class should fail
+@runtime_checkable  
+class RegularClass: # E: @runtime_checkable can only be applied to Protocol classes
+    def method(self) -> int:
+        return 42
+
+# This should also fail
+@runtime_checkable  
+class AnotherClass: # E: @runtime_checkable can only be applied to Protocol classes  
+    x: int = 5
+"#,
+);

@@ -21,7 +21,7 @@ f4: Callable[[int], None] = lambda x: reveal_type(x)  # E: revealed type: int
 f5: Callable[[int], int] = lambda x: x
 f6: Callable[[int], int] = lambda x: "foo"  # E: `(x: int) -> Literal['foo']` is not assignable to `(int) -> int`
 f7: Callable[[int, int], int] = lambda x: 1  # E: `(x: int) -> Literal[1]` is not assignable to `(int, int) -> int`
-f8: Callable[[int], int] = lambda x: x + "foo" # E: Argument `Literal['foo']` is not assignable to parameter with type `int`
+f8: Callable[[int], int] = lambda x: x + "foo" # E: Argument `Literal['foo']` is not assignable to parameter `value` with type `int`
 "#,
 );
 
@@ -335,6 +335,17 @@ testcase!(
     r#"
 def f(x: int = ""):  # E: Default `Literal['']` is not assignable to parameter `x` with type `int`
     pass
+    "#,
+);
+
+testcase!(
+    test_infer_param_type_from_default,
+    r#"
+from typing import Any, assert_type
+def f(x, y = "", z = None):
+    assert_type(x, Any)
+    assert_type(y, Any | str)
+    assert_type(z, Any | None)
     "#,
 );
 
@@ -752,5 +763,14 @@ def f(): ...
 def g() -> str: ...
 assert_type(f(), None)
 assert_type(g(), str)
+    "#,
+);
+
+testcase!(
+    test_posonly_kwargs_duplicate_ok,
+    r#"
+def f(x: int, /, **kwargs: str):
+    pass
+f(0, x="1")
     "#,
 );

@@ -11,12 +11,14 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_util::arc_id::ArcId;
 use ruff_python_ast::ModModule;
 use ruff_source_file::LineIndex;
 use ruff_source_file::OneIndexed;
 use ruff_source_file::SourceLocation;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::vec1;
 
 use crate::error::collector::ErrorCollector;
 use crate::error::kind::ErrorKind;
@@ -57,8 +59,8 @@ impl Display for SourceRange {
 }
 
 /// Information about a module, notably its name, path, and contents.
-#[derive(Debug, Clone, Dupe)]
-pub struct ModuleInfo(Arc<ModuleInfoInner>);
+#[derive(Debug, Clone, Dupe, PartialEq, Eq, Hash)]
+pub struct ModuleInfo(ArcId<ModuleInfoInner>);
 
 #[derive(Debug, Clone)]
 struct ModuleInfoInner {
@@ -76,7 +78,7 @@ impl ModuleInfo {
         let index = LineIndex::from_source_text(&contents);
         let ignore = Ignore::new(&contents);
         let is_generated = contents.contains(GENERATED_TOKEN);
-        Self(Arc::new(ModuleInfoInner {
+        Self(ArcId::new(ModuleInfoInner {
             name,
             path,
             index,
@@ -156,9 +158,9 @@ impl ModuleInfo {
         for err in parse_errors {
             errors.add(
                 err.location,
-                format!("Parse error: {}", err.error),
                 ErrorKind::ParseError,
                 None,
+                vec1![format!("Parse error: {}", err.error)],
             );
         }
         SemanticSyntaxContext::new(version, errors).visit(&module);
@@ -177,8 +179,30 @@ impl ModuleInfo {
         )
     }
 
-    pub fn is_ignored(&self, source_range: &SourceRange, msg: &str) -> bool {
-        self.0.ignore.is_ignored(source_range, msg)
+    fn content_at_line(&self, line: OneIndexed) -> &str {
+        let start = self.0.index.line_start(line, &self.0.contents);
+        let end = self.0.index.line_end(line, &self.0.contents);
+        &self.0.contents[start.to_usize()..end.to_usize()]
+    }
+
+    pub fn is_ignored(&self, source_range: &SourceRange) -> bool {
+        // Extend the range of the error to include comment lines before it.
+        // This makes it so that the preceding ignore could "see through" comments.
+        let start_line = {
+            let mut start_line = source_range.start.row;
+            while let Some(earlier_line) = start_line.checked_sub(OneIndexed::MIN) {
+                let earlier_line_content = &self.content_at_line(earlier_line).trim();
+                if Ignore::get_suppression_kind(earlier_line_content).is_some() {
+                    break;
+                } else if earlier_line_content.starts_with('#') {
+                    start_line = earlier_line;
+                } else {
+                    break;
+                }
+            }
+            start_line
+        };
+        self.0.ignore.is_ignored(start_line, source_range.end.row)
     }
 
     pub fn ignore(&self) -> &Ignore {
@@ -239,9 +263,9 @@ impl<'me> ruff_python_parser::semantic_errors::SemanticSyntaxContext
     ) {
         self.errors.add(
             error.range,
-            error.to_string(),
             ErrorKind::InvalidSyntax,
             None,
+            vec1![error.to_string()],
         );
     }
 }

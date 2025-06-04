@@ -1,6 +1,10 @@
 name: pyrefly
 on:
   push:
+    paths:
+      - '**/*'
+      - '!.*'
+      - '.github/workflows/pyrefly.yml'
   pull_request:
   schedule:
   - cron: '0 12 * * 1' # 12pm Monday

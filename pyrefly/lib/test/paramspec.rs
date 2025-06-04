@@ -411,3 +411,17 @@ def f(f: TA):
     f(1, 2, 3, 4, 5)
     "#,
 );
+
+testcase!(
+    test_in_try_except,
+    r#"
+from collections.abc import Callable
+def run[**P, R](func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
+    while True:
+        try:
+            return func(*args,**kwargs)
+        except Exception:
+            pass
+    raise NotImplementedError("Unreachable")
+  "#,
+);

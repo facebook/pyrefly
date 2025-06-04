@@ -38,10 +38,6 @@ use crate::sys_info::SysInfo;
 pub enum DefinitionStyle {
     /// Defined in this module, e.g. `x = 1` or `def x(): ...`
     Local,
-    /// Defined in this scope from `nonlocal x`
-    Nonlocal,
-    /// Defined in this scope from `global x`
-    Global,
     /// Imported with an alias, e.g. `from x import y as z`
     ImportAs(ModuleName),
     /// Imported with an alias, where the alias is identical, e.g. `from x import y as y`
@@ -75,6 +71,12 @@ pub struct Definition {
 pub struct Definitions {
     /// All the things defined in this module.
     pub definitions: SmallMap<Name, Definition>,
+    /// All the global names declared in this scope.
+    /// TODO(grievejia): This field is currently unused, but may be useful in the future.
+    pub globals: SmallSet<Name>,
+    /// All the nonlocal names declared in this scope.
+    /// TODO(grievejia): This field is currently unused, but may be useful in the future.
+    pub nonlocals: SmallSet<Name>,
     /// All the modules that are imported with `from x import *`.
     pub import_all: SmallMap<ModuleName, TextRange>,
     /// The `__all__` variable contents.
@@ -353,12 +355,12 @@ impl<'a> DefinitionsBuilder<'a> {
             }
             Stmt::Nonlocal(x) => {
                 for name in &x.names {
-                    self.add_name(&name.id, name.range, DefinitionStyle::Nonlocal, None)
+                    self.inner.nonlocals.insert(name.id.clone());
                 }
             }
             Stmt::Global(x) => {
                 for name in &x.names {
-                    self.add_name(&name.id, name.range, DefinitionStyle::Global, None)
+                    self.inner.globals.insert(name.id.clone());
                 }
             }
             Stmt::Assign(x) => {

@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Display;
 use std::mem;
@@ -20,6 +19,7 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::error::collector::ErrorCollector;
@@ -378,10 +378,10 @@ impl Solver {
         let kind = tcc.kind.as_error_kind();
         match tcc.context {
             Some(ctx) => {
-                errors.add(loc, msg, kind, Some(&|| ctx.clone()));
+                errors.add(loc, kind, Some(&|| ctx.clone()), vec1![msg]);
             }
             None => {
-                errors.add(loc, msg, kind, None);
+                errors.add(loc, kind, None, vec1![msg]);
             }
         }
     }
@@ -448,22 +448,19 @@ impl Solver {
         fn expand(
             t: Type,
             variables: &SmallMap<Var, Variable>,
-            seen: &mut HashSet<Var>,
+            recurser: &Recurser<Var>,
             res: &mut Vec<Type>,
         ) {
             match t {
-                Type::Var(v) if seen.insert(v) => {
-                    match variables.get(&v) {
-                        Some(Variable::Answer(t)) => {
-                            expand(t.clone(), variables, seen, res);
-                        }
-                        _ => res.push(v.to_type()),
+                Type::Var(v) if let Some(_guard) = recurser.recurse(v) => match variables.get(&v) {
+                    Some(Variable::Answer(t)) => {
+                        expand(t.clone(), variables, recurser, res);
                     }
-                    seen.remove(&v);
-                }
+                    _ => res.push(v.to_type()),
+                },
                 Type::Union(ts) => {
                     for t in ts {
-                        expand(t, variables, seen, res);
+                        expand(t, variables, recurser, res);
                     }
                 }
                 _ => res.push(t),
@@ -488,7 +485,7 @@ impl Solver {
                 // possibilities, so just ignore it.
                 let mut res = Vec::new();
                 // First expand all union/var into a list of the possible unions
-                expand(t, &lock, &mut HashSet::new(), &mut res);
+                expand(t, &lock, &Recurser::new(), &mut res);
                 // Then remove any reference to self, before unioning it back together
                 res.retain(|x| x != &Type::Var(v));
                 lock.insert(v, Variable::Answer(unions(res)));

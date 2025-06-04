@@ -803,7 +803,7 @@ testcase!(
     test_issubclass_error,
     r#"
 def f(x: int):
-    if issubclass(x, int):  # E: Argument `int` is not assignable to parameter with type `type`
+    if issubclass(x, int):  # E: Argument `int` is not assignable to parameter `cls` with type `type`
         return True
     "#,
 );

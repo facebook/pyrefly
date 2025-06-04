@@ -126,14 +126,13 @@ def test[*Ts](x: A[int, str], y: A[str, str, str], z: A[*Ts]):
 );
 
 testcase!(
-    bug = "TODO: typevartuple should be iterable",
     test_type_var_tuple_iterate,
     r#"
 from typing import TypeVarTuple
 
 _Ts = TypeVarTuple("_Ts")
 def f(*args: *_Ts) -> None: 
-    f(*args) # E: Type `TypeVarTuple[_Ts]` is not iterable
+    f(*args)
 "#,
 );
 

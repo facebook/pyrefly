@@ -151,27 +151,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
         errors: &ErrorCollector,
     ) -> Arc<DecoratedFunction> {
-        let check_default = |name: &Identifier, default: &Option<Box<Expr>>, ty: &Type| {
-            let mut required = Required::Required;
-            if let Some(default) = default {
-                required = Required::Optional;
-                if stub_or_impl != FunctionStubOrImpl::Stub
-                    || !matches!(default.as_ref(), Expr::EllipsisLiteral(_))
-                {
-                    self.expr(
-                        default,
-                        Some((ty, &|| {
-                            TypeCheckContext::of_kind(TypeCheckKind::FunctionParameterDefault(
-                                name.id.clone(),
-                            ))
-                        })),
-                        errors,
-                    );
-                }
-            }
-            required
-        };
-
         let defining_cls = class_key.and_then(|k| self.get_idx(*k).0.dupe());
         let mut self_type = if def.name.id == dunder::NEW || def.name.id == dunder::INIT_SUBCLASS {
             // __new__ and __init_subclass__ are staticmethods, and do not take a self parameter.
@@ -185,6 +164,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut is_overload = false;
         let mut is_staticmethod = false;
         let mut is_classmethod = false;
+        let mut is_deprecated = false;
         let mut is_property_getter = false;
         let mut is_property_setter_with_getter = None;
         let mut has_enum_member_decoration = false;
@@ -194,6 +174,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter(|k| {
                 let decorator = self.get_idx(**k);
+
                 match decorator.ty().callee_kind() {
                     Some(CalleeKind::Function(FunctionKind::Overload)) => {
                         is_overload = true;
@@ -206,6 +187,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(CalleeKind::Class(ClassKind::ClassMethod)) => {
                         is_classmethod = true;
                         false
+                    }
+                    Some(CalleeKind::Function(FunctionKind::Deprecated)) => {
+                        is_deprecated = true;
+                        true
                     }
                     Some(CalleeKind::Class(ClassKind::Property)) => {
                         is_property_getter = true;
@@ -230,7 +215,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         has_final_decoration = true;
                         false
                     }
-                    _ => true,
+                    _ => {
+                        if decorator.ty().to_string() == *"deprecated".to_owned() {
+                            is_deprecated = true;
+                        }
+                        true
+                    }
                 }
             })
             .collect::<Vec<_>>();
@@ -244,18 +234,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self_type = self_type.map(Type::type_form);
         }
 
-        let mut get_param_ty = |name: &Identifier| {
+        // Determine the type of the parameter based on its binding. Left is annotated parameter, right is unannotated
+        let mut get_param_ty = |name: &Identifier, default: Option<&Expr>| {
             let ty = match self.bindings().get_function_param(name) {
-                Either::Left(idx) => self.get_idx(idx).annotation.get_type().clone(),
+                Either::Left(idx) => {
+                    // If the parameter is annotated, we check the default value against the annotation
+                    let param_ty = self.get_idx(idx).annotation.get_type().clone();
+                    if let Some(default) = default
+                        && (stub_or_impl != FunctionStubOrImpl::Stub
+                            || !matches!(default, Expr::EllipsisLiteral(_)))
+                    {
+                        self.expr(
+                            default,
+                            Some((&param_ty, &|| {
+                                TypeCheckContext::of_kind(TypeCheckKind::FunctionParameterDefault(
+                                    name.id.clone(),
+                                ))
+                            })),
+                            errors,
+                        );
+                    }
+                    param_ty
+                }
                 Either::Right(var) => {
                     // If this is the first parameter and there is a self type, solve to `Self`.
                     // We only try to solve the first param for now. Other unannotated params
-                    // are also Var, but will always be forced to Any. In the future, we might
-                    // consider contextual information to infer parameter types, like decorator
-                    // applications.
+                    // are also Var. If a default value of type T is provided, it will resolve to Any | T.
+                    // Otherwise, it will be forced to Any
                     if let Some(ty) = &self_type {
                         self.solver()
                             .is_subset_eq(&var.to_type(), ty, self.type_order());
+                    } else if let Some(default) = default
+                        && (stub_or_impl != FunctionStubOrImpl::Stub
+                            || !matches!(default, Expr::EllipsisLiteral(_)))
+                    {
+                        let default_ty = self.expr(default, None, errors);
+                        self.solver().is_subset_eq(
+                            &self.union(Type::any_implicit(), default_ty),
+                            &var.to_type(),
+                            self.type_order(),
+                        );
                     }
                     self.solver().force_var(var)
                 }
@@ -267,17 +285,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut paramspec_kwargs = None;
         let mut params = Vec::with_capacity(def.parameters.len());
         params.extend(def.parameters.posonlyargs.iter().map(|x| {
-            let ty = get_param_ty(&x.parameter.name);
-            let required = check_default(&x.parameter.name, &x.default, &ty);
-            Param::PosOnly(ty, required)
+            let ty = get_param_ty(&x.parameter.name, x.default.as_deref());
+            let required = if x.default.is_some() {
+                Required::Optional
+            } else {
+                Required::Required
+            };
+            Param::PosOnly(Some(x.parameter.name.id.clone()), ty, required)
         }));
         params.extend(def.parameters.args.iter().map(|x| {
-            let ty = get_param_ty(&x.parameter.name);
-            let required = check_default(&x.parameter.name, &x.default, &ty);
+            let ty = get_param_ty(&x.parameter.name, x.default.as_deref());
+            let required = if x.default.is_some() {
+                Required::Optional
+            } else {
+                Required::Required
+            };
             Param::Pos(x.parameter.name.id.clone(), ty, required)
         }));
         params.extend(def.parameters.vararg.iter().map(|x| {
-            let ty = get_param_ty(&x.name);
+            let ty = get_param_ty(&x.name, None);
             if let Type::Args(q) = &ty {
                 paramspec_args = Some(q.clone());
             }
@@ -298,8 +324,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         params.extend(def.parameters.kwonlyargs.iter().map(|x| {
-            let ty = get_param_ty(&x.parameter.name);
-            let required = check_default(&x.parameter.name, &x.default, &ty);
+            let ty = get_param_ty(&x.parameter.name, x.default.as_deref());
+            let required = if x.default.is_some() {
+                Required::Optional
+            } else {
+                Required::Required
+            };
             Param::KwOnly(x.parameter.name.id.clone(), ty, required)
         }));
         params.extend(def.parameters.kwarg.iter().map(|x| {
@@ -319,13 +349,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .get(&Key::ReturnType(ShortIdentifier::new(&def.name)))
             .arc_clone_ty();
 
-        let ret = if def.is_async && !self.is_async_generator(&ret) {
-            self.stdlib
-                .coroutine(Type::any_implicit(), Type::any_implicit(), ret)
-                .to_type()
-        } else {
-            ret
-        };
         let mut tparams = self.scoped_type_params(def.type_params.as_deref(), errors);
         let legacy_tparams = legacy_tparams
             .iter()
@@ -374,7 +397,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 params
                     .into_iter()
                     .filter_map(|p| match p {
-                        Param::PosOnly(ty, _) => Some(ty),
+                        Param::PosOnly(_, ty, _) => Some(ty),
                         Param::Pos(_, ty, _) => Some(ty),
                         _ => None,
                     })
@@ -396,6 +419,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 is_overload,
                 is_staticmethod,
                 is_classmethod,
+                is_deprecated,
                 is_property_getter,
                 is_property_setter_with_getter,
                 has_enum_member_decoration,

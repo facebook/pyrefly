@@ -82,7 +82,7 @@ pub fn run_test_lsp(test_case: TestCase) {
         scope.spawn(move || {
             run_lsp(Arc::new(connection), || Ok(()), args)
                 .map(|_| ())
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                .map_err(|e| std::io::Error::other(e.to_string()))
         });
         // this thread sends messages to the language server (from test case)
         scope.spawn(move || {

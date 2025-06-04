@@ -194,13 +194,13 @@ from typing import assert_type, Literal
 x = b"far"
 
 assert_type(x[0], Literal[102])
-x[3.14]  # E: Cannot index into `Literal[b'far']`  # E: Argument `float` is not assignable to parameter with type `SupportsIndex` in function `bytes.__getitem__`
+x[3.14]  # E: Cannot index into `Literal[b'far']`  # E: Argument `float` is not assignable to parameter `key` with type `SupportsIndex` in function `bytes.__getitem__`
 y: Literal[0] = 0
 assert_type(x[y], Literal[102])
 
 # Negative index case
 assert_type(x[-1], Literal[114])
-x[-6.28]  # E: Cannot index into `Literal[b'far']`  # E: Argument `float` is not assignable to parameter with type `SupportsIndex` in function `bytes.__getitem__`
+x[-6.28]  # E: Cannot index into `Literal[b'far']`  # E: Argument `float` is not assignable to parameter `key` with type `SupportsIndex` in function `bytes.__getitem__`
 
 # The `bytes` type is correct, but ideally we would understand
 # literal slices and be able to give back the literal bytes.

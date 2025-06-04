@@ -63,9 +63,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let scoped_tparams = self.scoped_type_params(x.type_params.as_deref(), errors);
         let bases = bases.map(|x| self.base_class_of(x, errors));
         let name = &x.name;
-        let tparams_info = self.class_tparams(name, scoped_tparams, bases, legacy_tparams, errors);
+        let class_tparams = self.class_tparams(name, scoped_tparams, bases, legacy_tparams, errors);
 
-        let tparams = self.type_params(name.range, tparams_info, errors);
+        let tparams = self.type_params(name.range, class_tparams, errors);
 
         Class::new(
             def_index,
@@ -151,13 +151,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.get_metadata_for_class(cls).has_base_any()
     }
 
-    pub fn class_self_param(&self, cls: &Class, named: bool) -> Param {
+    pub fn class_self_param(&self, cls: &Class, posonly: bool) -> Param {
         let ty = self.instantiate(cls);
         let req = Required::Required;
-        if named {
-            Param::Pos(Name::new_static("self"), ty, req)
+        let name = Name::new_static("self");
+        if posonly {
+            Param::PosOnly(Some(name), ty, req)
         } else {
-            Param::PosOnly(ty, req)
+            Param::Pos(name, ty, req)
         }
     }
 }

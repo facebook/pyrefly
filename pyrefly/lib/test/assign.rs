@@ -15,7 +15,7 @@ from typing import assert_type
 
 x: list[int] = [0, 1, 2]
 x[0], x[1] = 3, 4
-x[0], x[1] = 3, "foo"  # E: Item assignment is not supported on `list[int]`\n  No matching overload found for function `list.__setitem__`, reporting errors for closest overload: `(SupportsIndex, int) -> None`  # E: Argument `Literal['foo']` is not assignable to parameter with type `int` in function `list.__setitem__`
+x[0], x[1] = 3, "foo"  # E: Item assignment is not supported on `list[int]`\n  No matching overload found for function `list.__setitem__`, reporting errors for closest overload: `(key: SupportsIndex, value: int, /) -> None`  # E: Argument `Literal['foo']` is not assignable to parameter `value` with type `int` in function `list.__setitem__`
 "#,
 );
 
@@ -33,7 +33,7 @@ y[0] = 1
 assert_type(y, list[int])
 
 z = [1, 2, 3]
-z[0] = "oops"  # E: No matching overload found  # E: `Literal['oops']` is not assignable to parameter with type `int`
+z[0] = "oops"  # E: No matching overload found  # E: `Literal['oops']` is not assignable to parameter `value` with type `int`
 
 a: int = 1
 a[0] = 1  # E: `int` has no attribute `__setitem__`
@@ -48,6 +48,17 @@ testcase!(
     r#"
 x: str = 1  # E: `Literal[1]` is not assignable to `str`
 y = x
+"#,
+);
+
+testcase!(
+    test_reassign_myself,
+    r#"
+from typing import assert_type
+x = [1, 2, 3]
+for x in x:
+    pass
+assert_type(x, int)
 "#,
 );
 
@@ -721,13 +732,12 @@ reveal_type(x) # E: revealed type: Unknown
 );
 
 testcase!(
-    bug = "We have two functions with the same name which should be an error. Also, reveal_type should not change the bahavior of a function",
     test_reveal_type_assign,
     r#"
 from typing import reveal_type
 
 def f(x):
-    x = 3 # E: `Literal[3]` is not assignable to variable `x` with type `str`
+    x = 3
     x = "None"
     reveal_type(x) # E: revealed type: Literal['None']
 

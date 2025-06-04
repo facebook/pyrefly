@@ -268,7 +268,7 @@ mod tests {
         let mut state = Playground::new();
         state.update_source("from t".to_owned());
         let expected_errors = &[
-            "Could not find import of `t`, no search path or site package path",
+            "Could not find import of `t`\n  No search path or site package path",
             "Parse error: Expected 'import', found newline",
         ];
         let expected_error_kinds = &[ErrorKind::ImportError, ErrorKind::ParseError];

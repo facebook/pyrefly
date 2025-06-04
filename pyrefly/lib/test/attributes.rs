@@ -170,7 +170,7 @@ class C3:
     def f(x: int, /) -> str:
         return ""
 def foo(x: Callable[[int], str], c: C, c2: C2, c3: C3):
-    C.f = x  # E: `(int) -> str` is not assignable to attribute `f` with type `(Self@C, int) -> str`
+    C.f = x  # E: `(int) -> str` is not assignable to attribute `f` with type `(self: Self@C, x: int, /) -> str`
     c.f = x
     C2.f = x
     c2.f = x

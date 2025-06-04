@@ -2,14 +2,11 @@
 
 [package]
 name = "pyrefly_util"
-version = "0.17.0"
+version = "0.18.0"
 authors = ["Meta"]
-edition = "2021"
+edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
 license = "MIT"
-
-[lib]
-edition = "2024"
 
 [dependencies]
 anstream = "0.6.11"

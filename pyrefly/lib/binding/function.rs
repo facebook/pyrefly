@@ -7,7 +7,6 @@
 
 use std::mem;
 
-use itertools::Either;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::AnyParameterRef;
@@ -37,14 +36,13 @@ use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyFunction;
 use crate::binding::binding::KeyLegacyTypeParam;
-use crate::binding::binding::KeyYield;
-use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::ReturnExplicit;
 use crate::binding::binding::ReturnImplicit;
 use crate::binding::binding::ReturnType;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamBuilder;
+use crate::binding::expr::Usage;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
 use crate::binding::scope::Scope;
@@ -231,6 +229,7 @@ impl<'a> BindingsBuilder<'a> {
         x: &mut StmtFunctionDef,
         func_name: &Identifier,
         class_key: Option<Idx<KeyClass>>,
+        usage: Usage,
     ) -> (
         Option<(TextRange, Idx<KeyAnnotation>)>,
         Vec<Idx<KeyLegacyTypeParam>>,
@@ -247,7 +246,7 @@ impl<'a> BindingsBuilder<'a> {
         for (param, default) in Ast::parameters_iter_mut(&mut x.parameters) {
             self.ensure_type_opt(param.annotation.as_deref_mut(), &mut legacy);
             if let Some(default) = default {
-                self.ensure_expr_opt(default.as_deref_mut());
+                self.ensure_expr_opt(default.as_deref_mut(), usage);
             }
         }
 
@@ -334,15 +333,16 @@ impl<'a> BindingsBuilder<'a> {
         stub_or_impl: FunctionStubOrImpl,
         decorators: Box<[Idx<Key>]>,
     ) {
-        let is_generator = !yields_and_returns.yields.is_empty();
+        let is_generator =
+            !(yields_and_returns.yields.is_empty() && yields_and_returns.yield_froms.is_empty());
         let return_ann = return_ann_with_range.as_ref().map(|(_, key)| *key);
 
         // Collect the keys of explicit returns.
         let return_keys = yields_and_returns
             .returns
-            .into_map(|x| {
-                self.insert_binding(
-                    Key::ReturnExplicit(x.range),
+            .into_map(|(idx, x)| {
+                self.insert_binding_idx(
+                    idx,
                     Binding::ReturnExplicit(ReturnExplicit {
                         annot: return_ann,
                         expr: x.value,
@@ -356,20 +356,12 @@ impl<'a> BindingsBuilder<'a> {
         // Collect the keys of yield expressions.
         let yield_keys = yields_and_returns
             .yields
-            .into_map(|x| match x {
-                Either::Left(x) => {
-                    // Add binding to get the send type for a yield expression.
-                    Either::Left(
-                        self.insert_binding(KeyYield(x.range), BindingYield::Yield(return_ann, x)),
-                    )
-                }
-                Either::Right(x) => {
-                    // Add binding to get the return type for a yield from expression.
-                    Either::Right(self.insert_binding(
-                        KeyYieldFrom(x.range),
-                        BindingYieldFrom::YieldFrom(return_ann, x),
-                    ))
-                }
+            .into_map(|(idx, x)| self.insert_binding_idx(idx, BindingYield::Yield(return_ann, x)))
+            .into_boxed_slice();
+        let yield_from_keys = yields_and_returns
+            .yield_froms
+            .into_map(|(idx, x)| {
+                self.insert_binding_idx(idx, BindingYieldFrom::YieldFrom(return_ann, x))
             })
             .into_boxed_slice();
 
@@ -380,6 +372,7 @@ impl<'a> BindingsBuilder<'a> {
                     returns: return_keys,
                     implicit_return,
                     yields: yield_keys,
+                    yield_froms: yield_from_keys,
                     is_async,
                     stub_or_impl,
                     decorators,
@@ -404,13 +397,13 @@ impl<'a> BindingsBuilder<'a> {
         );
     }
 
-    fn decorators(&mut self, decorator_list: Vec<Decorator>) -> Decorators {
+    fn decorators(&mut self, decorator_list: Vec<Decorator>, usage: Usage) -> Decorators {
         let has_no_type_check = decorator_list
             .iter()
             .any(|d| self.as_special_export(&d.expression) == Some(SpecialExport::NoTypeCheck));
 
         let decorators = self
-            .ensure_and_bind_decorators(decorator_list)
+            .ensure_and_bind_decorators(decorator_list, usage)
             .into_boxed_slice();
         Decorators {
             has_no_type_check,
@@ -500,6 +493,9 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn function_def(&mut self, mut x: StmtFunctionDef) {
+        let func_name = x.name.clone();
+        let def_user = self.declare_user(Key::Definition(ShortIdentifier::new(&func_name)));
+
         // Get preceding function definition, if any. Used for building an overload type.
         let (function_idx, pred_idx) = self.create_function_index(&x.name);
 
@@ -508,12 +504,11 @@ impl<'a> BindingsBuilder<'a> {
             _ => (None, None),
         };
 
-        let func_name = x.name.clone();
         self.scopes.push(Scope::annotation(x.range));
         let (return_ann_with_range, legacy_tparams) =
-            self.function_header(&mut x, &func_name, class_key);
+            self.function_header(&mut x, &func_name, class_key, def_user.usage());
 
-        let decorators = self.decorators(mem::take(&mut x.decorator_list));
+        let decorators = self.decorators(mem::take(&mut x.decorator_list), def_user.usage());
 
         let (stub_or_impl, self_assignments) = self.function_body(
             &mut x.parameters,
@@ -545,8 +540,9 @@ impl<'a> BindingsBuilder<'a> {
             },
         );
 
-        self.bind_definition(
+        self.bind_definition_user(
             &func_name,
+            def_user,
             Binding::Function(function_idx, pred_idx, metadata_key),
             FlowStyle::FunctionDef(function_idx, return_ann_with_range.is_some()),
         );

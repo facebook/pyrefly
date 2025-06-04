@@ -29,7 +29,7 @@ contributing. This file shows how to develop the extension locally.
   `buck2 build pyrefly @fbcode//mode/opt --show-output` or `cargo build` and
   either:
 
-1. Place binary at `lsp/bin/release/pyrefly(.exe)`
+1. Place binary at `lsp/bin/pyrefly(.exe)`
 2. Add the `pyrefly.lspPath` configuration key to point at it after extension
    startup.
 

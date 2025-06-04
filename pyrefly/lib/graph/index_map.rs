@@ -7,7 +7,6 @@
 
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::mem;
 
 use crate::graph::index::Idx;
 
@@ -61,7 +60,7 @@ impl<K, V> IndexMap<K, V> {
 
     pub fn insert(&mut self, key: Idx<K>, value: V) -> Option<V> {
         match self.items.get_mut(key.idx()) {
-            Some(v) => mem::replace(v, Some(value)),
+            Some(v) => v.replace(value),
             None => {
                 self.items.resize_with(key.idx() + 1, || None);
                 self.items[key.idx()] = Some(value);

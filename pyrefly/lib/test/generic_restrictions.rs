@@ -183,7 +183,7 @@ class C[T = int]:
     def meth(self, /) -> Self:
         return self
     attr: T
-reveal_type(C.meth)  # E: Forall[T, (C[TypeVar[T]]) -> C[TypeVar[T]]
+reveal_type(C.meth)  # E: Forall[T, (self: C[TypeVar[T]], /) -> C[TypeVar[T]]
 assert_type(C.attr, int)  # E: assert_type(Any, int) failed  # E: Instance-only attribute `attr` of class `C` is not visible on the class
  "#,
 );

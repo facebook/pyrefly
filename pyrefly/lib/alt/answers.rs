@@ -26,6 +26,7 @@ use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use vec1::vec1;
 
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
@@ -820,7 +821,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         msg: String,
     ) -> Type {
-        errors.add(range, msg, kind, context);
+        errors.add(range, kind, context, vec1![msg]);
         Type::any_error()
     }
 

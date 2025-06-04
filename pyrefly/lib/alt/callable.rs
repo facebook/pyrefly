@@ -202,7 +202,9 @@ impl CallArgPreEval<'_> {
 }
 
 /// Helps track matching of arguments against positional parameters in AnswersSolver::callable_infer_params.
+#[derive(PartialEq, Eq)]
 enum PosParamKind {
+    PositionalOnly,
     Positional,
     Unpacked,
     Variadic,
@@ -218,10 +220,10 @@ struct PosParam {
 impl PosParam {
     fn new(p: &Param) -> Option<Self> {
         match p {
-            Param::PosOnly(ty, _required) => Some(Self {
+            Param::PosOnly(name, ty, _required) => Some(Self {
                 ty: ty.clone(),
-                name: None,
-                kind: PosParamKind::Positional,
+                name: name.clone(),
+                kind: PosParamKind::PositionalOnly,
             }),
             Param::Pos(name, ty, _required) => Some(Self {
                 ty: ty.clone(),
@@ -246,13 +248,19 @@ impl PosParam {
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn is_param_spec_args(&self, x: &CallArg, q: Quantified, errors: &ErrorCollector) -> bool {
         match x {
-            CallArg::Star(x, _) => self.expr_infer(x, errors) == Type::Args(q),
+            CallArg::Star(x, _) => {
+                let mut ty = self.expr_infer(x, errors);
+                self.expand_type_mut(&mut ty);
+                ty == Type::Args(q)
+            }
             _ => false,
         }
     }
 
     fn is_param_spec_kwargs(&self, x: &Keyword, q: Quantified, errors: &ErrorCollector) -> bool {
-        self.expr_infer(&x.value, errors) == Type::Kwargs(q)
+        let mut ty = self.expr_infer(&x.value, errors);
+        self.expand_type_mut(&mut ty);
+        ty == Type::Kwargs(q)
     }
 
     // See comment on `callable_infer` about `arg_errors` and `call_errors`.
@@ -330,11 +338,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(PosParam {
                         ty,
                         name,
-                        kind: PosParamKind::Positional,
+                        kind: kind @ (PosParamKind::PositionalOnly | PosParamKind::Positional),
                     }) => {
                         num_positional_params += 1;
                         rparams.pop();
-                        if let Some(name) = &name {
+                        if let Some(name) = &name
+                            && kind == PosParamKind::Positional
+                        {
+                            // Remember names of positional parameters to detect duplicates.
+                            // We ignore positional-only parameters because they can't be passed in by name.
                             seen_names.insert(name.clone(), ty.clone());
                         }
                         arg_pre.post_check(
@@ -497,7 +509,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             };
             match p {
-                Param::PosOnly(_, required) => {
+                Param::PosOnly(_, _, required) => {
                     if required == Required::Required {
                         need_positional += 1;
                     }

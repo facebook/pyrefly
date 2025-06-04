@@ -575,7 +575,7 @@ impl Args {
 
         if !self.no_summary {
             info!(
-                "{} errors shown, {} errors ignored, {} modules, {} transitive dependencies, {} lines, took {timings}, peak memory {}",
+                "errors shown: {}, errors ignored: {}, modules: {}, transitive dependencies: {}, lines: {}, time: {timings}, peak memory: {}",
                 number_thousands(shown_errors_count),
                 number_thousands(errors.disabled.len() + errors.suppressed.len()),
                 number_thousands(handles.len()),

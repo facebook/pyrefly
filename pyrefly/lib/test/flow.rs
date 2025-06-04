@@ -353,7 +353,7 @@ testcase!(
 class C:
     pass
 def f(x):
-    [None for y in x if "5" + 5]  # E: `+` is not supported between `Literal['5']` and `Literal[5]`  # E: Argument `Literal[5]` is not assignable to parameter with type `str`
+    [None for y in x if "5" + 5]  # E: `+` is not supported between `Literal['5']` and `Literal[5]`  # E: Argument `Literal[5]` is not assignable to parameter `value` with type `str`
     "#,
 );
 

@@ -172,7 +172,7 @@ impl<'a> Transaction<'a> {
         }
         if let Some(id) = self.identifier_at(handle, position) {
             if self.get_bindings(handle)?.is_valid_usage(&id) {
-                return self.get_type(handle, &Key::Usage(ShortIdentifier::new(&id)));
+                return self.get_type(handle, &Key::BoundName(ShortIdentifier::new(&id)));
             } else {
                 return None;
             }
@@ -311,7 +311,11 @@ impl<'a> Transaction<'a> {
                     location,
                     docstring,
                 },
-            ) = self.key_to_export(handle, &Key::Usage(ShortIdentifier::new(&id)), INITIAL_GAS)?;
+            ) = self.key_to_export(
+                handle,
+                &Key::BoundName(ShortIdentifier::new(&id)),
+                INITIAL_GAS,
+            )?;
             return Some((
                 DefinitionMetadata::Variable,
                 TextRangeWithModuleInfo::new(self.get_module_info(&handle)?, location),
