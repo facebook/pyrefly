@@ -191,12 +191,19 @@ pub fn write_pyproject(pyproject_path: &Path, config: ConfigFile) -> anyhow::Res
             if let Some(tool_table_mut) = tool_entry.as_table_mut() {
                 tool_table_mut.remove("pyrefly");
 
+                let max_tool_pos = tool_table_mut
+                    .iter()
+                    .filter_map(|(_, v)| v.as_table().and_then(|t| t.position()))
+                    .max()
+                    .unwrap_or(0);
+
                 tool_table_mut.insert("pyrefly", pyrefly_table.clone());
 
                 if let Some(pyrefly_item) = tool_table_mut.get_mut("pyrefly")
                     && let Some(pyrefly_table_mut) = pyrefly_item.as_table_mut()
                 {
                     pyrefly_table_mut.decor_mut().set_prefix("\n");
+                    pyrefly_table_mut.set_position(max_tool_pos + 1);
                 }
             }
         }
