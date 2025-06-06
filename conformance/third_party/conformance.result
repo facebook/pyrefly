@@ -22,10 +22,10 @@
     "Line 75: Expected 1 errors",
     "Line 30: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveTuple']`\"]",
     "Line 42: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveMapping']`\"]",
-    "Line 58: Unexpected errors [\"`|` is not supported between `Literal['GenericTypeAlias1[T1]']` and `type[TypeVar(T1, constraints=(str, int), variance=PUndefined)]`\\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar(T1, constraints=(str, int), variance=PUndefined)] (trying to access __ror__)\"]",
+    "Line 58: Unexpected errors [\"`|` is not supported between `Literal['GenericTypeAlias1[T1]']` and `type[TypeVar(T1, constraints=(str, int), variance=PInvariant)]`\\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar(T1, constraints=(str, int), variance=PInvariant)] (trying to access __ror__)\"]",
     "Line 59: Unexpected errors [\"Can't apply arguments to non-class, got type[list[Unknown]]\"]",
     "Line 62: Unexpected errors [\"Can't apply arguments to non-class, got type[list[Unknown]]\"]",
-    "Line 65: Unexpected errors [\"`|` is not supported between `Literal['GenericTypeAlias2[T1, T2]']` and `type[TypeVar(T1, constraints=(str, int), variance=PUndefined)]`\\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar(T1, constraints=(str, int), variance=PUndefined)] (trying to access __ror__)\"]",
+    "Line 65: Unexpected errors [\"`|` is not supported between `Literal['GenericTypeAlias2[T1, T2]']` and `type[TypeVar(T1, constraints=(str, int), variance=PInvariant)]`\\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar(T1, constraints=(str, int), variance=PInvariant)] (trying to access __ror__)\"]",
     "Line 67: Unexpected errors [\"Can't apply arguments to non-class, got type[list[Unknown]]\"]",
     "Line 68: Unexpected errors [\"Can't apply arguments to non-class, got type[list[Unknown]]\"]"
   ],
@@ -56,10 +56,10 @@
     "Line 62: Expected 1 errors",
     "Line 63: Expected 1 errors",
     "Line 64: Expected 1 errors",
-    "Line 17: Unexpected errors ['Argument `tuple[type[TypeVar(T, variance=PUndefined)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
-    "Line 18: Unexpected errors ['Argument `tuple[type[TypeVar(S, variance=PUndefined)], type[TypeVar(T, variance=PUndefined)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
-    "Line 19: Unexpected errors ['Argument `tuple[type[TypeVar(T, variance=PUndefined)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
-    "Line 23: Unexpected errors ['Argument `tuple[type[TypeVar(S, variance=PUndefined)], type[TypeVar(TStr, bound=str, variance=PUndefined)], type[ParamSpec(P)], type[TypeVarTuple(Ts)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
+    "Line 17: Unexpected errors ['Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
+    "Line 18: Unexpected errors ['Argument `tuple[type[TypeVar(S, variance=PInvariant)], type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
+    "Line 19: Unexpected errors ['Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
+    "Line 23: Unexpected errors ['Argument `tuple[type[TypeVar(S, variance=PInvariant)], type[TypeVar(TStr, bound=str, variance=PInvariant)], type[ParamSpec(P)], type[TypeVarTuple(Ts)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
     "Line 35: Unexpected errors ['Expected a type form, got instance of `GenericAlias`']",
     "Line 36: Unexpected errors ['Expected a type form, got instance of `GenericAlias`']",
     "Line 37: Unexpected errors ['Expected a type form, got instance of `GenericAlias`']",
@@ -105,8 +105,8 @@
   ],
   "constructors_call_init.py": [
     "Line 107: Expected 1 errors",
-    "Line 74: Unexpected errors ['assert_type(Class5[list[int]], Class5[set[str]]) failed', 'No matching overload found for function `Class5.__init__`, reporting errors for closest overload: `(value: int) -> None`', \"Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `Class5.__init__`\"]",
-    "Line 75: Unexpected errors ['assert_type(Class5[list[int]], Class5[float]) failed', 'No matching overload found for function `Class5.__init__`, reporting errors for closest overload: `(value: int) -> None`', 'Argument `float` is not assignable to parameter `value` with type `int` in function `Class5.__init__`']"
+    "Line 74: Unexpected errors ['assert_type(Class5[list[int]], Class5[set[str]]) failed', 'No matching overload found for function `Class5.__init__`\\n  Possible overloads:\\n  (value: int) -> None [closest match]\\n  (value: str) -> None\\n  (value: list[int]) -> None']",
+    "Line 75: Unexpected errors ['assert_type(Class5[list[int]], Class5[float]) failed', 'No matching overload found for function `Class5.__init__`\\n  Possible overloads:\\n  (value: int) -> None [closest match]\\n  (value: str) -> None\\n  (value: list[int]) -> None']"
   ],
   "constructors_call_metaclass.py": [],
   "constructors_call_new.py": [],
@@ -181,7 +181,7 @@
   ],
   "dataclasses_transform_converter.py": [
     "Line 118: Expected 1 errors",
-    "Line 29: Unexpected errors ['Argument `tuple[Forall[S, T, (*, converter: (TypeVar[S]) -> TypeVar[T], default: TypeVar[S] | None, default_factory: (() -> TypeVar[S]) | None) -> TypeVar[T]]]` is not assignable to parameter `field_specifiers` with type `tuple[((...) -> Any) | type[Any], ...]` in function `typing.dataclass_transform`']",
+    "Line 29: Unexpected errors ['Argument `tuple[[S, T](*, converter: (S) -> T, default: S | None, default_factory: (() -> S) | None) -> T]` is not assignable to parameter `field_specifiers` with type `tuple[((...) -> Any) | type[Any], ...]` in function `typing.dataclass_transform`']",
     "Line 112: Unexpected errors ['Expected 0 positional arguments, got 5 in function `object.__init__`']",
     "Line 114: Unexpected errors [\"`Literal['f1']` is not assignable to attribute `field0` with type `int`\"]",
     "Line 115: Unexpected errors [\"`Literal['f6']` is not assignable to attribute `field3` with type `ConverterClass`\"]",
@@ -265,19 +265,19 @@
   "generics_basic.py": [
     "Line 49: Expected 1 errors",
     "Line 121: Expected 1 errors",
-    "Line 34: Unexpected errors ['`+` is not supported between `TypeVar[AnyStr]` and `TypeVar[AnyStr]`\\n  TODO: Expr::binop_infer attribute base undefined for type: TypeVar[AnyStr] (trying to access __add__)']",
+    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  TODO: Expr::binop_infer attribute base undefined for type: AnyStr (trying to access __add__)']",
     "Line 67: Unexpected errors ['assert_type(MyStr, str) failed']",
     "Line 68: Unexpected errors ['assert_type(MyStr, str) failed', 'Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`']"
   ],
   "generics_defaults.py": [
     "Line 127: Unexpected errors ['assert_type(Any, int) failed']",
-    "Line 166: Unexpected errors ['assert_type(Forall[DefaultIntT, (Foo7[TypeVar[DefaultIntT]]) -> Foo7[TypeVar[DefaultIntT]]], (Foo7[int]) -> Foo7[int]) failed']",
+    "Line 166: Unexpected errors ['assert_type([DefaultIntT](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']",
     "Line 167: Unexpected errors ['assert_type(Any, int) failed', 'Instance-only attribute `attr` of class `Foo7` is not visible on the class']"
   ],
   "generics_defaults_referential.py": [
-    "Line 66: Unexpected errors ['Expected default `TypeVar(X1, bound=int, variance=PUndefined)` of `Ok1` to be assignable to the upper bound of `float`']",
-    "Line 67: Unexpected errors ['Expected default `TypeVar(X1, bound=int, variance=PUndefined)` of `AlsoOk1` to be assignable to the upper bound of `int`']",
-    "Line 77: Unexpected errors ['Expected default `TypeVar(Y2, constraints=(int, str), variance=PUndefined)` of `AlsoOk2` to be one of the following constraints: `int`, `str`, `bool`']"
+    "Line 66: Unexpected errors ['Expected default `TypeVar(X1, bound=int, variance=PInvariant)` of `Ok1` to be assignable to the upper bound of `float`']",
+    "Line 67: Unexpected errors ['Expected default `TypeVar(X1, bound=int, variance=PInvariant)` of `AlsoOk1` to be assignable to the upper bound of `int`']",
+    "Line 77: Unexpected errors ['Expected default `TypeVar(Y2, constraints=(int, str), variance=PInvariant)` of `AlsoOk2` to be one of the following constraints: `int`, `str`, `bool`']"
   ],
   "generics_defaults_specialization.py": [],
   "generics_paramspec_basic.py": [],
@@ -345,7 +345,7 @@
     "Line 98: Expected 1 errors",
     "Line 66: Unexpected errors ['Found `S`, but it was not the global scope']",
     "Line 67: Unexpected errors ['assert_type(str, int) failed']",
-    "Line 116: Unexpected errors ['assert_type(type[TypeVar[T]], TypeVar) failed']"
+    "Line 116: Unexpected errors ['assert_type(type[T], TypeVar) failed']"
   ],
   "generics_type_erasure.py": [],
   "generics_typevartuple_args.py": [],
@@ -354,7 +354,7 @@
   ],
   "generics_typevartuple_callable.py": [],
   "generics_typevartuple_concat.py": [
-    "Line 56: Unexpected errors ['Returned type `tuple[*tuple[Unknown, ...], Unknown]` is not assignable to declared return type `tuple[*TypeVarTuple[Ts], TypeVar[T]]`']"
+    "Line 56: Unexpected errors ['Returned type `tuple[*tuple[Unknown, ...], Unknown]` is not assignable to declared return type `tuple[*Ts, T]`']"
   ],
   "generics_typevartuple_overloads.py": [],
   "generics_typevartuple_specialization.py": [
@@ -443,15 +443,15 @@
     "Line 49: Unexpected errors ['Overloaded function must have an implementation']"
   ],
   "overloads_evaluation.py": [
-    "Line 105: Unexpected errors ['No matching overload found for function `example2`, reporting errors for closest overload: `(x: int, y: str, z: int) -> str`', 'Argument `int | str` is not assignable to parameter `y` with type `str` in function `example2`']",
+    "Line 105: Unexpected errors ['No matching overload found for function `example2`\\n  Possible overloads:\\n  (x: int, y: str, z: int) -> str [closest match]\\n  (x: int, y: int, z: int) -> int']",
     "Line 106: Unexpected errors ['assert_type(Any, int | str) failed']",
-    "Line 134: Unexpected errors ['No matching overload found for function `expand_bool`, reporting errors for closest overload: `(x: Literal[False]) -> Literal[0]`', 'Argument `bool` is not assignable to parameter `x` with type `Literal[False]` in function `expand_bool`']",
+    "Line 134: Unexpected errors ['No matching overload found for function `expand_bool`\\n  Possible overloads:\\n  (x: Literal[False]) -> Literal[0] [closest match]\\n  (x: Literal[True]) -> Literal[1]']",
     "Line 135: Unexpected errors ['assert_type(Any, Literal[0, 1]) failed']",
-    "Line 160: Unexpected errors ['No matching overload found for function `expand_enum`, reporting errors for closest overload: `(x: Literal[Color.RED]) -> Literal[0]`', 'Argument `Color` is not assignable to parameter `x` with type `Literal[Color.RED]` in function `expand_enum`']",
+    "Line 160: Unexpected errors ['No matching overload found for function `expand_enum`\\n  Possible overloads:\\n  (x: Literal[Color.RED]) -> Literal[0] [closest match]\\n  (x: Literal[Color.BLUE]) -> Literal[1]']",
     "Line 161: Unexpected errors ['assert_type(Any, Literal[0, 1]) failed']",
-    "Line 180: Unexpected errors ['No matching overload found for function `expand_type_union`, reporting errors for closest overload: `(x: type[int]) -> int`', 'Argument `type[int | str]` is not assignable to parameter `x` with type `type[int]` in function `expand_type_union`']",
+    "Line 180: Unexpected errors ['No matching overload found for function `expand_type_union`\\n  Possible overloads:\\n  (x: type[int]) -> int [closest match]\\n  (x: type[str]) -> str']",
     "Line 181: Unexpected errors ['assert_type(Any, int | str) failed']",
-    "Line 204: Unexpected errors ['No matching overload found for function `expand_tuple`, reporting errors for closest overload: `(x: tuple[int, int]) -> int`', 'Argument `tuple[Literal[1], int | str]` is not assignable to parameter `x` with type `tuple[int, int]` in function `expand_tuple`']",
+    "Line 204: Unexpected errors ['No matching overload found for function `expand_tuple`\\n  Possible overloads:\\n  (x: tuple[int, int]) -> int [closest match]\\n  (x: tuple[int, str]) -> str']",
     "Line 205: Unexpected errors ['assert_type(Any, int | str) failed']",
     "Line 234: Unexpected errors ['assert_type(str, int) failed']",
     "Line 264: Unexpected errors ['assert_type(list[int], Any) failed']",
@@ -482,7 +482,6 @@
     "Line 165: Expected 1 errors"
   ],
   "protocols_generic.py": [
-    "Line 87: Unexpected errors ['Returned type `HasParent` is not assignable to declared return type `TypeVar[GenericHasParent]`']",
     "Line 144: Unexpected errors ['`ConcreteHasProperty1` is not assignable to `HasPropertyProto`']"
   ],
   "protocols_merging.py": [
@@ -562,8 +561,8 @@
     "Line 106: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed']",
     "Line 110: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed']",
     "Line 139: Unexpected errors ['assert_type(type, type[Any]) failed']",
-    "Line 152: Unexpected errors [\"Can't apply arguments to non-class, got TypeAlias[TA7, type[type[TypeVar(T, variance=PUndefined)]]]\"]",
-    "Line 156: Unexpected errors [\"Can't apply arguments to non-class, got TypeAlias[TA8, type[type[TypeVar(T, variance=PUndefined)]]]\"]",
+    "Line 152: Unexpected errors [\"Can't apply arguments to non-class, got TypeAlias[TA7, type[type[TypeVar(T, variance=PInvariant)]]]\"]",
+    "Line 156: Unexpected errors [\"Can't apply arguments to non-class, got TypeAlias[TA8, type[type[TypeVar(T, variance=PInvariant)]]]\"]",
     "Line 160: Unexpected errors ['assert_type(Any, int) failed']",
     "Line 161: Unexpected errors ['assert_type(Any, int) failed']"
   ],

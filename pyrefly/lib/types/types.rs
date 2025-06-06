@@ -214,6 +214,31 @@ impl TypeAlias {
     pub fn as_type(&self) -> Type {
         *self.ty.clone()
     }
+
+    pub fn fmt_with_type<'a, D: Display + 'a>(
+        &'a self,
+        f: &mut fmt::Formatter<'_>,
+        wrap: &'a impl Fn(&'a Type) -> D,
+        tparams: Option<&TParams>,
+    ) -> fmt::Result {
+        match (&self.style, tparams) {
+            (TypeAliasStyle::LegacyImplicit, _) => {
+                write!(f, "{}", wrap(&self.ty))
+            }
+            (_, None) => {
+                write!(f, "TypeAlias[{}, {}]", self.name, wrap(&self.ty))
+            }
+            (_, Some(tparams)) => {
+                write!(
+                    f,
+                    "TypeAlias[{}[{}], {}]",
+                    self.name,
+                    commas_iter(|| tparams.iter()),
+                    wrap(&self.ty)
+                )
+            }
+        }
+    }
 }
 
 assert_words!(Type, 4);
@@ -1099,13 +1124,12 @@ impl Type {
         }
     }
 
-    pub fn as_decomposed_tuple_or_union(&self) -> Option<Vec<Type>> {
-        if let Type::Tuple(Tuple::Concrete(ts)) = self {
-            Some(ts.clone())
-        } else if let Type::Type(box Type::Union(ts)) = self {
-            Some(ts.map(|t| Type::type_form(t.clone())))
-        } else {
-            None
+    pub fn as_decomposed_tuple_or_union(&self, stdlib: &Stdlib) -> Option<Vec<Type>> {
+        match self {
+            Type::Tuple(Tuple::Concrete(ts)) => Some(ts.clone()),
+            Type::Type(box Type::Union(ts)) => Some(ts.map(|t| Type::type_form(t.clone()))),
+            Type::TypeAlias(ta) => ta.as_value(stdlib).as_decomposed_tuple_or_union(stdlib),
+            _ => None,
         }
     }
 }

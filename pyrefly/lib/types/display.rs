@@ -26,10 +26,11 @@ use crate::types::qname::QName;
 use crate::types::type_var::Restriction;
 use crate::types::types::AnyStyle;
 use crate::types::types::BoundMethod;
+use crate::types::types::Forall;
+use crate::types::types::Forallable;
 use crate::types::types::NeverStyle;
 use crate::types::types::SuperObj;
 use crate::types::types::Type;
-use crate::types::types::TypeAliasStyle;
 
 /// Information about the classes we have seen.
 /// Set to None to indicate we have seen different values, or Some if they are all the same.
@@ -271,14 +272,21 @@ impl<'a> TypeDisplayContext<'a> {
                 )
             }
             Type::Tuple(t) => t.fmt_with_type(f, |t| self.display(t)),
-            Type::Forall(forall) => {
+            Type::Forall(box Forall {
+                tparams,
+                body: body @ Forallable::Function(_),
+            }) => {
                 write!(
                     f,
-                    "Forall[{}, {}]",
-                    commas_iter(|| forall.tparams.iter()),
-                    self.display(&forall.body.clone().as_type()),
+                    "[{}]{}",
+                    commas_iter(|| tparams.iter()),
+                    self.display(&body.clone().as_type()),
                 )
             }
+            Type::Forall(box Forall {
+                tparams,
+                body: Forallable::TypeAlias(ta),
+            }) => ta.fmt_with_type(f, &|t| self.display(t), Some(tparams)),
             Type::Type(ty) => write!(f, "type[{}]", self.display(ty)),
             Type::TypeGuard(ty) => write!(f, "TypeGuard[{}]", self.display(ty)),
             Type::TypeIs(ty) => write!(f, "TypeIs[{}]", self.display(ty)),
@@ -304,12 +312,7 @@ impl<'a> TypeDisplayContext<'a> {
                 AnyStyle::Explicit => write!(f, "Any"),
                 AnyStyle::Implicit | AnyStyle::Error => write!(f, "Unknown"),
             },
-            Type::TypeAlias(ta) if ta.style == TypeAliasStyle::LegacyImplicit => {
-                write!(f, "{}", self.display(&ta.as_type()))
-            }
-            Type::TypeAlias(ta) => {
-                write!(f, "TypeAlias[{}, {}]", ta.name, self.display(&ta.as_type()))
-            }
+            Type::TypeAlias(ta) => ta.fmt_with_type(f, &|t| self.display(t), None),
             Type::SuperInstance(box (cls, obj)) => {
                 write!(f, "super[")?;
                 self.fmt_qname(cls.qname(), f)?;

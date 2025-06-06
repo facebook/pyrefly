@@ -349,7 +349,7 @@ testcase!(
     test_bad_keyword,
     r#"
 from dataclasses import dataclass
-@dataclass(flibbertigibbet=True)  # E: No matching overload found  # E: Unexpected keyword argument `flibbertigibbet`
+@dataclass(flibbertigibbet=True)  # E: No matching overload found
 class C:
     pass
     "#,

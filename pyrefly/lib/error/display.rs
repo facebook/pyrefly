@@ -43,8 +43,8 @@ impl ErrorContext {
             Self::AsyncIteration(ty) => format!("Type `{ty}` is not an async iterable"),
             Self::Await(ty) => format!("Type `{ty}` is not awaitable"),
             Self::Index(ty) => format!("Cannot index into `{ty}`"),
-            Self::SetItem(ty) => format!("Item assignment is not supported on `{ty}`"),
-            Self::DelItem(ty) => format!("Item deletion is not supported on `{ty}`"),
+            Self::SetItem(ty) => format!("Cannot set item in `{ty}`"),
+            Self::DelItem(ty) => format!("Cannot delete item in `{ty}`"),
             Self::MatchPositional(ty) => {
                 format!("Cannot match positional sub-patterns in `{ty}`")
             }

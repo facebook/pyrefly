@@ -6,6 +6,7 @@
  */
 
 use append_only_vec::AppendOnlyVec;
+use itertools::Itertools;
 use pyrefly_util::display::count;
 use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::Expr;
@@ -14,6 +15,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
@@ -491,7 +493,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Heap storage for typed dict fields, which are freshly calculated (and need to be owned
         // somewhere) but are used as references.
         let kwargs_typed_dict_fields_vec = AppendOnlyVec::new();
-        let mut need_positional = 0;
+        // Missing positional-only arguments, split by whether the corresponding parameters
+        // in the callable have names. E.g., functions declared with `def` have named posonly
+        // parameters and `typing.Callable`s have unnamed ones.
+        let mut missing_unnamed_posonly = 0;
+        let mut missing_named_posonly = SmallSet::new();
         let mut kwparams = SmallMap::new();
         let mut kwargs = None;
         let mut kwargs_is_unpack = false;
@@ -509,9 +515,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             };
             match p {
-                Param::PosOnly(_, _, required) => {
+                Param::PosOnly(name, _, required) => {
                     if required == Required::Required {
-                        need_positional += 1;
+                        if let Some(name) = name {
+                            missing_named_posonly.insert(name);
+                        } else {
+                            missing_unnamed_posonly += 1;
+                        }
                     }
                 }
                 Param::VarArg(..) => {}
@@ -532,18 +542,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         }
-        if need_positional > 0 {
-            let range = keywords.first().map_or(range, |kw| kw.range);
-            error(
-                call_errors,
-                range,
-                ErrorKind::BadArgumentCount,
-                format!(
-                    "Expected {}",
-                    count(need_positional, "more positional argument")
-                ),
-            );
-        }
+        let mut unexpected_keyword_error = |name: &Name, range| {
+            if missing_named_posonly.shift_remove(name) {
+                error(
+                    call_errors,
+                    range,
+                    ErrorKind::UnexpectedKeyword,
+                    format!("Expected argument `{}` to be positional", name),
+                );
+            } else {
+                error(
+                    call_errors,
+                    range,
+                    ErrorKind::UnexpectedKeyword,
+                    format!("Unexpected keyword argument `{}`", name),
+                );
+            }
+        };
         let mut splat_kwargs = Vec::new();
         for kw in keywords {
             match &kw.arg {
@@ -572,12 +587,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 }
                                 hint = Some(ty.clone())
                             } else if kwargs.is_none() && !kwargs_is_unpack {
-                                error(
-                                    call_errors,
-                                    kw.range,
-                                    ErrorKind::UnexpectedKeyword,
-                                    format!("Unexpected keyword argument `{}`", name),
-                                );
+                                unexpected_keyword_error(name, kw.range);
                             }
                             if let Some(want) = &hint {
                                 self.check_type(want, &field.ty, kw.range, call_errors, &|| {
@@ -655,12 +665,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         hint = Some(ty.clone());
                         has_matching_param = true;
                     } else if kwargs.is_none() {
-                        error(
-                            call_errors,
-                            kw.range,
-                            ErrorKind::UnexpectedKeyword,
-                            format!("Unexpected keyword argument `{}`", id.id),
-                        );
+                        unexpected_keyword_error(&id.id, kw.range);
                     }
                     let tcc: &dyn Fn() -> TypeCheckContext = &|| TypeCheckContext {
                         kind: if has_matching_param {
@@ -681,6 +686,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
             }
+        }
+        if missing_unnamed_posonly > 0 || !missing_named_posonly.is_empty() {
+            let range = keywords.first().map_or(range, |kw| kw.range);
+            let msg = if missing_unnamed_posonly == 0 {
+                format!(
+                    "Missing positional argument{} {}",
+                    if missing_named_posonly.len() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    },
+                    missing_named_posonly
+                        .iter()
+                        .map(|name| format!("`{name}`"))
+                        .join(", "),
+                )
+            } else {
+                format!(
+                    "Expected {}",
+                    count(
+                        missing_unnamed_posonly + missing_named_posonly.len(),
+                        "more positional argument"
+                    ),
+                )
+            };
+            error(call_errors, range, ErrorKind::BadArgumentCount, msg);
         }
         for (name, (want, required)) in kwparams.iter() {
             if !seen_names.contains_key(name) {

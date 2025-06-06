@@ -186,9 +186,21 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    pub fn bind_name_assign(&mut self, name: &ExprName, mut value: Box<Expr>) {
-        let user = self.declare_user(Key::Definition(ShortIdentifier::expr_name(name)));
-        if self.is_definitely_type_alias_rhs(value.as_ref()) {
+    pub fn bind_name_assign(
+        &mut self,
+        name: &Identifier,
+        mut value: Box<Expr>,
+        direct_ann: Option<(&Expr, Idx<KeyAnnotation>)>,
+    ) -> Option<Idx<KeyAnnotation>> {
+        let user = self.declare_user(Key::Definition(ShortIdentifier::new(name)));
+        let is_definitely_type_alias = if let Some((e, _)) = direct_ann
+            && self.as_special_export(e) == Some(SpecialExport::TypeAlias)
+        {
+            true
+        } else {
+            self.is_definitely_type_alias_rhs(value.as_ref())
+        };
+        if is_definitely_type_alias {
             self.ensure_type(&mut value, &mut None);
         } else {
             self.ensure_expr(&mut value, user.usage());
@@ -200,16 +212,46 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             FlowStyle::Other
         };
-        let (ann, default) = self.bind_user(&name.id, &user, style);
-        let mut binding = Binding::NameAssign(
-            name.id.clone(),
-            ann.map(|k| (AnnotationStyle::Forwarded, k)),
-            value,
-        );
+        let (cannonical_ann, default) = self.bind_user(&name.id, &user, style);
+        let ann = match direct_ann {
+            Some((_, idx)) => Some((AnnotationStyle::Direct, idx)),
+            None => cannonical_ann.map(|idx| (AnnotationStyle::Forwarded, idx)),
+        };
+        let mut binding = Binding::NameAssign(name.id.clone(), ann, value);
         if let Some(default) = default {
             binding = Binding::Default(default, Box::new(binding));
         }
         self.insert_binding_user(user, binding);
+        cannonical_ann
+    }
+
+    /// Bind the annotation in an `AnnAssign`
+    pub fn bind_annotation(
+        &mut self,
+        name: &Identifier,
+        annotation: &mut Expr,
+        is_initialized: Initialized,
+    ) -> Idx<KeyAnnotation> {
+        let ann_key = KeyAnnotation::Annotation(ShortIdentifier::new(name));
+        self.ensure_type(annotation, &mut None);
+        let ann_val = if let Some(special) = SpecialForm::new(&name.id, annotation) {
+            // Special case `_: SpecialForm` declarations (this mainly affects some names declared in `typing.pyi`)
+            BindingAnnotation::Type(
+                AnnotationTarget::Assign(name.id.clone(), Initialized::Yes),
+                special.to_type(),
+            )
+        } else {
+            BindingAnnotation::AnnotateExpr(
+                if self.scopes.in_class_body() {
+                    AnnotationTarget::ClassMember(name.id.clone())
+                } else {
+                    AnnotationTarget::Assign(name.id.clone(), is_initialized)
+                },
+                annotation.clone(),
+                None,
+            )
+        };
+        self.insert_binding(ann_key, ann_val)
     }
 
     /// Record a return statement for later analysis if we are in a function body, and mark
@@ -359,7 +401,7 @@ impl<'a> BindingsBuilder<'a> {
                             _ => {}
                         }
                     }
-                    self.bind_name_assign(name, x.value)
+                    self.bind_name_assign(&Ast::expr_name_identifier(name.clone()), x.value, None);
                 } else {
                     self.bind_targets_with_value(&mut x.targets, &mut x.value);
                 }
@@ -416,79 +458,59 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::AnnAssign(mut x) => match *x.target {
                 Expr::Name(name) => {
                     let name = Ast::expr_name_identifier(name);
-                    let ann_key = KeyAnnotation::Annotation(ShortIdentifier::new(&name));
-                    let in_class_body = self.scopes.in_class_body();
-                    self.ensure_type(&mut x.annotation, &mut None);
-                    let ann_val = if let Some(special) = SpecialForm::new(&name.id, &x.annotation) {
-                        BindingAnnotation::Type(
-                            AnnotationTarget::Assign(name.id.clone(), Initialized::Yes),
-                            special.to_type(),
-                        )
-                    } else {
-                        BindingAnnotation::AnnotateExpr(
-                            if in_class_body {
-                                AnnotationTarget::ClassMember(name.id.clone())
-                            } else {
-                                AnnotationTarget::Assign(
-                                    name.id.clone(),
-                                    if x.value.is_some() {
-                                        Initialized::Yes
-                                    } else {
-                                        Initialized::No
-                                    },
-                                )
-                            },
-                            *x.annotation.clone(),
-                            None,
-                        )
-                    };
-                    let ann_key = self.insert_binding(ann_key, ann_val);
-                    let flow_style = if in_class_body {
-                        let initial_value = x.value.as_deref().cloned();
-                        FlowStyle::ClassField { initial_value }
-                    } else if x.value.is_some() {
-                        FlowStyle::Other
-                    } else {
-                        FlowStyle::Uninitialized
-                    };
-                    let binding_value = if let Some(value) = x.value {
+                    // We have to handle the value carefully because the annotation, class field, and
+                    // binding do not all treat `...` exactly the same:
+                    // - an annotation key and a class field treat `...` as initializing, but only in stub files
+                    // - we skip the `NameAssign` if we are in a stub and the value is `...`
+                    let (value, maybe_ellipses) = if let Some(value) = x.value {
                         // Treat a name as initialized, but skip actually checking the value, if we are assigning `...` in a stub.
                         if self.module_info.path().is_interface()
                             && matches!(&*value, Expr::EllipsisLiteral(_))
                         {
-                            None
+                            (None, Some(*value))
                         } else {
-                            Some(value)
+                            (Some(value), None)
                         }
                     } else {
-                        None
+                        (None, None)
                     };
-                    let user = self.declare_user(Key::Definition(ShortIdentifier::new(&name)));
-                    let binding = if let Some(mut value) = binding_value {
-                        // Handle forward references in explicit type aliases.
-                        if self.as_special_export(&x.annotation) == Some(SpecialExport::TypeAlias) {
-                            self.ensure_type(&mut value, &mut None);
-                        } else {
-                            self.ensure_expr(&mut value, user.usage());
+                    let ann_idx = self.bind_annotation(
+                        &name,
+                        &mut x.annotation,
+                        match (&value, &maybe_ellipses) {
+                            (None, None) => Initialized::No,
+                            _ => Initialized::Yes,
+                        },
+                    );
+                    let cannonical_ann_idx = match value {
+                        Some(value) => {
+                            self.bind_name_assign(&name, value, Some((&x.annotation, ann_idx)))
                         }
-                        Binding::NameAssign(
-                            name.id.clone(),
-                            Some((AnnotationStyle::Direct, ann_key)),
-                            value,
-                        )
-                    } else {
-                        Binding::AnnotatedType(
-                            ann_key,
-                            Box::new(Binding::Type(Type::any_implicit())),
-                        )
+                        None => self.bind_definition(
+                            &name,
+                            Binding::AnnotatedType(
+                                ann_idx,
+                                Box::new(Binding::Type(Type::any_implicit())),
+                            ),
+                            if self.scopes.in_class_body() {
+                                FlowStyle::ClassField {
+                                    initial_value: maybe_ellipses,
+                                }
+                            } else {
+                                FlowStyle::Uninitialized
+                            },
+                        ),
                     };
-                    if let Some(ann) = self.bind_definition_user(&name, user, binding, flow_style)
-                        && ann != ann_key
+                    // This assignment gets checked with the provided annotation. But if there exists a prior
+                    // annotation, we might be invalidating it unless the annotations are the same. Insert a
+                    // check that in that case the annotations match.
+                    if let Some(ann) = cannonical_ann_idx
+                        && ann != ann_idx
                     {
                         self.insert_binding(
                             KeyExpect(name.range),
                             BindingExpect::Redefinition {
-                                new: ann_key,
+                                new: ann_idx,
                                 existing: ann,
                                 name: name.id.clone(),
                             },

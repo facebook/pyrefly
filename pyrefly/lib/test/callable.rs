@@ -265,8 +265,8 @@ testcase!(
     r#"
 def test(x: int, y: str, /): ...
 test(1, "hello") # OK
-test(1) # E: Expected 1 more positional argument
-test(1, y="hello") # E: Expected 1 more positional argument # E: Unexpected keyword argument `y`
+test(1) # E: Missing positional argument `y`
+test(1, y="hello") # E: Expected argument `y` to be positional
 test(1, "hello", 2) # E: Expected 2 positional arguments, got 3
 "#,
 );
@@ -323,7 +323,7 @@ testcase!(
     test_defaults_posonly,
     r#"
 def test(x: int, y: int = 0, z: str = "", /): ...
-test() # E: Expected 1 more positional argument
+test() # E: Missing positional argument `x`
 test(0, 1) # OK
 test(0, 1, "foo") # OK
 test(0, 1, "foo", 2) # E: Expected 3 positional arguments
@@ -772,5 +772,13 @@ testcase!(
 def f(x: int, /, **kwargs: str):
     pass
 f(0, x="1")
+    "#,
+);
+
+testcase!(
+    test_not_a_class_object,
+    r#"
+isinstance(1, "not a class object")  # E: Expected class object
+issubclass(str, "not a class object")  # E: Expected class object
     "#,
 );

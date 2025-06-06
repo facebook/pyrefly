@@ -182,6 +182,7 @@ impl ErrorKind {
     pub fn severity(self) -> Severity {
         match self {
             ErrorKind::RevealType => Severity::Info,
+            ErrorKind::Deprecated => Severity::Warn,
             _ => Severity::Error,
         }
     }

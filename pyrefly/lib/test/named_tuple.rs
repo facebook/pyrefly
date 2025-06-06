@@ -22,7 +22,7 @@ assert_type(y, str)
 assert_type(p[0], int)
 assert_type(p[1], str)
 assert_type(p[:2], tuple[int, str])
-p["oops"]  # E: Cannot index into `Pair`  # E: `Literal['oops']` is not assignable to parameter `key` with type `SupportsIndex`
+p["oops"]  # E: Cannot index into `Pair`
 p.x = 1  # E: Cannot assign to read-only field `x`
     "#,
 );
@@ -36,7 +36,7 @@ class Pair(NamedTuple):
     y: str
 p: Pair = Pair(1, "")
 del p.x  # E: Cannot delete read-only field `x`
-del p[0]  # E: Item deletion is not supported on `Pair`
+del p[0]  # E: Cannot delete item in `Pair`
     "#,
 );
 

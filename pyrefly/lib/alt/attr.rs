@@ -39,6 +39,7 @@ use crate::types::class::ClassType;
 use crate::types::literal::Lit;
 use crate::types::module::Module;
 use crate::types::quantified::Quantified;
+use crate::types::quantified::QuantifiedKind;
 use crate::types::tuple::Tuple;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
@@ -305,7 +306,8 @@ enum AttributeBase {
     /// The attribute access is on a quantified type form (as in `args: P.args` - this
     /// is only used when the base *is* a quantified type, not when the base is
     /// a term that *has* a quantified type.
-    TypeVar(Quantified),
+    /// The second element is a bound or constraint for the type variable.
+    TypeVar(Quantified, Option<ClassType>),
     Any(AnyStyle),
     Never,
     /// type[Any] is a special case where attribute lookups first check the
@@ -321,6 +323,61 @@ enum AttributeBase {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    /// Gets the possible attribute bases for a type:
+    /// If the type is a union, we will attempt to generate bases for each member of the union
+    /// If the type is a bounded type var w/ a union upper bound, we will attempt to generate 1 base for
+    /// each member of the union
+    /// If the type is a constrained type var, we will attempt to generate 1 base for each constraint
+    fn get_possible_attribute_bases(&self, base: &Type) -> Vec<Option<AttributeBase>> {
+        let mut bases = Vec::new();
+        self.map_over_union(base, |base| {
+            match base {
+                Type::Quantified(quantified) => match quantified.restriction() {
+                    Restriction::Bound(upper_bound) => {
+                        let mut use_fallback = false;
+                        self.map_over_union(upper_bound, |bound| {
+                            let bound_attr_base = self.as_attribute_base_no_union(bound.clone());
+                            if let Some(AttributeBase::ClassInstance(cls)) = bound_attr_base {
+                                bases.push(Some(AttributeBase::TypeVar(
+                                    quantified.clone(),
+                                    Some(cls),
+                                )));
+                            } else {
+                                use_fallback = true;
+                            }
+                        });
+                        if use_fallback {
+                            bases.push(Some(AttributeBase::TypeVar(quantified.clone(), None)));
+                        }
+                    }
+                    Restriction::Constraints(constraints) => {
+                        let mut use_fallback = false;
+                        for constraint in constraints {
+                            let constraint_attr_base =
+                                self.as_attribute_base_no_union(constraint.clone());
+                            if let Some(AttributeBase::ClassInstance(cls)) = constraint_attr_base {
+                                bases.push(Some(AttributeBase::TypeVar(
+                                    quantified.clone(),
+                                    Some(cls),
+                                )));
+                            } else {
+                                use_fallback = true;
+                            }
+                        }
+                        if use_fallback {
+                            bases.push(Some(AttributeBase::TypeVar(quantified.clone(), None)));
+                        }
+                    }
+                    Restriction::Unrestricted => bases.push(Some(AttributeBase::ClassInstance(
+                        self.stdlib.object().clone(),
+                    ))),
+                },
+                _ => bases.push(self.as_attribute_base_no_union(base.clone())),
+            };
+        });
+        bases
+    }
+
     /// Compute the get (i.e. read) type of an attribute. If the attribute cannot be found or read,
     /// error and return `Any`. Use this to infer the type of a direct attribute fetch.
     pub fn type_of_attr_get(
@@ -332,8 +389,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         todo_ctx: &str,
     ) -> Type {
-        self.distribute_over_union(base, |base| {
-            let lookup_result = self.lookup_attr_no_union(base, attr_name);
+        let bases = self.get_possible_attribute_bases(base);
+        let mut results = Vec::new();
+        for attr_base in bases {
+            let lookup_result = attr_base.map_or_else(
+                || LookupResult::InternalError(InternalError::AttributeBaseUndefined(base.clone())),
+                |attr_base| self.lookup_attr_from_base_no_union(attr_base, attr_name),
+            );
             match self.get_type_or_conflated_error_msg(
                 lookup_result,
                 attr_name,
@@ -342,10 +404,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 context,
                 todo_ctx,
             ) {
-                Ok(ty) => ty,
-                Err(msg) => self.error(errors, range, ErrorKind::MissingAttribute, context, msg),
+                Ok(ty) => results.push(ty),
+                Err(msg) => results.push(self.error(
+                    errors,
+                    range,
+                    ErrorKind::MissingAttribute,
+                    context,
+                    msg,
+                )),
             }
-        })
+        }
+        self.unions(results)
     }
 
     /// Compute the get (i.e., read) type of a magic dunder attribute, if it can be found. If reading is not
@@ -951,12 +1020,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(attr) => LookupResult::found_type(attr),
                 None => LookupResult::NotFound(NotFound::ModuleExport(module)),
             },
-            AttributeBase::TypeVar(q) => match (q.is_param_spec(), attr_name.as_str()) {
+            AttributeBase::TypeVar(q, bound) => match (q.kind(), attr_name.as_str()) {
                 // Note that is is for cases like `P.args` where `P` is a param spec, or `T.x` where
                 // `T` is a type variable (the latter is illegal, but a user could write it). It is
                 // not for cases where `base` is a term with a quantified type.
-                (true, "args") => LookupResult::found_type(Type::type_form(Type::Args(q))),
-                (true, "kwargs") => LookupResult::found_type(Type::type_form(Type::Kwargs(q))),
+                (QuantifiedKind::ParamSpec, "args") => {
+                    LookupResult::found_type(Type::type_form(Type::Args(q)))
+                }
+                (QuantifiedKind::ParamSpec, "kwargs") => {
+                    LookupResult::found_type(Type::type_form(Type::Kwargs(q)))
+                }
+                (QuantifiedKind::TypeVar, _) if let Some(upper_bound) = bound => {
+                    match self.get_bounded_type_var_attribute(q.clone(), &upper_bound, attr_name) {
+                        Some(attr) => LookupResult::Found(attr),
+                        None => LookupResult::NotFound(NotFound::Attribute(
+                            upper_bound.class_object().dupe(),
+                        )),
+                    }
+                }
                 _ => {
                     let class = q.as_value(self.stdlib);
                     match self.get_instance_attribute(class, attr_name) {
@@ -1103,11 +1184,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn try_lookup_attr(&self, base: &Type, attr_name: &Name) -> Vec<Attribute> {
         let mut result = Vec::new();
-        self.map_over_union(base, |base| {
-            if let Some(attr) = self.try_lookup_attr_no_union(base, attr_name) {
-                result.push(attr);
+        let bases = self.get_possible_attribute_bases(base);
+        for attr_base in bases {
+            let lookup_result = attr_base.map_or_else(
+                || LookupResult::InternalError(InternalError::AttributeBaseUndefined(base.clone())),
+                |attr_base| self.lookup_attr_from_base_no_union(attr_base, attr_name),
+            );
+            match lookup_result {
+                LookupResult::Found(attr) => result.push(attr),
+                _ => {}
             }
-        });
+        }
         result
     }
 
@@ -1215,9 +1302,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Restriction::Bound(bound) => {
                     self.as_attribute_base_no_union(Type::type_form(bound.clone()))
                 }
-                _ => Some(AttributeBase::TypeVar(q)),
+                _ => Some(AttributeBase::TypeVar(q, None)),
             },
-            Type::Type(box Type::Quantified(q)) => Some(AttributeBase::TypeVar(q)),
+            Type::Type(box Type::Quantified(q)) => Some(AttributeBase::TypeVar(q, None)),
             Type::Type(box Type::Any(style)) => Some(AttributeBase::TypeAny(style)),
             Type::Module(module) => Some(AttributeBase::Module(module)),
             Type::TypeVar(_) => Some(AttributeBase::ClassInstance(self.stdlib.type_var().clone())),
@@ -1515,7 +1602,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 AttributeBase::ClassObject(class) => {
                     self.completions_class(class, expected_attribute_name, &mut res)
                 }
-                AttributeBase::TypeVar(q) => self.completions_class_type(
+                AttributeBase::TypeVar(q, _) => self.completions_class_type(
                     q.as_value(self.stdlib),
                     expected_attribute_name,
                     &mut res,

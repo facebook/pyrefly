@@ -35,7 +35,7 @@ export default function LandingPageSection({
             // Delay the title animation to start after the Why Pyrefly section animations
             const timer = setTimeout(() => {
                 setIsTitleVisible(true);
-            }, 1100); // Slightly later than why pyrefly animations (1400ms)
+            }, 1100); // Slightly later than why pyrefly animations (950ms)
 
             return () => clearTimeout(timer);
         } else {

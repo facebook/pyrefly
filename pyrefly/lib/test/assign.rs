@@ -15,7 +15,7 @@ from typing import assert_type
 
 x: list[int] = [0, 1, 2]
 x[0], x[1] = 3, 4
-x[0], x[1] = 3, "foo"  # E: Item assignment is not supported on `list[int]`\n  No matching overload found for function `list.__setitem__`, reporting errors for closest overload: `(key: SupportsIndex, value: int, /) -> None`  # E: Argument `Literal['foo']` is not assignable to parameter `value` with type `int` in function `list.__setitem__`
+x[0], x[1] = 3, "foo"  # E: Cannot set item in `list[int]`\n  No matching overload found for function `list.__setitem__`
 "#,
 );
 
@@ -33,7 +33,7 @@ y[0] = 1
 assert_type(y, list[int])
 
 z = [1, 2, 3]
-z[0] = "oops"  # E: No matching overload found  # E: `Literal['oops']` is not assignable to parameter `value` with type `int`
+z[0] = "oops"  # E: No matching overload found
 
 a: int = 1
 a[0] = 1  # E: `int` has no attribute `__setitem__`
@@ -700,7 +700,7 @@ testcase!(
 xs: list[int] = [1, 2, 3]
 xs[0]: int = 3 # E: Subscripts should not be annotated
 xs[1]: str = 3 # E: Subscripts should not be annotated
-xs[2]: str = "test" # E: Subscripts should not be annotated # E: Argument `Literal['test']` is not assignable # E: Item assignment is not supported on
+xs[2]: str = "test" # E: Subscripts should not be annotated # E: Cannot set item in
 "#,
 );
 
@@ -713,11 +713,10 @@ testcase!(
 );
 
 testcase!(
-    bug = "Should only produce one error, not the item assignment is not supported one",
     test_assign_subscript_wrong_type,
     r#"
 xs: list[int] = [1, 2, 3]
-xs[1] = "test" # E: Argument `Literal['test']` is not assignable to parameter # E: Item assignment is not supported on
+xs[1] = "test" # E: Cannot set item in
 "#,
 );
 

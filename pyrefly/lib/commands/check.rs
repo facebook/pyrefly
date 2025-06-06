@@ -76,27 +76,37 @@ enum OutputFormat {
 
 #[derive(Debug, Parser, Clone)]
 pub struct Args {
-    // how/what should Pyrefly output
+    #[command(flatten)]
+    output: OutputArgs,
+    #[command(flatten)]
+    behavior: BehaviorArgs,
+    #[command(flatten)]
+    config_override: ConfigOverrideArgs,
+}
+
+/// how/what should Pyrefly output
+#[derive(Debug, Parser, Clone)]
+struct OutputArgs {
     /// Write the errors to a file, instead of printing them.
     #[arg(long, short = 'o', env = clap_env("OUTPUT"))]
     output: Option<PathBuf>,
-    #[clap(long, value_enum, default_value_t, env = clap_env("OUTPUT_FORMAT"))]
+    #[arg(long, value_enum, default_value_t, env = clap_env("OUTPUT_FORMAT"))]
     output_format: OutputFormat,
     /// Produce debugging information about the type checking process.
-    #[clap(long, env = clap_env("DEBUG_INFO"))]
+    #[arg(long, env = clap_env("DEBUG_INFO"))]
     debug_info: Option<PathBuf>,
-    #[clap(long, env = clap_env("REPORT_BINDING_MEMORY"))]
+    #[arg(long, env = clap_env("REPORT_BINDING_MEMORY"))]
     report_binding_memory: Option<PathBuf>,
-    #[clap(long, env = clap_env("REPORT_TRACE"))]
+    #[arg(long, env = clap_env("REPORT_TRACE"))]
     report_trace: Option<PathBuf>,
     /// Process each module individually to figure out how long each step takes.
-    #[clap(long, env = clap_env("REPORT_TIMINGS"))]
+    #[arg(long, env = clap_env("REPORT_TIMINGS"))]
     report_timings: Option<PathBuf>,
     /// Generate a Glean-compatible JSON file for each module
-    #[clap(long, env = clap_env("REPORT_GLEAN"))]
+    #[arg(long, env = clap_env("REPORT_GLEAN"))]
     report_glean: Option<PathBuf>,
     /// Count the number of each error kind. Prints the top N errors, sorted by count, or all errors if N is not specified.
-    #[clap(
+    #[arg(
         long,
         default_missing_value = "5",
         require_equals = true,
@@ -107,7 +117,7 @@ pub struct Args {
     /// Summarize errors by directory. The optional index argument specifies which file path segment will be used to group errors.
     /// The default index is 0. For errors in `/foo/bar/...`, this will group errors by `/foo`. If index is 1, errors will be grouped by `/foo/bar`.
     /// An index larger than the number of path segments will group by the final path element, i.e. the file name.
-    #[clap(
+    #[arg(
         long,
         default_missing_value = "0",
         require_equals = true,
@@ -115,43 +125,48 @@ pub struct Args {
         env = clap_env("SUMMARIZE_ERRORS")
     )]
     summarize_errors: Option<usize>,
-
     /// Set this flag to omit the summary in the last line of the output.
-    #[clap(long, env = clap_env("NO_SUMMARY"))]
+    #[arg(long, env = clap_env("NO_SUMMARY"))]
     no_summary: bool,
+}
 
-    // non-config type checker behavior
+/// non-config type checker behavior
+#[derive(Debug, Parser, Clone)]
+struct BehaviorArgs {
     /// Check all reachable modules, not just the ones that are passed in explicitly on CLI positional arguments.
-    #[clap(long, short = 'a', env = clap_env("CHECK_ALL"))]
+    #[arg(long, short = 'a', env = clap_env("CHECK_ALL"))]
     check_all: bool,
     /// Suppress errors found in the input files.
-    #[clap(long, env = clap_env("SUPPRESS_ERRORS"))]
+    #[arg(long, env = clap_env("SUPPRESS_ERRORS"))]
     suppress_errors: bool,
     /// Check against any `E:` lines in the file.
-    #[clap(long, env = clap_env("EXPECTATIONS"))]
+    #[arg(long, env = clap_env("EXPECTATIONS"))]
     expectations: bool,
     /// Remove unused ignores from the input files.
-    #[clap(long, env = clap_env("REMOVE_UNUSED_IGNORES"))]
+    #[arg(long, env = clap_env("REMOVE_UNUSED_IGNORES"))]
     remove_unused_ignores: bool,
+}
 
-    // config overrides
+/// config overrides
+#[derive(Debug, Parser, Clone)]
+struct ConfigOverrideArgs {
     /// The list of directories where imports are imported from, including
     /// type checked files.
-    #[clap(long, env = clap_env("SEARCH_PATH"))]
+    #[arg(long, env = clap_env("SEARCH_PATH"))]
     search_path: Option<Vec<PathBuf>>,
     /// The Python version any `sys.version` checks should evaluate against.
-    #[clap(long, env = clap_env("PYTHON_VERSION"))]
+    #[arg(long, env = clap_env("PYTHON_VERSION"))]
     python_version: Option<PythonVersion>,
     /// The platform any `sys.platform` checks should evaluate against.
-    #[clap(long, env = clap_env("PLATFORM"))]
+    #[arg(long, env = clap_env("PLATFORM"))]
     python_platform: Option<PythonPlatform>,
     /// Directories containing third-party package imports, searched
     /// after first checking `search_path` and `typeshed`.
-    #[clap(long, env = clap_env("SITE_PACKAGE_PATH"))]
+    #[arg(long, env = clap_env("SITE_PACKAGE_PATH"))]
     site_package_path: Option<Vec<PathBuf>>,
     /// The Python executable that will be queried for `python_version`
     /// `python_platform`, or `site_package_path` if any of the values are missing.
-    #[clap(long, env = clap_env("PYTHON_INTERPRETER"))]
+    #[arg(long, env = clap_env("PYTHON_INTERPRETER"))]
     python_interpreter: Option<PathBuf>,
 }
 
@@ -365,7 +380,7 @@ impl Timings {
 
 impl Args {
     pub fn absolute_search_path(&mut self) {
-        if let Some(paths) = self.search_path.as_mut() {
+        if let Some(paths) = self.config_override.search_path.as_mut() {
             for x in paths.iter_mut() {
                 if let Ok(v) = x.absolutize() {
                     *x = v.into_owned();
@@ -381,7 +396,10 @@ impl Args {
     ) -> anyhow::Result<Vec<(Handle, Require)>> {
         let handles = Handles::new(
             checkpoint(files_to_check.files(), config_finder)?,
-            self.search_path.as_deref().unwrap_or_default(),
+            self.config_override
+                .search_path
+                .as_deref()
+                .unwrap_or_default(),
             config_finder,
         );
         Ok(handles.all(self.get_required_levels().specified))
@@ -409,7 +427,10 @@ impl Args {
         let holder = Forgetter::new(State::new(config_finder), allow_forget);
         let handles = Handles::new(
             expanded_file_list,
-            self.search_path.as_deref().unwrap_or_default(),
+            self.config_override
+                .search_path
+                .as_deref()
+                .unwrap_or_default(),
             holder.as_ref().config_finder(),
         );
         let require_levels = self.get_required_levels();
@@ -438,7 +459,10 @@ impl Args {
         let require_levels = self.get_required_levels();
         let mut handles = Handles::new(
             expanded_file_list,
-            self.search_path.as_deref().unwrap_or_default(),
+            self.config_override
+                .search_path
+                .as_deref()
+                .unwrap_or_default(),
             &config_finder,
         );
         let state = State::new(config_finder);
@@ -466,7 +490,10 @@ impl Args {
             handles.update(
                 events.created.iter().filter(|p| files_to_check.covers(p)),
                 events.removed.iter().filter(|p| files_to_check.covers(p)),
-                self.search_path.as_deref().unwrap_or_default(),
+                self.config_override
+                    .search_path
+                    .as_deref()
+                    .unwrap_or_default(),
                 state.config_finder(),
             );
         }
@@ -481,26 +508,29 @@ impl Args {
             }
             Ok(())
         }
-        validate_arg("--site-package-path", self.site_package_path.as_ref())?;
-        validate_arg("--search-path", self.search_path.as_ref())?;
+        validate_arg(
+            "--site-package-path",
+            self.config_override.site_package_path.as_ref(),
+        )?;
+        validate_arg("--search-path", self.config_override.search_path.as_ref())?;
         Ok(())
     }
 
     pub fn override_config(&self, mut config: ConfigFile) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
-        if let Some(x) = &self.python_platform {
+        if let Some(x) = &self.config_override.python_platform {
             config.python_environment.python_platform = Some(x.clone());
         }
-        if let Some(x) = &self.python_version {
+        if let Some(x) = &self.config_override.python_version {
             config.python_environment.python_version = Some(*x);
         }
-        if let Some(x) = &self.search_path {
+        if let Some(x) = &self.config_override.search_path {
             config.search_path_from_args = x.clone();
         }
-        if let Some(x) = &self.site_package_path {
+        if let Some(x) = &self.config_override.site_package_path {
             config.python_environment.site_package_path = Some(x.clone());
             config.python_environment.site_package_path_source = SitePackagePathSource::CommandLine;
         }
-        if let Some(x) = &self.python_interpreter {
+        if let Some(x) = &self.config_override.python_interpreter {
             config.python_interpreter = Some(x.clone());
         }
         config.configure();
@@ -509,10 +539,10 @@ impl Args {
     }
 
     fn get_required_levels(&self) -> RequireLevels {
-        let retain = self.report_binding_memory.is_some()
-            || self.debug_info.is_some()
-            || self.report_trace.is_some()
-            || self.report_glean.is_some();
+        let retain = self.output.report_binding_memory.is_some()
+            || self.output.debug_info.is_some()
+            || self.output.report_trace.is_some()
+            || self.output.report_glean.is_some();
         RequireLevels {
             specified: if retain {
                 Require::Everything
@@ -521,7 +551,7 @@ impl Args {
             },
             default: if retain {
                 Require::Everything
-            } else if self.check_all || stdlib_search_path().is_some() {
+            } else if self.behavior.check_all || stdlib_search_path().is_some() {
                 Require::Errors
             } else {
                 Require::Exports
@@ -542,7 +572,7 @@ impl Args {
         transaction.run(handles);
         transaction.set_subscriber(None);
 
-        let loads = if self.check_all {
+        let loads = if self.behavior.check_all {
             transaction.get_all_errors()
         } else {
             transaction.get_errors(handles.iter().map(|(handle, _)| handle))
@@ -557,23 +587,26 @@ impl Args {
         }
 
         let errors = loads.collect_errors();
-        if let Some(path) = &self.output {
-            self.output_format
+        if let Some(path) = &self.output.output {
+            self.output
+                .output_format
                 .write_errors_to_file(path, &errors.shown)?;
         } else {
-            self.output_format.write_errors_to_console(&errors.shown)?;
+            self.output
+                .output_format
+                .write_errors_to_console(&errors.shown)?;
         }
         memory_trace.stop();
-        if let Some(limit) = self.count_errors {
+        if let Some(limit) = self.output.count_errors {
             print_error_counts(&errors.shown, limit);
         }
-        if let Some(path_index) = self.summarize_errors {
+        if let Some(path_index) = self.output.summarize_errors {
             print_error_summary(&errors.shown, path_index);
         }
         let shown_errors_count = config_errors_count + errors.shown.len();
         timings.report_errors = report_errors_start.elapsed();
 
-        if !self.no_summary {
+        if !self.output.no_summary {
             info!(
                 "errors shown: {}, errors ignored: {}, modules: {}, transitive dependencies: {}, lines: {}, time: {timings}, peak memory: {}",
                 number_thousands(shown_errors_count),
@@ -584,13 +617,13 @@ impl Args {
                 memory_trace.peak()
             );
         }
-        if let Some(timings) = &self.report_timings {
+        if let Some(timings) = &self.output.report_timings {
             eprintln!("Computing timing information");
             transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
             transaction.report_timings(timings)?;
             transaction.set_subscriber(None);
         }
-        if let Some(debug_info) = &self.debug_info {
+        if let Some(debug_info) = &self.output.debug_info {
             let is_javascript = debug_info.extension() == Some("js".as_ref());
             fs_anyhow::write(
                 debug_info,
@@ -602,7 +635,7 @@ impl Args {
                 .as_bytes(),
             )?;
         }
-        if let Some(glean) = &self.report_glean {
+        if let Some(glean) = &self.output.report_glean {
             fs_anyhow::create_dir_all(glean)?;
             for (handle, _) in handles {
                 fs_anyhow::write(
@@ -611,16 +644,16 @@ impl Args {
                 )?;
             }
         }
-        if let Some(path) = &self.report_binding_memory {
+        if let Some(path) = &self.output.report_binding_memory {
             fs_anyhow::write(
                 path,
                 report::binding_memory::binding_memory(transaction).as_bytes(),
             )?;
         }
-        if let Some(path) = &self.report_trace {
+        if let Some(path) = &self.output.report_trace {
             fs_anyhow::write(path, report::trace::trace(transaction).as_bytes())?;
         }
-        if self.suppress_errors {
+        if self.behavior.suppress_errors {
             let mut errors_to_suppress: SmallMap<PathBuf, Vec<Error>> = SmallMap::new();
 
             for e in errors.shown {
@@ -630,7 +663,7 @@ impl Args {
             }
             suppress::suppress_errors(&errors_to_suppress);
         }
-        if self.remove_unused_ignores {
+        if self.behavior.remove_unused_ignores {
             let mut all_ignores: SmallMap<&PathBuf, SmallSet<OneIndexed>> = SmallMap::new();
             for (module_path, ignore) in loads.collect_ignores() {
                 if let ModulePathDetails::FileSystem(path) = module_path.details() {
@@ -653,7 +686,7 @@ impl Args {
             let unused_ignores = suppress::find_unused_ignores(all_ignores, suppressed_errors);
             suppress::remove_unused_ignores(unused_ignores);
         }
-        if self.expectations {
+        if self.behavior.expectations {
             loads.check_against_expectations()?;
             Ok(CommandExitStatus::Success)
         } else if shown_errors_count > 0 {

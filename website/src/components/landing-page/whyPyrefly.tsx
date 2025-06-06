@@ -26,10 +26,10 @@ export default function WhyPyrefly(): React.ReactElement {
             // Start the grid items animation after the container animation
             const gridTimer = setTimeout(() => {
                 setStartAnimation(true);
-            }, 150); // Reduced from 300ms to 150ms
+            }, 150);
 
             return () => clearTimeout(gridTimer);
-        }, 500); // Reduced from 800ms to 500ms
+        }, 500); // start animation after landing page header button group (400ms), last grid item would finish at 950ms
 
         return () => clearTimeout(timer);
     }, []);

@@ -29,7 +29,6 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::VarianceMap;
-use crate::alt::class::variance_inference::variance_map;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::types::decorated_function::DecoratedFunction;
@@ -1330,7 +1329,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 base_types.push(base_type);
             }
-            variance_map(class, base_types, fields)
+            self.variance_map(class, base_types, fields)
         } else {
             Arc::new(VarianceMap(SmallMap::new()))
         }

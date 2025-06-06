@@ -26,7 +26,7 @@ export default function PerformanceComparisonChartSection(): React.ReactElement 
         // Delay the animation to start after the Why Pyrefly section animations
         const timer = setTimeout(() => {
             setIsLoaded(true);
-        }, 1200); // slightly later than Performance Comparison Header (1500ms)
+        }, 1200); // slightly later than Performance Comparison Header (1100ms)
 
         return () => clearTimeout(timer);
     }, []);

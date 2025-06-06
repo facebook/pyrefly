@@ -10,6 +10,7 @@ use num_traits::ToPrimitive;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
+use ruff_python_ast::Arguments;
 use ruff_python_ast::BoolOp;
 use ruff_python_ast::Comprehension;
 use ruff_python_ast::Expr;
@@ -48,7 +49,6 @@ use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
-use crate::types::class::Class;
 use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::param_spec::ParamSpec;
@@ -276,7 +276,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut arg_name = false;
         let mut restriction = None;
         let mut default = None;
-        let mut variance = PreInferenceVariance::PUndefined;
+        let mut variance = None;
 
         let check_name_arg = |arg: &Expr| {
             if let Expr::StringLiteral(lit) = arg {
@@ -305,7 +305,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let mut try_set_variance = |kw: &Keyword, v: PreInferenceVariance| {
             if self.literal_bool_infer(&kw.value, errors) {
-                if variance != PreInferenceVariance::PUndefined {
+                if variance.is_some() {
                     self.error(
                         errors,
                         kw.range,
@@ -314,7 +314,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         "Contradictory variance specifications".to_owned(),
                     );
                 } else {
-                    variance = v;
+                    variance = Some(v);
                 }
             }
         };
@@ -417,6 +417,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             ));
         }
+
+        let variance = variance.unwrap_or(PreInferenceVariance::PInvariant);
+
         TypeVar::new(
             name,
             self.module_info().dupe(),
@@ -655,141 +658,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn expr_infer_type_info(&self, x: &Expr, errors: &ErrorCollector) -> TypeInfo {
         self.expr_infer_type_info_with_hint(x, None, errors)
-    }
-
-    fn check_type_is_class_object(
-        &self,
-        ty: Type,
-        contains_subscript: bool,
-        range: TextRange,
-        func_kind: &FunctionKind,
-        errors: &ErrorCollector,
-    ) {
-        if let Some(ts) = ty.as_decomposed_tuple_or_union() {
-            for t in ts {
-                self.check_type_is_class_object(t, contains_subscript, range, func_kind, errors);
-            }
-        } else if let Type::ClassDef(cls) = &ty {
-            let metadata = self.get_metadata_for_class(cls);
-            let func_display = || {
-                format!(
-                    "{}()",
-                    func_kind.as_func_id().format(self.module_info().name())
-                )
-            };
-            if metadata.is_new_type() {
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::InvalidArgument,
-                    None,
-                    format!("NewType `{}` not allowed in {}", cls.name(), func_display(),),
-                );
-            }
-            // Check if this is a protocol that needs @runtime_checkable
-            if metadata.is_protocol() && !metadata.is_runtime_checkable_protocol() {
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::InvalidArgument,
-                    None,
-                    format!("Protocol `{}` is not decorated with @runtime_checkable and cannot be used with {}", cls.name(), func_display()),
-                );
-            } else if metadata.is_protocol() && metadata.is_runtime_checkable_protocol() {
-                // Additional validation for runtime checkable protocols:
-                // issubclass() can only be used with non-data protocols
-                if *func_kind == FunctionKind::IsSubclass && self.is_data_protocol(cls, range) {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorKind::InvalidArgument,
-                        None,
-                        format!("Protocol `{}` has non-method members and cannot be used with issubclass()", cls.name()),
-                    );
-                }
-            }
-        } else if contains_subscript
-            && matches!(&ty, Type::Type(box Type::ClassType(cls)) if !cls.targs().is_empty())
-        {
-            // If the raw expression contains something that structurally looks like `A[T]` and
-            // part of the expression resolves to a parameterized class type, then we likely have a
-            // literal parameterized type, which is a runtime exception.
-            self.error(
-                errors,
-                range,
-                ErrorKind::InvalidArgument,
-                None,
-                format!(
-                    "Expected class object, got parameterized generic type: `{}`",
-                    self.for_display(ty)
-                ),
-            );
-        } else if self.unwrap_class_object_silently(&ty).is_none() {
-            self.error(
-                errors,
-                range,
-                ErrorKind::InvalidArgument,
-                None,
-                format!("Expected class object, got `{}`", self.for_display(ty)),
-            );
-        }
-    }
-
-    /// Check if a protocol is a data protocol (has non-method members)
-    fn is_data_protocol(&self, cls: &Class, range: TextRange) -> bool {
-        // A data protocol has at least one non-method member
-        // Use protocol metadata to get the member names
-        let metadata = self.get_metadata_for_class(cls);
-        if let Some(protocol_metadata) = metadata.protocol_metadata() {
-            for field_name in &protocol_metadata.members {
-                // Use the class type to access the field
-                let class_type = cls.as_class_type();
-                let ty = self.type_of_attr_get(
-                    &class_type.to_type(),
-                    field_name,
-                    range,
-                    &self.error_swallower(),
-                    None,
-                    "is_data_protocol",
-                );
-
-                // If it's not a callable type, it's a data member
-                if !matches!(
-                    ty,
-                    Type::Callable(_) | Type::Function(_) | Type::BoundMethod(_)
-                ) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    fn check_second_arg_is_class_object(
-        &self,
-        args: &[Expr],
-        func_kind: &FunctionKind,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) {
-        if args.len() == 2 {
-            let arg_expr = &args[1];
-            let arg_class_type = self.expr_infer(arg_expr, errors);
-            let mut contains_subscript = false;
-            arg_expr.visit(&mut |e| {
-                if matches!(e, Expr::Subscript(_)) {
-                    contains_subscript = true;
-                }
-            });
-
-            self.check_type_is_class_object(
-                arg_class_type,
-                contains_subscript,
-                range,
-                func_kind,
-                errors,
-            );
-        }
     }
 
     /// Apply a decorator. This effectively synthesizes a function call.
@@ -1067,6 +935,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             }
         })
+    }
+
+    fn has_exactly_two_posargs(&self, arguments: &Arguments) -> bool {
+        arguments.keywords.is_empty()
+            && arguments.args.len() == 2
+            && arguments
+                .args
+                .iter()
+                .all(|e| !matches!(e, Expr::Starred(_)))
     }
 
     /// This function should not be used directly: we want every expression to record a type trace,
@@ -1396,20 +1273,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Type::any_implicit()
                     }
                 } else {
-                    let func_range = x.func.range();
                     self.distribute_over_union(&ty_fun, |ty| match ty.callee_kind() {
                         Some(CalleeKind::Function(FunctionKind::AssertType)) => self
                             .call_assert_type(
                                 &x.arguments.args,
                                 &x.arguments.keywords,
-                                x.range,
+                                x.arguments.range,
                                 errors,
                             ),
                         Some(CalleeKind::Function(FunctionKind::RevealType)) => self
                             .call_reveal_type(
                                 &x.arguments.args,
                                 &x.arguments.keywords,
-                                x.range,
+                                x.arguments.range,
                                 errors,
                             ),
                         Some(CalleeKind::Function(FunctionKind::Cast)) => {
@@ -1418,7 +1294,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.call_typing_cast(
                                 &x.arguments.args,
                                 &x.arguments.keywords,
-                                func_range,
+                                x.arguments.range,
                                 errors,
                             )
                         }
@@ -1428,30 +1304,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .call_assert_type(
                                 &x.arguments.args,
                                 &x.arguments.keywords,
-                                x.range,
+                                x.arguments.range,
                                 errors,
                             ),
                         None if ty.is_error() && is_special_name(&x.func, "reveal_type") => self
                             .call_reveal_type(
                                 &x.arguments.args,
                                 &x.arguments.keywords,
-                                x.range,
+                                x.arguments.range,
                                 errors,
                             ),
+                        Some(CalleeKind::Function(FunctionKind::IsInstance))
+                            if self.has_exactly_two_posargs(&x.arguments) =>
+                        {
+                            self.call_isinstance(&x.arguments.args[0], &x.arguments.args[1], errors)
+                        }
+                        Some(CalleeKind::Function(FunctionKind::IsSubclass))
+                            if self.has_exactly_two_posargs(&x.arguments) =>
+                        {
+                            self.call_issubclass(&x.arguments.args[0], &x.arguments.args[1], errors)
+                        }
                         _ => {
-                            if let Some(CalleeKind::Function(func_kind)) = ty_fun.callee_kind()
-                                && matches!(
-                                    func_kind,
-                                    FunctionKind::IsInstance | FunctionKind::IsSubclass
-                                )
-                            {
-                                self.check_second_arg_is_class_object(
-                                    &x.arguments.args,
-                                    &func_kind,
-                                    x.range,
-                                    errors,
-                                );
-                            }
                             let args = x.arguments.args.map(|arg| match arg {
                                 Expr::Starred(x) => CallArg::Star(&x.value, x.range),
                                 _ => CallArg::Expr(arg),
@@ -1459,7 +1332,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let callable = self.as_call_target_or_error(
                                 ty.clone(),
                                 CallStyle::FreeForm,
-                                func_range,
+                                x.func.range(),
                                 errors,
                                 None,
                             );
@@ -1467,7 +1340,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 callable,
                                 &args,
                                 &x.arguments.keywords,
-                                func_range,
+                                x.arguments.range,
                                 errors,
                                 None,
                                 hint.cloned(),

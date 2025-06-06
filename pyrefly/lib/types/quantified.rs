@@ -140,11 +140,7 @@ impl QuantifiedKind {
 
 impl Display for Quantified {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.info.kind {
-            QuantifiedKind::TypeVar => write!(f, "TypeVar[{}]", self.info.name),
-            QuantifiedKind::ParamSpec => write!(f, "ParamSpec[{}]", self.info.name),
-            QuantifiedKind::TypeVarTuple => write!(f, "TypeVarTuple[{}]", self.info.name),
-        }
+        write!(f, "{}", self.info.name)
     }
 }
 

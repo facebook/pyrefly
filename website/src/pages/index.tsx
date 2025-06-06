@@ -8,8 +8,8 @@
  */
 
 import * as React from 'react';
-import NewLandingPage from './newLandingPage';
+import LandingPage from './landingPage';
 
 export default function Home(): React.ReactElement {
-    return <NewLandingPage />;
+    return <LandingPage />;
 }

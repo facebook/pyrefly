@@ -147,7 +147,7 @@ const styles = stylex.create({
         transform: 'rotateX(-20deg) translateY(20px)',
         transformOrigin: 'center center',
         transition: 'all 1.4s cubic-bezier(0.34, 1.56, 0.64, 1)',
-        transitionDelay: '0.2s', // Reduced delay for subtitle animation
+        transitionDelay: '0.2s', // start animation after logo (0ms)
     },
     subtitleVisible: {
         opacity: 1,
@@ -169,7 +169,7 @@ const styles = stylex.create({
         transform: 'rotateX(15deg) translateY(15px)',
         transformOrigin: 'center center',
         transition: 'all 1.2s cubic-bezier(0.34, 1.56, 0.64, 1)',
-        transitionDelay: '0.4s', // delay for button group
+        transitionDelay: '0.4s', // start animation after subtitle (200ms)
     },
     buttonGroupVerticalVisible: {
         opacity: 1,

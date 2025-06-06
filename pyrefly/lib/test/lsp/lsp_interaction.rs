@@ -202,6 +202,43 @@ fn test_go_to_def_basic(root: &TempDir, workspace_folders: Option<Vec<(String, U
 }
 
 #[test]
+fn test_hover_basic() {
+    let root = get_test_files_root();
+    let request_file_name = root.path().join("bar.py");
+    run_test_lsp(TestCase {
+        messages_from_language_client: vec![
+            Message::from(build_did_open_notification(
+                root.path().join(request_file_name.clone()),
+            )),
+            Message::from(Request {
+                id: RequestId::from(2),
+                method: "textDocument/hover".to_owned(),
+                params: serde_json::json!({
+                    "textDocument": {
+                        "uri": Url::from_file_path(root.path().join(request_file_name)).unwrap().to_string()
+                    },
+                    "position": {
+                        "line": 7,
+                        "character": 5
+                    }
+                }),
+            }),
+        ],
+        expected_messages_from_language_server: vec![Message::Response(Response {
+            id: RequestId::from(2),
+            result: Some(serde_json::json!({
+                "contents": {
+                    "kind": "markdown",
+                    "value": "```python\n(variable) foo: Literal[3]\n```",
+                }
+            })),
+            error: None,
+        })],
+        ..Default::default()
+    });
+}
+
+#[test]
 fn test_go_to_def_single_root() {
     let root = get_test_files_root();
     test_go_to_def_basic(
