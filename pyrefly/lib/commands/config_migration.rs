@@ -592,6 +592,7 @@ dependencies = { python = "^3.8" }
 
 [tool.pyrefly]
 project_includes = ["old/path/**/*.py"]
+project_excludes = ["should/be/removed.py"]
 
 [tool.black]
 line-length = 88
@@ -613,6 +614,7 @@ line-length = 88
         assert!(updated_content.contains("[tool.pyrefly]"));
         assert!(updated_content.contains("project-includes = [\"new/path/**/*.py\"]"));
         assert!(!updated_content.contains("project_includes = [\"old/path/**/*.py\"]"));
+        assert!(!updated_content.contains("project_excludes"));
 
         Ok(())
     }
