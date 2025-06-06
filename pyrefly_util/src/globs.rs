@@ -277,6 +277,10 @@ impl Globs {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    pub fn append(&mut self, patterns: &[Glob]) {
+        self.0.extend_from_slice(patterns);
+    }
 }
 
 impl Display for Globs {
