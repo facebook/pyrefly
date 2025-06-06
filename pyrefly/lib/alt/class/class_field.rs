@@ -317,6 +317,14 @@ impl ClassField {
         }
     }
 
+    pub fn is_init_var(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Simple { annotation, .. } => {
+                annotation.as_ref().is_some_and(|ann| ann.is_init_var())
+            }
+        }
+    }
+
     pub fn is_final(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Simple { annotation, ty, .. } => {
@@ -1238,11 +1246,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn get_instance_attribute(&self, cls: &ClassType, name: &Name) -> Option<Attribute> {
         self.get_class_member(cls.class_object(), name)
-            .map(|member| {
-                self.as_instance_attribute(
-                    Arc::unwrap_or_clone(member.value),
-                    &Instance::of_class(cls),
-                )
+            .and_then(|member| {
+                let field = Arc::unwrap_or_clone(member.value);
+                // InitVar fields are not accessible as instance attributes
+                if field.is_init_var() {
+                    None
+                } else {
+                    Some(self.as_instance_attribute(field, &Instance::of_class(cls)))
+                }
             })
     }
 
