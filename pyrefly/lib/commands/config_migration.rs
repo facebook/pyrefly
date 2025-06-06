@@ -622,32 +622,56 @@ version = "0.1.0"
 [tool]
 # Comment within tool section
 
-[tool.a]
-option = "first"
+[tool.black]
+line-length = 88
+
+[tool.pytest]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
 "#;
         fs_anyhow::write(&ordering_path, existing_content.as_bytes())?;
 
         let mut config = ConfigFile::default();
         config.project_includes = Globs::new(vec!["ordering_test.py".to_owned()]);
+
         write_pyproject(&ordering_path, config)?;
 
         let toml_content = fs_anyhow::read_to_string(&ordering_path)?;
+
         let toml_expected = concat!(
             "[project]\n",
             "name = \"test-project\"\n",
             "version = \"0.1.0\"\n",
             "\n",
-            "[tool.pyrefly]\n",
-            "project-includes = [\"ordering_test.py\"]\n",
-            "\n",
             "# Comment before tool section\n",
             "[tool]\n",
             "# Comment within tool section\n",
             "\n",
-            "[tool.a]\n",
-            "option = \"first\"\n"
+            "[tool.black]\n",
+            "line-length = 88\n",
+            "\n",
+            "[tool.pytest]\n",
+            "testpaths = [\"tests\"]\n",
+            "\n",
+            "[tool.ruff]\n",
+            "line-length = 88\n",
+            "\n",
+            "[tool.pyrefly]\n",
+            "project-includes = [\"ordering_test.py\"]\n",
+            "\n",
+            "[build-system]\n",
+            "requires = [\"setuptools\"]\n",
+            "build-backend = \"setuptools.build_meta\"\n",
         );
+
         assert_eq!(toml_content.trim(), toml_expected.trim());
+
         Ok(())
     }
 }
