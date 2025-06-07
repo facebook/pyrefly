@@ -320,8 +320,18 @@ impl ConfigFile {
         result
     }
 
+    /// Gets a [`FilteredGlobs`] from the optional `custom_excludes` or this
+    /// [`ConfigFile`]s `project_excludes`, adding all `site_package_path` entries
+    /// as extra exclude items.
     pub fn get_filtered_globs(&self, custom_excludes: Option<Globs>) -> FilteredGlobs {
-        let project_excludes = custom_excludes.unwrap_or_else(|| self.project_excludes.clone());
+        let mut project_excludes = custom_excludes.unwrap_or_else(|| self.project_excludes.clone());
+        project_excludes.append(
+            &self
+                .site_package_path()
+                .iter()
+                .map(|pattern| Glob::new(pattern.to_string_lossy().to_string()))
+                .collect::<Vec<_>>(),
+        );
         FilteredGlobs::new(self.project_includes.clone(), project_excludes)
     }
 
@@ -1315,6 +1325,47 @@ mod tests {
         assert_eq!(
             config.search_path().cloned().collect::<Vec<_>>(),
             vec![src_dir]
+        );
+    }
+
+    #[test]
+    fn test_get_filtered_globs() {
+        let mut config = ConfigFile::default();
+        let site_package_path = vec![
+            "venv/site_packages".to_owned(),
+            "system/site_packages".to_owned(),
+        ];
+        config.python_environment.site_package_path = Some(
+            site_package_path
+                .iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>(),
+        );
+        config.project_excludes = ConfigFile::default_project_excludes();
+
+        assert_eq!(
+            config.get_filtered_globs(None),
+            FilteredGlobs::new(
+                config.project_includes.clone(),
+                Globs::new(
+                    vec!["**/*venv/**".to_owned()]
+                        .into_iter()
+                        .chain(site_package_path.clone())
+                        .collect::<Vec<_>>()
+                ),
+            )
+        );
+        assert_eq!(
+            config.get_filtered_globs(Some(Globs::new(vec!["custom_excludes".to_owned()]))),
+            FilteredGlobs::new(
+                config.project_includes.clone(),
+                Globs::new(
+                    vec!["custom_excludes".to_owned()]
+                        .into_iter()
+                        .chain(site_package_path)
+                        .collect::<Vec<_>>()
+                ),
+            )
         );
     }
 }
