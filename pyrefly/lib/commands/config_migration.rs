@@ -83,11 +83,11 @@ impl Args {
     }
 
     pub fn run(&self) -> anyhow::Result<CommandExitStatus> {
-        if let Some(path) = self.input_path.as_ref() {
-            if !path.exists() {
-                error!("Could not find or cannot access `{}`", path.display());
-                return Ok(CommandExitStatus::InfraError);
-            }
+        if let Some(path) = self.input_path.as_ref()
+            && !path.exists()
+        {
+            error!("Could not find or cannot access `{}`", path.display());
+            return Ok(CommandExitStatus::InfraError);
         }
 
         if self.output_path.as_ref().is_some_and(|p| {
@@ -164,12 +164,65 @@ impl Args {
 }
 
 pub fn write_pyproject(pyproject_path: &Path, config: ConfigFile) -> anyhow::Result<()> {
-    // TODO: Use toml_edit to replace the existing tool.pyrefly config, if one exists.
-    // This merely appends the new config to the end of the file.
-    let config = PyProject::new(config);
-    let serialized = toml::to_string_pretty(&config)?;
-    fs_anyhow::append(pyproject_path, serialized.as_bytes())
-        .with_context(|| "While trying to write the pyrefly config to the pyproject.toml file")
+    const ERR_WRITE_CONFIG: &str = "While trying to write Pyrefly config to pyproject.toml file";
+
+    if pyproject_path.exists() {
+        let original_content = fs_anyhow::read_to_string(pyproject_path)?;
+        let mut doc = original_content
+            .parse::<toml_edit::DocumentMut>()
+            .with_context(|| {
+                format!(
+                    "Failed to parse {} as TOML document",
+                    pyproject_path.display()
+                )
+            })?;
+
+        let config_pyproject = PyProject::new(config);
+        let toml_string = toml::to_string_pretty(&config_pyproject)?;
+        let config_doc = toml_string.parse::<toml_edit::DocumentMut>()?;
+
+        if let Some(tool_table) = config_doc.get("tool")
+            && let Some(pyrefly_table) = tool_table.get("pyrefly")
+        {
+            let tool_entry = doc
+                .entry("tool")
+                .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+
+            if let Some(tool_table_mut) = tool_entry.as_table_mut() {
+                tool_table_mut.remove("pyrefly");
+
+                let max_tool_pos = tool_table_mut
+                    .iter()
+                    .filter_map(|(_, v)| v.as_table().and_then(|t| t.position()))
+                    .max()
+                    .unwrap_or(0);
+
+                tool_table_mut.insert("pyrefly", pyrefly_table.clone());
+
+                if let Some(pyrefly_item) = tool_table_mut.get_mut("pyrefly")
+                    && let Some(pyrefly_table_mut) = pyrefly_item.as_table_mut()
+                {
+                    pyrefly_table_mut.decor_mut().set_prefix("\n");
+                    pyrefly_table_mut.set_position(max_tool_pos + 1);
+                }
+            }
+        }
+
+        fs_anyhow::write(pyproject_path, doc.to_string().as_bytes())
+            .with_context(|| ERR_WRITE_CONFIG)
+    } else {
+        let config_pyproject = PyProject::new(config);
+        let serialized_toml = toml::to_string_pretty(&config_pyproject)?;
+
+        let serialized_toml = if !serialized_toml.contains("[tool.pyrefly]") {
+            String::from("[tool.pyrefly]\n")
+        } else {
+            serialized_toml
+        };
+
+        fs_anyhow::write(pyproject_path, serialized_toml.as_bytes())
+            .with_context(|| ERR_WRITE_CONFIG)
+    }
 }
 
 #[cfg(test)]
@@ -409,69 +462,6 @@ files = ["mypy.py"]
         Ok(())
     }
 
-    /*
-    #[ignore = "Cannot edit toml files in a way that preserves order and comments"]
-    #[test]
-    fn test_overwrite_existing_toolpyrefly() -> anyhow::Result<()> {
-        let tmp = tempfile::tempdir()?;
-        let input_path = tmp.path().join("pyrightconfig.json");
-        fs_anyhow::write(&input_path, b"{}")?;
-        let output_path = tmp.path().join("pyproject.toml");
-        fs_anyhow::write(
-            &output_path,
-            br#"[project]
-name = "test"
-
-[tool.a]
-test = true
-
-[tool.z]
-test = true
-
-# I'm a comment!
-
-[tool.pyrefly]
-incomplete = true
-
-[tool.b]
-test = true
-"#,
-        )?;
-        let args = Args {
-            input_path: Some(input_path),
-            output_path: Some(output_path.clone()),
-        };
-        let status = args.run()?;
-        assert!(matches!(status, CommandExitStatus::Success));
-
-        let output = fs_anyhow::read_to_string(&output_path)?;
-        let headers = output
-            .lines()
-            .filter(|l| l.starts_with(['[', '#']))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            headers,
-            vec![
-                "[project]",
-                "[tool.a]",
-                "[tool.z]",
-                "# I'm a comment!",
-                "[tool.pyrefly]",
-                "[tool.b]",
-            ]
-        );
-
-        let config = toml::from_str::<toml::Table>(&output)?;
-        assert!(
-            !config["tool"]["pyrefly"]
-                .as_table()
-                .is_some_and(|table| table.contains_key("incomplete"))
-        );
-
-        Ok(())
-    }
-    */
-
     #[test]
     fn test_output_path_must_be_file() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
@@ -585,6 +575,112 @@ test = true
         let pyr = serde_jsonrc::from_str::<PyrightConfig>(raw_file)?;
         let config = pyr.convert();
         assert!(!config.project_includes.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_existing_pyrefly_config() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let pyproject_path = tmp.path().join("pyproject.toml");
+
+        let existing_content = r#"[project]
+name = "test-project"
+version = "0.1.0"
+
+[tool.poetry]
+dependencies = { python = "^3.8" }
+
+[tool.pyrefly]
+project_includes = ["old/path/**/*.py"]
+project_excludes = ["should/be/removed.py"]
+
+[tool.black]
+line-length = 88
+"#;
+        fs_anyhow::write(&pyproject_path, existing_content.as_bytes())?;
+
+        let mut config = ConfigFile::default();
+        config.project_includes = Globs::new(vec!["new/path/**/*.py".to_owned()]);
+
+        write_pyproject(&pyproject_path, config)?;
+
+        let updated_content = fs_anyhow::read_to_string(&pyproject_path)?;
+
+        assert!(updated_content.contains("[project]"));
+        assert!(updated_content.contains("name = \"test-project\""));
+        assert!(updated_content.contains("[tool.poetry]"));
+        assert!(updated_content.contains("[tool.black]"));
+
+        assert!(updated_content.contains("[tool.pyrefly]"));
+        assert!(updated_content.contains("project-includes = [\"new/path/**/*.py\"]"));
+        assert!(!updated_content.contains("project_includes = [\"old/path/**/*.py\"]"));
+        assert!(!updated_content.contains("project_excludes"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pyrefly_section_ordering() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let ordering_path = tmp.path().join("ordering_test.toml");
+        let existing_content = r#"[project]
+name = "test-project"
+version = "0.1.0"
+
+# Comment before tool section
+[tool]
+# Comment within tool section
+
+[tool.black]
+line-length = 88
+
+[tool.pytest]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+"#;
+        fs_anyhow::write(&ordering_path, existing_content.as_bytes())?;
+
+        let mut config = ConfigFile::default();
+        config.project_includes = Globs::new(vec!["ordering_test.py".to_owned()]);
+
+        write_pyproject(&ordering_path, config)?;
+
+        let toml_content = fs_anyhow::read_to_string(&ordering_path)?;
+
+        let toml_expected = concat!(
+            "[project]\n",
+            "name = \"test-project\"\n",
+            "version = \"0.1.0\"\n",
+            "\n",
+            "# Comment before tool section\n",
+            "[tool]\n",
+            "# Comment within tool section\n",
+            "\n",
+            "[tool.black]\n",
+            "line-length = 88\n",
+            "\n",
+            "[tool.pytest]\n",
+            "testpaths = [\"tests\"]\n",
+            "\n",
+            "[tool.ruff]\n",
+            "line-length = 88\n",
+            "\n",
+            "[tool.pyrefly]\n",
+            "project-includes = [\"ordering_test.py\"]\n",
+            "\n",
+            "[build-system]\n",
+            "requires = [\"setuptools\"]\n",
+            "build-backend = \"setuptools.build_meta\"\n",
+        );
+
+        assert_eq!(toml_content.trim(), toml_expected.trim());
+
         Ok(())
     }
 }
