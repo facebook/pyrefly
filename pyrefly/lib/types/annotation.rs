@@ -62,6 +62,10 @@ impl Annotation {
         self.has_qualifier(&Qualifier::Final)
     }
 
+    pub fn is_init_var(&self) -> bool {
+        self.has_qualifier(&Qualifier::InitVar)
+    }
+
     pub fn has_qualifier(&self, qualifier: &Qualifier) -> bool {
         self.qualifiers.iter().any(|q| q == qualifier)
     }
