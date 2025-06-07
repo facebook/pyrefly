@@ -42,7 +42,7 @@ $ mkdir -p $TMPDIR/src_project/src/foo && echo "x: int = 0" > $TMPDIR/src_projec
 ## Relative --project-excludes
 
 ```scrut {output_stream: stderr}
-$ mkdir $TMPDIR/foo && touch $TMPDIR/foo/bar.py && echo "x: str = 0" > $TMPDIR/foo/problem.py && cd $TMPDIR/foo && $PYREFLY check *.py --project-excludes=problem.py
+$ mkdir $TMPDIR/foo && touch $TMPDIR/foo/bar.py && echo "x: str = 0" > $TMPDIR/foo/problem.py && cd $TMPDIR/foo && $PYREFLY check "*.py" --project-excludes=problem.py
  INFO errors shown: 0* (glob)
 [0]
 ```
