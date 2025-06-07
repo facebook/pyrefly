@@ -110,7 +110,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         } else {
             let mut acc = Vec::new();
+            let implementation_range = def.id_range;
             let mut first = def;
+            let mut has_overload_successor = false;
+            
+            let binding = self.bindings().get(idx);
+            let mut current_successor = binding.successor;
+            while let Some(succ_key_idx) = current_successor {
+                let succ_def = self.get_idx(succ_key_idx);
+                if succ_def.metadata.flags.is_overload {
+                    has_overload_successor = true;
+                    break;
+                }
+                current_successor = self.bindings().get(succ_key_idx).successor;
+            }
+            if has_overload_successor && !skip_implementation {
+                self.error(
+                    errors,
+                    implementation_range,
+                    ErrorKind::InvalidOverload,
+                    None,
+                    "Function implementation must come after all @overload declarations. ".to_owned(),
+                );
+            }  
             while let Some(def) = self.step_overload_pred(predecessor) {
                 acc.push((def.id_range, def.ty.clone()));
                 first = def;
