@@ -468,6 +468,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         "`ClassVar` may not be nested inside `Final`".to_owned(),
                     );
                 }
+
+                let has_required = ann.qualifiers.contains(&Qualifier::Required);
+                let has_not_required = ann.qualifiers.contains(&Qualifier::NotRequired);
+                if (qualifier == Qualifier::Required && has_not_required)
+                    || (qualifier == Qualifier::NotRequired && has_required)
+                {
+                    self.error(
+                        errors,
+                        x.range(),
+                        ErrorKind::InvalidAnnotation,
+                        None,
+                        "Cannot combine Required and NotRequired for a TypedDict field".to_owned(),
+                    );
+                }
+
                 ann.qualifiers.insert(0, qualifier);
                 ann
             }

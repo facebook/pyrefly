@@ -574,3 +574,14 @@ def f(c: C):
     c.setdefault("x", default=0)  # E: No matching overload
     "#,
 );
+
+testcase!(
+    test_required_and_notrequired_conflict,
+    r#"
+from typing import TypedDict, Required, NotRequired
+
+class TD(TypedDict):
+    x: Required[NotRequired[int]]  # E: Cannot combine Required and NotRequired for a TypedDict field
+    y: NotRequired[Required[int]]  # E: Cannot combine Required and NotRequired for a TypedDict field
+"#,
+);
