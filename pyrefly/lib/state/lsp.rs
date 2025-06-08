@@ -14,6 +14,7 @@ use pyrefly_util::gas::Gas;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::visit::Visit;
+use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::Identifier;
@@ -28,6 +29,7 @@ use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
+use crate::common::symbol_kind::SymbolKind;
 use crate::export::definitions::DocString;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
@@ -56,8 +58,21 @@ const INITIAL_GAS: Gas = Gas::new(20);
 pub enum DefinitionMetadata {
     Attribute(Name),
     Module,
-    Variable,
-    VariableOrAttribute(Name),
+    Variable(Option<SymbolKind>),
+    VariableOrAttribute(Name, Option<SymbolKind>),
+}
+
+impl DefinitionMetadata {
+    pub fn symbol_kind(&self) -> Option<SymbolKind> {
+        match self {
+            DefinitionMetadata::Attribute(_) => Some(SymbolKind::Attribute),
+            DefinitionMetadata::Module => Some(SymbolKind::Module),
+            DefinitionMetadata::Variable(symbol_kind) => symbol_kind.as_ref().copied(),
+            DefinitionMetadata::VariableOrAttribute(_, symbol_kind) => {
+                symbol_kind.as_ref().copied()
+            }
+        }
+    }
 }
 
 enum ImportIdentifier {
@@ -91,18 +106,10 @@ impl<'a> Transaction<'a> {
 
     fn identifier_at(&self, handle: &Handle, position: TextSize) -> Option<Identifier> {
         let mod_module = self.get_ast(handle)?;
-        fn f(x: &Expr, find: TextSize, res: &mut Option<Identifier>) {
-            if let Expr::Name(x) = x
-                && x.range.contains_inclusive(find)
-            {
-                *res = Some(Ast::expr_name_identifier(x.clone()));
-            } else {
-                x.recurse(&mut |x| f(x, find, res));
-            }
+        match Ast::locate_node(&mod_module, position).first() {
+            Some(AnyNodeRef::ExprName(name)) => Some(Ast::expr_name_identifier((*name).clone())),
+            _ => None,
         }
-        let mut res = None;
-        mod_module.visit(&mut |x| f(x, position, &mut res));
-        res
     }
 
     fn import_at(&self, handle: &Handle, position: TextSize) -> Option<ImportIdentifier> {
@@ -227,6 +234,7 @@ impl<'a> Transaction<'a> {
                     handle,
                     Export {
                         location: TextRange::default(),
+                        symbol_kind: Some(SymbolKind::Module),
                         docstring,
                     },
                 ))
@@ -291,12 +299,13 @@ impl<'a> Transaction<'a> {
                 handle,
                 Export {
                     location,
+                    symbol_kind,
                     docstring,
                 },
             ) = self.key_to_export(handle, &key, INITIAL_GAS)?;
             let name = Name::new(self.get_module_info(&handle)?.code_at(location));
             return Some((
-                DefinitionMetadata::VariableOrAttribute(name),
+                DefinitionMetadata::VariableOrAttribute(name, symbol_kind),
                 TextRangeWithModuleInfo::new(self.get_module_info(&handle)?, location),
                 docstring,
             ));
@@ -309,6 +318,7 @@ impl<'a> Transaction<'a> {
                 handle,
                 Export {
                     location,
+                    symbol_kind,
                     docstring,
                 },
             ) = self.key_to_export(
@@ -317,7 +327,7 @@ impl<'a> Transaction<'a> {
                 INITIAL_GAS,
             )?;
             return Some((
-                DefinitionMetadata::Variable,
+                DefinitionMetadata::Variable(symbol_kind),
                 TextRangeWithModuleInfo::new(self.get_module_info(&handle)?, location),
                 docstring,
             ));
@@ -356,10 +366,6 @@ impl<'a> Transaction<'a> {
         position: TextSize,
     ) -> Option<TextRangeWithModuleInfo> {
         self.find_definition(handle, position).map(|x| x.1)
-    }
-
-    pub fn docstring(&self, handle: &Handle, position: TextSize) -> Option<DocString> {
-        self.find_definition(handle, position).map(|x| x.2)?
     }
 
     pub fn find_local_references(&self, handle: &Handle, position: TextSize) -> Vec<TextRange> {
@@ -418,10 +424,10 @@ impl<'a> Transaction<'a> {
                 self.local_attribute_references_from_definition(handle, &definition, &expected_name)
             }
             DefinitionMetadata::Module => Vec::new(),
-            DefinitionMetadata::Variable => self
+            DefinitionMetadata::Variable(_) => self
                 .local_variable_references_from_definition(handle, &definition)
                 .unwrap_or_default(),
-            DefinitionMetadata::VariableOrAttribute(expected_name) => [
+            DefinitionMetadata::VariableOrAttribute(expected_name, _) => [
                 self.local_attribute_references_from_definition(
                     handle,
                     &definition,
@@ -513,6 +519,7 @@ impl<'a> Transaction<'a> {
                 definition_handle,
                 Export {
                     location,
+                    symbol_kind: _,
                     docstring: _,
                 },
             )) = self.binding_to_export(handle, binding, INITIAL_GAS)
@@ -585,11 +592,16 @@ impl<'a> Transaction<'a> {
                 .filter_map(|idx| {
                     let key = bindings.idx_to_key(idx);
                     if let Key::Definition(id) = key {
+                        let binding = bindings.get(idx);
                         let detail = self.get_type(handle, key).map(|t| t.to_string());
                         Some(CompletionItem {
                             label: module_info.code_at(id.range()).to_owned(),
                             detail,
-                            kind: Some(CompletionItemKind::VARIABLE),
+                            kind: binding
+                                .symbol_kind()
+                                .map_or(Some(CompletionItemKind::VARIABLE), |k| {
+                                    Some(k.to_lsp_completion_item_kind())
+                                }),
                             ..Default::default()
                         })
                     } else {

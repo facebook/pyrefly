@@ -442,6 +442,7 @@ impl<'a> Transaction<'a> {
         res
     }
 
+    /// Create a handle for import `module` within the handle `handle`
     pub fn import_handle(
         &self,
         handle: &Handle,

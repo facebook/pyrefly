@@ -772,20 +772,9 @@ impl<'a> BindingsBuilder<'a> {
         let mut barrier = false;
         for scope in self.scopes.iter_rev() {
             if let Some(flow) = scope.flow.info.get_hashed(name) {
-                match kind {
-                    LookupKind::Regular => {
-                        if !barrier {
-                            // TODO: track usage
-                            return Ok(flow.key);
-                        }
-                    }
-                    LookupKind::Mutable => {
-                        if !barrier {
-                            return Ok(flow.key);
-                        } else {
-                            return Err(LookupError::NotMutable);
-                        }
-                    }
+                if !barrier {
+                    // TODO: track usage
+                    return Ok(flow.key);
                 }
             }
             if !matches!(scope.kind, ScopeKind::Class(_))

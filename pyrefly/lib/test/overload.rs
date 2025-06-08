@@ -168,7 +168,7 @@ if sys.version_info >= (3, 12):
 assert_type(f(0), int)
 assert_type(f(""), str)
 assert_type(f(), None)
-f(0, 0) # E: No matching overload found  # E: Expected 1 positional argument, got 2
+f(0, 0) # E: No matching overload found
 "#,
 );
 
@@ -301,7 +301,7 @@ def f(x: object) -> object:
     return x
 
 assert_type(f(0), int)
-f(b"")  # E: No matching overload found for function `f`, reporting errors for closest overload: `(int) -> int`  # E: `Literal[b'']` is not assignable to parameter with type `int`
+f(b"")  # E: No matching overload found for function `f`
     "#,
 );
 

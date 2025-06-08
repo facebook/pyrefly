@@ -217,7 +217,7 @@ mod tests {
         // We're not going to check the whole output because most of it will be default values, which may change.
         // We only actually care about the includes.
         let output_lines = output.lines().collect::<Vec<_>>();
-        assert_eq!(output_lines[0], r#"project_includes = ["src/**/*.py"]"#);
+        assert_eq!(output_lines[0], r#"project-includes = ["src/**/*.py"]"#);
         from_file(&output_path)
     }
 
@@ -260,6 +260,7 @@ check_untyped_defs = True
         // We care about the config getting serialized in a way that can be checked-in to a repo,
         // i.e. without absolutized paths. So we need to check the raw file.
         #[derive(Deserialize)]
+        #[serde(rename_all = "kebab-case")]
         struct CheckConfig {
             project_includes: Vec<String>,
             search_path: Vec<String>,

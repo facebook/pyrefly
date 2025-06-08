@@ -5,15 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#![allow(dead_code)] // We don't yet generate this
-
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::report::glean::schema::*;
-
-/// The Schema ID for Python as specified by Glean
-pub const PYTHON_SCHEMA_ID: &str = "54195d609c9195d2bc09d8fa05050bf7";
 
 /// Represents a Glean JSON file containing Python indexer data
 #[derive(Debug, Clone, Serialize)]
@@ -42,7 +37,10 @@ pub fn json(x: impl Serialize) -> Value {
 
 impl python::Name {
     pub fn new(name: String) -> Self {
-        Self { id: 0, key: name }
+        Self {
+            id: 0,
+            key: Box::new(name),
+        }
     }
 }
 
@@ -50,14 +48,17 @@ impl python::Module {
     pub fn new(name: python::Name) -> Self {
         Self {
             id: 0,
-            key: python::Module_key { name },
+            key: Box::new(python::Module_key { name }),
         }
     }
 }
 
 impl src::File {
     pub fn new(file: String) -> Self {
-        Self { id: 0, key: file }
+        Self {
+            id: 0,
+            key: Box::new(file),
+        }
     }
 }
 
@@ -65,7 +66,7 @@ impl digest::FileDigest {
     pub fn new(file: src::File, digest: digest::Digest) -> Self {
         Self {
             id: 0,
-            key: digest::FileDigest_key { file, digest },
+            key: Box::new(digest::FileDigest_key { file, digest }),
         }
     }
 }

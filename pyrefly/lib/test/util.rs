@@ -25,6 +25,8 @@ use pyrefly_util::trace::init_tracing;
 use ruff_python_ast::name::Name;
 use ruff_source_file::LineIndex;
 use ruff_source_file::OneIndexed;
+use ruff_source_file::PositionEncoding;
+use ruff_source_file::SourceLocation;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
@@ -228,24 +230,30 @@ impl TestEnv {
 
 pub fn code_frame_of_source_at_range(source: &str, range: TextRange) -> String {
     let index = LineIndex::from_source_text(source);
-    let start_loc = index.source_location(range.start(), source);
-    let end_loc = index.source_location(range.end(), source);
+    let start_loc = index.line_column(range.start(), source);
+    let end_loc = index.line_column(range.end(), source);
     if (range.start().checked_add(TextSize::from(1))) == Some(range.end()) {
-        let full_line = source.lines().nth(start_loc.row.to_zero_indexed()).unwrap();
+        let full_line = source
+            .lines()
+            .nth(start_loc.line.to_zero_indexed())
+            .unwrap();
         format!(
             "{} | {}\n{}   {}^",
-            start_loc.row,
+            start_loc.line,
             full_line,
-            " ".repeat(start_loc.row.to_string().len()),
+            " ".repeat(start_loc.line.to_string().len()),
             " ".repeat(start_loc.column.to_zero_indexed())
         )
-    } else if start_loc.row == end_loc.row {
-        let full_line = source.lines().nth(start_loc.row.to_zero_indexed()).unwrap();
+    } else if start_loc.line == end_loc.line {
+        let full_line = source
+            .lines()
+            .nth(start_loc.line.to_zero_indexed())
+            .unwrap();
         format!(
             "{} | {}\n{}   {}{}",
-            start_loc.row,
+            start_loc.line,
             full_line,
-            " ".repeat(start_loc.row.to_string().len()),
+            " ".repeat(start_loc.line.to_string().len()),
             " ".repeat(start_loc.column.to_zero_indexed()),
             "^".repeat(std::cmp::max(
                 end_loc.column.to_zero_indexed() - start_loc.column.to_zero_indexed(),
@@ -283,9 +291,12 @@ pub fn extract_cursors_for_test(source: &str) -> Vec<TextSize> {
                 panic!("Invalid cursor at {}:{}", line_index, row_index);
             }
             let position = index.offset(
-                OneIndexed::from_zero_indexed(line_index - 1),
-                OneIndexed::from_zero_indexed(row_index),
+                SourceLocation {
+                    line: OneIndexed::from_zero_indexed(line_index - 1),
+                    character_offset: OneIndexed::from_zero_indexed(row_index),
+                },
                 source,
+                PositionEncoding::Utf32,
             );
             ranges.push(position);
         }

@@ -17,54 +17,65 @@ exports[`Home page renders external site correctly 1`] = `
           class="container"
         >
           <header>
-            <section>
-              <img
-                alt="Pyrefly Logo"
-                src="/img/Pyrefly-Brandmark.svg"
-              />
-            </section>
-            <p>
-              <span>
-                A faster Python type checker written in Rust
-              </span>
-            </p>
-            <section>
-              <div>
-                <pre>
-                  <code>
-                    <span>
-                      $ 
-                    </span>
-                    pip install pyrefly && pyrefly init
-                  </code>
-                  <button
-                    title="Copy to clipboard"
-                  >
-                    <svg
-                      height="20"
-                      viewBox="340 364 14 15"
-                      width="20"
-                      xmlns="http://www.w3.org/2000/svg"
+            <div
+              style="opacity: 0;"
+            >
+              <section>
+                <img
+                  alt="Pyrefly Logo"
+                  src="/img/Pyrefly-Brandmark.svg"
+                />
+              </section>
+            </div>
+            <div
+              style="opacity: 0;"
+            >
+              <p>
+                <span>
+                  A faster Python type checker written in Rust
+                </span>
+              </p>
+            </div>
+            <div
+              style="opacity: 0;"
+            >
+              <section>
+                <div>
+                  <pre>
+                    <code>
+                      <span>
+                        $ 
+                      </span>
+                      pip install pyrefly && pyrefly init
+                    </code>
+                    <button
+                      title="Copy to clipboard"
                     >
-                      <path
-                        d="M342 375.974h4v.998h-4v-.998zm5-5.987h-5v.998h5v-.998zm2 2.994v-1.995l-3 2.993 3 2.994v-1.996h5v-1.995h-5zm-4.5-.997H342v.998h2.5v-.997zm-2.5 2.993h2.5v-.998H342v.998zm9 .998h1v1.996c-.016.28-.11.514-.297.702-.187.187-.422.28-.703.296h-10c-.547 0-1-.452-1-.998v-10.976c0-.546.453-.998 1-.998h3c0-1.107.89-1.996 2-1.996 1.11 0 2 .89 2 1.996h3c.547 0 1 .452 1 .998v4.99h-1v-2.995h-10v8.98h10v-1.996zm-9-7.983h8c0-.544-.453-.996-1-.996h-1c-.547 0-1-.453-1-.998 0-.546-.453-.998-1-.998-.547 0-1 .452-1 .998 0 .545-.453.998-1 .998h-1c-.547 0-1 .452-1 .997z"
-                        fill="currentColor"
-                        fill-rule="evenodd"
-                      />
-                    </svg>
-                  </button>
-                </pre>
-              </div>
-              <a
-                href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
-                target="_blank"
-              >
-                 
-                Get VSCode Extension
-                 
-              </a>
-            </section>
-            <section />
+                      <svg
+                        height="20"
+                        viewBox="340 364 14 15"
+                        width="20"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <path
+                          d="M342 375.974h4v.998h-4v-.998zm5-5.987h-5v.998h5v-.998zm2 2.994v-1.995l-3 2.993 3 2.994v-1.996h5v-1.995h-5zm-4.5-.997H342v.998h2.5v-.997zm-2.5 2.993h2.5v-.998H342v.998zm9 .998h1v1.996c-.016.28-.11.514-.297.702-.187.187-.422.28-.703.296h-10c-.547 0-1-.452-1-.998v-10.976c0-.546.453-.998 1-.998h3c0-1.107.89-1.996 2-1.996 1.11 0 2 .89 2 1.996h3c.547 0 1 .452 1 .998v4.99h-1v-2.995h-10v8.98h10v-1.996zm-9-7.983h8c0-.544-.453-.996-1-.996h-1c-.547 0-1-.453-1-.998 0-.546-.453-.998-1-.998-.547 0-1 .452-1 .998 0 .545-.453.998-1 .998h-1c-.547 0-1 .452-1 .997z"
+                          fill="currentColor"
+                          fill-rule="evenodd"
+                        />
+                      </svg>
+                    </button>
+                  </pre>
+                </div>
+                <a
+                  href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
+                  target="_blank"
+                >
+                   
+                  Get VSCode Extension
+                   
+                </a>
+              </section>
+            </div>
             <section>
               <li
                 id="firefly"
@@ -91,70 +102,86 @@ exports[`Home page renders external site correctly 1`] = `
         <div
           class="container"
         >
-          <div>
+          <div
+            style="opacity: 0;"
+          >
             <div>
-              <div
-                style="transition-delay: 0s;"
-              >
-                <h3>
-                  Scale with Confidence
-                </h3>
-                <p>
-                  Type check over 1.85 million lines of code
-                   
-                  <span>
-                    per second.
-                    <sup>
-                      <span>
-                        <span>
-                          ⓘ
-                        </span>
-                        <span>
-                          Tested using Meta infrastructure (166 cores, 228 GB RAM)
-                        </span>
-                      </span>
-                    </sup>
-                  </span>
-                </p>
-              </div>
-              <div
-                style="transition-delay: 0.05s;"
-              >
-                <h3>
-                  Developer Delight
-                </h3>
-                <p>
-                  Get lightning fast autocomplete, and catch errors with instant feedback in your favorite editor.
-                </p>
-              </div>
-              <div
-                style="transition-delay: 0.1s;"
-              >
-                <h3>
-                  Easy Onboarding
-                </h3>
-                <p>
-                  <a
-                    href="/en/docs/installation/"
-                    target="_blank"
+              <div>
+                <div
+                  style="opacity: 0;"
+                >
+                  <div
+                    style="transition-delay: 0s;"
                   >
-                    Start type checking
-                  </a>
-                   your code in minutes.
-                </p>
+                    <h3>
+                      Scale with Confidence
+                    </h3>
+                    <p>
+                      Type check over 1.85 million lines of code
+                       
+                      <span>
+                        per second.
+                        <sup>
+                          <span>
+                            <span>
+                              ⓘ
+                            </span>
+                            <span>
+                              Tested using Meta infrastructure (166 cores, 228 GB RAM)
+                            </span>
+                          </span>
+                        </sup>
+                      </span>
+                    </p>
+                  </div>
+                </div>
+                <div
+                  style="opacity: 0;"
+                >
+                  <div
+                    style="transition-delay: 0.05s;"
+                  >
+                    <h3>
+                      Developer Delight
+                    </h3>
+                    <p>
+                      Get lightning fast autocomplete, and catch errors with instant feedback in your favorite editor.
+                    </p>
+                  </div>
+                </div>
+                <div
+                  style="opacity: 0;"
+                >
+                  <div
+                    style="transition-delay: 0.1s;"
+                  >
+                    <h3>
+                      Easy Onboarding
+                    </h3>
+                    <p>
+                      <a
+                        href="/en/docs/installation/"
+                        target="_blank"
+                      >
+                        Start type checking
+                      </a>
+                       your code in minutes.
+                    </p>
+                  </div>
+                </div>
               </div>
+              <section>
+                <li
+                  id="firefly"
+                />
+                <li
+                  id="firefly"
+                />
+                <li
+                  id="firefly"
+                />
+              </section>
             </div>
-            <section>
-              <li
-                id="firefly"
-              />
-              <li
-                id="firefly"
-              />
-              <li
-                id="firefly"
-              />
-            </section>
           </div>
         </div>
       </section>
@@ -164,161 +191,206 @@ exports[`Home page renders external site correctly 1`] = `
         <div
           class="container"
         >
-          <h2>
-            Performance Comparison
-          </h2>
-          <div>
-            <div>
-              <button>
-                PyTorch
-              </button>
-              <button>
-                Instagram
-              </button>
-            </div>
+          <div
+            style="opacity: 0;"
+          >
+            <h2>
+              Performance Comparison
+            </h2>
+          </div>
+          <div
+            style="opacity: 0;"
+          >
             <div>
               <div>
-                Type checking the
-                 
-                <a
-                  href="https://github.com/pytorch/pytorch"
-                  rel="noopener noreferrer"
-                  target="_blank"
-                >
+                <button>
                   PyTorch
-                </a>
-                 
-                codebase from scratch.
-                <span>
-                  <span>
-                    ⓘ
-                  </span>
-                  <span>
-                    <strong>
-                      Tested using Macbook
-                    </strong>
-                    <br />
-                    (10 cores: 8 performance + 2 efficiency cores, 32 GB RAM)
-                  </span>
-                </span>
+                </button>
+                <button>
+                  Instagram
+                </button>
               </div>
               <div>
                 <div>
-                  <div>
-                    <div>
-                      <span>
-                        <strong>
-                          Pyrefly
-                        </strong>
-                      </span>
-                      <span>
-                        <span>
-                          ⓘ
-                        </span>
-                        <span>
-                          <strong>
-                            Command: "pyrefly check"
-                          </strong>
-                          <br />
-                          Pyrefly uses as many threads as possible
-                        </span>
-                      </span>
-                    </div>
-                  </div>
-                  <div>
-                    <div>
-                      <div
-                        style="height: 80%; width: 4.827299209321681%;"
-                      >
-                        <div
-                          style="animation-duration: 2.32s; width: 0%;"
-                        />
-                      </div>
-                    </div>
+                  Type checking the
+                   
+                  <a
+                    href="https://github.com/pytorch/pytorch"
+                    rel="noopener noreferrer"
+                    target="_blank"
+                  >
+                    PyTorch
+                  </a>
+                   
+                  codebase from scratch.
+                  <span>
+                    <span>
+                      ⓘ
+                    </span>
                     <span>
                       <strong>
-                        0.0s
+                        Tested using Macbook
                       </strong>
+                      <br />
+                      (10 cores: 8 performance + 2 efficiency cores, 32 GB RAM)
                     </span>
-                  </div>
+                  </span>
                 </div>
                 <div>
                   <div>
                     <div>
-                      <span>
-                        <strong>
-                          Pyright
-                        </strong>
-                      </span>
-                      <span>
-                        <span>
-                          ⓘ
-                        </span>
+                      <div>
                         <span>
                           <strong>
-                            Command: "pyright --threads=8"
+                            Pyrefly
                           </strong>
-                          <br />
-                          8 threads yielded the best performance after testing multiple settings
                         </span>
-                      </span>
-                    </div>
-                  </div>
-                  <div>
-                    <div>
-                      <div
-                        style="height: 80%; width: 73.1585518102372%;"
-                      >
-                        <div
-                          style="animation-duration: 35.16s; width: 0%;"
-                        />
+                        <span>
+                          <span>
+                            ⓘ
+                          </span>
+                          <span>
+                            <strong>
+                              Command: "pyrefly check"
+                            </strong>
+                            <br />
+                            Pyrefly uses as many threads as possible
+                          </span>
+                        </span>
                       </div>
                     </div>
-                    <span>
-                      <strong>
-                        0.0s
-                      </strong>
-                    </span>
-                  </div>
-                </div>
-                <div>
-                  <div>
                     <div>
+                      <div>
+                        <div
+                          style="height: 80%; width: 4.827299209321681%;"
+                        >
+                          <div
+                            style="animation-duration: 2.32s; width: 0%;"
+                          />
+                        </div>
+                      </div>
                       <span>
                         <strong>
-                          MyPy
+                          0.0s
                         </strong>
-                      </span>
-                      <span>
-                        <span>
-                          ⓘ
-                        </span>
-                        <span>
-                          <strong>
-                            Command: "dmypy run"
-                          </strong>
-                        </span>
                       </span>
                     </div>
                   </div>
                   <div>
                     <div>
-                      <div
-                        style="height: 80%; width: 100%;"
-                      >
-                        <div
-                          style="animation-duration: 48.06s; width: 0%;"
-                        />
+                      <div>
+                        <span>
+                          <strong>
+                            Pyright
+                          </strong>
+                        </span>
+                        <span>
+                          <span>
+                            ⓘ
+                          </span>
+                          <span>
+                            <strong>
+                              Command: "pyright --threads=8"
+                            </strong>
+                            <br />
+                            8 threads yielded the best performance after testing multiple settings
+                          </span>
+                        </span>
                       </div>
                     </div>
-                    <span>
-                      <strong>
-                        0.0s
-                      </strong>
-                    </span>
+                    <div>
+                      <div>
+                        <div
+                          style="height: 80%; width: 73.1585518102372%;"
+                        >
+                          <div
+                            style="animation-duration: 35.16s; width: 0%;"
+                          />
+                        </div>
+                      </div>
+                      <span>
+                        <strong>
+                          0.0s
+                        </strong>
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <div>
+                      <div>
+                        <span>
+                          <strong>
+                            MyPy
+                          </strong>
+                        </span>
+                        <span>
+                          <span>
+                            ⓘ
+                          </span>
+                          <span>
+                            <strong>
+                              Command: "dmypy run"
+                            </strong>
+                          </span>
+                        </span>
+                      </div>
+                    </div>
+                    <div>
+                      <div>
+                        <div
+                          style="height: 80%; width: 100%;"
+                        >
+                          <div
+                            style="animation-duration: 48.06s; width: 0%;"
+                          />
+                        </div>
+                      </div>
+                      <span>
+                        <strong>
+                          0.0s
+                        </strong>
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section
+        id="pyrefly-video"
+      >
+        <div
+          class="container"
+        >
+          <div
+            style="opacity: 0;"
+          >
+            <h2>
+              Check it out in the intro video
+            </h2>
+          </div>
+          <div
+            style="opacity: 0;"
+          >
+            <div>
+              <link
+                as="image"
+                href="https://i.ytimg.com/vi/LXaFRKrTJVU/maxresdefault.jpg"
+                rel="preload"
+              />
+              <article
+                class="yt-lite "
+                data-title="Introducing Pyrefly: A new type checker and IDE experience for Python"
+                style="background-image: url(https://i.ytimg.com/vi/LXaFRKrTJVU/maxresdefault.jpg); --aspect-ratio: 56.25%;"
+              >
+                <button
+                  aria-label="Watch Introducing Pyrefly: A new type checker and IDE experience for Python"
+                  class="lty-playbtn"
+                  type="button"
+                />
+              </article>
             </div>
           </div>
         </div>
@@ -345,54 +417,65 @@ exports[`Home page renders internal site correctly 1`] = `
           class="container"
         >
           <header>
-            <section>
-              <img
-                alt="Pyrefly Logo"
-                src="/img/Pyrefly-Brandmark.svg"
-              />
-            </section>
-            <p>
-              <span>
-                A faster Python type checker written in Rust
-              </span>
-            </p>
-            <section>
-              <div>
-                <pre>
-                  <code>
-                    <span>
-                      $ 
-                    </span>
-                    pip install pyrefly && pyrefly init
-                  </code>
-                  <button
-                    title="Copy to clipboard"
-                  >
-                    <svg
-                      height="20"
-                      viewBox="340 364 14 15"
-                      width="20"
-                      xmlns="http://www.w3.org/2000/svg"
+            <div
+              style="opacity: 0;"
+            >
+              <section>
+                <img
+                  alt="Pyrefly Logo"
+                  src="/img/Pyrefly-Brandmark.svg"
+                />
+              </section>
+            </div>
+            <div
+              style="opacity: 0;"
+            >
+              <p>
+                <span>
+                  A faster Python type checker written in Rust
+                </span>
+              </p>
+            </div>
+            <div
+              style="opacity: 0;"
+            >
+              <section>
+                <div>
+                  <pre>
+                    <code>
+                      <span>
+                        $ 
+                      </span>
+                      pip install pyrefly && pyrefly init
+                    </code>
+                    <button
+                      title="Copy to clipboard"
                     >
-                      <path
-                        d="M342 375.974h4v.998h-4v-.998zm5-5.987h-5v.998h5v-.998zm2 2.994v-1.995l-3 2.993 3 2.994v-1.996h5v-1.995h-5zm-4.5-.997H342v.998h2.5v-.997zm-2.5 2.993h2.5v-.998H342v.998zm9 .998h1v1.996c-.016.28-.11.514-.297.702-.187.187-.422.28-.703.296h-10c-.547 0-1-.452-1-.998v-10.976c0-.546.453-.998 1-.998h3c0-1.107.89-1.996 2-1.996 1.11 0 2 .89 2 1.996h3c.547 0 1 .452 1 .998v4.99h-1v-2.995h-10v8.98h10v-1.996zm-9-7.983h8c0-.544-.453-.996-1-.996h-1c-.547 0-1-.453-1-.998 0-.546-.453-.998-1-.998-.547 0-1 .452-1 .998 0 .545-.453.998-1 .998h-1c-.547 0-1 .452-1 .997z"
-                        fill="currentColor"
-                        fill-rule="evenodd"
-                      />
-                    </svg>
-                  </button>
-                </pre>
-              </div>
-              <a
-                href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
-                target="_blank"
-              >
-                 
-                Get VSCode Extension
-                 
-              </a>
-            </section>
-            <section />
+                      <svg
+                        height="20"
+                        viewBox="340 364 14 15"
+                        width="20"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <path
+                          d="M342 375.974h4v.998h-4v-.998zm5-5.987h-5v.998h5v-.998zm2 2.994v-1.995l-3 2.993 3 2.994v-1.996h5v-1.995h-5zm-4.5-.997H342v.998h2.5v-.997zm-2.5 2.993h2.5v-.998H342v.998zm9 .998h1v1.996c-.016.28-.11.514-.297.702-.187.187-.422.28-.703.296h-10c-.547 0-1-.452-1-.998v-10.976c0-.546.453-.998 1-.998h3c0-1.107.89-1.996 2-1.996 1.11 0 2 .89 2 1.996h3c.547 0 1 .452 1 .998v4.99h-1v-2.995h-10v8.98h10v-1.996zm-9-7.983h8c0-.544-.453-.996-1-.996h-1c-.547 0-1-.453-1-.998 0-.546-.453-.998-1-.998-.547 0-1 .452-1 .998 0 .545-.453.998-1 .998h-1c-.547 0-1 .452-1 .997z"
+                          fill="currentColor"
+                          fill-rule="evenodd"
+                        />
+                      </svg>
+                    </button>
+                  </pre>
+                </div>
+                <a
+                  href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
+                  target="_blank"
+                >
+                   
+                  Get VSCode Extension
+                   
+                </a>
+              </section>
+            </div>
             <section>
               <li
                 id="firefly"
@@ -419,70 +502,86 @@ exports[`Home page renders internal site correctly 1`] = `
         <div
           class="container"
         >
-          <div>
+          <div
+            style="opacity: 0;"
+          >
             <div>
-              <div
-                style="transition-delay: 0s;"
-              >
-                <h3>
-                  Scale with Confidence
-                </h3>
-                <p>
-                  Type check over 1.85 million lines of code
-                   
-                  <span>
-                    per second.
-                    <sup>
-                      <span>
-                        <span>
-                          ⓘ
-                        </span>
-                        <span>
-                          Tested using Meta infrastructure (166 cores, 228 GB RAM)
-                        </span>
-                      </span>
-                    </sup>
-                  </span>
-                </p>
-              </div>
-              <div
-                style="transition-delay: 0.05s;"
-              >
-                <h3>
-                  Developer Delight
-                </h3>
-                <p>
-                  Get lightning fast autocomplete, and catch errors with instant feedback in your favorite editor.
-                </p>
-              </div>
-              <div
-                style="transition-delay: 0.1s;"
-              >
-                <h3>
-                  Easy Onboarding
-                </h3>
-                <p>
-                  <a
-                    href="/en/docs/installation/"
-                    target="_blank"
+              <div>
+                <div
+                  style="opacity: 0;"
+                >
+                  <div
+                    style="transition-delay: 0s;"
                   >
-                    Start type checking
-                  </a>
-                   your code in minutes.
-                </p>
+                    <h3>
+                      Scale with Confidence
+                    </h3>
+                    <p>
+                      Type check over 1.85 million lines of code
+                       
+                      <span>
+                        per second.
+                        <sup>
+                          <span>
+                            <span>
+                              ⓘ
+                            </span>
+                            <span>
+                              Tested using Meta infrastructure (166 cores, 228 GB RAM)
+                            </span>
+                          </span>
+                        </sup>
+                      </span>
+                    </p>
+                  </div>
+                </div>
+                <div
+                  style="opacity: 0;"
+                >
+                  <div
+                    style="transition-delay: 0.05s;"
+                  >
+                    <h3>
+                      Developer Delight
+                    </h3>
+                    <p>
+                      Get lightning fast autocomplete, and catch errors with instant feedback in your favorite editor.
+                    </p>
+                  </div>
+                </div>
+                <div
+                  style="opacity: 0;"
+                >
+                  <div
+                    style="transition-delay: 0.1s;"
+                  >
+                    <h3>
+                      Easy Onboarding
+                    </h3>
+                    <p>
+                      <a
+                        href="/en/docs/installation/"
+                        target="_blank"
+                      >
+                        Start type checking
+                      </a>
+                       your code in minutes.
+                    </p>
+                  </div>
+                </div>
               </div>
+              <section>
+                <li
+                  id="firefly"
+                />
+                <li
+                  id="firefly"
+                />
+                <li
+                  id="firefly"
+                />
+              </section>
             </div>
-            <section>
-              <li
-                id="firefly"
-              />
-              <li
-                id="firefly"
-              />
-              <li
-                id="firefly"
-              />
-            </section>
           </div>
         </div>
       </section>
@@ -492,161 +591,206 @@ exports[`Home page renders internal site correctly 1`] = `
         <div
           class="container"
         >
-          <h2>
-            Performance Comparison
-          </h2>
-          <div>
-            <div>
-              <button>
-                PyTorch
-              </button>
-              <button>
-                Instagram
-              </button>
-            </div>
+          <div
+            style="opacity: 0;"
+          >
+            <h2>
+              Performance Comparison
+            </h2>
+          </div>
+          <div
+            style="opacity: 0;"
+          >
             <div>
               <div>
-                Type checking the
-                 
-                <a
-                  href="https://github.com/pytorch/pytorch"
-                  rel="noopener noreferrer"
-                  target="_blank"
-                >
+                <button>
                   PyTorch
-                </a>
-                 
-                codebase from scratch.
-                <span>
-                  <span>
-                    ⓘ
-                  </span>
-                  <span>
-                    <strong>
-                      Tested using Macbook
-                    </strong>
-                    <br />
-                    (10 cores: 8 performance + 2 efficiency cores, 32 GB RAM)
-                  </span>
-                </span>
+                </button>
+                <button>
+                  Instagram
+                </button>
               </div>
               <div>
                 <div>
-                  <div>
-                    <div>
-                      <span>
-                        <strong>
-                          Pyrefly
-                        </strong>
-                      </span>
-                      <span>
-                        <span>
-                          ⓘ
-                        </span>
-                        <span>
-                          <strong>
-                            Command: "pyrefly check"
-                          </strong>
-                          <br />
-                          Pyrefly uses as many threads as possible
-                        </span>
-                      </span>
-                    </div>
-                  </div>
-                  <div>
-                    <div>
-                      <div
-                        style="height: 80%; width: 4.827299209321681%;"
-                      >
-                        <div
-                          style="animation-duration: 2.32s; width: 0%;"
-                        />
-                      </div>
-                    </div>
+                  Type checking the
+                   
+                  <a
+                    href="https://github.com/pytorch/pytorch"
+                    rel="noopener noreferrer"
+                    target="_blank"
+                  >
+                    PyTorch
+                  </a>
+                   
+                  codebase from scratch.
+                  <span>
+                    <span>
+                      ⓘ
+                    </span>
                     <span>
                       <strong>
-                        0.0s
+                        Tested using Macbook
                       </strong>
+                      <br />
+                      (10 cores: 8 performance + 2 efficiency cores, 32 GB RAM)
                     </span>
-                  </div>
+                  </span>
                 </div>
                 <div>
                   <div>
                     <div>
-                      <span>
-                        <strong>
-                          Pyright
-                        </strong>
-                      </span>
-                      <span>
-                        <span>
-                          ⓘ
-                        </span>
+                      <div>
                         <span>
                           <strong>
-                            Command: "pyright --threads=8"
+                            Pyrefly
                           </strong>
-                          <br />
-                          8 threads yielded the best performance after testing multiple settings
                         </span>
-                      </span>
-                    </div>
-                  </div>
-                  <div>
-                    <div>
-                      <div
-                        style="height: 80%; width: 73.1585518102372%;"
-                      >
-                        <div
-                          style="animation-duration: 35.16s; width: 0%;"
-                        />
+                        <span>
+                          <span>
+                            ⓘ
+                          </span>
+                          <span>
+                            <strong>
+                              Command: "pyrefly check"
+                            </strong>
+                            <br />
+                            Pyrefly uses as many threads as possible
+                          </span>
+                        </span>
                       </div>
                     </div>
-                    <span>
-                      <strong>
-                        0.0s
-                      </strong>
-                    </span>
-                  </div>
-                </div>
-                <div>
-                  <div>
                     <div>
+                      <div>
+                        <div
+                          style="height: 80%; width: 4.827299209321681%;"
+                        >
+                          <div
+                            style="animation-duration: 2.32s; width: 0%;"
+                          />
+                        </div>
+                      </div>
                       <span>
                         <strong>
-                          MyPy
+                          0.0s
                         </strong>
-                      </span>
-                      <span>
-                        <span>
-                          ⓘ
-                        </span>
-                        <span>
-                          <strong>
-                            Command: "dmypy run"
-                          </strong>
-                        </span>
                       </span>
                     </div>
                   </div>
                   <div>
                     <div>
-                      <div
-                        style="height: 80%; width: 100%;"
-                      >
-                        <div
-                          style="animation-duration: 48.06s; width: 0%;"
-                        />
+                      <div>
+                        <span>
+                          <strong>
+                            Pyright
+                          </strong>
+                        </span>
+                        <span>
+                          <span>
+                            ⓘ
+                          </span>
+                          <span>
+                            <strong>
+                              Command: "pyright --threads=8"
+                            </strong>
+                            <br />
+                            8 threads yielded the best performance after testing multiple settings
+                          </span>
+                        </span>
                       </div>
                     </div>
-                    <span>
-                      <strong>
-                        0.0s
-                      </strong>
-                    </span>
+                    <div>
+                      <div>
+                        <div
+                          style="height: 80%; width: 73.1585518102372%;"
+                        >
+                          <div
+                            style="animation-duration: 35.16s; width: 0%;"
+                          />
+                        </div>
+                      </div>
+                      <span>
+                        <strong>
+                          0.0s
+                        </strong>
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <div>
+                      <div>
+                        <span>
+                          <strong>
+                            MyPy
+                          </strong>
+                        </span>
+                        <span>
+                          <span>
+                            ⓘ
+                          </span>
+                          <span>
+                            <strong>
+                              Command: "dmypy run"
+                            </strong>
+                          </span>
+                        </span>
+                      </div>
+                    </div>
+                    <div>
+                      <div>
+                        <div
+                          style="height: 80%; width: 100%;"
+                        >
+                          <div
+                            style="animation-duration: 48.06s; width: 0%;"
+                          />
+                        </div>
+                      </div>
+                      <span>
+                        <strong>
+                          0.0s
+                        </strong>
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section
+        id="pyrefly-video"
+      >
+        <div
+          class="container"
+        >
+          <div
+            style="opacity: 0;"
+          >
+            <h2>
+              Check it out in the intro video
+            </h2>
+          </div>
+          <div
+            style="opacity: 0;"
+          >
+            <div>
+              <link
+                as="image"
+                href="https://i.ytimg.com/vi/LXaFRKrTJVU/maxresdefault.jpg"
+                rel="preload"
+              />
+              <article
+                class="yt-lite "
+                data-title="Introducing Pyrefly: A new type checker and IDE experience for Python"
+                style="background-image: url(https://i.ytimg.com/vi/LXaFRKrTJVU/maxresdefault.jpg); --aspect-ratio: 56.25%;"
+              >
+                <button
+                  aria-label="Watch Introducing Pyrefly: A new type checker and IDE experience for Python"
+                  class="lty-playbtn"
+                  type="button"
+                />
+              </article>
             </div>
           </div>
         </div>

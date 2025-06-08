@@ -170,7 +170,7 @@ class C3:
     def f(x: int, /) -> str:
         return ""
 def foo(x: Callable[[int], str], c: C, c2: C2, c3: C3):
-    C.f = x  # E: `(int) -> str` is not assignable to attribute `f` with type `(Self@C, int) -> str`
+    C.f = x  # E: `(int) -> str` is not assignable to attribute `f` with type `(self: Self@C, x: int, /) -> str`
     c.f = x
     C2.f = x
     c2.f = x
@@ -737,10 +737,10 @@ class Outer[T]:
         x: T | None = None
 assert_type(Outer[int].Inner, type[Outer.Inner])
 assert_type(Outer.Inner, type[Outer.Inner])
-reveal_type(Outer[int].Inner.x)  # E: revealed type: TypeVar[T] | None
-reveal_type(Outer.Inner.x)  # E: revealed type: TypeVar[T] | None
-reveal_type(Outer[int].Inner().x)  # E: revealed type: TypeVar[T] | None
-reveal_type(Outer.Inner().x)  # E: revealed type: TypeVar[T] | None
+reveal_type(Outer[int].Inner.x)  # E: revealed type: T | None
+reveal_type(Outer.Inner.x)  # E: revealed type: T | None
+reveal_type(Outer[int].Inner().x)  # E: revealed type: T | None
+reveal_type(Outer.Inner().x)  # E: revealed type: T | None
    "#,
 );
 
@@ -864,7 +864,6 @@ def f[T: Foo](y: T) -> T:
 );
 
 testcase!(
-    bug = "Pyrefly cannot handle attribute access against a quantified bound by a union",
     test_attribute_access_on_quantified_bound_by_union,
     r#"
 from typing import assert_type
@@ -874,7 +873,7 @@ class Bar:
     x: str
 def f[T: Foo | Bar](y: T, z: Foo | Bar) -> T:
     assert_type(z.x, int | str)
-    assert_type(y.x, int | str) # E: TODO: Expr::attr_infer_for_type # E: assert_type(Any, int | str)
+    assert_type(y.x, int | str)
     return y
     "#,
 );

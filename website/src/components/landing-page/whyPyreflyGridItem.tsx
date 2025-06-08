@@ -10,9 +10,9 @@
 import * as React from 'react';
 import * as stylex from '@stylexjs/stylex';
 import typography from './typography';
-import { useEffect, useState } from 'react';
 import { landingPageCardStyles } from './landingPageCardStyles';
 import Tooltip from './Tooltip';
+import DelayedComponent from '../../utils/DelayedComponent';
 
 interface LinkProps {
     text: string;
@@ -30,7 +30,6 @@ interface WhyPyreflyGridItemProps {
     title: string;
     content?: string;
     index: number;
-    startAnimation: boolean;
     contentWithLink?: ContentWithLinkProps;
     footnote?: string;
 }
@@ -40,74 +39,78 @@ export default function WhyPyreflyGridItem({
     content,
     contentWithLink,
     index,
-    startAnimation,
     footnote,
 }: WhyPyreflyGridItemProps): React.ReactElement {
-    const [isVisible, setIsVisible] = useState(false);
-
-    useEffect(() => {
-        // Only start animation when parent signals it's time
-        if (startAnimation) {
-            // Stagger the animations based on index
-            const timer = setTimeout(() => {
-                setIsVisible(true);
-            }, index * 80); // Reduced from 150ms to 80ms delay between each card
-
-            return () => clearTimeout(timer);
-        }
-    }, [startAnimation, index]);
+    // Calculate delay in seconds (100ms per index, 0.5 is the time it takes for the Why Pyrefly section to load)
+    const delayInSeconds = index * 0.1 + 0.5;
 
     return (
-        <div
-            {...stylex.props(
-                landingPageCardStyles.card,
-                styles.hidden,
-                isVisible && styles.visible
-            )}
-            style={{
-                // Apply dynamic delay based on index
-                transitionDelay: `${index * 0.05}s`, // Reduced from 0.1s to 0.05s
-            }}
-        >
-            <h3 {...stylex.props(typography.h5, styles.cardTitle)}>{title}</h3>
-            <p {...stylex.props(typography.p, styles.contentText)}>
-                {content && (
-                    <>
-                        {footnote ? (
+        <DelayedComponent delayInSeconds={delayInSeconds}>
+            {(isVisible) => (
+                <div
+                    {...stylex.props(
+                        landingPageCardStyles.card,
+                        styles.hidden,
+                        isVisible && styles.visible
+                    )}
+                    style={{
+                        // Apply dynamic delay based on index
+                        transitionDelay: `${index * 0.05}s`, // Reduced from 0.1s to 0.05s
+                    }}
+                >
+                    <h3 {...stylex.props(typography.h5, styles.cardTitle)}>
+                        {title}
+                    </h3>
+                    <p {...stylex.props(typography.p, styles.contentText)}>
+                        {content && (
                             <>
-                                {/* Split content to keep last part with footnote */}
-                                {content.split(' ').slice(0, -2).join(' ')}{' '}
-                                <span {...stylex.props(styles.inlineContent)}>
-                                    {content.split(' ').slice(-2).join(' ')}
-                                    <sup
-                                        {...stylex.props(
-                                            styles.footnoteSupElement
-                                        )}
-                                    >
-                                        <Tooltip content={footnote} />
-                                    </sup>
-                                </span>
+                                {footnote ? (
+                                    <>
+                                        {/* Split content to keep last part with footnote */}
+                                        {content
+                                            .split(' ')
+                                            .slice(0, -2)
+                                            .join(' ')}{' '}
+                                        <span
+                                            {...stylex.props(
+                                                styles.inlineContent
+                                            )}
+                                        >
+                                            {content
+                                                .split(' ')
+                                                .slice(-2)
+                                                .join(' ')}
+                                            <sup
+                                                {...stylex.props(
+                                                    styles.footnoteSupElement
+                                                )}
+                                            >
+                                                <Tooltip content={footnote} />
+                                            </sup>
+                                        </span>
+                                    </>
+                                ) : (
+                                    content
+                                )}
                             </>
-                        ) : (
-                            content
                         )}
-                    </>
-                )}
-                {contentWithLink && (
-                    <>
-                        {contentWithLink.beforeText}
-                        <a
-                            href={contentWithLink.link.url}
-                            target="_blank"
-                            {...stylex.props(styles.link)}
-                        >
-                            {contentWithLink.link.text}
-                        </a>
-                        {contentWithLink.afterText}
-                    </>
-                )}
-            </p>
-        </div>
+                        {contentWithLink && (
+                            <>
+                                {contentWithLink.beforeText}
+                                <a
+                                    href={contentWithLink.link.url}
+                                    target="_blank"
+                                    {...stylex.props(styles.link)}
+                                >
+                                    {contentWithLink.link.text}
+                                </a>
+                                {contentWithLink.afterText}
+                            </>
+                        )}
+                    </p>
+                </div>
+            )}
+        </DelayedComponent>
     );
 }
 

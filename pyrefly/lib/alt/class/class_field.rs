@@ -50,6 +50,7 @@ use crate::types::class::ClassType;
 use crate::types::class::Substitution;
 use crate::types::class::TArgs;
 use crate::types::literal::Lit;
+use crate::types::quantified::Quantified;
 use crate::types::typed_dict::TypedDict;
 use crate::types::typed_dict::TypedDictField;
 use crate::types::types::BoundMethod;
@@ -360,10 +361,11 @@ impl ClassField {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum InstanceKind {
     ClassType,
     TypedDict,
+    TypeVar(Quantified),
 }
 
 /// Wrapper to hold a specialized instance of a class , unifying ClassType and TypedDict.
@@ -390,6 +392,14 @@ impl<'a> Instance<'a> {
         }
     }
 
+    fn of_type_var(q: Quantified, bound: &'a ClassType) -> Self {
+        Self {
+            kind: InstanceKind::TypeVar(q),
+            class: bound.class_object(),
+            args: bound.targs(),
+        }
+    }
+
     /// Instantiate a type that is relative to the class type parameters
     /// by substituting in the type arguments.
     fn instantiate_member(&self, raw_member: Type) -> Type {
@@ -397,13 +407,14 @@ impl<'a> Instance<'a> {
     }
 
     fn to_type(&self) -> Type {
-        match self.kind {
+        match &self.kind {
             InstanceKind::ClassType => {
                 ClassType::new(self.class.dupe(), self.args.clone()).to_type()
             }
             InstanceKind::TypedDict => {
                 Type::TypedDict(TypedDict::new(self.class.dupe(), self.args.clone()))
             }
+            InstanceKind::TypeVar(q) => Type::Quantified(q.clone()),
         }
     }
 }
@@ -1231,6 +1242,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.as_instance_attribute(
                     Arc::unwrap_or_clone(member.value),
                     &Instance::of_class(cls),
+                )
+            })
+    }
+
+    pub fn get_bounded_type_var_attribute(
+        &self,
+        type_var: Quantified,
+        upper_bound: &ClassType,
+        name: &Name,
+    ) -> Option<Attribute> {
+        self.get_class_member(upper_bound.class_object(), name)
+            .map(|member| {
+                self.as_instance_attribute(
+                    Arc::unwrap_or_clone(member.value),
+                    &Instance::of_type_var(type_var, upper_bound),
                 )
             })
     }

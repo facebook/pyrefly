@@ -50,6 +50,7 @@ use crate::alt::types::yields::YieldFromResult;
 use crate::alt::types::yields::YieldResult;
 use crate::binding::bindings::Bindings;
 use crate::binding::narrow::NarrowOp;
+use crate::common::symbol_kind::SymbolKind;
 use crate::dunder;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
@@ -1082,6 +1083,58 @@ impl DisplayWith<Bindings> for Binding {
                     }
                 }
             }
+        }
+    }
+}
+
+impl Binding {
+    pub fn symbol_kind(&self) -> Option<SymbolKind> {
+        match self {
+            Binding::TypeVar(_, _, _)
+            | Binding::ParamSpec(_, _, _)
+            | Binding::TypeVarTuple(_, _, _)
+            | Binding::TypeParameter(_)
+            | Binding::CheckLegacyTypeParam(_, _) => Some(SymbolKind::TypeParameter),
+            Binding::StrType => Some(SymbolKind::Str),
+            Binding::BoolType => Some(SymbolKind::Bool),
+            Binding::Function(_, _, _) => Some(SymbolKind::Function),
+            Binding::Import(_, _) => {
+                // TODO: maybe we can resolve it to see its symbol kind
+                Some(SymbolKind::Variable)
+            }
+            Binding::ClassDef(_, _) => Some(SymbolKind::Class),
+            Binding::Module(_, _, _) => Some(SymbolKind::Module),
+            Binding::ScopedTypeAlias(_, _, _) => Some(SymbolKind::TypeAlias),
+            Binding::NameAssign(name, _, _) if name.as_str() == name.to_uppercase() => {
+                Some(SymbolKind::Constant)
+            }
+            Binding::NameAssign(_, _, _) => Some(SymbolKind::Variable),
+            Binding::LambdaParameter(_) | Binding::FunctionParameter(_) => {
+                Some(SymbolKind::Parameter)
+            }
+            Binding::Expr(_, _)
+            | Binding::ReturnExplicit(_)
+            | Binding::ReturnImplicit(_)
+            | Binding::ReturnType(_)
+            | Binding::IterableValue(_, _, _)
+            | Binding::ContextValue(_, _, _, _)
+            | Binding::UnpackedValue(_, _, _, _)
+            | Binding::AnnotatedType(_, _)
+            | Binding::AugAssign(_, _)
+            | Binding::Type(_)
+            | Binding::Forward(_)
+            | Binding::Phi(_)
+            | Binding::Default(_, _)
+            | Binding::Narrow(_, _, _)
+            | Binding::PatternMatchMapping(_, _)
+            | Binding::PatternMatchClassPositional(_, _, _, _)
+            | Binding::PatternMatchClassKeyword(_, _, _)
+            | Binding::Decorator(_)
+            | Binding::ExceptionHandler(_, _)
+            | Binding::SuperInstance(_, _)
+            | Binding::AssignToAttribute(_)
+            | Binding::UsageLink(_)
+            | Binding::AssignToSubscript(_) => None,
         }
     }
 }

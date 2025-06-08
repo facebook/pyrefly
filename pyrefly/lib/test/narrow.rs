@@ -637,6 +637,33 @@ def f(x: str | int):
 );
 
 testcase!(
+    test_isinstance_alias_of_union,
+    r#"
+class A: ...
+class B(A): ...
+class C(A): ...
+
+X = B | C
+
+def f(x: A) -> X:
+    if isinstance(x, X):
+        return x
+    raise ValueError()
+    "#,
+);
+
+// Using scoped type aliases with isinstance is a runtime error.
+testcase!(
+    test_isinstance_alias_error,
+    r#"
+type X = int
+type Y = int | str
+isinstance(1, X)  # E: Expected class object
+isinstance(1, Y)  # E: Expected class object
+    "#,
+);
+
+testcase!(
     test_isinstance_error,
     r#"
 from typing import assert_type
@@ -803,7 +830,7 @@ testcase!(
     test_issubclass_error,
     r#"
 def f(x: int):
-    if issubclass(x, int):  # E: Argument `int` is not assignable to parameter with type `type`
+    if issubclass(x, int):  # E: Argument `int` is not assignable to parameter `cls` with type `type`
         return True
     "#,
 );

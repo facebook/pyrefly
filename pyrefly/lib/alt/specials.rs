@@ -378,7 +378,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             )),
                             Some((Tuple::Concrete(elts), false)) => {
                                 Type::type_form(Type::callable(
-                                    elts.map(|t| Param::PosOnly(t.clone(), Required::Required)),
+                                    elts.map(|t| {
+                                        Param::PosOnly(None, t.clone(), Required::Required)
+                                    }),
                                     ret,
                                 ))
                             }

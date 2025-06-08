@@ -46,8 +46,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             match (l_arg, u_arg) {
                 (None, None) => return true,
                 (
-                    Some(Param::PosOnly(l, l_req) | Param::Pos(_, l, l_req)),
-                    Some(Param::PosOnly(u, u_req)),
+                    Some(Param::PosOnly(_, l, l_req) | Param::Pos(_, l, l_req)),
+                    Some(Param::PosOnly(_, u, u_req)),
                 ) if (*u_req == Required::Required || *l_req == Required::Optional) => {
                     if self.is_subset_eq(u, l) {
                         l_arg = l_args.next();
@@ -76,7 +76,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
                 (
                     Some(
-                        Param::PosOnly(_, Required::Optional)
+                        Param::PosOnly(_, _, Required::Optional)
                         | Param::Pos(_, _, Required::Optional)
                         | Param::KwOnly(_, _, Required::Optional)
                         | Param::VarArg(_, _)
@@ -88,11 +88,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
                 (
                     Some(Param::VarArg(_, Type::Unpack(l))),
-                    Some(Param::PosOnly(_, Required::Required)),
+                    Some(Param::PosOnly(_, _, Required::Required)),
                 ) => {
                     let mut u_types = Vec::new();
                     loop {
-                        if let Some(Param::PosOnly(u, Required::Required)) = u_arg {
+                        if let Some(Param::PosOnly(_, u, Required::Required)) = u_arg {
                             u_types.push(u.clone());
                             u_arg = u_args.next();
                         } else if let Some(Param::VarArg(_, Type::Unpack(u))) = u_arg {
@@ -130,12 +130,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                 }
                 (
-                    Some(Param::PosOnly(_, _) | Param::Pos(_, _, _)),
+                    Some(Param::PosOnly(_, _, _) | Param::Pos(_, _, _)),
                     Some(Param::VarArg(_, Type::Unpack(u))),
                 ) => {
                     let mut l_types = Vec::new();
                     loop {
-                        if let Some(Param::PosOnly(l, _) | Param::Pos(_, l, _)) = l_arg {
+                        if let Some(Param::PosOnly(_, l, _) | Param::Pos(_, l, _)) = l_arg {
                             l_types.push(l.clone());
                             l_arg = l_args.next();
                         } else if let Some(Param::VarArg(_, Type::Unpack(l))) = l_arg {
@@ -172,7 +172,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         }
                     }
                 }
-                (Some(Param::VarArg(_, l)), Some(Param::PosOnly(u, Required::Required))) => {
+                (Some(Param::VarArg(_, l)), Some(Param::PosOnly(_, u, Required::Required))) => {
                     if self.is_subset_eq(u, l) {
                         u_arg = u_args.next();
                     } else {

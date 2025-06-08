@@ -9,9 +9,11 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprSubscript;
+use ruff_python_ast::Identifier;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 
+use crate::binding::binding::AnnotationStyle;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::ExprOrBinding;
@@ -25,7 +27,7 @@ use crate::binding::bindings::LookupKind;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::binding::scope::FlowStyle;
-use crate::error::kind::ErrorKind;
+use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::module::short_identifier::ShortIdentifier;
 
@@ -297,12 +299,6 @@ impl<'a> BindingsBuilder<'a> {
                 );
             }
             Expr::Starred(x) => {
-                self.error(
-                    x.range,
-                    ErrorKind::InvalidSyntax,
-                    None,
-                    "Starred assignment target must be in a list or tuple".to_owned(),
-                );
                 self.bind_target_impl(&mut x.value, assigned, make_assigned_value, ensure_assigned);
             }
             illegal_target => {
@@ -361,6 +357,22 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    /// Version of `bind_assign_impl` used when we don't want expression usage tracking.
+    ///
+    /// Used for:
+    /// - Scenarios where we inject a binding directly, without ever using an expression
+    ///   (for example, when the binding points at the `Idx<Key>` of another binding).
+    /// - Special cases - mainly in legacy type variables - where `ensure_expr` is not the
+    ///   right way to ensure because we might need to ensure as a type; we
+    ///   just skip these cases for usage tracking.
+    pub fn bind_assign_no_expr(
+        &mut self,
+        name: &ExprName,
+        make_binding: impl FnOnce(Option<Idx<KeyAnnotation>>) -> Binding,
+    ) {
+        self.bind_assign_impl(name, None, |_, ann| make_binding(ann), false)
+    }
+
     /// Given a function that produces a binding from an ensured expression:
     /// - Ensure the expression, if there is one we are supposed to ensure
     /// - Update the bindings table and flow info to note that:
@@ -387,19 +399,61 @@ impl<'a> BindingsBuilder<'a> {
         self.insert_binding_user(user, binding);
     }
 
-    /// Version of `bind_assign_impl` used when we don't want expression usage tracking.
+    /// Handle single assignment: this is closely related to `bind_assign_impl`, but
+    /// handles additional concerns (such as type alias logic) that don't apply to
+    /// other target name assignments.
     ///
-    /// Used for:
-    /// - Scenarios where we inject a binding directly, without ever using an expression
-    ///   (for example, when the binding points at the `Idx<Key>` of another binding).
-    /// - Special cases - mainly in legacy type variables - where `ensure_expr` is not the
-    ///   right way to ensure because we might need to ensure as a type; we
-    ///   just skip these cases for usage tracking.
-    pub fn bind_assign_no_expr(
+    /// It is used for
+    /// - single-name `Assign` statements
+    /// - for `AnnAssign` when there is a value assigned
+    pub fn bind_single_name_assign(
         &mut self,
-        name: &ExprName,
-        make_binding: impl FnOnce(Option<Idx<KeyAnnotation>>) -> Binding,
-    ) {
-        self.bind_assign_impl(name, None, |_, ann| make_binding(ann), false)
+        name: &Identifier,
+        mut value: Box<Expr>,
+        direct_ann: Option<(&Expr, Idx<KeyAnnotation>)>,
+    ) -> Option<Idx<KeyAnnotation>> {
+        let user = self.declare_user(Key::Definition(ShortIdentifier::new(name)));
+        let is_definitely_type_alias = if let Some((e, _)) = direct_ann
+            && self.as_special_export(e) == Some(SpecialExport::TypeAlias)
+        {
+            true
+        } else {
+            self.is_definitely_type_alias_rhs(value.as_ref())
+        };
+        if is_definitely_type_alias {
+            self.ensure_type(&mut value, &mut None);
+        } else {
+            self.ensure_expr(&mut value, user.usage());
+        }
+        let style = if self.scopes.in_class_body() {
+            FlowStyle::ClassField {
+                initial_value: Some((*value).clone()),
+            }
+        } else {
+            FlowStyle::Other
+        };
+        let (canonical_ann, default) = self.bind_user(&name.id, &user, style);
+        let ann = match direct_ann {
+            Some((_, idx)) => Some((AnnotationStyle::Direct, idx)),
+            None => canonical_ann.map(|idx| (AnnotationStyle::Forwarded, idx)),
+        };
+        let mut binding = Binding::NameAssign(name.id.clone(), ann, value);
+        if let Some(default) = default {
+            binding = Binding::Default(default, Box::new(binding));
+        }
+        self.insert_binding_user(user, binding);
+        canonical_ann
+    }
+
+    /// If someone does `x = C["test"]`, that might be a type alias, it might not.
+    /// Use this heuristic to detect things that are definitely type aliases.
+    fn is_definitely_type_alias_rhs(&mut self, x: &Expr) -> bool {
+        match x {
+            Expr::Subscript(x) => matches!(
+                self.as_special_export(&x.value),
+                Some(SpecialExport::Union | SpecialExport::Optional)
+            ),
+            _ => false,
+        }
     }
 }

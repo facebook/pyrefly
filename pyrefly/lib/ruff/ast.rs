@@ -9,6 +9,7 @@ use std::iter;
 use std::slice;
 
 use pyrefly_util::visit::Visit;
+use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBooleanLiteral;
@@ -28,14 +29,54 @@ use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtExpr;
 use ruff_python_ast::StmtIf;
 use ruff_python_ast::StringFlags;
+use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
+use ruff_python_ast::visitor::source_order::TraversalSignal;
 use ruff_python_parser::ParseError;
 use ruff_python_parser::parse_expression_range;
 use ruff_python_parser::parse_unchecked_source;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 /// Just used for convenient namespacing - not a real type
 pub struct Ast;
+
+struct CoveringNodeVisitor<'a> {
+    position: TextSize,
+    level: usize,
+    covering_nodes: Vec<AnyNodeRef<'a>>,
+}
+
+impl CoveringNodeVisitor<'_> {
+    fn new(position: TextSize) -> Self {
+        Self {
+            position,
+            level: 0,
+            covering_nodes: Vec::new(),
+        }
+    }
+}
+
+impl<'a> SourceOrderVisitor<'a> for CoveringNodeVisitor<'a> {
+    fn enter_node(&mut self, node: AnyNodeRef<'a>) -> TraversalSignal {
+        self.level += 1;
+        if self.level <= self.covering_nodes.len() {
+            // This is to prevent the (extremely niche) case where multiple sibling nodes cover the same range.
+            // If we have already found a covering node at the same level, we can stop looking.
+            TraversalSignal::Skip
+        } else if node.range().contains_inclusive(self.position) {
+            // We can't stop looking because there could be child nodes that cover `self.range` more tightly.
+            self.covering_nodes.push(node);
+            TraversalSignal::Traverse
+        } else {
+            TraversalSignal::Skip
+        }
+    }
+
+    fn leave_node(&mut self, _: AnyNodeRef<'a>) {
+        self.level -= 1;
+    }
+}
 
 impl Ast {
     pub fn parse(contents: &str) -> (ModModule, Vec<ParseError>) {
@@ -230,5 +271,16 @@ impl Ast {
                 value: box Expr::StringLiteral(_),
             }))
         )
+    }
+
+    /// Given a module and a position, find all AST nodes that "cover" the position.
+    /// Return a vector of AST nodes sorted by the node's range, where the "innermost" node that covers the
+    /// position comes first, and parent nodes of that covering node come later.
+    pub fn locate_node<'a>(module: &'a ModModule, position: TextSize) -> Vec<AnyNodeRef<'a>> {
+        let mut visitor = CoveringNodeVisitor::new(position);
+        AnyNodeRef::from(module).visit_source_order(&mut visitor);
+        let mut covering_nodes = visitor.covering_nodes;
+        covering_nodes.reverse();
+        covering_nodes
     }
 }

@@ -56,10 +56,10 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 struct Args {
     /// Set this to true to run profiling of fast jobs.
     /// Will run the command repeatedly.
-    #[clap(long = "profiling", global = true, hide = true, env = clap_env("PROFILING"))]
+    #[arg(long = "profiling", global = true, hide = true, env = clap_env("PROFILING"))]
     profiling: bool,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     common: CommonGlobalArgs,
 
     #[command(subcommand)]
@@ -75,10 +75,10 @@ struct FullCheckArgs {
     /// are ignored, and we use the default excludes unless overridden with the `--project-excludes` flag.
     files: Vec<String>,
     /// Files to exclude when type checking.
-    #[clap(long, env = clap_env("PROJECT_EXCLUDES"))]
+    #[arg(long, env = clap_env("PROJECT_EXCLUDES"))]
     project_excludes: Option<Vec<String>>,
     /// Watch for file changes and re-check them.
-    #[clap(long, env = clap_env("WATCH"), conflicts_with = "check_all")]
+    #[arg(long, env = clap_env("WATCH"), conflicts_with = "check_all")]
     watch: bool,
 
     /// Explicitly set the Pyre configuration to use when type checking or starting a language server.
@@ -88,10 +88,10 @@ struct FullCheckArgs {
     /// When not set, Pyre will perform an upward-filesystem-walk approach to find the nearest
     /// pyrefly.toml or pyproject.toml with `tool.pyre` section'. If no config is found, Pyre exits with error.
     /// If both a pyrefly.toml and valid pyproject.toml are found, pyrefly.toml takes precedence.
-    #[clap(long, short, env = clap_env("CONFIG"))]
+    #[arg(long, short, env = clap_env("CONFIG"), value_name = "FILE")]
     config: Option<PathBuf>,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     args: CheckArgs,
 }
 

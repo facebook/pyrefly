@@ -471,7 +471,7 @@ def f(c: C, k1: str, k2: int):
     assert_type(c.get("x"), int)
     assert_type(c.get(k1), object)
     assert_type(c.get(k1, 0), object)
-    c.get(k2)  # E: No matching overload  # E: `int` is not assignable to parameter with type `Literal['x']`
+    c.get(k2)  # E: No matching overload
     "#,
 );
 
@@ -516,11 +516,11 @@ class F(TypedDict):
     x: int
 def f(c1: C, c2: C, c3: dict[str, int], d: D, e: E, f: F):
     c1.update(c2)
-    c1.update(c3)  # E: `dict[str, int]` is not assignable to parameter with type `TypedDict[C]`
+    c1.update(c3)  # E: `dict[str, int]` is not assignable to parameter `m` with type `TypedDict[C]`
     c1.update(d)
-    c1.update(e)  # E: `TypedDict[E]` is not assignable to parameter with type `TypedDict[C]`
+    c1.update(e)  # E: `TypedDict[E]` is not assignable to parameter `m` with type `TypedDict[C]`
     # This is not ok because `F` could contain `y` with an incompatible type
-    c1.update(f)  # E: `TypedDict[F]` is not assignable to parameter with type `TypedDict[C]`
+    c1.update(f)  # E: `TypedDict[F]` is not assignable to parameter `m` with type `TypedDict[C]`
     c1.update({"x": 1, "y": 1})
     c1.update({"x": 1})  # Should be OK  # E: Missing required key `y`
     c1.update({"z": 1})  # E: Missing required key `x`  # E: Missing required key `y`  # E: Key `z` is not defined
@@ -556,9 +556,9 @@ class C(TypedDict):
     x: int
 def f(c: C, s: str):
     assert_type(c.setdefault("x", 0), int)
-    c.setdefault("x", 0.0)  # E: No matching overload  # E: `float` is not assignable to parameter with type `int`
-    c.setdefault("x")  # E: No matching overload  # E: Expected 1 more positional argument
-    c.setdefault(s, 0)  # E: No matching overload  # E: `str` is not assignable to parameter with type `Literal['x']`
+    c.setdefault("x", 0.0)  # E: No matching overload
+    c.setdefault("x")  # E: No matching overload
+    c.setdefault(s, 0)  # E: No matching overload
     "#,
 );
 
@@ -570,7 +570,7 @@ class C(TypedDict):
     x: int
 def f(c: C):
     # Both of these methods take only positional arguments.
-    c.get(key="x")  # E: No matching overload  # E: Expected 1 more positional argument  # E: Unexpected keyword argument
-    c.setdefault("x", default=0)  # E: No matching overload  # E: Expected 1 more positional argument  # E: Unexpected keyword argument
+    c.get(key="x")  # E: No matching overload
+    c.setdefault("x", default=0)  # E: No matching overload
     "#,
 );

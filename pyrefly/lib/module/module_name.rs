@@ -114,6 +114,10 @@ impl ModuleName {
         Self::from_str("types")
     }
 
+    pub fn warnings() -> Self {
+        Self::from_str("warnings")
+    }
+
     pub fn collections() -> Self {
         Self::from_str("collections")
     }

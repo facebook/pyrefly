@@ -90,7 +90,8 @@ fn count_error_kinds(errors: &[Error]) -> Vec<(ErrorKind, usize)> {
 
 pub fn print_error_counts(errors: &[Error], limit: usize) {
     let items = count_error_kinds(errors);
-    for (error, count) in items.iter().rev().take(limit).rev() {
+    let limit = if limit > 0 { limit } else { items.len() };
+    for (error, count) in items.iter().rev().take(limit) {
         eprintln!(
             "{} instances of {}",
             number_thousands(*count),

@@ -77,6 +77,8 @@ pub enum ErrorKind {
     BadUnpacking,
     /// Attempting to `del` something that cannot be deleted
     DeleteError,
+    /// Calling a function marked with `@deprecated`
+    Deprecated,
     /// An error related to the import machinery.
     /// e.g. failed to import a module.
     ImportError,
@@ -180,6 +182,7 @@ impl ErrorKind {
     pub fn severity(self) -> Severity {
         match self {
             ErrorKind::RevealType => Severity::Info,
+            ErrorKind::Deprecated => Severity::Warn,
             _ => Severity::Error,
         }
     }

@@ -50,3 +50,13 @@ assert_type(A.__new__(B[int]), B[int])
 assert_type(A.__new__(C[int]), Self)
     "#,
 );
+
+testcase!(
+    test_deprecated_call,
+    r#"
+from warnings import deprecated
+@deprecated("function is deprecated")
+def old_function() -> None: ...
+old_function()  # E: Call to deprecated function `old_function`
+    "#,
+);

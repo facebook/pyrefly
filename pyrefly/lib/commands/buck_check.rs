@@ -39,7 +39,7 @@ pub struct Args {
     input_path: PathBuf,
 
     /// Path to output JSON file
-    #[arg(long = "output", short = 'o', env = clap_env("OUTPUT_PATH"))]
+    #[arg(long = "output", short = 'o', env = clap_env("OUTPUT_PATH"), value_name = "FILE")]
     output_path: Option<PathBuf>,
 }
 

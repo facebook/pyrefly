@@ -15,7 +15,7 @@ from typing import assert_type
 
 x: list[int] = [0, 1, 2]
 x[0], x[1] = 3, 4
-x[0], x[1] = 3, "foo"  # E: Item assignment is not supported on `list[int]`\n  No matching overload found for function `list.__setitem__`, reporting errors for closest overload: `(SupportsIndex, int) -> None`  # E: Argument `Literal['foo']` is not assignable to parameter with type `int` in function `list.__setitem__`
+x[0], x[1] = 3, "foo"  # E: Cannot set item in `list[int]`\n  No matching overload found for function `list.__setitem__`
 "#,
 );
 
@@ -33,7 +33,7 @@ y[0] = 1
 assert_type(y, list[int])
 
 z = [1, 2, 3]
-z[0] = "oops"  # E: No matching overload found  # E: `Literal['oops']` is not assignable to parameter with type `int`
+z[0] = "oops"  # E: No matching overload found
 
 a: int = 1
 a[0] = 1  # E: `int` has no attribute `__setitem__`
@@ -682,7 +682,7 @@ assert_type(c1, Literal[1])
 [d1, d2]: list[int] = ["test", "more"] # E: Parse error: Only single target (not list) can be annotated
 assert_type(d1, str)
 
-*e = ["test"] # E: Starred assignment target must be in a list or tuple
+*e = ["test"] # E: starred assignment target must be in a list or tuple
 assert_type(e, list[str])
 "#,
 );
@@ -700,24 +700,22 @@ testcase!(
 xs: list[int] = [1, 2, 3]
 xs[0]: int = 3 # E: Subscripts should not be annotated
 xs[1]: str = 3 # E: Subscripts should not be annotated
-xs[2]: str = "test" # E: Subscripts should not be annotated # E: Argument `Literal['test']` is not assignable # E: Item assignment is not supported on
+xs[2]: str = "test" # E: Subscripts should not be annotated # E: Cannot set item in
 "#,
 );
 
 testcase!(
     test_assign_annotated_starred,
     r#"
-# TODO(stroxler) Ideally we wouldn't get two errors here, they are partially duplicated.
-*e: int = (42,)  # E: Parse error: Invalid annotated assignment target # E: Starred assignment target must be in a list or tuple
+*e: int = (42,)  # E: Parse error: Invalid annotated assignment target
 "#,
 );
 
 testcase!(
-    bug = "Should only produce one error, not the item assignment is not supported one",
     test_assign_subscript_wrong_type,
     r#"
 xs: list[int] = [1, 2, 3]
-xs[1] = "test" # E: Argument `Literal['test']` is not assignable to parameter # E: Item assignment is not supported on
+xs[1] = "test" # E: Cannot set item in
 "#,
 );
 

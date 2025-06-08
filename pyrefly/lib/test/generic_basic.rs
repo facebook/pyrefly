@@ -491,7 +491,7 @@ testcase!(
     r#"
 from typing import TypeVar
 T: int = 0
-T = TypeVar('T')  # E: `type[TypeVar(T, variance=PUndefined)]` is not assignable to variable `T` with type `int`
+T = TypeVar('T')  # E: `type[TypeVar(T, variance=PInvariant)]` is not assignable to variable `T` with type `int`
     "#,
 );
 
@@ -752,20 +752,6 @@ class A[*Ps, *Qs = *Ps]: # E: cannot be more than one TypeVarTuple
 );
 
 testcase!(
-    bug = "TODO(pybind11): There should be no errors",
-    test_pass_along_typevar,
-    r#"
-from typing import TypeVar
-T = TypeVar('T', bound='A')
-class A:
-    def f(self: T) -> T:
-        return self
-    def g(self: T) -> T:
-        return self.f() # E: `A` is not assignable to declared return type `TypeVar[T]`
-    "#,
-);
-
-testcase!(
     test_specialize_error,
     r#"
 from nowhere import BrokenGeneric, BrokenTypeVar # E: Could not find import of `nowhere`
@@ -811,8 +797,7 @@ def f():
 
 def g():
     x: dict[int, int] = {}
-    # Should probably be only one error message here (general overload)
-    x.update(a = 1) # E: No matching overload # E: Argument `dict[int, int]` is not assignable to parameter `self` with type `Mapping[str, int]`
+    x.update(a = 1) # E: No matching overload
 "#,
 );
 

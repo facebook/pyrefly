@@ -240,7 +240,7 @@ mod test {
         let tmp = tempfile::tempdir()?;
         let status = run_init_on_dir(&tmp)?;
         assert_success(status);
-        check_file_in(tmp.path(), "pyrefly.toml", &["project_includes"])
+        check_file_in(tmp.path(), "pyrefly.toml", &["project-includes"])
     }
 
     #[test]
@@ -248,7 +248,7 @@ mod test {
         let tmp = tempfile::tempdir()?;
         let status = run_init_on_file(&tmp, "pyrefly.toml")?;
         assert_success(status);
-        check_file_in(tmp.path(), "pyrefly.toml", &["project_includes"])
+        check_file_in(tmp.path(), "pyrefly.toml", &["project-includes"])
     }
 
     #[test]
@@ -278,7 +278,7 @@ mod test {
         check_file_in(
             tmp.path(),
             "pyrefly.toml",
-            &["project_includes = [\"abc\"]"],
+            &["project-includes = [\"abc\"]"],
         )
     }
 
@@ -291,7 +291,7 @@ mod test {
         check_file_in(
             tmp.path(),
             "pyrefly.toml",
-            &["project_includes = [\"abc\"]"],
+            &["project-includes = [\"abc\"]"],
         )
     }
 
@@ -321,7 +321,7 @@ mod test {
         check_file_in(
             tmp.path(),
             "pyrefly.toml",
-            &["project_includes = [\"abc\"]"],
+            &["project-includes = [\"abc\"]"],
         )
     }
 
@@ -343,7 +343,7 @@ mod test {
         check_file_in(
             tmp.path(),
             "pyrefly.toml",
-            &["project_includes = [\"abc\"]"],
+            &["project-includes = [\"abc\"]"],
         )
     }
 
@@ -395,7 +395,7 @@ files = \"abc\"
         check_file_in(
             tmp.path(),
             "pyproject.toml",
-            &["tool.mypy", "tool.pyrefly", "project_includes = [\"abc\"]"],
+            &["tool.mypy", "tool.pyrefly", "project-includes = [\"abc\"]"],
         )
     }
 
@@ -420,7 +420,7 @@ include = [\"abc\"]
             &[
                 "tool.pyright",
                 "tool.pyrefly",
-                "project_includes = [\"abc\"]",
+                "project-includes = [\"abc\"]",
             ],
         )
     }
@@ -446,7 +446,7 @@ include = [\"abc\"]
             &[
                 "tool.pyright",
                 "tool.pyrefly",
-                "project_includes = [\"abc\"]",
+                "project-includes = [\"abc\"]",
             ],
         )
     }

@@ -32,6 +32,7 @@ use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
+use crate::types::callable::Params;
 use crate::types::class::Class;
 use crate::types::class::ClassKind;
 use crate::types::class::ClassType;
@@ -212,6 +213,31 @@ impl TypeAlias {
     /// `as_type` returns `type[int]`; the caller must turn it into `int`.
     pub fn as_type(&self) -> Type {
         *self.ty.clone()
+    }
+
+    pub fn fmt_with_type<'a, D: Display + 'a>(
+        &'a self,
+        f: &mut fmt::Formatter<'_>,
+        wrap: &'a impl Fn(&'a Type) -> D,
+        tparams: Option<&TParams>,
+    ) -> fmt::Result {
+        match (&self.style, tparams) {
+            (TypeAliasStyle::LegacyImplicit, _) => {
+                write!(f, "{}", wrap(&self.ty))
+            }
+            (_, None) => {
+                write!(f, "TypeAlias[{}, {}]", self.name, wrap(&self.ty))
+            }
+            (_, Some(tparams)) => {
+                write!(
+                    f,
+                    "TypeAlias[{}[{}], {}]",
+                    self.name,
+                    commas_iter(|| tparams.iter()),
+                    wrap(&self.ty)
+                )
+            }
+        }
     }
 }
 
@@ -884,6 +910,10 @@ impl Type {
         self.check_func_metadata(&|meta| meta.flags.is_overload)
     }
 
+    pub fn is_deprecated(&self) -> bool {
+        self.check_func_metadata(&|meta| meta.flags.is_deprecated)
+    }
+
     pub fn has_final_decoration(&self) -> bool {
         self.check_func_metadata(&|meta| meta.flags.has_final_decoration)
     }
@@ -994,9 +1024,26 @@ impl Type {
     }
 
     pub fn anon_callables(self) -> Self {
-        self.transform(&mut |ty| {
+        self.transform(&mut |mut ty| {
             if let Type::Function(func) = ty {
                 *ty = Type::Callable(Box::new(func.signature.clone()));
+            }
+            // Anonymize posonly parameters in callables and paramspec values.
+            fn transform_params(params: &mut ParamList) {
+                for param in params.items_mut() {
+                    if let Param::PosOnly(Some(_), ty, req) = param {
+                        *param = Param::PosOnly(None, ty.clone(), *req);
+                    }
+                }
+            }
+            ty.transform_callable(&mut |callable: &mut Callable| match &mut callable.params {
+                Params::List(params) => {
+                    transform_params(params);
+                }
+                _ => {}
+            });
+            if let Type::ParamSpecValue(params) = &mut ty {
+                transform_params(params);
             }
         })
     }
@@ -1077,13 +1124,12 @@ impl Type {
         }
     }
 
-    pub fn as_decomposed_tuple_or_union(&self) -> Option<Vec<Type>> {
-        if let Type::Tuple(Tuple::Concrete(ts)) = self {
-            Some(ts.clone())
-        } else if let Type::Type(box Type::Union(ts)) = self {
-            Some(ts.map(|t| Type::type_form(t.clone())))
-        } else {
-            None
+    pub fn as_decomposed_tuple_or_union(&self, stdlib: &Stdlib) -> Option<Vec<Type>> {
+        match self {
+            Type::Tuple(Tuple::Concrete(ts)) => Some(ts.clone()),
+            Type::Type(box Type::Union(ts)) => Some(ts.map(|t| Type::type_form(t.clone()))),
+            Type::TypeAlias(ta) => ta.as_value(stdlib).as_decomposed_tuple_or_union(stdlib),
+            _ => None,
         }
     }
 }

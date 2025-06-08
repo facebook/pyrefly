@@ -118,16 +118,16 @@ def foo():
       ^
 Completion Results:
 - (Variable) xxxx: Literal[3]
-- (Variable) bar: () -> None
-- (Variable) foo: () -> None
+- (Function) bar: () -> None
+- (Function) foo: () -> None
 
 8 |     y
         ^
 Completion Results:
 - (Variable) yyyy: Literal[4]
 - (Variable) xxxx: Literal[3]
-- (Variable) bar: () -> None
-- (Variable) foo: () -> None
+- (Function) bar: () -> None
+- (Function) foo: () -> None
 "#
         .trim(),
         report.trim(),

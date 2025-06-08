@@ -51,7 +51,7 @@ impl ParamList {
 
     /// Create a new ParamList from a list of types, as required position-only parameters.
     pub fn new_types(xs: &[Type]) -> Self {
-        Self(xs.map(|t| Param::PosOnly(t.clone(), Required::Required)))
+        Self(xs.map(|t| Param::PosOnly(None, t.clone(), Required::Required)))
     }
 
     /// Prepend some required position-only parameters.
@@ -61,7 +61,7 @@ impl ParamList {
         } else {
             Cow::Owned(ParamList(
                 pre.iter()
-                    .map(|t| Param::PosOnly(t.clone(), Required::Required))
+                    .map(|t| Param::PosOnly(None, t.clone(), Required::Required))
                     .chain(self.0.iter().cloned())
                     .collect(),
             ))
@@ -73,10 +73,20 @@ impl ParamList {
         f: &mut fmt::Formatter<'_>,
         wrap: &'a impl Fn(&'a Type) -> D,
     ) -> fmt::Result {
+        // Keep track of whether we encounter a posonly parameter with a name, so we can emit the
+        // `/` posonly marker. For conciseness, we don't want to emit this marker for
+        // `typing.Callable` and other situations where we only have anonymous posonly parameters.
+        let mut named_posonly = false;
         let mut kwonly = false;
         for (i, param) in self.0.iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
+            }
+            if matches!(param, Param::PosOnly(Some(_), _, _)) {
+                named_posonly = true;
+            } else if named_posonly {
+                named_posonly = false;
+                write!(f, "/, ")?;
             }
             if !kwonly && matches!(param, Param::KwOnly(..)) {
                 kwonly = true;
@@ -84,11 +94,18 @@ impl ParamList {
             }
             param.fmt_with_type(f, wrap)?;
         }
+        if named_posonly {
+            write!(f, ", /")?;
+        }
         Ok(())
     }
 
     pub fn items(&self) -> &[Param] {
         &self.0
+    }
+
+    pub fn items_mut(&mut self) -> &mut [Param] {
+        &mut self.0
     }
 
     pub fn len(&self) -> usize {
@@ -126,7 +143,7 @@ pub enum Params {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum Param {
-    PosOnly(Type, Required),
+    PosOnly(Option<Name>, Type, Required),
     Pos(Name, Type, Required),
     VarArg(Option<Name>, Type),
     KwOnly(Name, Type, Required),
@@ -173,6 +190,8 @@ pub struct FuncFlags {
     pub is_overload: bool,
     pub is_staticmethod: bool,
     pub is_classmethod: bool,
+    /// A function decorated with `@deprecated`
+    pub is_deprecated: bool,
     /// A function decorated with `@property`
     pub is_property_getter: bool,
     /// A function decorated with `@foo.setter`, where `foo` is some `@property`-decorated function.
@@ -219,6 +238,7 @@ pub enum FunctionKind {
     ClassMethod,
     Overload,
     Override,
+    Deprecated,
     Cast,
     AssertType,
     RevealType,
@@ -425,9 +445,9 @@ impl Param {
         wrap: impl Fn(&'a Type) -> D,
     ) -> fmt::Result {
         match self {
-            Param::PosOnly(ty, Required::Required) => write!(f, "{}", wrap(ty)),
-            Param::PosOnly(ty, Required::Optional) => write!(f, "_: {} = ...", wrap(ty)),
-            Param::Pos(name, ty, required) => {
+            Param::PosOnly(None, ty, Required::Required) => write!(f, "{}", wrap(ty)),
+            Param::PosOnly(None, ty, Required::Optional) => write!(f, "_: {} = ...", wrap(ty)),
+            Param::PosOnly(Some(name), ty, required) | Param::Pos(name, ty, required) => {
                 write!(
                     f,
                     "{}: {}{}",
@@ -450,7 +470,7 @@ impl Param {
     #[allow(dead_code)]
     pub fn is_required(&self) -> bool {
         match self {
-            Param::PosOnly(_, Required::Required)
+            Param::PosOnly(_, _, Required::Required)
             | Param::Pos(_, _, Required::Required)
             | Param::KwOnly(_, _, Required::Required) => true,
             _ => false,
@@ -463,7 +483,7 @@ impl Param {
         is_subset: &dyn Fn(&Type, &Type) -> bool,
     ) {
         match self {
-            Param::PosOnly(ty, _)
+            Param::PosOnly(_, ty, _)
             | Param::Pos(_, ty, _)
             | Param::VarArg(_, ty)
             | Param::KwOnly(_, ty, _)
@@ -480,6 +500,7 @@ impl FunctionKind {
             ("builtins", None, "classmethod") => Self::ClassMethod,
             ("dataclasses", None, "dataclass") => Self::Dataclass(Box::new(BoolKeywords::new())),
             ("dataclasses", None, "field") => Self::DataclassField,
+            ("warnings", None, "deprecated") => Self::Deprecated,
             ("typing", None, "overload") => Self::Overload,
             ("typing", None, "override") => Self::Override,
             ("typing", None, "cast") => Self::Cast,
@@ -508,6 +529,11 @@ impl FunctionKind {
                 module: ModuleName::builtins(),
                 cls: None,
                 func: Name::new_static("issubclass"),
+            },
+            Self::Deprecated => FuncId {
+                module: ModuleName::warnings(),
+                cls: None,
+                func: Name::new_static("deprecated"),
             },
             Self::ClassMethod => FuncId {
                 module: ModuleName::builtins(),

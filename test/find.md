@@ -46,3 +46,17 @@ $ mkdir $TMPDIR/foo && touch $TMPDIR/foo/bar.py && echo "x: str = 0" > $TMPDIR/f
  INFO errors shown: 0* (glob)
 [0]
 ```
+
+## Removing -stubs prefix (this import should work)
+
+```scrut
+$ mkdir $TMPDIR/test-stubs && touch $TMPDIR/test-stubs/utils.pyi && touch $TMPDIR/test-stubs/main.pyi && \
+> echo "x: int = 1" > $TMPDIR/test-stubs/utils.pyi && \
+> echo "from test.utils import x" > $TMPDIR/test-stubs/main.pyi && \
+> $PYREFLY check --python-version 3.13.0 "$TMPDIR/test-stubs/main.pyi"
+*test-stubs/main.pyi:1:1-25: Could not find import of `test.utils` [import-error] (glob)
+*Looked in these locations* (glob)
+*Fallback search path* (glob)
+*Site package path* (glob)
+[1]
+```

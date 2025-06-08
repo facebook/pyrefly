@@ -13,7 +13,7 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::prelude::VecExt;
-use ruff_source_file::SourceLocation;
+use ruff_source_file::LineColumn;
 use serde::Serialize;
 
 use crate::config::config::ConfigFile;
@@ -35,9 +35,9 @@ pub struct Position {
 }
 
 impl Position {
-    fn new(position: SourceLocation) -> Self {
+    fn new(position: LineColumn) -> Self {
         Self {
-            line: position.row.to_zero_indexed() as i32 + 1,
+            line: position.line.to_zero_indexed() as i32 + 1,
             column: position.column.to_zero_indexed() as i32 + 1,
         }
     }
@@ -58,9 +58,9 @@ pub struct Range {
 impl Range {
     fn new(range: SourceRange) -> Self {
         Self {
-            start_line: range.start.row.to_zero_indexed() as i32 + 1,
+            start_line: range.start.line.to_zero_indexed() as i32 + 1,
             start_col: range.start.column.to_zero_indexed() as i32 + 1,
-            end_line: range.end.row.to_zero_indexed() as i32 + 1,
+            end_line: range.end.line.to_zero_indexed() as i32 + 1,
             end_col: range.end.column.to_zero_indexed() as i32 + 1,
         }
     }
@@ -154,9 +154,9 @@ impl Playground {
             .map(|e| {
                 let range = e.source_range();
                 Diagnostic {
-                    start_line: range.start.row.to_zero_indexed() as i32 + 1,
+                    start_line: range.start.line.to_zero_indexed() as i32 + 1,
                     start_col: range.start.column.to_zero_indexed() as i32 + 1,
-                    end_line: range.end.row.to_zero_indexed() as i32 + 1,
+                    end_line: range.end.line.to_zero_indexed() as i32 + 1,
                     end_col: range.end.column.to_zero_indexed() as i32 + 1,
                     message: e.msg().to_owned(),
                     kind: e.error_kind().to_name().to_owned(),
@@ -233,7 +233,7 @@ impl Playground {
             .zip(transaction.inlay_hints(&handle))
             .map(|(info, hints)| {
                 hints.into_map(|(position, label)| {
-                    let position = Position::new(info.source_location(position));
+                    let position = Position::new(info.line_column(position));
                     InlayHint { label, position }
                 })
             })

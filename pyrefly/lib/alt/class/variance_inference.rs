@@ -7,6 +7,8 @@ use pyrefly_derive::TypeEq;
 use pyrefly_util::visit::VisitMut;
 use starlark_map::small_map::SmallMap;
 
+use crate::alt::answers::AnswersSolver;
+use crate::alt::answers::LookupAnswer;
 use crate::alt::class::class_field::ClassField;
 use crate::types::class::Class;
 use crate::types::type_var::PreInferenceVariance;
@@ -46,19 +48,22 @@ pub fn pre_to_post_variance(pre_variance: PreInferenceVariance) -> Variance {
     }
 }
 
-pub fn variance_map(
-    class: &Class,
-    _base_types: Vec<Type>,
-    _fields: Vec<Arc<ClassField>>,
-) -> Arc<VarianceMap> {
-    // TODO: use base_types and fields to obtain a populated variance map
-    let mut variances = SmallMap::new();
+impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    pub fn variance_map(
+        &self,
+        class: &Class,
+        _base_types: Vec<Type>,
+        _fields: Vec<Arc<ClassField>>,
+    ) -> Arc<VarianceMap> {
+        // TODO: use base_types and fields to obtain a populated variance map
+        let mut variances = SmallMap::new();
 
-    for tparam in class.tparams().iter() {
-        variances.insert(
-            tparam.name().as_str().to_owned(),
-            pre_to_post_variance(tparam.variance),
-        );
+        for tparam in class.tparams().iter() {
+            variances.insert(
+                tparam.name().as_str().to_owned(),
+                pre_to_post_variance(tparam.variance),
+            );
+        }
+        Arc::new(VarianceMap(variances))
     }
-    Arc::new(VarianceMap(variances))
 }

@@ -29,7 +29,6 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::VarianceMap;
-use crate::alt::class::variance_inference::variance_map;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::types::decorated_function::DecoratedFunction;
@@ -491,6 +490,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Given an `iterable` type, determine the iteration type; this is the type
     /// of `x` if we were to loop using `for x in iterable`.
+    ///
+    /// Returns a Vec of length 1 unless the iterable is a union, in which case the
+    /// caller must handle each case.
     pub fn iterate(
         &self,
         iterable: &Type,
@@ -1327,7 +1329,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 base_types.push(base_type);
             }
-            variance_map(class, base_types, fields)
+            self.variance_map(class, base_types, fields)
         } else {
             Arc::new(VarianceMap(SmallMap::new()))
         }
@@ -1957,6 +1959,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Binding::NameAssign(name, annot_key, expr) => {
                 let (has_type_alias_qualifier, ty) = match annot_key.as_ref() {
+                    // First infer the type as a normal value
                     Some((style, k)) => {
                         let annot = self.get_idx(*k);
                         let tcc: &dyn Fn() -> TypeCheckContext = &|| {
@@ -1995,6 +1998,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     None => (None, self.expr(expr, None, errors)),
                 };
+                // Then, handle the possibility that we need to treat the type as a type alias
                 match (has_type_alias_qualifier, &ty) {
                     (Some(true), _) => {
                         self.as_type_alias(name, TypeAliasStyle::LegacyExplicit, ty, expr, errors)
@@ -2360,8 +2364,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None => context_value,
                 }
             }
-            Binding::UnpackedValue(ann, b, range, pos) => {
-                let iterables = self.iterate(self.get_idx(*b).ty(), *range, errors);
+            Binding::UnpackedValue(ann, to_unpack, range, pos) => {
+                let iterables = self.iterate(self.get_idx(*to_unpack).ty(), *range, errors);
                 let mut values = Vec::new();
                 for iterable in iterables {
                     values.push(match iterable {
@@ -2955,6 +2959,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .iter()
                     .map(|x| {
                         Param::PosOnly(
+                            None,
                             self.expr_untype(x, type_form_context, errors),
                             Required::Required,
                         )
