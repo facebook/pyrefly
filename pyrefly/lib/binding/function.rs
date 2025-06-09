@@ -431,12 +431,18 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn decorators(&mut self, decorator_list: Vec<Decorator>) -> Decorators {
-        let is_overload = decorator_list
+        let (is_overload, has_no_type_check) = decorator_list
             .iter()
-            .any(|d| self.as_special_export(&d.expression) == Some(SpecialExport::Overload));
-        let has_no_type_check = decorator_list
-            .iter()
-            .any(|d| self.as_special_export(&d.expression) == Some(SpecialExport::NoTypeCheck));
+            .fold((false, false), |(overload, no_check), d| {
+                if overload && no_check {
+                    return (true, true);
+                }
+                let special_export = self.as_special_export(&d.expression);
+                (
+                    overload || matches!(special_export, Some(SpecialExport::Overload)),
+                    no_check || matches!(special_export, Some(SpecialExport::NoTypeCheck)),
+                )
+            });
 
         let decorators = self
             .ensure_and_bind_decorators(decorator_list)
