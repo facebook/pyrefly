@@ -12,6 +12,8 @@ use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::uniques::Unique;
+use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::name::Name;
 
 use crate::alt::solve::TypeFormContext;
@@ -20,8 +22,6 @@ use crate::types::class::ClassType;
 use crate::types::stdlib::Stdlib;
 use crate::types::type_var::Restriction;
 use crate::types::types::Type;
-use crate::util::uniques::Unique;
-use crate::util::uniques::UniqueFactory;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 #[derive(Visit, VisitMut, TypeEq)]
@@ -140,11 +140,7 @@ impl QuantifiedKind {
 
 impl Display for Quantified {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.info.kind {
-            QuantifiedKind::TypeVar => write!(f, "TypeVar[{}]", self.info.name),
-            QuantifiedKind::ParamSpec => write!(f, "ParamSpec[{}]", self.info.name),
-            QuantifiedKind::TypeVarTuple => write!(f, "TypeVarTuple[{}]", self.info.name),
-        }
+        write!(f, "{}", self.info.name)
     }
 }
 

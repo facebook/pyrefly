@@ -6,6 +6,8 @@
  */
 
 use dupe::Dupe;
+use pyrefly_util::display::count;
+use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
@@ -28,8 +30,6 @@ use crate::types::types::Forallable;
 use crate::types::types::TParam;
 use crate::types::types::TParams;
 use crate::types::types::Type;
-use crate::util::display::count;
-use crate::util::prelude::SliceExt;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Silently promotes a Class to a ClassType, using default type arguments. It is up to the
@@ -294,12 +294,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         suffix.extend_from_slice(elts);
                     }
                 }
-                Type::Unpack(box t) => {
+                Type::Unpack(t) => {
                     if !suffix.is_empty() {
                         middle.push(Type::Tuple(Tuple::Unbounded(Box::new(self.unions(suffix)))));
                         suffix = Vec::new();
                     } else {
-                        middle.push(t.clone())
+                        middle.push((**t).clone())
                     }
                 }
                 arg => {
@@ -345,7 +345,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn create_paramspec_value(&self, targs: &[Type]) -> Type {
-        let params: Vec<Param> = targs.map(|t| Param::PosOnly(t.clone(), Required::Required));
+        let params: Vec<Param> = targs.map(|t| Param::PosOnly(None, t.clone(), Required::Required));
         Type::ParamSpecValue(ParamList::new(params))
     }
 

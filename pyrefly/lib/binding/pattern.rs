@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::mem;
-
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Pattern;
@@ -21,6 +19,7 @@ use crate::binding::binding::KeyExpect;
 use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::expr::Usage;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::FacetKind;
 use crate::binding::narrow::NarrowOps;
@@ -39,9 +38,12 @@ impl<'a> BindingsBuilder<'a> {
         pattern: Pattern,
         key: Idx<Key>,
     ) -> NarrowOps {
+        // In typical code, match patterns are more like static types than normal values, so
+        // we ignore match patterns for first-usage tracking.
+        let no_usage = Usage::NoUsageTracking;
         match pattern {
             Pattern::MatchValue(mut p) => {
-                self.ensure_expr(&mut p.value);
+                self.ensure_expr(&mut p.value, no_usage);
                 if let Some(subject) = match_subject {
                     NarrowOps::from_single_narrow_op_for_subject(
                         subject,
@@ -69,11 +71,11 @@ impl<'a> BindingsBuilder<'a> {
                 // If there is a new name, refine that instead
                 let mut subject = match_subject;
                 if let Some(name) = &p.name {
-                    self.bind_definition(name, Binding::Forward(key), FlowStyle::None);
+                    self.bind_definition(name, Binding::Forward(key), FlowStyle::Other);
                     subject = Some(NarrowingSubject::Name(name.id.clone()));
                 };
-                if let Some(box pattern) = p.pattern {
-                    self.bind_pattern(subject, pattern, key)
+                if let Some(pattern) = p.pattern {
+                    self.bind_pattern(subject, *pattern, key)
                 } else {
                     NarrowOps::new()
                 }
@@ -89,8 +91,8 @@ impl<'a> BindingsBuilder<'a> {
                                 let position = UnpackedPosition::Slice(idx, num_patterns - idx - 1);
                                 self.bind_definition(
                                     name,
-                                    Binding::UnpackedValue(key, p.range, position),
-                                    FlowStyle::None,
+                                    Binding::UnpackedValue(None, key, p.range, position),
+                                    FlowStyle::Other,
                                 );
                             }
                             unbounded = true;
@@ -103,7 +105,7 @@ impl<'a> BindingsBuilder<'a> {
                             };
                             let key = self.insert_binding(
                                 Key::Anon(x.range()),
-                                Binding::UnpackedValue(key, x.range(), position),
+                                Binding::UnpackedValue(None, key, x.range(), position),
                             );
                             narrow_ops.and_all(self.bind_pattern(None, x, key));
                         }
@@ -148,12 +150,12 @@ impl<'a> BindingsBuilder<'a> {
                         ))
                     });
                 if let Some(rest) = x.rest {
-                    self.bind_definition(&rest, Binding::Forward(key), FlowStyle::None);
+                    self.bind_definition(&rest, Binding::Forward(key), FlowStyle::Other);
                 }
                 narrow_ops
             }
             Pattern::MatchClass(mut x) => {
-                self.ensure_expr(&mut x.cls);
+                self.ensure_expr(&mut x.cls, no_usage);
                 let mut narrow_ops = if let Some(subject) = match_subject {
                     NarrowOps::from_single_narrow_op_for_subject(
                         subject,
@@ -204,21 +206,22 @@ impl<'a> BindingsBuilder<'a> {
                     if pattern.is_irrefutable() && idx != n_subpatterns - 1 {
                         self.error(
                             pattern.range(),
-                            "Only the last subpattern in MatchOr may be irrefutable".to_owned(),
                             ErrorKind::MatchError,
+                            None,
+                            "Only the last subpattern in MatchOr may be irrefutable".to_owned(),
                         )
                     }
-                    let mut base = self.scopes.current().flow.clone();
+                    let mut base = self.scopes.clone_current_flow();
                     let new_narrow_ops = self.bind_pattern(match_subject.clone(), pattern, key);
                     if let Some(ref mut ops) = narrow_ops {
                         ops.or_all(new_narrow_ops)
                     } else {
                         narrow_ops = Some(new_narrow_ops);
                     }
-                    mem::swap(&mut self.scopes.current_mut().flow, &mut base);
+                    self.scopes.swap_current_flow_with(&mut base);
                     branches.push(base);
                 }
-                self.scopes.current_mut().flow = self.merge_flow(branches, range);
+                self.set_current_flow_to_merged_branches(branches, range);
                 narrow_ops.unwrap_or_default()
             }
             Pattern::MatchStar(_) => NarrowOps::new(),
@@ -226,12 +229,10 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn stmt_match(&mut self, mut x: StmtMatch) {
-        self.ensure_expr(&mut x.subject);
+        let subject_user = self.declare_user(Key::Anon(x.subject.range()));
+        self.ensure_expr(&mut x.subject, subject_user.usage());
         let match_subject = *x.subject.clone();
-        let key = self.insert_binding(
-            Key::Anon(x.subject.range()),
-            Binding::Expr(None, *x.subject.clone()),
-        );
+        let key = self.insert_binding_user(subject_user, Binding::Expr(None, *x.subject.clone()));
         let mut exhaustive = false;
         let range = x.range;
         let mut branches = Vec::new();
@@ -245,7 +246,7 @@ impl<'a> BindingsBuilder<'a> {
         // is carried over to the fallback case.
         let mut negated_prev_ops = NarrowOps::new();
         for case in x.cases {
-            let mut base = self.scopes.current().flow.clone();
+            let mut base = self.scopes.clone_current_flow();
             if case.pattern.is_wildcard() || case.pattern.is_irrefutable() {
                 exhaustive = true;
             }
@@ -255,16 +256,22 @@ impl<'a> BindingsBuilder<'a> {
             self.bind_narrow_ops(&new_narrow_ops, case.range);
             negated_prev_ops.and_all(new_narrow_ops.negate());
             if let Some(mut guard) = case.guard {
-                self.ensure_expr(&mut guard);
-                self.insert_binding(Key::Anon(guard.range()), Binding::Expr(None, *guard));
+                let guard_user = self.declare_user(Key::Anon(guard.range()));
+                self.ensure_expr(&mut guard, guard_user.usage());
+                self.insert_binding_user(guard_user, Binding::Expr(None, *guard));
             }
             self.stmts(case.body);
-            mem::swap(&mut self.scopes.current_mut().flow, &mut base);
+            self.scopes.swap_current_flow_with(&mut base);
             branches.push(base);
         }
-        if !exhaustive {
-            branches.push(mem::take(&mut self.scopes.current_mut().flow));
+        // If the match branches cover all possibilities, then the flow after the match
+        // is just the merged branch flows.
+        //
+        // Otherwise, we need to merge the branches with the original `base` flow (which is current).
+        if exhaustive {
+            self.set_current_flow_to_merged_branches(branches, range);
+        } else {
+            self.merge_branches_into_current(branches, range);
         }
-        self.scopes.current_mut().flow = self.merge_flow(branches, range);
     }
 }

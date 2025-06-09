@@ -3,6 +3,11 @@ on:
   workflow_dispatch:
   workflow_call:
   push:
+    paths:
+      - '**/*'
+      - '!.*'
+      - '.github/workflows/build_extension.yml'
+      - '.github/workflows/test_extension.yml'
 
 jobs:
   build_extension:

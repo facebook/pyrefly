@@ -14,18 +14,25 @@ use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::assert_words;
+use pyrefly_util::display::commas_iter;
+use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::uniques::Unique;
+use pyrefly_util::uniques::UniqueFactory;
+use pyrefly_util::visit::Visit;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
-use crate::assert_words;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
+use crate::types::callable::Params;
 use crate::types::class::Class;
 use crate::types::class::ClassKind;
 use crate::types::class::ClassType;
@@ -41,15 +48,8 @@ use crate::types::tuple::Tuple;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
 use crate::types::type_var::TypeVar;
-use crate::types::type_var::Variance;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::typed_dict::TypedDict;
-use crate::util::display::commas_iter;
-use crate::util::prelude::SliceExt;
-use crate::util::uniques::Unique;
-use crate::util::uniques::UniqueFactory;
-use crate::util::visit::Visit;
-use crate::util::visit::VisitMut;
 
 /// An introduced synthetic variable to range over as yet unknown types.
 #[derive(Debug, Copy, Clone, Dupe, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -76,18 +76,11 @@ impl Var {
     }
 }
 
-/// Bundles together type param info for passing around while building TParams.
-#[derive(Debug, Clone, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TParamInfo {
-    pub quantified: Quantified,
-    pub variance: PreInferenceVariance,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct TParam {
     pub quantified: Quantified,
-    pub variance: Variance,
+    pub variance: PreInferenceVariance,
 }
 
 impl Display for TParam {
@@ -220,6 +213,31 @@ impl TypeAlias {
     /// `as_type` returns `type[int]`; the caller must turn it into `int`.
     pub fn as_type(&self) -> Type {
         *self.ty.clone()
+    }
+
+    pub fn fmt_with_type<'a, D: Display + 'a>(
+        &'a self,
+        f: &mut fmt::Formatter<'_>,
+        wrap: &'a impl Fn(&'a Type) -> D,
+        tparams: Option<&TParams>,
+    ) -> fmt::Result {
+        match (&self.style, tparams) {
+            (TypeAliasStyle::LegacyImplicit, _) => {
+                write!(f, "{}", wrap(&self.ty))
+            }
+            (_, None) => {
+                write!(f, "TypeAlias[{}, {}]", self.name, wrap(&self.ty))
+            }
+            (_, Some(tparams)) => {
+                write!(
+                    f,
+                    "TypeAlias[{}[{}], {}]",
+                    self.name,
+                    commas_iter(|| tparams.iter()),
+                    wrap(&self.ty)
+                )
+            }
+        }
     }
 }
 
@@ -470,7 +488,7 @@ pub enum Type {
     /// An overloaded function.
     Overload(Overload),
     Union(Vec<Type>),
-    #[expect(dead_code)] // Not currently used, but may be in the future
+    #[allow(dead_code)] // Not currently used, but may be in the future
     Intersect(Vec<Type>),
     /// A class definition has type `Type::ClassDef(cls)`. This type
     /// has special value semantics, and can also be implicitly promoted
@@ -514,8 +532,8 @@ pub enum Type {
     Any(AnyStyle),
     Never(NeverStyle),
     TypeAlias(TypeAlias),
-    /// Represents the result of a super() call. The first ClassType is the class that attribute lookup
-    /// on the super instance should be done on (*not* the class passed to the super() call), and the second
+    /// Represents the result of a super() call. The first ClassType is the point in the MRO that attribute lookup
+    /// on the super instance should start at (*not* the class passed to the super() call), and the second
     /// ClassType is the second argument (implicit or explicit) to the super() call. For example, in:
     ///   class A: ...
     ///   class B(A): ...
@@ -725,7 +743,7 @@ impl Type {
                 signature: callable,
                 metadata: _,
             }) => callable.is_typeguard(),
-            Type::Forall(box forall) => forall.body.is_typeguard(),
+            Type::Forall(forall) => forall.body.is_typeguard(),
             Type::BoundMethod(method) => method.func.is_typeguard(),
             Type::Overload(overload) => overload.is_typeguard(),
             _ => false,
@@ -739,7 +757,7 @@ impl Type {
                 signature: callable,
                 metadata: _,
             }) => callable.is_typeis(),
-            Type::Forall(box forall) => forall.body.is_typeis(),
+            Type::Forall(forall) => forall.body.is_typeis(),
             Type::BoundMethod(method) => method.func.is_typeis(),
             Type::Overload(overload) => overload.is_typeis(),
             _ => false,
@@ -892,6 +910,10 @@ impl Type {
         self.check_func_metadata(&|meta| meta.flags.is_overload)
     }
 
+    pub fn is_deprecated(&self) -> bool {
+        self.check_func_metadata(&|meta| meta.flags.is_deprecated)
+    }
+
     pub fn has_final_decoration(&self) -> bool {
         self.check_func_metadata(&|meta| meta.flags.has_final_decoration)
     }
@@ -914,7 +936,7 @@ impl Type {
 
     fn transform_callable(&mut self, mut f: impl FnMut(&mut Callable)) {
         match self {
-            Type::Callable(box callable) => f(callable),
+            Type::Callable(callable) => f(callable),
             Type::Function(box func)
             | Type::Forall(box Forall {
                 body: Forallable::Function(func),
@@ -1002,9 +1024,26 @@ impl Type {
     }
 
     pub fn anon_callables(self) -> Self {
-        self.transform(&mut |ty| {
+        self.transform(&mut |mut ty| {
             if let Type::Function(func) = ty {
                 *ty = Type::Callable(Box::new(func.signature.clone()));
+            }
+            // Anonymize posonly parameters in callables and paramspec values.
+            fn transform_params(params: &mut ParamList) {
+                for param in params.items_mut() {
+                    if let Param::PosOnly(Some(_), ty, req) = param {
+                        *param = Param::PosOnly(None, ty.clone(), *req);
+                    }
+                }
+            }
+            ty.transform_callable(&mut |callable: &mut Callable| match &mut callable.params {
+                Params::List(params) => {
+                    transform_params(params);
+                }
+                _ => {}
+            });
+            if let Type::ParamSpecValue(params) = &mut ty {
+                transform_params(params);
             }
         })
     }
@@ -1085,13 +1124,12 @@ impl Type {
         }
     }
 
-    pub fn as_decomposed_tuple_or_union(&self) -> Option<Vec<Type>> {
-        if let Type::Tuple(Tuple::Concrete(ts)) = self {
-            Some(ts.clone())
-        } else if let Type::Type(box Type::Union(ts)) = self {
-            Some(ts.map(|t| Type::type_form(t.clone())))
-        } else {
-            None
+    pub fn as_decomposed_tuple_or_union(&self, stdlib: &Stdlib) -> Option<Vec<Type>> {
+        match self {
+            Type::Tuple(Tuple::Concrete(ts)) => Some(ts.clone()),
+            Type::Type(box Type::Union(ts)) => Some(ts.map(|t| Type::type_form(t.clone()))),
+            Type::TypeAlias(ta) => ta.as_value(stdlib).as_decomposed_tuple_or_union(stdlib),
+            _ => None,
         }
     }
 }

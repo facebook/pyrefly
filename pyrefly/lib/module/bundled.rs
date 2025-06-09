@@ -16,6 +16,7 @@ use std::sync::LazyLock;
 use anyhow::Context as _;
 use anyhow::anyhow;
 use dupe::Dupe;
+use pyrefly_util::arc_id::ArcId;
 use starlark_map::small_map::SmallMap;
 use tar::Archive;
 use zstd::stream::read::Decoder;
@@ -25,7 +26,6 @@ use crate::config::error::ErrorDisplayConfig;
 use crate::error::kind::ErrorKind;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
-use crate::util::arc_id::ArcId;
 
 const BUNDLED_TYPESHED_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/typeshed.tar.zst"));
 

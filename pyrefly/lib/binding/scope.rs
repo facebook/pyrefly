@@ -6,13 +6,17 @@
  */
 
 use std::fmt::Debug;
+use std::mem;
 
-use dupe::Dupe;
 use parse_display::Display;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::ExprYield;
+use ruff_python_ast::ExprYieldFrom;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtReturn;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -31,12 +35,17 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyFunction;
+use crate::binding::binding::KeyVariance;
+use crate::binding::binding::KeyYield;
+use crate::binding::binding::KeyYieldFrom;
 use crate::binding::bindings::BindingTable;
+use crate::binding::bindings::User;
+use crate::binding::function::SelfAssignments;
 use crate::dunder;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
 use crate::export::exports::LookupExport;
-use crate::export::special::SpecialEntry;
+use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::module::module_name::ModuleName;
@@ -76,14 +85,6 @@ impl StaticInfo {
         } else {
             Key::Anywhere(name.clone(), self.loc)
         }
-    }
-
-    pub fn is_global(&self) -> bool {
-        self.style == DefinitionStyle::Global
-    }
-
-    pub fn is_nonlocal(&self) -> bool {
-        self.style == DefinitionStyle::Nonlocal
     }
 }
 
@@ -165,15 +166,23 @@ impl Static {
 #[derive(Default, Clone, Debug)]
 pub struct Flow {
     pub info: SmallMap<Name, FlowInfo>,
-    // Should this flow be merged into the next? Flow merging occurs after constructs like branches and loops.
-    pub no_next: bool,
+    // Have we seen control flow terminate?
+    //
+    // We continue to analyze the rest of the code after a flow terminates, but
+    // we don't include terminated flows when merging after loops and branches.
+    pub has_terminated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FlowStyle {
     /// Not one of the styles below.
-    None,
-    /// Am I an assignment in a class body?
+    Other,
+    /// I am a name defined by an Assign or AnnAssign in a class body.
+    /// - If `initial_value` is `None`, then I am defined by an `AnnAssign`
+    ///   with no value (in other words, I am an instance attribute annotation)
+    /// - If `initial_value` is `Some(_)`, then I am defined by an assignment,
+    ///   and the initial value may be needed later (if I turn out to be a dataclass
+    ///   field, which requires inspecting the actual expression).
     ClassField { initial_value: Option<Expr> },
     /// Am I the result of an import (which needs merging).
     /// E.g. `import foo.bar` and `import foo.baz` need merging.
@@ -203,6 +212,29 @@ impl FlowStyle {
             Self::PossiblyUninitialized => Some(format!("`{name}` may be uninitialized")),
             _ => None,
         }
+    }
+
+    pub fn merged(styles: Vec<FlowStyle>) -> FlowStyle {
+        let mut it = styles.into_iter();
+        let mut merged = it.next().unwrap_or(FlowStyle::Other);
+        for x in it {
+            match (&merged, x) {
+                // If they're identical, keep it
+                (l, r) if l == &r => {}
+                // Uninitialized and initialized branches merge into PossiblyUninitialized
+                (FlowStyle::Uninitialized, _) => {
+                    return FlowStyle::PossiblyUninitialized;
+                }
+                (_, FlowStyle::PossiblyUninitialized | FlowStyle::Uninitialized) => {
+                    return FlowStyle::PossiblyUninitialized;
+                }
+                // Unclear how to merge, default to None
+                _ => {
+                    merged = FlowStyle::Other;
+                }
+            }
+        }
+        merged
     }
 }
 
@@ -249,6 +281,7 @@ pub struct ClassIndices {
     pub class_idx: Idx<KeyClass>,
     pub metadata_idx: Idx<KeyClassMetadata>,
     pub synthesized_fields_idx: Idx<KeyClassSynthesizedFields>,
+    pub variance_idx: Idx<KeyVariance>,
 }
 
 #[derive(Clone, Debug)]
@@ -330,7 +363,10 @@ impl ScopeClass {
 }
 
 fn is_attribute_defining_method(method_name: &Name, class_name: &Name) -> bool {
-    if method_name == &dunder::INIT {
+    if method_name == &dunder::INIT
+        || method_name == &dunder::INIT_SUBCLASS
+        || method_name == &dunder::NEW
+    {
         true
     } else {
         (class_name.contains("Test") || class_name.contains("test"))
@@ -346,6 +382,14 @@ fn is_test_setup_method(method_name: &Name) -> bool {
     }
 }
 
+/// Things we collect from inside a function
+#[derive(Default, Clone, Debug)]
+pub struct YieldsAndReturns {
+    pub returns: Vec<(Idx<Key>, StmtReturn)>,
+    pub yields: Vec<(Idx<KeyYield>, ExprYield)>,
+    pub yield_froms: Vec<(Idx<KeyYieldFrom>, ExprYieldFrom)>,
+}
+
 #[derive(Clone, Debug)]
 pub struct InstanceAttribute(
     pub ExprOrBinding,
@@ -358,6 +402,12 @@ pub struct ScopeMethod {
     pub name: Identifier,
     pub self_name: Option<Identifier>,
     pub instance_attributes: SmallMap<Name, InstanceAttribute>,
+    pub yields_and_returns: YieldsAndReturns,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ScopeFunction {
+    pub yields_and_returns: YieldsAndReturns,
 }
 
 #[derive(Clone, Debug)]
@@ -365,12 +415,12 @@ pub enum ScopeKind {
     Annotation,
     Class(ScopeClass),
     Comprehension,
-    Function,
+    Function(ScopeFunction),
     Method(ScopeMethod),
     Module,
 }
 
-#[derive(Clone, Debug, Display)]
+#[derive(Clone, Debug, Display, Copy)]
 pub enum LoopExit {
     NeverRan,
     #[display("break")]
@@ -432,7 +482,7 @@ impl Scope {
     }
 
     pub fn function(range: TextRange) -> Self {
-        Self::new(range, true, ScopeKind::Function)
+        Self::new(range, true, ScopeKind::Function(Default::default()))
     }
 
     pub fn method(range: TextRange, name: Identifier) -> Self {
@@ -443,6 +493,7 @@ impl Scope {
                 name,
                 self_name: None,
                 instance_attributes: SmallMap::new(),
+                yields_and_returns: Default::default(),
             }),
         )
     }
@@ -530,6 +581,41 @@ impl Scopes {
         &self.scopes.last().scope
     }
 
+    pub fn clone_current_flow(&self) -> Flow {
+        self.current().flow.clone()
+    }
+
+    pub fn in_class_body(&self) -> bool {
+        match self.current().kind {
+            ScopeKind::Class(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn current_class_and_metadata_keys(
+        &self,
+    ) -> Option<(Idx<KeyClass>, Idx<KeyClassMetadata>)> {
+        match &self.current().kind {
+            ScopeKind::Class(class_scope) => Some((
+                class_scope.indices.class_idx,
+                class_scope.indices.metadata_idx,
+            )),
+            _ => None,
+        }
+    }
+
+    pub fn function_predecessor_indices(
+        &self,
+        name: &Name,
+    ) -> Option<(Idx<Key>, Idx<KeyFunction>)> {
+        if let Some(flow) = self.current().flow.info.get(name) {
+            if let FlowStyle::FunctionDef(fidx, _) = flow.style {
+                return Some((flow.key, fidx));
+            }
+        }
+        None
+    }
+
     pub fn current_mut(&mut self) -> &mut Scope {
         &mut self.current_mut_node().scope
     }
@@ -563,40 +649,92 @@ impl Scopes {
         scope
     }
 
+    pub fn push_function_scope(&mut self, range: TextRange, name: &Identifier, in_class: bool) {
+        if in_class {
+            self.push(Scope::method(range, name.clone()));
+        } else {
+            self.push(Scope::function(range));
+        }
+    }
+
+    pub fn pop_function_scope(&mut self) -> (YieldsAndReturns, Option<SelfAssignments>) {
+        match self.pop().kind {
+            ScopeKind::Method(method_scope) => (
+                method_scope.yields_and_returns,
+                Some(SelfAssignments {
+                    method_name: method_scope.name.id,
+                    instance_attributes: method_scope.instance_attributes,
+                }),
+            ),
+            ScopeKind::Function(function_scope) => (function_scope.yields_and_returns, None),
+            unexpected => unreachable!("Tried to pop a function scope, but got {unexpected:?}"),
+        }
+    }
+
     pub fn iter_rev(&self) -> impl ExactSizeIterator<Item = &Scope> {
         self.scopes.iter().map(|node| &node.scope).rev()
     }
 
-    pub fn iter_rev_mut(&mut self) -> impl ExactSizeIterator<Item = &mut Scope> {
+    fn iter_rev_mut(&mut self) -> impl ExactSizeIterator<Item = &mut Scope> {
         self.scopes.iter_mut().map(|node| &mut node.scope).rev()
     }
 
-    /// Return the default to use, if inside a loop.
-    /// If `style` is `None`, try preserving the old flow style.
-    /// TODO(grievejia): Properly separate out `FlowStyle` from the keys
-    pub fn update_flow_info(
+    /// In methods, we track assignments to `self` attribute targets so that we can
+    /// be aware of class fields implicitly defined in methods.
+    ///
+    /// We currently apply this logic in all methods, although downstream code will
+    /// often complain if an attribute is implicitly defined outside of methods
+    /// (like constructors) that we recognize as always being called.
+    ///
+    /// Returns `true` if the attribute was a self attribute.
+    pub fn record_self_attr_assign(
         &mut self,
-        loop_depth: u32,
-        name: &Name,
-        key: Idx<Key>,
-        style: Option<FlowStyle>,
-    ) -> Option<Idx<Key>> {
-        self.update_flow_info_hashed(loop_depth, Hashed::new(name), key, style)
+        x: &ExprAttribute,
+        value: ExprOrBinding,
+        annotation: Option<Idx<KeyAnnotation>>,
+    ) -> bool {
+        for scope in self.iter_rev_mut() {
+            if let ScopeKind::Method(method_scope) = &mut scope.kind
+                && let Some(self_name) = &method_scope.self_name
+                && matches!(&*x.value, Expr::Name(name) if name.id == self_name.id)
+            {
+                if !method_scope.instance_attributes.contains_key(&x.attr.id) {
+                    method_scope.instance_attributes.insert(
+                        x.attr.id.clone(),
+                        InstanceAttribute(value, annotation, x.attr.range()),
+                    );
+                }
+                return true;
+            }
+        }
+        false
     }
 
-    /// Return the default to use, if inside a loop.
-    /// /// If `style` is `None`, try preserving the old flow style.
+    pub fn loop_depth(&self) -> u32 {
+        self.scopes
+            .iter()
+            .fold(0, |depth, node| depth + node.scope.loops.len() as u32)
+    }
+
+    /// Update the flow info to bind `name` to `key`, maybe with `FlowStyle` `style`
+    ///
+    /// - Return the `Idx<Key>` of the default binding, if inside a loop
+    /// - If `style` is `None` and a previous entry exists, preserve the old style
+    ///
+    /// A caller of this function promises to create a binding for `key`; the
+    /// binding may not exist yet (it might depend on the returned default).
+    ///
     /// TODO(grievejia): Properly separate out `FlowStyle` from the indices
-    pub fn update_flow_info_hashed(
+    pub fn update_flow_info(
         &mut self,
-        loop_depth: u32,
         name: Hashed<&Name>,
         key: Idx<Key>,
         style: Option<FlowStyle>,
     ) -> Option<Idx<Key>> {
+        let in_loop = self.loop_depth() != 0;
         match self.current_mut().flow.info.entry_hashed(name.cloned()) {
             Entry::Vacant(e) => {
-                let style = style.unwrap_or(FlowStyle::None);
+                let style = style.unwrap_or(FlowStyle::Other);
                 e.insert(FlowInfo {
                     key,
                     default: key,
@@ -605,16 +743,8 @@ impl Scopes {
                 None
             }
             Entry::Occupied(mut e) => {
-                let default = if loop_depth != 0 {
-                    Some(e.get().default)
-                } else {
-                    None
-                };
-                let style = if let Some(style) = style {
-                    style
-                } else {
-                    e.get().style.clone()
-                };
+                let default = if in_loop { Some(e.get().default) } else { None };
+                let style = style.unwrap_or_else(|| e.get().style.clone());
                 *e.get_mut() = FlowInfo {
                     key,
                     default: default.unwrap_or(key),
@@ -638,20 +768,208 @@ impl Scopes {
     pub fn get_flow_style(&self, name: &Name) -> &FlowStyle {
         match self.get_flow_info(name) {
             Some(flow) => &flow.style,
-            None => &FlowStyle::None,
+            None => &FlowStyle::Other,
         }
     }
 
-    pub fn get_special_entry<'a>(&'a self, name: &Name) -> Option<SpecialEntry<'a>> {
-        let flow = self.get_flow_info(name)?;
-        let entry = match &flow.style {
-            FlowStyle::Import(m, name) => SpecialEntry::ImportName(m.dupe(), name),
-            FlowStyle::MergeableImport(m) | FlowStyle::ImportAs(m) => {
-                SpecialEntry::ImportModule(m.dupe())
+    /// Look up either `name` or `base_name.name` in the current scope, assuming we are
+    /// in the module with name `module_name`. If it is a `SpecialExport`, return it (otherwise None)
+    pub fn as_special_export(
+        &self,
+        name: &Name,
+        base_name: Option<&Name>,
+        current_module: ModuleName,
+    ) -> Option<SpecialExport> {
+        if let Some(base_name) = base_name {
+            // Check to see whether there's an imported module `base_name` such that `base_name.name`
+            // is a special export.
+            let special = SpecialExport::new(name)?;
+            let flow = self.get_flow_info(base_name)?;
+            match &flow.style {
+                FlowStyle::MergeableImport(m) | FlowStyle::ImportAs(m) => {
+                    if special.defined_in(*m) {
+                        Some(special)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
             }
-            _ => SpecialEntry::Local,
-        };
-        Some(entry)
+        } else {
+            // Check to see whether `name` is a special export; either it must be
+            // defined in the current module, or be an imported name from some other module.
+            let flow = self.get_flow_info(name)?;
+            match &flow.style {
+                FlowStyle::Import(m, upstream_name) => {
+                    let special = SpecialExport::new(upstream_name)?;
+                    if special.defined_in(*m) {
+                        Some(special)
+                    } else {
+                        None
+                    }
+                }
+                _ => {
+                    let special = SpecialExport::new(name)?;
+                    if special.defined_in(current_module) {
+                        Some(special)
+                    } else {
+                        None
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn add_to_current_static(
+        &mut self,
+        name: Name,
+        range: TextRange,
+        ann: Option<Idx<KeyAnnotation>>,
+    ) {
+        self.current_mut().stat.add(name, range, ann);
+    }
+
+    pub fn add_lvalue_to_current_static(&mut self, x: &Expr) {
+        self.current_mut().stat.expr_lvalue(x);
+    }
+
+    /// Add a loop exit point to the current innermost loop with the current flow.
+    ///
+    /// Return a bool indicating whether we were in a loop (if we weren't, we do nothing).
+    pub fn add_loop_exitpoint(&mut self, exit: LoopExit) -> bool {
+        let scope = self.current_mut();
+        let flow = scope.flow.clone();
+        if let Some(innermost) = scope.loops.last_mut() {
+            innermost.0.push((exit, flow));
+            scope.flow.has_terminated = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn swap_current_flow_with(&mut self, flow: &mut Flow) {
+        mem::swap(&mut self.current_mut().flow, flow);
+    }
+
+    pub fn replace_current_flow(&mut self, mut flow: Flow) -> Flow {
+        mem::swap(&mut self.current_mut().flow, &mut flow);
+        flow
+    }
+
+    pub fn mark_flow_termination(&mut self) {
+        self.current_mut().flow.has_terminated = true;
+    }
+
+    pub fn finish_current_loop(&mut self) -> Loop {
+        assert!(self.loop_depth() > 0);
+        self.current_mut().loops.pop().unwrap()
+    }
+
+    /// Whenever we enter the scope of a method *and* we see a matching
+    /// parameter, we record the name of it so that we can detect `self` assignments
+    /// that might define class fields.
+    pub fn set_self_name_if_applicable(&mut self, self_name: Option<Identifier>) {
+        if let Scope {
+            kind: ScopeKind::Method(method_scope),
+            ..
+        } = self.current_mut()
+        {
+            method_scope.self_name = self_name;
+        }
+    }
+
+    /// Whenever we exit a function definition scope that was a method where we accumulated
+    /// assignments to `self`, we need to record those assignments on the parent class scope;
+    /// they may later be used to define class fields.
+    pub fn record_self_assignments_if_applicable(
+        &mut self,
+        self_assignments: Option<SelfAssignments>,
+    ) {
+        if let Some(self_assignments) = self_assignments
+            && let ScopeKind::Class(class_scope) = &mut self.current_mut().kind
+        {
+            class_scope.add_attributes_defined_by_method(
+                self_assignments.method_name,
+                self_assignments.instance_attributes,
+            );
+        }
+    }
+
+    fn current_yields_and_returns_mut(&mut self) -> Option<&mut YieldsAndReturns> {
+        for scope in self.iter_rev_mut() {
+            match &mut scope.kind {
+                ScopeKind::Function(scope) => return Some(&mut scope.yields_and_returns),
+                ScopeKind::Method(scope) => return Some(&mut scope.yields_and_returns),
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Record a return in the enclosing function body there is one.
+    ///
+    /// Return `None` if this succeeded and Some(rejected_return) if we are at the top-level
+    pub fn record_or_reject_return(
+        &mut self,
+        user: User,
+        x: StmtReturn,
+    ) -> Result<(), (User, StmtReturn)> {
+        match self.current_yields_and_returns_mut() {
+            Some(yields_and_returns) => {
+                yields_and_returns.returns.push((user.into_idx(), x));
+                Ok(())
+            }
+            None => Err((user, x)),
+        }
+    }
+
+    /// Record a yield in the enclosing function body there is one.
+    ///
+    /// Return `None` if this succeeded and Some(rejected_yield) if we are at the top-level
+    pub fn record_or_reject_yield(
+        &mut self,
+        idx: Idx<KeyYield>,
+        x: ExprYield,
+    ) -> Result<(), ExprYield> {
+        match self.current_yields_and_returns_mut() {
+            Some(yields_and_returns) => {
+                yields_and_returns.yields.push((idx, x));
+                Ok(())
+            }
+            None => Err(x),
+        }
+    }
+
+    /// Record a yield in the enclosing function body there is one.
+    ///
+    /// Return `None` if this succeeded and Some(rejected_yield) if we are at the top-level
+    pub fn record_or_reject_yield_from(
+        &mut self,
+        idx: Idx<KeyYieldFrom>,
+        x: ExprYieldFrom,
+    ) -> Result<(), ExprYieldFrom> {
+        match self.current_yields_and_returns_mut() {
+            Some(yields_and_returns) => {
+                yields_and_returns.yield_froms.push((idx, x));
+                Ok(())
+            }
+            None => Err(x),
+        }
+    }
+
+    /// Insert an annotation pulled from some ancester scope for a name
+    /// defined by a `global` or `nonlocal` declaration.
+    pub fn set_annotation_for_mutable_capture(
+        &mut self,
+        name: Hashed<&Name>,
+        ann: Option<Idx<KeyAnnotation>>,
+    ) {
+        if ann.is_some()
+            && let Some(current_scope_info) = self.current_mut().stat.0.get_mut_hashed(name)
+        {
+            current_scope_info.annot = ann;
+        }
     }
 }
 

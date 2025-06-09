@@ -14,16 +14,14 @@ use std::sync::Arc;
 use dupe::Dupe;
 use itertools::Either;
 use itertools::Itertools;
+use pyrefly_util::display::DisplayWithCtx;
+use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::AnyParameterRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
-use ruff_python_ast::ExprName;
-use ruff_python_ast::ExprYield;
-use ruff_python_ast::ExprYieldFrom;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
-use ruff_python_ast::StmtReturn;
 use ruff_python_ast::TypeParam;
 use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
@@ -35,31 +33,27 @@ use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
+use vec1::vec1;
 
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
-use crate::binding::binding::BindingYield;
-use crate::binding::binding::BindingYieldFrom;
-use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyFunction;
 use crate::binding::binding::KeyLegacyTypeParam;
-use crate::binding::binding::KeyYield;
-use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::TypeParameter;
+use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::scope::Flow;
 use crate::binding::scope::FlowInfo;
 use crate::binding::scope::FlowStyle;
-use crate::binding::scope::InstanceAttribute;
 use crate::binding::scope::Loop;
 use crate::binding::scope::LoopExit;
 use crate::binding::scope::ScopeKind;
@@ -68,11 +62,10 @@ use crate::binding::scope::Scopes;
 use crate::binding::table::TableKeyed;
 use crate::config::base::UntypedDefBehavior;
 use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorContext;
 use crate::error::kind::ErrorKind;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
-use crate::export::special::SpecialEntry;
-use crate::export::special::SpecialEnv;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::graph::index::Index;
@@ -89,8 +82,6 @@ use crate::table_for_each;
 use crate::table_try_for_each;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::types::Var;
-use crate::util::display::DisplayWithCtx;
-use crate::util::uniques::UniqueFactory;
 
 #[derive(Clone, Dupe, Debug)]
 pub struct Bindings(Arc<BindingsInner>);
@@ -136,22 +127,13 @@ pub struct BindingsBuilder<'a> {
     pub lookup: &'a dyn LookupExport,
     pub sys_info: &'a SysInfo,
     pub class_count: u32,
-    pub loop_depth: u32,
     errors: &'a ErrorCollector,
     solver: &'a Solver,
     uniques: &'a UniqueFactory,
     pub has_docstring: bool,
     pub scopes: Scopes,
-    pub function_yields_and_returns: Vec1<FuncYieldsAndReturns>,
     table: BindingTable,
     pub untyped_def_behavior: UntypedDefBehavior,
-}
-
-/// Things we collect from inside a function
-#[derive(Default, Clone, Debug)]
-pub struct FuncYieldsAndReturns {
-    pub returns: Vec<StmtReturn>,
-    pub yields: Vec<Either<ExprYield, ExprYieldFrom>>,
 }
 
 impl Bindings {
@@ -189,14 +171,14 @@ impl Bindings {
         }
     }
 
-    /// Within the LSP, check if a Usage key exists.
+    /// Within the LSP, check if a BoundName key exists.
     /// It may not exist within `if False:` or `if sys.version == 0:` style code.
     pub fn is_valid_usage(&self, k: &Identifier) -> bool {
         self.0
             .table
             .get::<Key>()
             .0
-            .key_to_idx(&Key::Usage(ShortIdentifier::new(k)))
+            .key_to_idx(&Key::BoundName(ShortIdentifier::new(k)))
             .is_some()
     }
 
@@ -275,7 +257,7 @@ impl Bindings {
         if let Binding::FunctionParameter(p) = b {
             match p {
                 Either::Left(idx) => Either::Left(*idx),
-                Either::Right((var, _, _)) => Either::Right(*var),
+                Either::Right((var, _)) => Either::Right(*var),
             }
         } else {
             panic!(
@@ -308,11 +290,9 @@ impl Bindings {
             errors,
             solver,
             uniques,
-            loop_depth: 0,
             class_count: 0,
             has_docstring: Ast::has_docstring(&x),
             scopes: Scopes::module(x.range, enable_trace),
-            function_yields_and_returns: Vec1::new(FuncYieldsAndReturns::default()),
             table: Default::default(),
             untyped_def_behavior,
         };
@@ -321,45 +301,11 @@ impl Bindings {
             builder.inject_builtins();
         }
         builder.stmts(x.body);
-        // Create dummy bindings for any invalid yield/yield from expressions.
-        let (top_level_yields_and_returns, _) =
-            builder.function_yields_and_returns.split_off_first();
-        for x in top_level_yields_and_returns.yields {
-            match x {
-                Either::Left(x) => {
-                    builder
-                        .table
-                        .insert(KeyYield(x.range), BindingYield::Invalid(x));
-                }
-                Either::Right(x) => {
-                    builder
-                        .table
-                        .insert(KeyYieldFrom(x.range), BindingYieldFrom::Invalid(x));
-                }
-            }
-        }
-        for x in top_level_yields_and_returns.returns {
-            if let Some(x) = x.value {
-                builder
-                    .table
-                    .insert(Key::Anon(x.range()), Binding::Expr(None, *x));
-            }
-            errors.add(
-                x.range,
-                "Invalid `return` outside of a function".to_owned(),
-                ErrorKind::BadReturn,
-                None,
-            );
-        }
-        assert_eq!(builder.loop_depth, 0);
+        assert_eq!(builder.scopes.loop_depth(), 0);
         let scope_trace = builder.scopes.finish();
         let last_scope = scope_trace.toplevel_scope();
         let exported = exports.exports(lookup);
         for (k, static_info) in last_scope.stat.0.iter_hashed() {
-            if static_info.is_nonlocal() || static_info.is_global() {
-                // Nonlocal and global don't do anything outside a function
-                continue;
-            }
             let info = last_scope.flow.info.get_hashed(k);
             let binding = match info {
                 Some(FlowInfo { key, .. }) => {
@@ -423,6 +369,12 @@ impl BindingTable {
                 entry.1.get_exists(idx)
             );
         }
+        idx
+    }
+
+    fn insert_overwrite(&mut self, key: Key, value: Binding) -> Idx<Key> {
+        let idx = self.types.0.insert(key);
+        self.types.1.insert(idx, value);
         idx
     }
 
@@ -517,6 +469,22 @@ pub enum MutableCaptureLookupKind {
     Nonlocal,
 }
 
+/// An abstraction representing the `Idx<Key>` for a binding that we
+/// are currently constructing, which can be used as a factory to create
+/// usage values for `ensure_expr`.
+#[derive(Debug)]
+pub struct User(Idx<Key>);
+
+impl User {
+    pub fn usage(&self) -> Usage {
+        Usage::Idx(self.0)
+    }
+
+    pub fn into_idx(self) -> Idx<Key> {
+        self.0
+    }
+}
+
 impl<'a> BindingsBuilder<'a> {
     /// Given a `key: K = impl Keyed`, get an `Idx<K>` for it. The intended use case
     /// is when creating a complex binding where the process of creating the binding
@@ -527,6 +495,12 @@ impl<'a> BindingsBuilder<'a> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         self.table.get_mut::<K>().0.insert(key)
+    }
+
+    /// Declare a `Key` as a usage, which can be used for name lookups. Like `idx_for_promise`,
+    /// this is a promise to later provide a `Binding` corresponding this key.
+    pub fn declare_user(&mut self, key: Key) -> User {
+        User(self.idx_for_promise(key))
     }
 
     /// Insert a binding into the bindings table immediately, given a `key`
@@ -540,9 +514,7 @@ impl<'a> BindingsBuilder<'a> {
     /// Like `insert_binding` but will overwrite any existing binding.
     /// Should only be used in exceptional cases.
     pub fn insert_binding_overwrite(&mut self, key: Key, value: Binding) -> Idx<Key> {
-        let idx = self.table.types.0.insert(key);
-        self.table.types.1.insert(idx, value);
-        idx
+        self.table.insert_overwrite(key, value)
     }
 
     /// Insert a binding into the bindings table, given the `idx` of a key that we obtained previously.
@@ -551,6 +523,12 @@ impl<'a> BindingsBuilder<'a> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         self.table.insert_idx(idx, value)
+    }
+
+    /// Insert a binding into the bindings table, given a `Usage`. This will panic if the usage
+    /// is `Usage::NoUsageTracking`.
+    pub fn insert_binding_user(&mut self, user: User, value: Binding) -> Idx<Key> {
+        self.insert_binding_idx(user.0, value)
     }
 
     /// Allow access to an `Idx<Key>` given a `LastStmt` coming from a scan of a function body.
@@ -564,12 +542,12 @@ impl<'a> BindingsBuilder<'a> {
         })
     }
 
-    /// Given the name of a function def, return a new `Idx<KeyFunctionDef>` at which
+    /// Given the name of a function def, return a new `Idx<KeyFunction>` at which
     /// we will store the result of binding it along with an optional `Idx<Key>` at which
     /// we have the binding for the TypeInfo of any preceding function def of the same name.
     ///
     /// An invariant is that the caller must store a binding for the returned
-    /// `Idx<KeyFunctionDef>`; failure to do so will lead to a dangling Idx and
+    /// `Idx<KeyFunction>`; failure to do so will lead to a dangling Idx and
     /// a panic at solve time.
     ///
     /// Function bindings are unusual because the `@overload` decorator causes bindings
@@ -583,14 +561,13 @@ impl<'a> BindingsBuilder<'a> {
         function_identifier: &Identifier,
     ) -> (Idx<KeyFunction>, Option<Idx<Key>>) {
         // Get the index of both the `Key` and `KeyFunction` for the preceding function definition, if any
-        let mut pred_idx = None;
-        let mut pred_function_idx = None;
-        if let Some(flow) = self.scopes.current().flow.info.get(&function_identifier.id) {
-            if let FlowStyle::FunctionDef(fidx, _) = flow.style {
-                pred_idx = Some(flow.key);
-                pred_function_idx = Some(fidx);
-            }
-        }
+        let (pred_idx, pred_function_idx) = match self
+            .scopes
+            .function_predecessor_indices(&function_identifier.id)
+        {
+            Some((pred_idx, pred_function_idx)) => (Some(pred_idx), Some(pred_function_idx)),
+            None => (None, None),
+        };
         // Create the Idx<KeyFunction> at which we'll store the def we are ready to bind now.
         // The caller *must* eventually store a binding for it.
         let function_idx =
@@ -641,22 +618,57 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             Err(err @ FindError::NotFound(..)) => {
-                self.error(
+                let (ctx, msg) = err.display();
+                self.error_multiline(
                     TextRange::default(),
-                    err.display(),
                     ErrorKind::InternalError,
+                    ctx.as_deref(),
+                    msg,
                 );
             }
             Err(FindError::Ignored | FindError::NoPyTyped | FindError::NoSource(_)) => (),
         }
     }
 
+    // Only works for things with `Foo`, or `source.Foo`, or `F` where `from module import Foo as F`.
+    // Does not work for things with nested modules - but no SpecialExport's have that.
     pub fn as_special_export(&self, e: &Expr) -> Option<SpecialExport> {
-        SpecialExport::as_special_export(self, e)
+        match e {
+            Expr::Name(name) => {
+                self.scopes
+                    .as_special_export(&name.id, None, self.module_info.name())
+            }
+            Expr::Attribute(ExprAttribute {
+                value: box Expr::Name(base_name),
+                attr: name,
+                ..
+            }) => self.scopes.as_special_export(
+                &name.id,
+                Some(&base_name.id),
+                self.module_info.name(),
+            ),
+            _ => None,
+        }
     }
 
-    pub fn error(&self, range: TextRange, msg: String, error_kind: ErrorKind) {
-        self.errors.add(range, msg, error_kind, None);
+    pub fn error(
+        &self,
+        range: TextRange,
+        error_kind: ErrorKind,
+        context: Option<&dyn Fn() -> ErrorContext>,
+        msg: String,
+    ) {
+        self.errors.add(range, error_kind, context, vec1![msg]);
+    }
+
+    pub fn error_multiline(
+        &self,
+        range: TextRange,
+        error_kind: ErrorKind,
+        context: Option<&dyn Fn() -> ErrorContext>,
+        msg: Vec1<String>,
+    ) {
+        self.errors.add(range, error_kind, context, msg);
     }
 
     pub fn lookup_mutable_captured_name(
@@ -666,8 +678,8 @@ impl<'a> BindingsBuilder<'a> {
     ) -> Result<Idx<Key>, MutableCaptureLookupError> {
         let name = Hashed::new(name);
         let mut barrier = false;
-        let mut allow_nonlocal_reference = kind == MutableCaptureLookupKind::Nonlocal;
-        let mut allow_global_reference = kind == MutableCaptureLookupKind::Global;
+        let allow_nonlocal_reference = kind == MutableCaptureLookupKind::Nonlocal;
+        let allow_global_reference = kind == MutableCaptureLookupKind::Global;
         let mut result = Err(MutableCaptureLookupError::NotFound);
         // If there is static info for the name in the current scope and this value is not None
         // set the `annot` field to this value
@@ -701,108 +713,84 @@ impl<'a> BindingsBuilder<'a> {
             if !matches!(scope.kind, ScopeKind::Class(_))
                 && let Some(info) = scope.stat.0.get_hashed(name)
             {
-                if !info.is_nonlocal() && !info.is_global() {
-                    match kind {
-                        MutableCaptureLookupKind::Nonlocal => {
-                            if valid_nonlocal_reference {
-                                let key = info.as_key(name.into_key());
-                                result = Ok(self.table.types.0.insert(key));
-                                // We can't return immediately, because we need to override
-                                // the static annotation in the current scope with the one we found
-                                static_annot_override = info.annot;
-                                break;
-                            } else if !in_current_scope {
-                                return Err(MutableCaptureLookupError::NonlocalScope);
-                            }
-                        }
-                        MutableCaptureLookupKind::Global => {
-                            if valid_global_reference {
-                                let key = info.as_key(name.into_key());
-                                result = Ok(self.table.types.0.insert(key));
-                                // We can't return immediately, because we need to override
-                                // the static annotation in the current scope with the one we found
-                                static_annot_override = info.annot;
-                                break;
-                            } else if !in_current_scope {
-                                return Err(MutableCaptureLookupError::GlobalScope);
-                            }
+                match kind {
+                    MutableCaptureLookupKind::Nonlocal => {
+                        if valid_nonlocal_reference {
+                            let key = info.as_key(name.into_key());
+                            result = Ok(self.table.types.0.insert(key));
+                            // We can't return immediately, because we need to override
+                            // the static annotation in the current scope with the one we found
+                            static_annot_override = info.annot;
+                            break;
+                        } else if !in_current_scope {
+                            return Err(MutableCaptureLookupError::NonlocalScope);
                         }
                     }
-                }
-                if !barrier && info.is_nonlocal() {
-                    allow_nonlocal_reference = true;
-                }
-                if !barrier && info.is_global() {
-                    allow_global_reference = true;
+                    MutableCaptureLookupKind::Global => {
+                        if valid_global_reference {
+                            let key = info.as_key(name.into_key());
+                            result = Ok(self.table.types.0.insert(key));
+                            // We can't return immediately, because we need to override
+                            // the static annotation in the current scope with the one we found
+                            static_annot_override = info.annot;
+                            break;
+                        } else if !in_current_scope {
+                            return Err(MutableCaptureLookupError::GlobalScope);
+                        }
+                    }
                 }
             }
             barrier = barrier || scope.barrier;
         }
-        if let Some(annot) = static_annot_override
-            && let Some(current_scope_info) = self.scopes.current_mut().stat.0.get_mut_hashed(name)
-        {
-            current_scope_info.annot = Some(annot);
-        }
+        self.scopes
+            .set_annotation_for_mutable_capture(name, static_annot_override);
         result
     }
 
-    pub fn lookup_name(&mut self, name: &Name, kind: LookupKind) -> Result<Idx<Key>, LookupError> {
-        self.lookup_name_hashed(Hashed::new(name), kind)
-    }
-
-    pub fn lookup_name_hashed(
+    pub fn lookup_name(
         &mut self,
         name: Hashed<&Name>,
         kind: LookupKind,
     ) -> Result<Idx<Key>, LookupError> {
+        self.lookup_name_impl(name, kind, Usage::NoUsageTracking)
+    }
+
+    pub fn lookup_name_usage(
+        &mut self,
+        name: Hashed<&Name>,
+        usage: Usage,
+    ) -> Result<Idx<Key>, LookupError> {
+        self.lookup_name_impl(name, LookupKind::Regular, usage)
+    }
+
+    fn lookup_name_impl(
+        &mut self,
+        name: Hashed<&Name>,
+        kind: LookupKind,
+        _usage: Usage,
+    ) -> Result<Idx<Key>, LookupError> {
         let mut barrier = false;
-        let mut allow_nonlocal_reference = false;
-        let mut allow_global_reference = false;
-        for (idx, scope) in self.scopes.iter_rev().enumerate() {
-            let in_current_scope = idx == 0;
-            let valid_nonlocal_reference = allow_nonlocal_reference
-                && !in_current_scope
-                && !matches!(scope.kind, ScopeKind::Module | ScopeKind::Class(_));
-            let valid_global_reference = allow_global_reference
-                && !in_current_scope
-                && matches!(scope.kind, ScopeKind::Module);
+        for scope in self.scopes.iter_rev() {
             if let Some(flow) = scope.flow.info.get_hashed(name) {
-                match kind {
-                    LookupKind::Regular => {
-                        if !barrier || valid_nonlocal_reference || valid_global_reference {
-                            return Ok(flow.key);
-                        }
-                    }
-                    LookupKind::Mutable => {
-                        if !barrier || valid_nonlocal_reference || valid_global_reference {
-                            return Ok(flow.key);
-                        } else {
-                            return Err(LookupError::NotMutable);
-                        }
-                    }
+                if !barrier {
+                    // TODO: track usage
+                    return Ok(flow.key);
                 }
             }
             if !matches!(scope.kind, ScopeKind::Class(_))
                 && let Some(info) = scope.stat.0.get_hashed(name)
             {
-                if !info.is_nonlocal() && !info.is_global() {
-                    match kind {
-                        LookupKind::Regular => {
-                            let key = info.as_key(name.into_key());
-                            return Ok(self.table.types.0.insert(key));
-                        }
-                        LookupKind::Mutable => {
-                            if barrier && !valid_nonlocal_reference {
-                                return Err(LookupError::NotMutable);
-                            }
+                match kind {
+                    LookupKind::Regular => {
+                        // TODO: track usage
+                        let key = info.as_key(name.into_key());
+                        return Ok(self.table.types.0.insert(key));
+                    }
+                    LookupKind::Mutable => {
+                        if barrier {
+                            return Err(LookupError::NotMutable);
                         }
                     }
-                }
-                if !barrier && info.is_nonlocal() {
-                    allow_nonlocal_reference = true;
-                }
-                if !barrier && info.is_global() {
-                    allow_global_reference = true;
                 }
             }
             barrier = barrier || scope.barrier;
@@ -828,7 +816,9 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         name: &Identifier,
     ) -> Either<Idx<KeyLegacyTypeParam>, Option<Idx<Key>>> {
-        let found = self.lookup_name(&name.id, LookupKind::Regular).ok();
+        let found = self
+            .lookup_name(Hashed::new(&name.id), LookupKind::Regular)
+            .ok();
         if let Some(idx) = found {
             match self.lookup_legacy_tparam_from_idx(name, idx) {
                 Some(left) => Either::Left(left),
@@ -895,56 +885,28 @@ impl<'a> BindingsBuilder<'a> {
         binding: Binding,
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
-        let idx = self
-            .table
-            .insert(Key::Definition(ShortIdentifier::new(name)), binding);
+        let idx = self.insert_binding(Key::Definition(ShortIdentifier::new(name)), binding);
         self.bind_key(&name.id, idx, style).0
     }
 
-    pub fn bind_assign(
+    pub fn bind_definition_user(
         &mut self,
-        name: &ExprName,
-        binding: impl FnOnce(Option<Idx<KeyAnnotation>>) -> Binding,
+        name: &Identifier,
+        user: User,
+        binding: Binding,
         style: FlowStyle,
-    ) {
-        let idx = self.idx_for_promise(Key::Definition(ShortIdentifier::expr_name(name)));
-        let (ann, default) = self.bind_key(&name.id, idx, style);
-        let mut binding = binding(ann);
-        if let Some(default) = default {
-            binding = Binding::Default(default, Box::new(binding));
-        }
-        self.insert_binding_idx(idx, binding);
+    ) -> Option<Idx<KeyAnnotation>> {
+        let idx = self.insert_binding_user(user, binding);
+        self.bind_key(&name.id, idx, style).0
     }
 
-    /// In methods, we track assignments to `self` attribute targets so that we can
-    /// be aware of class fields implicitly defined in methods.
-    ///
-    /// We currently apply this logic in all methods, although downstream code will
-    /// often complain if an attribute is implicitly defined outside of methods
-    /// (like constructors) that we recognize as always being called.
-    ///
-    /// Returns `true` if the attribute was a self attribute.
-    pub fn record_self_attr_assign(
+    pub fn bind_user(
         &mut self,
-        x: &ExprAttribute,
-        value: ExprOrBinding,
-        annotation: Option<Idx<KeyAnnotation>>,
-    ) -> bool {
-        for scope in self.scopes.iter_rev_mut() {
-            if let ScopeKind::Method(method_scope) = &mut scope.kind
-                && let Some(self_name) = &method_scope.self_name
-                && matches!(&*x.value, Expr::Name(name) if name.id == self_name.id)
-            {
-                if !method_scope.instance_attributes.contains_key(&x.attr.id) {
-                    method_scope.instance_attributes.insert(
-                        x.attr.id.clone(),
-                        InstanceAttribute(value, annotation, x.attr.range()),
-                    );
-                }
-                return true;
-            }
-        }
-        false
+        name: &Name,
+        user: &User,
+        style: FlowStyle,
+    ) -> (Option<Idx<KeyAnnotation>>, Option<Idx<Key>>) {
+        self.bind_key(name, user.0, style)
     }
 
     /// Return a pair of:
@@ -957,9 +919,7 @@ impl<'a> BindingsBuilder<'a> {
         style: FlowStyle,
     ) -> (Option<Idx<KeyAnnotation>>, Option<Idx<Key>>) {
         let name = Hashed::new(name);
-        let default = self
-            .scopes
-            .update_flow_info_hashed(self.loop_depth, name, idx, Some(style));
+        let default = self.scopes.update_flow_info(name, idx, Some(style));
         let info = self
             .scopes
             .current()
@@ -985,8 +945,8 @@ impl<'a> BindingsBuilder<'a> {
             let mut constraints = None;
             let kind = match x {
                 TypeParam::TypeVar(tv) => {
-                    if let Some(box bound_expr) = &mut tv.bound {
-                        if let Expr::Tuple(tuple) = bound_expr {
+                    if let Some(bound_expr) = &mut tv.bound {
+                        if let Expr::Tuple(tuple) = &mut **bound_expr {
                             let mut constraint_exprs = Vec::new();
                             for constraint in &mut tuple.elts {
                                 self.ensure_type(constraint, &mut None);
@@ -995,89 +955,81 @@ impl<'a> BindingsBuilder<'a> {
                             constraints = Some((constraint_exprs, bound_expr.range()))
                         } else {
                             self.ensure_type(bound_expr, &mut None);
-                            bound = Some(bound_expr);
+                            bound = Some((**bound_expr).clone());
                         }
                     }
-                    if let Some(box default_expr) = &mut tv.default {
+                    if let Some(default_expr) = &mut tv.default {
                         self.ensure_type(default_expr, &mut None);
-                        default = Some(default_expr);
+                        default = Some((**default_expr).clone());
                     }
                     QuantifiedKind::TypeVar
                 }
                 TypeParam::ParamSpec(x) => {
-                    if let Some(box default_expr) = &mut x.default {
+                    if let Some(default_expr) = &mut x.default {
                         self.ensure_type(default_expr, &mut None);
-                        default = Some(default_expr);
+                        default = Some((**default_expr).clone());
                     }
                     QuantifiedKind::ParamSpec
                 }
                 TypeParam::TypeVarTuple(x) => {
-                    if let Some(box default_expr) = &mut x.default {
+                    if let Some(default_expr) = &mut x.default {
                         self.ensure_type(default_expr, &mut None);
-                        default = Some(default_expr);
+                        default = Some((**default_expr).clone());
                     }
                     QuantifiedKind::TypeVarTuple
                 }
             };
             self.scopes
-                .current_mut()
-                .stat
-                .add(name.id.clone(), name.range, None);
+                .add_to_current_static(name.id.clone(), name.range, None);
             self.bind_definition(
                 &name,
                 Binding::TypeParameter(Box::new(TypeParameter {
                     name: name.id.clone(),
                     unique: self.uniques.fresh(),
                     kind,
-                    default: default.cloned(),
-                    bound: bound.cloned(),
+                    default,
+                    bound,
                     constraints,
                 })),
-                FlowStyle::None,
+                FlowStyle::Other,
             );
         }
     }
 
     pub fn add_loop_exitpoint(&mut self, exit: LoopExit, range: TextRange) {
-        let scope = self.scopes.current_mut();
-        let flow = scope.flow.clone();
-        if let Some(innermost) = scope.loops.last_mut() {
-            innermost.0.push((exit, flow));
-            scope.flow.no_next = true;
-        } else {
+        let in_loop = self.scopes.add_loop_exitpoint(exit);
+        if !in_loop {
             // Python treats break and continue outside of a loop as a syntax error.
             self.error(
                 range,
-                format!("Cannot `{exit}` outside loop"),
                 ErrorKind::ParseError,
+                None,
+                format!("Cannot `{exit}` outside loop"),
             );
         }
     }
 
     pub fn bind_narrow_ops(&mut self, narrow_ops: &NarrowOps, use_range: TextRange) {
         for (name, (op, op_range)) in narrow_ops.0.iter_hashed() {
-            if let Ok(name_key) = self.lookup_name_hashed(name, LookupKind::Regular) {
+            if let Ok(name_key) = self.lookup_name(name, LookupKind::Regular) {
                 let binding_key = self.insert_binding(
                     Key::Narrow(name.into_key().clone(), *op_range, use_range),
                     Binding::Narrow(name_key, Box::new(op.clone()), use_range),
                 );
-                self.scopes
-                    .update_flow_info_hashed(self.loop_depth, name, binding_key, None);
+                self.scopes.update_flow_info(name, binding_key, None);
             }
         }
     }
 
     pub fn bind_lambda_param(&mut self, name: &Identifier) {
         let var = self.solver.fresh_contained(self.uniques);
-        let bind_key = self.insert_binding(
+        let idx = self.insert_binding(
             Key::Definition(ShortIdentifier::new(name)),
             Binding::LambdaParameter(var),
         );
         self.scopes
-            .current_mut()
-            .stat
-            .add(name.id.clone(), name.range, None);
-        self.bind_key(&name.id, bind_key, FlowStyle::None);
+            .add_to_current_static(name.id.clone(), name.range, None);
+        self.bind_key(&name.id, idx, FlowStyle::Other);
     }
 
     pub fn bind_function_param(
@@ -1102,7 +1054,7 @@ impl<'a> BindingsBuilder<'a> {
                     KeyAnnotation::Annotation(ShortIdentifier::new(name)),
                     BindingAnnotation::Type(target.clone(), var.to_type()),
                 );
-                (annot, Either::Right((var, function_idx, target)))
+                (annot, Either::Right((var, function_idx)))
             }
         };
         let key = self.insert_binding(
@@ -1110,10 +1062,8 @@ impl<'a> BindingsBuilder<'a> {
             Binding::FunctionParameter(def),
         );
         self.scopes
-            .current_mut()
-            .stat
-            .add(name.id.clone(), name.range, Some(annot));
-        self.bind_key(&name.id, key, FlowStyle::None);
+            .add_to_current_static(name.id.clone(), name.range, Some(annot));
+        self.bind_key(&name.id, key, FlowStyle::Other);
     }
 
     /// Helper for loops, inserts a phi key for every name in the given flow.
@@ -1122,27 +1072,23 @@ impl<'a> BindingsBuilder<'a> {
             // The promise is that we will insert a Phi binding when the control flow merges.
             info.key = self.idx_for_promise(Key::Phi(name.clone(), range));
         }
-        flow.no_next = false;
         flow
     }
 
     pub fn setup_loop(&mut self, range: TextRange, narrow_ops: &NarrowOps) {
-        self.loop_depth += 1;
         let base = mem::take(&mut self.scopes.current_mut().flow);
         // To account for possible assignments to existing names in a loop, we
         // speculatively insert phi keys upfront.
         self.scopes.current_mut().flow = self.insert_phi_keys(base.clone(), range);
-        self.bind_narrow_ops(narrow_ops, range);
         self.scopes
             .current_mut()
             .loops
             .push(Loop(vec![(LoopExit::NeverRan, base)]));
+        self.bind_narrow_ops(narrow_ops, range);
     }
 
     pub fn teardown_loop(&mut self, range: TextRange, narrow_ops: &NarrowOps, orelse: Vec<Stmt>) {
-        assert!(self.loop_depth > 0);
-        self.loop_depth -= 1;
-        let done = self.scopes.current_mut().loops.pop().unwrap();
+        let done = self.scopes.finish_current_loop();
         let (breaks, other_exits): (Vec<Flow>, Vec<Flow>) =
             done.0.into_iter().partition_map(|(exit, flow)| match exit {
                 LoopExit::Break => Either::Left(flow),
@@ -1166,44 +1112,12 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    fn merge_flow_style(&mut self, styles: Vec<FlowStyle>) -> FlowStyle {
-        let mut it = styles.into_iter();
-        let mut merged = it.next().unwrap_or(FlowStyle::None);
-        for x in it {
-            match (&merged, x) {
-                // If they're identical, keep it
-                (l, r) if l == &r => {}
-                // Uninitialized and initialized branches merge into PossiblyUninitialized
-                (FlowStyle::Uninitialized, _) => {
-                    return FlowStyle::PossiblyUninitialized;
-                }
-                (_, FlowStyle::PossiblyUninitialized | FlowStyle::Uninitialized) => {
-                    return FlowStyle::PossiblyUninitialized;
-                }
-                // Unclear how to merge, default to None
-                _ => {
-                    merged = FlowStyle::None;
-                }
-            }
-        }
-        merged
-    }
-
-    pub fn merge_flow(&mut self, xs: Vec<Flow>, range: TextRange) -> Flow {
-        self.merge_flow_is_loop(xs, range, false)
-    }
-
-    pub fn merge_flow_is_loop(
-        &mut self,
-        mut xs: Vec<Flow>,
-        range: TextRange,
-        is_loop: bool,
-    ) -> Flow {
-        if xs.len() == 1 && xs[0].no_next {
+    fn merge_flow(&mut self, mut xs: Vec<Flow>, range: TextRange, is_loop: bool) -> Flow {
+        if xs.len() == 1 && xs[0].has_terminated {
             return xs.pop().unwrap();
         }
         let (hidden_branches, mut visible_branches): (Vec<_>, Vec<_>) =
-            xs.into_iter().partition(|x| x.no_next);
+            xs.into_iter().partition(|x| x.has_terminated);
 
         // We normally go through the visible branches, but if nothing is visible no one is going to
         // fill in the Phi keys we promised. So just give up and use the hidden branches instead.
@@ -1230,7 +1144,7 @@ impl<'a> BindingsBuilder<'a> {
                 match names.entry_hashed(name) {
                     Entry::Occupied(mut e) => f(e.get_mut()),
                     Entry::Vacant(e) => {
-                        // The promise is that the next block will create a binding for all names in `namesA`.
+                        // The promise is that the next block will create a binding for all names in `names`.
                         //
                         // Note that in some cases (e.g. variables defined above a loop) we already promised
                         // a binding and this lookup will just give us back the same `Idx<Key::Phi(...)>` we
@@ -1249,7 +1163,7 @@ impl<'a> BindingsBuilder<'a> {
 
         let mut res = SmallMap::with_capacity(names.len());
         for (name, (key, default, values, styles)) in names.into_iter_hashed() {
-            let style = self.merge_flow_style(styles);
+            let style = FlowStyle::merged(styles);
             self.insert_binding_idx(
                 key,
                 match () {
@@ -1262,27 +1176,37 @@ impl<'a> BindingsBuilder<'a> {
                 name,
                 FlowInfo {
                     key,
-                    default: if self.loop_depth > 0 { default } else { key },
+                    default: if self.scopes.loop_depth() > 0 {
+                        default
+                    } else {
+                        key
+                    },
                     style,
                 },
             );
         }
-        Flow { info: res, no_next }
+        Flow {
+            info: res,
+            has_terminated: no_next,
+        }
     }
 
-    fn merge_loop_into_current(&mut self, mut branches: Vec<Flow>, range: TextRange) {
+    fn merge_into_current(&mut self, mut branches: Vec<Flow>, range: TextRange, is_loop: bool) {
         branches.push(mem::take(&mut self.scopes.current_mut().flow));
-        self.scopes.current_mut().flow = self.merge_flow_is_loop(branches, range, true);
-    }
-}
-
-impl SpecialEnv for BindingsBuilder<'_> {
-    fn current_module(&self) -> ModuleName {
-        self.module_info.name()
+        self.scopes.current_mut().flow = self.merge_flow(branches, range, is_loop);
     }
 
-    fn lookup_special(&self, name: &Name) -> Option<SpecialEntry> {
-        self.scopes.get_special_entry(name)
+    fn merge_loop_into_current(&mut self, branches: Vec<Flow>, range: TextRange) {
+        self.merge_into_current(branches, range, true);
+    }
+
+    pub fn merge_branches_into_current(&mut self, branches: Vec<Flow>, range: TextRange) {
+        self.merge_into_current(branches, range, false);
+    }
+
+    pub fn set_current_flow_to_merged_branches(&mut self, branches: Vec<Flow>, range: TextRange) {
+        let flow = self.merge_flow(branches, range, false);
+        self.scopes.replace_current_flow(flow);
     }
 }
 
@@ -1353,9 +1277,7 @@ impl LegacyTParamBuilder {
             if let Either::Left((name, idx)) = entry {
                 builder
                     .scopes
-                    .current_mut()
-                    .stat
-                    .add(name.id.clone(), name.range, None);
+                    .add_to_current_static(name.id.clone(), name.range, None);
                 builder.bind_definition(
                     name,
                     // Note: we use None as the range here because the range is
@@ -1363,7 +1285,7 @@ impl LegacyTParamBuilder {
                     // tparams, and we only want to do that once (which we do in
                     // the binding created by `forward_lookup`).
                     Binding::CheckLegacyTypeParam(*idx, None),
-                    FlowStyle::None,
+                    FlowStyle::Other,
                 );
             }
         }

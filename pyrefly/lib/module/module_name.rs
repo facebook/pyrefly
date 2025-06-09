@@ -14,6 +14,8 @@ use std::path::Path;
 
 use dupe::Dupe;
 use equivalent::Equivalent;
+use pyrefly_util::visit::Visit;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -30,6 +32,16 @@ static MODULE_NAME_INTERNER: Interner<String> = Interner::new();
 /// The name of a python module. Examples: `foo.bar.baz`, `.foo.bar`.
 #[derive(Clone, Dupe, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ModuleName(Intern<String>);
+
+impl<To: 'static> Visit<To> for ModuleName {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a To)) {}
+}
+
+impl<To: 'static> VisitMut<To> for ModuleName {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut To)) {}
+}
 
 impl Serialize for ModuleName {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -100,6 +112,10 @@ impl ModuleName {
 
     pub fn types() -> Self {
         Self::from_str("types")
+    }
+
+    pub fn warnings() -> Self {
+        Self::from_str("warnings")
     }
 
     pub fn collections() -> Self {

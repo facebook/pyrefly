@@ -15,6 +15,11 @@ use anyhow::Context;
 use anyhow::anyhow;
 use itertools::Itertools;
 use path_absolutize::Absolutize;
+use pyrefly_util::fs_anyhow;
+use pyrefly_util::globs::FilteredGlobs;
+use pyrefly_util::globs::Glob;
+use pyrefly_util::globs::Globs;
+use pyrefly_util::prelude::VecExt;
 use serde::Deserialize;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
@@ -27,6 +32,7 @@ use crate::config::environment::environment::PythonEnvironment;
 use crate::config::environment::environment::SitePackagePathSource;
 use crate::config::error::ErrorConfig;
 use crate::config::error::ErrorDisplayConfig;
+use crate::config::finder::ConfigError;
 use crate::module::bundled::typeshed;
 use crate::module::finder::find_module_in_search_path;
 use crate::module::finder::find_module_in_site_package_path;
@@ -37,11 +43,6 @@ use crate::state::loader::FindError;
 use crate::sys_info::PythonPlatform;
 use crate::sys_info::PythonVersion;
 use crate::sys_info::SysInfo;
-use crate::util::fs_anyhow;
-use crate::util::globs::FilteredGlobs;
-use crate::util::globs::Glob;
-use crate::util::globs::Globs;
-use crate::util::prelude::VecExt;
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
 pub struct SubConfig {
@@ -159,6 +160,7 @@ impl ImportLookupPathPart<'_> {
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "kebab-case")]
 pub struct ConfigFile {
     #[serde(skip)]
     pub source: ConfigSource,
@@ -168,7 +170,10 @@ pub struct ConfigFile {
     /// in this config, but may be overridden by CLI args where used.
     #[serde(
         default = "ConfigFile::default_project_includes",
-        skip_serializing_if = "Globs::is_empty"
+        skip_serializing_if = "Globs::is_empty",
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "project_includes",
     )]
     pub project_includes: Globs,
 
@@ -178,7 +183,10 @@ pub struct ConfigFile {
     /// in this config, but may be overridden by CLI args where used.
     #[serde(
         default = "ConfigFile::default_project_excludes",
-        skip_serializing_if = "Globs::is_empty"
+        skip_serializing_if = "Globs::is_empty",
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "project_excludes",
     )]
     pub project_excludes: Globs,
 
@@ -189,7 +197,14 @@ pub struct ConfigFile {
     /// imported from, including type checked files.
     /// Does not include command-line overrides or the import root!
     /// Use ConfigFile::search_path() to get the full search path.
-    #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "search_path")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        rename = "search-path", 
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "search_path"
+    )]
     pub search_path_from_file: Vec<PathBuf>,
 
     /// The automatically inferred subdirectory that importable Python packages live in.
@@ -199,13 +214,25 @@ pub struct ConfigFile {
     /// Not exposed to the user. When we aren't able to determine the root of a
     /// project, we guess some fallback search paths that are checked after
     /// typeshed (so we don't clobber the stdlib) and before site_package_path.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "fallback_search_path"
+    )]
     pub fallback_search_path: Vec<PathBuf>,
 
     // TODO(connernilsen): make this mutually exclusive with venv/conda env
     /// The python executable that will be queried for `python_version`,
     /// `python_platform`, or `site_package_path` if any of the values are missing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "python_interpreter"
+    )]
     pub python_interpreter: Option<PathBuf>,
 
     /// Values representing the environment of the Python interpreter
@@ -221,13 +248,23 @@ pub struct ConfigFile {
 
     /// Sub-configs that can override specific `ConfigBase` settings
     /// based on path matching.
-    #[serde(default, rename = "sub_config", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "sub-config",
+        skip_serializing_if = "Vec::is_empty",
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "sub_config"
+    )]
     pub sub_configs: Vec<SubConfig>,
 
     /// Skips any `py.typed` checks we do when resolving `site_package_path` imports.
     #[serde(
         default = "ConfigFile::default_true",
-        skip_serializing_if = "crate::config::util::skip_default_true"
+        skip_serializing_if = "crate::config::util::skip_default_true",
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "use_untyped_imports",
     )]
     pub use_untyped_imports: bool,
 
@@ -239,7 +276,10 @@ pub struct ConfigFile {
     /// installed non-stubs package.
     #[serde(
         default = "ConfigFile::default_true",
-        skip_serializing_if = "crate::config::util::skip_default_true"
+        skip_serializing_if = "crate::config::util::skip_default_true",
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "ignore_missing_source",
     )]
     pub ignore_missing_source: bool,
 }
@@ -344,10 +384,9 @@ impl ConfigFile {
 
     pub fn default_project_excludes() -> Globs {
         Globs::new(vec![
-            // match any hidden file, but don't match `.` or `..` (equivalent to regex: `\.[^/\.]{0,1}.*`)
-            "**/.[!/.]*".to_owned(),
             // match any `.venv` or `venv` directory
             "**/*venv/**".to_owned(),
+            // Note: dot files are now excluded at the Glob::files() level
         ])
     }
 
@@ -535,7 +574,7 @@ impl ConfigFile {
             .for_each(|c| c.rewrite_with_path_to_config(config_root));
     }
 
-    pub fn validate(&self) -> Vec<anyhow::Error> {
+    pub fn validate(&self) -> Vec<ConfigError> {
         fn validate<'a>(
             paths: &'a [PathBuf],
             field: &'a str,
@@ -554,13 +593,13 @@ impl ConfigFile {
         }
         errors.extend(validate(&self.search_path_from_file, "search_path"));
         if let ConfigSource::File(path) = &self.source {
-            errors.into_map(|e| e.context(format!("{}", path.display())))
+            errors.into_map(|e| ConfigError::warn(e.context(format!("{}", path.display()))))
         } else {
-            errors
+            errors.into_map(ConfigError::warn)
         }
     }
 
-    pub fn from_file(config_path: &Path) -> (ConfigFile, Vec<anyhow::Error>) {
+    pub fn from_file(config_path: &Path) -> (ConfigFile, Vec<ConfigError>) {
         fn read_path(config_path: &Path) -> anyhow::Result<Option<ConfigFile>> {
             let config_str = fs_anyhow::read_to_string(config_path)?;
             if config_path.file_name() == Some(OsStr::new(ConfigFile::PYPROJECT_FILE_NAME)) {
@@ -628,7 +667,8 @@ impl ConfigFile {
             Ok(config_path) => (f(&config_path), config_path.into_owned()),
             Err(e) => ((ConfigFile::default(), vec![e]), config_path.to_path_buf()),
         };
-        let errors = errors.into_map(|err| err.context(format!("{}", config_path.display())));
+        let errors = errors
+            .into_map(|err| ConfigError::error(err.context(format!("{}", config_path.display()))));
         (config, errors)
     }
 
@@ -695,30 +735,30 @@ mod tests {
     #[test]
     fn deserialize_pyrefly_config() {
         let config_str = r#"
-            project_includes = ["tests", "./implementation"]
-            project_excludes = ["tests/untyped/**"]
-            untyped_def_behavior = "check-and-infer-return-type"
-            search_path = ["../.."]
-            python_platform = "darwin"
-            python_version = "1.2.3"
-            site_package_path = ["venv/lib/python1.2.3/site-packages"]
-            python_interpreter = "venv/my/python"
-            replace_imports_with_any = ["fibonacci"]
-            ignore_errors_in_generated_code = true
-            use_untyped_imports = true
-            ignore_missing_source = true
+            project-includes = ["tests", "./implementation"]
+            project-excludes = ["tests/untyped/**"]
+            untyped-def-behavior = "check-and-infer-return-type"
+            search-path = ["../.."]
+            python-platform = "darwin"
+            python-version = "1.2.3"
+            site-package-path = ["venv/lib/python1.2.3/site-packages"]
+            python-interpreter = "venv/my/python"
+            replace-imports-with-any = ["fibonacci"]
+            ignore-errors-in-generated-code = true
+            use-untyped-imports = true
+            ignore-missing-source = true
 
             [errors]
             assert-type = true
             bad-return = false
 
-            [[sub_config]]
+            [[sub-config]]
             matches = "sub/project/**"
 
-            untyped_def_behavior = "check-and-infer-return-any"
-            replace_imports_with_any = []
-            ignore_errors_in_generated_code = false
-            [sub_config.errors]
+            untyped-def-behavior = "check-and-infer-return-any"
+            replace-imports-with-any = []
+            ignore-errors-in-generated-code = false
+            [sub-config.errors]
             assert-type = false
             invalid-yield = false
         "#;
@@ -772,6 +812,46 @@ mod tests {
                 use_untyped_imports: true,
                 ignore_missing_source: true,
             }
+        );
+    }
+
+    #[test]
+    fn deserialize_pyrefly_config_snake_case() {
+        let config_str = r#"
+            project_includes = ["tests", "./implementation"]
+            project_excludes = ["tests/untyped/**"]
+            untyped_def_behavior = "check-and-infer-return-type"
+            search_path = ["../.."]
+            python_platform = "darwin"
+            python_version = "1.2.3"
+            site_package_path = ["venv/lib/python1.2.3/site-packages"]
+            python_interpreter = "venv/my/python"
+            replace_imports_with_any = ["fibonacci"]
+            ignore_errors_in_generated_code = true
+            use_untyped_imports = true
+            ignore_missing_source = true
+
+            [errors]
+            assert-type = true
+            bad-return = false
+
+            [[sub_config]]
+            matches = "sub/project/**"
+
+            untyped_def_behavior = "check-and-infer-return-any"
+            replace_imports_with_any = []
+            ignore_errors_in_generated_code = false
+            [sub_config.errors]
+            assert-type = false
+            invalid-yield = false
+        "#;
+        let config = ConfigFile::parse_config(config_str).unwrap();
+        assert!(config.root.extras.0.is_empty());
+        assert!(
+            config
+                .sub_configs
+                .iter()
+                .all(|c| c.settings.extras.0.is_empty())
         );
     }
 

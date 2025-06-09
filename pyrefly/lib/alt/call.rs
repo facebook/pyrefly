@@ -11,6 +11,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
+use vec1::vec1;
 
 use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
@@ -101,7 +102,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         error_kind: ErrorKind,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> CallTarget {
-        errors.add(range, msg, error_kind, context);
+        self.error(errors, range, error_kind, context, msg);
         CallTarget::new(Target::Any(AnyStyle::Error))
     }
 
@@ -110,7 +111,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.solver()
                 .fresh_quantified(tparams, Type::Function(Box::new(func)), self.uniques);
         match t {
-            Type::Function(box func) => (qs, func),
+            Type::Function(func) => (qs, *func),
             // We passed a Function to fresh_quantified(), so we know we get a Function back out.
             _ => unreachable!(),
         }
@@ -552,6 +553,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 signature: mut callable,
                 metadata,
             }) => {
+                if metadata.flags.is_deprecated {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::Deprecated,
+                        context,
+                        format!(
+                            "Call to deprecated function `{}`",
+                            metadata.kind.as_func_id().format(self.module_info().name())
+                        ),
+                    );
+                }
                 // Most instances of typing.Self are replaced in as_call_target, but __new__ is a
                 // staticmethod, so we don't have access to the first argument until we get here.
                 let id = metadata.kind.as_func_id();
@@ -639,7 +652,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Type {
         let mut closest_overload: Option<CalledOverload> = None;
-        for callable in overloads {
+        for callable in overloads.iter() {
             let arg_errors = self.error_collector();
             let call_errors = self.error_collector();
             let res = self.callable_infer(
@@ -652,8 +665,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &arg_errors,
                 &call_errors,
                 // We intentionally drop the context here, as arg errors don't need it,
-                // and if we log any call errors, we'll also log a separate
-                // "No matching overloads" error with the necessary context.
+                // and if there are any call errors, we'll log a "No matching overloads"
+                // error with the necessary context.
                 None,
             );
             if arg_errors.is_empty() && call_errors.is_empty() {
@@ -664,7 +677,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return res;
             }
             let called_overload = CalledOverload {
-                signature: callable,
+                signature: callable.clone(),
                 arg_errors,
                 call_errors,
                 return_type: res,
@@ -680,16 +693,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // We're guaranteed to have at least one overload.
         let closest_overload = closest_overload.unwrap();
         errors.extend(closest_overload.arg_errors);
-        let signature = match self_arg {
-            Some(_) => closest_overload
-                .signature
-                .drop_first_param()
-                .unwrap_or(closest_overload.signature),
-            None => closest_overload.signature,
-        };
-        let signature = self
-            .solver()
-            .for_display(Type::Callable(Box::new(signature)));
         if closest_overload.call_errors.is_empty() {
             // No overload evaluated completely successfully, but we still say we found a match if
             // there were only arg_errors, since they may be unrelated. For example, in:
@@ -705,17 +708,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // arg error for both overloads.
             closest_overload.return_type
         } else {
-            self.error(
-                errors,
-                range,
-                ErrorKind::NoMatchingOverload,
-                context,
+            let mut msg = vec1![
                 format!(
-                    "No matching overload found for function `{}`, reporting errors for closest overload: `{}`",
-                    metadata.kind.as_func_id().format(self.module_info().name()), signature,
+                    "No matching overload found for function `{}`",
+                    metadata.kind.as_func_id().format(self.module_info().name())
                 ),
-            );
-            errors.extend(closest_overload.call_errors);
+                "Possible overloads:".to_owned(),
+            ];
+            for overload in overloads {
+                let suffix = if overload == closest_overload.signature {
+                    " [closest match]"
+                } else {
+                    ""
+                };
+                let signature = match self_arg {
+                    Some(_) => overload.drop_first_param().unwrap_or(overload),
+                    None => overload,
+                };
+                let signature = self
+                    .solver()
+                    .for_display(Type::Callable(Box::new(signature)));
+                msg.push(format!("{signature}{suffix}"));
+            }
+            // We intentionally discard closest_overload.call_errors. When no overload matches,
+            // there's a high likelihood that the "closest" one by our heuristic isn't the right
+            // one, in which case the call errors are just noise.
+            errors.add(range, ErrorKind::NoMatchingOverload, context, msg);
             Type::any_error()
         }
     }

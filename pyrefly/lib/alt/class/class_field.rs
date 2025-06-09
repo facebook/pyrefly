@@ -50,6 +50,7 @@ use crate::types::class::ClassType;
 use crate::types::class::Substitution;
 use crate::types::class::TArgs;
 use crate::types::literal::Lit;
+use crate::types::quantified::Quantified;
 use crate::types::typed_dict::TypedDict;
 use crate::types::typed_dict::TypedDictField;
 use crate::types::types::BoundMethod;
@@ -360,10 +361,11 @@ impl ClassField {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum InstanceKind {
     ClassType,
     TypedDict,
+    TypeVar(Quantified),
 }
 
 /// Wrapper to hold a specialized instance of a class , unifying ClassType and TypedDict.
@@ -390,6 +392,14 @@ impl<'a> Instance<'a> {
         }
     }
 
+    fn of_type_var(q: Quantified, bound: &'a ClassType) -> Self {
+        Self {
+            kind: InstanceKind::TypeVar(q),
+            class: bound.class_object(),
+            args: bound.targs(),
+        }
+    }
+
     /// Instantiate a type that is relative to the class type parameters
     /// by substituting in the type arguments.
     fn instantiate_member(&self, raw_member: Type) -> Type {
@@ -397,13 +407,14 @@ impl<'a> Instance<'a> {
     }
 
     fn to_type(&self) -> Type {
-        match self.kind {
+        match &self.kind {
             InstanceKind::ClassType => {
                 ClassType::new(self.class.dupe(), self.args.clone()).to_type()
             }
             InstanceKind::TypedDict => {
                 Type::TypedDict(TypedDict::new(self.class.dupe(), self.args.clone()))
             }
+            InstanceKind::TypeVar(q) => Type::Quantified(q.clone()),
         }
     }
 }
@@ -425,8 +436,8 @@ fn make_bound_method_helper(
             tparams: tparams.clone(),
             body: func.clone(),
         })),
-        Type::Function(box func) if should_bind(&func.metadata) => {
-            Some(BoundMethodType::Function(func.clone()))
+        Type::Function(func) if should_bind(&func.metadata) => {
+            Some(BoundMethodType::Function((**func).clone()))
         }
         Type::Overload(overload) if should_bind(&overload.metadata) => {
             Some(BoundMethodType::Overload(overload.clone()))
@@ -492,6 +503,7 @@ impl<T> WithDefiningClass<T> {
     }
 }
 
+#[expect(clippy::large_enum_variant)] // the vast majority of `DataclassMember`s are `Field`
 /// The result of processing a raw dataclass member (any annotated assignment in its body).
 pub enum DataclassMember {
     /// A dataclass field
@@ -1004,9 +1016,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ty: &Type,
     ) -> Option<Attribute> {
         let mut foralled = match ty {
-            Type::Function(box func) => Type::Forall(Box::new(Forall {
+            Type::Function(func) => Type::Forall(Box::new(Forall {
                 tparams: cls.tparams().clone(),
-                body: Forallable::Function(func.clone()),
+                body: Forallable::Function((**func).clone()),
             })),
             Type::Forall(box Forall {
                 tparams,
@@ -1234,6 +1246,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
     }
 
+    pub fn get_bounded_type_var_attribute(
+        &self,
+        type_var: Quantified,
+        upper_bound: &ClassType,
+        name: &Name,
+    ) -> Option<Attribute> {
+        self.get_class_member(upper_bound.class_object(), name)
+            .map(|member| {
+                self.as_instance_attribute(
+                    Arc::unwrap_or_clone(member.value),
+                    &Instance::of_type_var(type_var, upper_bound),
+                )
+            })
+    }
+
     pub fn get_typed_dict_attribute(&self, td: &TypedDict, name: &Name) -> Option<Attribute> {
         if let Some(meta) = self
             .get_metadata_for_class(td.class_object())
@@ -1252,22 +1279,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
     }
 
+    fn get_super_class_member(
+        &self,
+        cls: &Class,
+        start_lookup_cls: &ClassType,
+        name: &Name,
+    ) -> Option<WithDefiningClass<Arc<ClassField>>> {
+        // Skip ancestors in the MRO until we find the class we want to start at
+        let metadata = self.get_metadata_for_class(cls);
+        let ancestors = metadata
+            .ancestors(self.stdlib)
+            .skip_while(|ancestor| *ancestor != start_lookup_cls);
+        for ancestor in ancestors {
+            if let Some(found) = self
+                .get_field_from_current_class_only(ancestor.class_object(), name)
+                .map(|field| WithDefiningClass {
+                    value: Arc::new(field.instantiate_for(&Instance::of_class(ancestor))),
+                    defining_class: ancestor.class_object().dupe(),
+                })
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+
     /// Looks up an attribute on a super instance.
     pub fn get_super_attribute(
         &self,
-        lookup_cls: &ClassType,
+        start_lookup_cls: &ClassType,
         super_obj: &SuperObj,
         name: &Name,
     ) -> Option<Attribute> {
-        let member = self.get_class_member(lookup_cls.class_object(), name);
         match super_obj {
-            SuperObj::Instance(obj) => member.map(|member| {
-                self.as_instance_attribute(
-                    Arc::unwrap_or_clone(member.value),
-                    &Instance::of_class(obj),
-                )
-            }),
-            SuperObj::Class(obj) => member
+            SuperObj::Instance(obj) => self
+                .get_super_class_member(obj.class_object(), start_lookup_cls, name)
+                .map(|member| {
+                    self.as_instance_attribute(
+                        Arc::unwrap_or_clone(member.value),
+                        &Instance::of_class(obj),
+                    )
+                }),
+            SuperObj::Class(obj) => self
+                .get_super_class_member(obj, start_lookup_cls, name)
                 .map(|member| self.as_class_attribute(Arc::unwrap_or_clone(member.value), obj)),
         }
     }

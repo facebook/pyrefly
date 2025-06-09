@@ -6,6 +6,7 @@
  */
 
 use dupe::Dupe;
+use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_text_size::Ranged;
 use serde::Serialize;
@@ -15,7 +16,6 @@ use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
 use crate::state::handle::Handle;
 use crate::state::state::Transaction;
-use crate::util::visit::Visit;
 
 #[derive(Serialize)]
 struct Output {
@@ -63,7 +63,6 @@ fn trace_module(transaction: &Transaction, handle: &Handle) -> Option<ModuleOutp
     })
 }
 
-/// Report on how many there are of each binding, and how much memory they take up, per module.
 pub fn trace(transaction: &Transaction) -> String {
     let mut modules = Vec::new();
     for h in transaction.handles() {

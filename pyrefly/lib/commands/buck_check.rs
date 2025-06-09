@@ -12,6 +12,10 @@ use std::str::FromStr;
 use anyhow::Context as _;
 use clap::Parser;
 use dupe::Dupe;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::args::clap_env;
+use pyrefly_util::fs_anyhow;
+use pyrefly_util::prelude::VecExt;
 use serde::Deserialize;
 use tracing::info;
 
@@ -28,10 +32,6 @@ use crate::state::state::State;
 use crate::sys_info::PythonPlatform;
 use crate::sys_info::PythonVersion;
 use crate::sys_info::SysInfo;
-use crate::util::arc_id::ArcId;
-use crate::util::args::clap_env;
-use crate::util::fs_anyhow;
-use crate::util::prelude::VecExt;
 
 #[derive(Debug, Clone, Parser)]
 pub struct Args {
@@ -39,7 +39,7 @@ pub struct Args {
     input_path: PathBuf,
 
     /// Path to output JSON file
-    #[arg(long = "output", short = 'o', env = clap_env("OUTPUT_PATH"))]
+    #[arg(long = "output", short = 'o', env = clap_env("OUTPUT_PATH"), value_name = "FILE")]
     output_path: Option<PathBuf>,
 }
 

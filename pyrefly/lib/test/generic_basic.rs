@@ -491,7 +491,7 @@ testcase!(
     r#"
 from typing import TypeVar
 T: int = 0
-T = TypeVar('T')  # E: `type[TypeVar(T, variance=PUndefined)]` is not assignable to variable `T` with type `int`
+T = TypeVar('T')  # E: `type[TypeVar(T, variance=PInvariant)]` is not assignable to variable `T` with type `int`
     "#,
 );
 
@@ -703,6 +703,42 @@ reveal_type(B[int, str, float]()) # E: B[tuple[int, str], float, [int, str]]
 );
 
 testcase!(
+    bug = "should raise an error on bad_curry",
+    test_functools_partial_pattern,
+    r#"
+from typing import Any, Callable, Concatenate, Generic, ParamSpec, TypeVar, TypeVarTuple, overload
+
+_P1 = ParamSpec("_P1")
+_P2 = ParamSpec("_P2")
+_T = TypeVar("_T")
+_R_co = TypeVar("_R_co", covariant=True)
+_Ts = TypeVarTuple("_Ts")
+
+class partial(Generic[_P1, _P2, _T, _R_co, *_Ts]):
+    @overload
+    def __new__(cls, __func: Callable[_P1, _R_co]) -> partial[_P1, _P1, Any, _R_co]: ...
+    @overload
+    def __new__(cls, __func: Callable[Concatenate[*_Ts, _P2], _R_co], *args: *_Ts) -> partial[Concatenate[*_Ts, _P2], _P2, Any, _R_co, *_Ts]: ...
+    @overload
+    def __new__(cls, __func: Callable[_P1, _R_co], *args: *_Ts, **kwargs: _T) -> partial[_P1, ..., _T, _R_co, *_Ts]: ...
+    def __new__(cls, __func, *args, **kwargs):
+        return super().__new__(cls)
+    def __call__(self, *args: _P2.args, **kwargs: _P2.kwargs) -> _R_co: ...
+
+def many_params(a: int, b: str, c: int, d: str) -> tuple[int, str]:
+    return a + c, b + d
+
+o1: tuple[int, str] = many_params(1, 'a', 2, 'b')
+
+curry = partial(many_params, 17, 'foo')
+o2a = curry(42, 'bar')
+
+bad_curry = partial(many_params, 1, 'a', 2, 'b', 3, 'c', 4, 'd')
+o2b = bad_curry(7, 11)
+    "#,
+);
+
+testcase!(
     test_typevartuple_default_is_typevartuple,
     r#"
 from typing import TypeVarTuple, Unpack
@@ -712,20 +748,6 @@ Qs = TypeVarTuple('Qs', default=Unpack[Ps])
 # without any additional error.
 class A[*Ps, *Qs = *Ps]: # E: cannot be more than one TypeVarTuple
     pass
-    "#,
-);
-
-testcase!(
-    bug = "TODO(pybind11): There should be no errors",
-    test_pass_along_typevar,
-    r#"
-from typing import TypeVar
-T = TypeVar('T', bound='A')
-class A:
-    def f(self: T) -> T:
-        return self
-    def g(self: T) -> T:
-        return self.f() # E: `A` is not assignable to declared return type `TypeVar[T]`
     "#,
 );
 
@@ -775,8 +797,7 @@ def f():
 
 def g():
     x: dict[int, int] = {}
-    # Should probably be only one error message here (general overload)
-    x.update(a = 1) # E: No matching overload # E: Argument `dict[int, int]` is not assignable to parameter `self` with type `Mapping[str, int]`
+    x.update(a = 1) # E: No matching overload
 "#,
 );
 

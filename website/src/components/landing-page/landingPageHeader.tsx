@@ -12,85 +12,87 @@ import * as stylex from '@stylexjs/stylex';
 import Firefly from './firefly';
 import typography from './typography';
 import useBaseUrl from '@docusaurus/useBaseUrl';
-import { useEffect, useState } from 'react';
-import * as docusaurusTheme from '@docusaurus/theme-common';
 import PipInstallPyrefly from './pipInstallPyrefly';
 import ThemedImage from '@theme/ThemedImage';
 import { log, LoggingEvent } from '../../utils/LoggingUtils';
+import DelayedComponent from '../../utils/DelayedComponent';
 
 export default function LandingPageHeader(): React.ReactElement {
-    const { colorMode } = docusaurusTheme.useColorMode();
-
-    const [isLoaded, setIsLoaded] = useState(false);
-
-    useEffect(() => {
-        // Trigger animation after component mounts
-        setIsLoaded(true);
-    }, []);
-
-    const pyreflyLogoUrl = useBaseUrl(
-        colorMode === 'dark'
-            ? 'img/Pyrefly-Brandmark-Invert.svg'
-            : 'img/Pyrefly-Brandmark.svg'
-    );
+    // Call hooks at the top level of the component
+    const lightLogoUrl = useBaseUrl('img/Pyrefly-Brandmark.svg');
+    const darkLogoUrl = useBaseUrl('img/Pyrefly-Brandmark-Invert.svg');
 
     return (
         <header {...stylex.props(styles.featureHero)}>
-            <section {...stylex.props(styles.logoContainer)}>
-                <ThemedImage
-                    alt="Pyrefly Logo"
-                    sources={{
-                        light: useBaseUrl('img/Pyrefly-Brandmark.svg'),
-                        dark: useBaseUrl('img/Pyrefly-Brandmark-Invert.svg'),
-                    }}
-                    {...stylex.props(
-                        styles.logo,
-                        isLoaded && styles.logoVisible
-                    )}
-                />
-            </section>
-            <p
-                {...stylex.props(
-                    styles.subtitle,
-                    typography.h3,
-                    isLoaded && styles.subtitleVisible
+            <></>
+            <DelayedComponent delayInSeconds={0}>
+                {(isLoaded) => (
+                    <section {...stylex.props(styles.logoContainer)}>
+                        <ThemedImage
+                            alt="Pyrefly Logo"
+                            sources={{
+                                light: lightLogoUrl,
+                                dark: darkLogoUrl,
+                            }}
+                            {...stylex.props(
+                                styles.logo,
+                                isLoaded && styles.logoVisible
+                            )}
+                        />
+                    </section>
                 )}
-            >
-                <span>A faster Python type checker written in Rust</span>
-            </p>
+            </DelayedComponent>
 
-            <section
-                {...stylex.props(
-                    styles.buttonGroupVertical,
-                    isLoaded && styles.buttonGroupVerticalVisible
+            <DelayedComponent delayInSeconds={0.2}>
+                {(isLoaded) => (
+                    <p
+                        {...stylex.props(
+                            styles.subtitle,
+                            typography.h3,
+                            isLoaded && styles.subtitleVisible
+                        )}
+                    >
+                        <span>
+                            A faster Python type checker written in Rust
+                        </span>
+                    </p>
                 )}
-            >
-                <PipInstallPyrefly />
-                <a
-                    href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
-                    target="_blank"
-                    onClick={() =>
-                        log(LoggingEvent.CLICK, {
-                            button_id: 'get_vscode_extension',
-                        })
-                    }
-                    onMouseEnter={() =>
-                        log(LoggingEvent.HOVER, {
-                            button_id: 'get_vscode_extension',
-                        })
-                    }
-                    {...stylex.props(styles.buttonFullWidth, typography.p)}
-                >
-                    {' '}
-                    Get VSCode Extension{' '}
-                </a>
-            </section>
-            <section
-                {...stylex.props(
-                    styles.buttonGroup,
-                    isLoaded && styles.buttonGroupVisible
+            </DelayedComponent>
+
+            <DelayedComponent delayInSeconds={0.4}>
+                {(isLoaded) => (
+                    <section
+                        {...stylex.props(
+                            styles.buttonGroupVertical,
+                            isLoaded && styles.buttonGroupVerticalVisible
+                        )}
+                    >
+                        <PipInstallPyrefly />
+                        <a
+                            href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
+                            target="_blank"
+                            onClick={() =>
+                                log(LoggingEvent.CLICK, {
+                                    button_id: 'get_vscode_extension',
+                                })
+                            }
+                            onMouseEnter={() =>
+                                log(LoggingEvent.HOVER, {
+                                    button_id: 'get_vscode_extension',
+                                })
+                            }
+                            {...stylex.props(
+                                styles.buttonFullWidth,
+                                typography.p
+                            )}
+                        >
+                            {' '}
+                            Get VSCode Extension{' '}
+                        </a>
+                    </section>
                 )}
-            ></section>
+            </DelayedComponent>
+
             <section>
                 <Firefly />
                 <Firefly />
@@ -147,7 +149,6 @@ const styles = stylex.create({
         transform: 'rotateX(-20deg) translateY(20px)',
         transformOrigin: 'center center',
         transition: 'all 1.4s cubic-bezier(0.34, 1.56, 0.64, 1)',
-        transitionDelay: '0.2s', // Reduced delay for subtitle animation
     },
     subtitleVisible: {
         opacity: 1,
@@ -159,7 +160,7 @@ const styles = stylex.create({
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        marginTop: '20px',
+        marginVertical: '20px',
         width: '100%',
         maxWidth: '430px',
         marginLeft: 'auto',
@@ -169,7 +170,6 @@ const styles = stylex.create({
         transform: 'rotateX(15deg) translateY(15px)',
         transformOrigin: 'center center',
         transition: 'all 1.2s cubic-bezier(0.34, 1.56, 0.64, 1)',
-        transitionDelay: '0.4s', // delay for button group
     },
     buttonGroupVerticalVisible: {
         opacity: 1,
@@ -191,23 +191,6 @@ const styles = stylex.create({
         justifyContent: 'space-between',
         width: '100%',
         marginTop: '10px',
-    },
-    buttonGroup: {
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginTop: '20px',
-        opacity: 0,
-        filter: 'blur(6px)',
-        transform: 'rotateX(15deg) translateY(15px)',
-        transformOrigin: 'center center',
-        transition: 'all 1.2s cubic-bezier(0.34, 1.56, 0.64, 1)',
-        transitionDelay: '0.6s', // delay for bottom button group
-    },
-    buttonGroupVisible: {
-        opacity: 1,
-        filter: 'blur(0px)',
-        transform: 'rotateX(0deg) translateY(0)',
     },
     buttonFullWidth: {
         padding: '0.75rem 1.5rem',

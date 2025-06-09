@@ -11,16 +11,17 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use dupe::Dupe;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::lock::Mutex;
 use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
 use crate::config::config::ProjectLayout;
+use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
+use crate::config::finder::debug_log;
 use crate::module::bundled::BundledTypeshed;
 use crate::module::module_path::ModulePathDetails;
-use crate::util::arc_id::ArcId;
-use crate::util::lock::Mutex;
-use crate::util::trace::debug_log;
 
 /// Create a standard `ConfigFinder`. The `configure` function is expected to set any additional options,
 /// then call `configure` and `validate`.
@@ -33,7 +34,7 @@ use crate::util::trace::debug_log;
 /// of the project may be `None` if it can't be found (no [`Path::parent()`]) or it's irrelevant (bundled typeshed).
 pub fn standard_config_finder(
     configure: Arc<
-        dyn Fn(Option<&Path>, ConfigFile) -> (ArcId<ConfigFile>, Vec<anyhow::Error>) + Send + Sync,
+        dyn Fn(Option<&Path>, ConfigFile) -> (ArcId<ConfigFile>, Vec<ConfigError>) + Send + Sync,
     >,
 ) -> ConfigFinder {
     let configure2 = configure.dupe();
@@ -129,6 +130,7 @@ mod tests {
 
     use clap::Parser;
     use pretty_assertions::assert_eq;
+    use pyrefly_util::test_path::TestPath;
 
     use super::*;
     use crate::commands::check::Args;
@@ -136,7 +138,6 @@ mod tests {
     use crate::config::environment::environment::PythonEnvironment;
     use crate::module::module_name::ModuleName;
     use crate::module::module_path::ModulePath;
-    use crate::test::util::TestPath;
 
     #[test]
     fn test_site_package_path_from_environment() {

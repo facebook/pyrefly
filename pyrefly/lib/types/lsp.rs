@@ -1,4 +1,4 @@
-use ruff_source_file::SourceLocation;
+use ruff_source_file::LineColumn;
 use ruff_text_size::TextSize;
 
 use crate::module::module_info::ModuleInfo;
@@ -11,15 +11,15 @@ pub fn source_range_to_range(x: &SourceRange) -> lsp_types::Range {
     )
 }
 
-fn source_location_to_position(x: &SourceLocation) -> lsp_types::Position {
+fn source_location_to_position(x: &LineColumn) -> lsp_types::Position {
     lsp_types::Position {
-        line: x.row.to_zero_indexed() as u32,
+        line: x.line.to_zero_indexed() as u32,
         character: x.column.to_zero_indexed() as u32,
     }
 }
 
 pub fn text_size_to_position(info: &ModuleInfo, x: TextSize) -> lsp_types::Position {
-    source_location_to_position(&info.source_location(x))
+    source_location_to_position(&info.line_column(x))
 }
 
 pub fn position_to_text_size(info: &ModuleInfo, position: lsp_types::Position) -> TextSize {

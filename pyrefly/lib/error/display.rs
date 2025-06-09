@@ -43,10 +43,13 @@ impl ErrorContext {
             Self::AsyncIteration(ty) => format!("Type `{ty}` is not an async iterable"),
             Self::Await(ty) => format!("Type `{ty}` is not awaitable"),
             Self::Index(ty) => format!("Cannot index into `{ty}`"),
-            Self::SetItem(ty) => format!("Item assignment is not supported on `{ty}`"),
-            Self::DelItem(ty) => format!("Item deletion is not supported on `{ty}`"),
+            Self::SetItem(ty) => format!("Cannot set item in `{ty}`"),
+            Self::DelItem(ty) => format!("Cannot delete item in `{ty}`"),
             Self::MatchPositional(ty) => {
                 format!("Cannot match positional sub-patterns in `{ty}`")
+            }
+            Self::ImportNotFound(import) => {
+                format!("Could not find import of `{import}`")
             }
         }
     }
@@ -190,7 +193,11 @@ impl TypeCheckKind {
             // In an annotated assignment, the variable, type, and assigned value are all in the
             // same statement, so we can make the error message more concise and assume the context
             // is clear from the surrounding code.
-            Self::AnnAssign => format!(
+            //
+            // TODO(stroxler): In an unpacked assignment to a name we would ideally provide the name in
+            // the error message, but without a refactor of `bind_target` we don't have easy access to
+            // that information when creating the binding, so we're stuck with just types for now.
+            Self::AnnAssign | Self::UnpackedAssign => format!(
                 "`{}` is not assignable to `{}`",
                 ctx.display(got),
                 ctx.display(want)

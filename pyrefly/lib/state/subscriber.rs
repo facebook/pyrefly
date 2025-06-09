@@ -11,12 +11,12 @@ use std::sync::Arc;
 use dupe::Dupe;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
+use pyrefly_util::lock::Mutex;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 
 use crate::state::handle::Handle;
 use crate::state::load::Load;
-use crate::util::lock::Mutex;
 
 /// Trait to capture which handles are executed by `State`.
 /// Calls to `start_work` and `finish_work` will be paired.

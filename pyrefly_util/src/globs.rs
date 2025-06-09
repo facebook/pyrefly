@@ -27,11 +27,17 @@ use serde::de::Visitor;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
 
-use crate::util::fs_anyhow;
-use crate::util::prelude::SliceExt;
-use crate::util::prelude::VecExt;
+use crate::fs_anyhow;
+use crate::prelude::SliceExt;
+use crate::prelude::VecExt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Default)]
+
+/// A glob pattern for matching files.
+///
+/// Only matches Python files (.py, .pyi) and automatically excludes:
+/// - Files that don't have .py or .pyi extensions
+/// - Files whose names start with '.' (dot files)
 pub struct Glob(PathBuf);
 
 impl Glob {
@@ -100,10 +106,28 @@ impl Glob {
         ext.is_some_and(|e| e == "py" || e == "pyi")
     }
 
+    /// Returns true if the given file should be included in results.
+    /// Filters out non-Python files and dot files.
+    fn should_include_file(path: &Path) -> bool {
+        // Check if it's a Python file
+        if !Self::is_python_extension(path.extension()) {
+            return false;
+        }
+
+        // Check if it's a dot file
+        if let Some(file_name) = path.file_name().and_then(OsStr::to_str) {
+            if file_name.starts_with('.') {
+                return false;
+            }
+        }
+
+        true
+    }
+
     fn resolve_path(path: PathBuf, results: &mut Vec<PathBuf>) -> anyhow::Result<()> {
         if path.is_dir() {
             Self::resolve_dir(&path, results)?;
-        } else if Self::is_python_extension(path.extension()) {
+        } else if Self::should_include_file(&path) {
             results.push(path);
         }
         Ok(())
@@ -389,7 +413,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::test::util::TestPath;
+    use crate::test_path::TestPath;
 
     #[test]
     fn test_roots() {
@@ -748,7 +772,6 @@ mod tests {
             "a/b.py",
             "a/c/d.py",
             "a/c/e.pyi",
-            "a/.dotfile.py",
             "a/__pycache__/g.py",
             "a/__pycache__/h.pyi",
             "c/j/k.py",
@@ -766,7 +789,6 @@ mod tests {
             &[
                 "a/b.py",
                 "a/c/d.py",
-                "a/.dotfile.py",
                 "a/__pycache__/g.py",
                 "c/j/k.py",
                 "l.py",
@@ -782,7 +804,6 @@ mod tests {
                 "a/b.py",
                 "a/c/d.py",
                 "a/c/e.pyi",
-                "a/.dotfile.py",
                 "a/__pycache__/g.py",
                 "a/__pycache__/h.pyi",
                 "c/j/k.py",
@@ -805,7 +826,6 @@ mod tests {
                 "a/b.py",
                 "a/c/d.py",
                 "a/c/e.pyi",
-                "a/.dotfile.py",
                 "a/__pycache__/g.py",
                 "a/__pycache__/h.pyi",
             ],
@@ -817,7 +837,6 @@ mod tests {
                 "a/b.py",
                 "a/c/d.py",
                 "a/c/e.pyi",
-                "a/.dotfile.py",
                 "a/__pycache__/g.py",
                 "a/__pycache__/h.pyi",
             ],
@@ -829,7 +848,6 @@ mod tests {
                 "a/b.py",
                 "a/c/d.py",
                 "a/c/e.pyi",
-                "a/.dotfile.py",
                 "a/__pycache__/g.py",
                 "a/__pycache__/h.pyi",
             ],
@@ -843,7 +861,6 @@ mod tests {
                 "a/c/e.pyi",
                 "a/__pycache__/g.py",
                 "a/__pycache__/h.pyi",
-                "a/.dotfile.py",
             ],
         )
         .unwrap();
@@ -862,12 +879,74 @@ mod tests {
                 "a/b.py",
                 "a/c/d.py",
                 "a/c/e.pyi",
-                "a/.dotfile.py",
                 "a/__pycache__/g.py",
                 "a/__pycache__/h.pyi",
                 "c/j/k.py",
             ],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_dot_file_exclusion() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "a",
+                    vec![
+                        TestPath::file("b.py"),
+                        TestPath::file(".dotfile.py"),
+                        TestPath::dir(
+                            "c",
+                            vec![TestPath::file("d.py"), TestPath::file(".hidden.py")],
+                        ),
+                    ],
+                ),
+                TestPath::file(".top_level_dot.py"),
+            ],
+        );
+
+        // Helper function to assert that a glob pattern returns no files
+        let assert_empty_glob = |pattern_str: &str, description: &str| {
+            let found_files = Glob::new_with_root(root, pattern_str.to_owned())
+                .files()
+                .unwrap_or_else(|_| Vec::new());
+            assert!(
+                found_files.is_empty(),
+                "{} should be excluded, found: {:?}",
+                description,
+                found_files
+            );
+        };
+
+        // Test explicit dot file exclusion
+        assert_empty_glob("a/.dotfile.py", "Direct dot file path");
+        assert_empty_glob("**/.dotfile.py", "Recursive dot file pattern");
+        assert_empty_glob("**/.*.py", "Dot file wildcard");
+        assert_empty_glob(".top_level_dot.py", "Top-level dot file");
+        assert_empty_glob("a/c/.hidden.py", "Nested dot file");
+
+        // Verify that normal files are still found
+        let normal_files = Glob::new_with_root(root, "**/*.py".to_owned())
+            .files()
+            .unwrap();
+        assert!(
+            !normal_files.is_empty(),
+            "Normal Python files should still be found"
+        );
+
+        // Ensure no dot files are in the results
+        for file in &normal_files {
+            if let Some(file_name) = file.file_name().and_then(|n| n.to_str()) {
+                assert!(
+                    !file_name.starts_with('.'),
+                    "Found dot file in results: {:?}",
+                    file
+                );
+            }
+        }
     }
 }

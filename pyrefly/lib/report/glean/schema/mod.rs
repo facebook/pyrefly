@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+pub mod builtin;
 pub mod digest;
 pub mod python;
 pub mod src;

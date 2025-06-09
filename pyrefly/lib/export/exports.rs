@@ -17,6 +17,7 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::common::symbol_kind::SymbolKind;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
 use crate::export::definitions::DocString;
@@ -36,6 +37,7 @@ pub trait LookupExport {
 #[derive(Debug, Clone)]
 pub struct Export {
     pub location: TextRange,
+    pub symbol_kind: Option<SymbolKind>,
     pub docstring: Option<DocString>,
 }
 
@@ -144,11 +146,13 @@ impl Exports {
             for (name, definition) in self.0.definitions.definitions.iter_hashed() {
                 let export = match definition.style {
                     DefinitionStyle::Local
-                    | DefinitionStyle::Nonlocal
-                    | DefinitionStyle::Global
                     // If the import is invalid, the final location is this module.
                     | DefinitionStyle::ImportInvalidRelative => {
-                        ExportLocation::ThisModule(Export {location: definition.range, docstring: definition.docstring.clone() })
+                        ExportLocation::ThisModule(Export {
+                            location: definition.range,
+                            symbol_kind: None,
+                            docstring: definition.docstring.clone(),
+                        })
                     }
                     DefinitionStyle::ImportAs(from)
                     | DefinitionStyle::ImportAsEq(from)

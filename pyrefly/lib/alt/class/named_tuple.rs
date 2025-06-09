@@ -90,7 +90,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         elements: &SmallSet<Name>,
     ) -> ClassSynthesizedField {
-        let mut params = vec![self.class_self_param(cls, true)];
+        let mut params = vec![self.class_self_param(cls, false)];
         params.extend(self.get_named_tuple_field_params(cls, elements));
         let ty = Type::Function(Box::new(Function {
             signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
@@ -108,7 +108,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         elements: &SmallSet<Name>,
     ) -> ClassSynthesizedField {
-        let params = vec![self.class_self_param(cls, true)];
+        let params = vec![self.class_self_param(cls, false)];
         let element_types: Vec<Type> = elements
             .iter()
             .map(|name| (*self.get_class_member(cls, name).unwrap().value).as_named_tuple_type())

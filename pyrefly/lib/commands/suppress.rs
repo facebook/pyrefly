@@ -9,6 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::anyhow;
+use pyrefly_util::fs_anyhow;
 use regex::Regex;
 use ruff_source_file::OneIndexed;
 use starlark_map::small_map::SmallMap;
@@ -18,7 +19,6 @@ use tracing::error;
 use crate::error::error::Error;
 use crate::module::module_info::GENERATED_TOKEN;
 use crate::ruff::ast::Ast;
-use crate::util::fs_anyhow;
 
 /// Combines all errors that affect one line into a single entry.
 // The current format is: `# pyrefly: ignore  # error1, error2, ...`
@@ -26,7 +26,7 @@ fn dedup_errors(errors: &[Error]) -> SmallMap<usize, String> {
     let mut deduped_errors = SmallMap::new();
     for error in errors {
         let e: &mut String = deduped_errors
-            .entry(error.source_range().start.row.to_zero_indexed())
+            .entry(error.source_range().start.line.to_zero_indexed())
             .or_default();
         let contains_error = e.contains(error.error_kind().to_name());
         if e.is_empty() {
@@ -185,29 +185,37 @@ pub fn remove_unused_ignores(path_ignores: SmallMap<&PathBuf, SmallSet<OneIndexe
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use pretty_assertions::assert_str_eq;
+    use ruff_source_file::LineColumn;
     use ruff_source_file::OneIndexed;
-    use ruff_source_file::SourceLocation;
     use tempfile;
     use vec1::Vec1;
 
     use super::*;
     use crate::error::kind::ErrorKind;
+    use crate::module::module_info::ModuleInfo;
     use crate::module::module_info::SourceRange;
+    use crate::module::module_name::ModuleName;
     use crate::module::module_path::ModulePath;
 
     fn sourcerange(row: usize, column: usize) -> SourceRange {
-        let row = OneIndexed::new(row).unwrap();
+        let line = OneIndexed::new(row).unwrap();
         let column = OneIndexed::new(column).unwrap();
         SourceRange {
-            start: SourceLocation { row, column },
-            end: SourceLocation { row, column },
+            start: LineColumn { line, column },
+            end: LineColumn { line, column },
         }
     }
 
     fn error(path: PathBuf, row: usize, column: usize, error_kind: ErrorKind) -> Error {
         Error::new(
-            ModulePath::filesystem(path),
+            ModuleInfo::new(
+                ModuleName::unknown(),
+                ModulePath::filesystem(path),
+                Arc::new("".to_owned()),
+            ),
             sourcerange(row, column),
             Vec1::new("test message".to_owned()),
             false,

@@ -13,6 +13,8 @@ use std::str::FromStr;
 use anyhow::Context as _;
 use configparser::ini::Ini;
 use configparser::ini::IniDefault;
+use pyrefly_util::globs::Glob;
+use pyrefly_util::globs::Globs;
 use serde::Deserialize;
 
 use crate::config::base::ConfigBase;
@@ -24,8 +26,6 @@ use crate::config::mypy::regex_converter;
 use crate::module::wildcard::ModuleWildcard;
 use crate::sys_info::PythonPlatform;
 use crate::sys_info::PythonVersion;
-use crate::util::globs::Glob;
-use crate::util::globs::Globs;
 #[derive(Clone, Debug, Deserialize)]
 pub struct MypyConfig {
     files: Option<Vec<String>>,
@@ -238,9 +238,10 @@ impl MypyConfig {
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_util::fs_anyhow;
+
     use super::*;
     use crate::error::kind::ErrorKind;
-    use crate::util::fs_anyhow;
 
     #[test]
     fn test_run_mypy() -> anyhow::Result<()> {

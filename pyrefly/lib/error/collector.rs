@@ -8,8 +8,9 @@
 use std::fmt::Debug;
 
 use dupe::Dupe;
+use pyrefly_util::lock::Mutex;
 use ruff_text_size::TextRange;
-use vec1::vec1;
+use vec1::Vec1;
 
 use crate::config::error::ErrorConfig;
 use crate::error::context::ErrorContext;
@@ -17,7 +18,6 @@ use crate::error::error::Error;
 use crate::error::kind::ErrorKind;
 use crate::error::style::ErrorStyle;
 use crate::module::module_info::ModuleInfo;
-use crate::util::lock::Mutex;
 
 #[derive(Debug, Default, Clone)]
 struct ModuleErrors {
@@ -102,26 +102,19 @@ impl ErrorCollector {
     pub fn add(
         &self,
         range: TextRange,
-        msg: String,
         kind: ErrorKind,
         context: Option<&dyn Fn() -> ErrorContext>,
+        mut msg: Vec1<String>,
     ) {
         if self.style == ErrorStyle::Never {
             return;
         }
         let source_range = self.module_info.source_range(range);
-        let is_ignored = self.module_info.is_ignored(&source_range, &msg);
-        let full_msg = match context {
-            Some(ctx) => vec1![ctx().format(), msg],
-            None => vec1![msg],
-        };
-        let err = Error::new(
-            self.module_info.path().dupe(),
-            source_range,
-            full_msg,
-            is_ignored,
-            kind,
-        );
+        let is_ignored = self.module_info.is_ignored(&source_range);
+        if let Some(ctx) = context {
+            msg.insert(0, ctx().format());
+        }
+        let err = Error::new(self.module_info.dupe(), source_range, msg, is_ignored, kind);
         self.errors.lock().push(err);
     }
 
@@ -170,14 +163,19 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use pyrefly_util::prelude::SliceExt;
     use ruff_python_ast::name::Name;
     use ruff_text_size::TextSize;
+    use vec1::vec1;
 
     use super::*;
     use crate::config::error::ErrorDisplayConfig;
     use crate::module::module_name::ModuleName;
     use crate::module::module_path::ModulePath;
-    use crate::util::prelude::SliceExt;
+
+    fn add(errors: &ErrorCollector, range: TextRange, kind: ErrorKind, msg: String) {
+        errors.add(range, kind, None, vec1![msg]);
+    }
 
     #[test]
     fn test_error_collector() {
@@ -187,35 +185,35 @@ mod tests {
             Arc::new("contents".to_owned()),
         );
         let errors = ErrorCollector::new(mi.dupe(), ErrorStyle::Delayed);
-        errors.add(
+        add(
+            &errors,
             TextRange::new(TextSize::new(1), TextSize::new(3)),
+            ErrorKind::InternalError,
             "b".to_owned(),
-            ErrorKind::InternalError,
-            None,
         );
-        errors.add(
+        add(
+            &errors,
             TextRange::new(TextSize::new(1), TextSize::new(3)),
-            "a".to_owned(),
             ErrorKind::InternalError,
-            None,
+            "a".to_owned(),
         );
-        errors.add(
+        add(
+            &errors,
             TextRange::new(TextSize::new(1), TextSize::new(3)),
-            "a".to_owned(),
             ErrorKind::InternalError,
-            None,
+            "a".to_owned(),
         );
-        errors.add(
+        add(
+            &errors,
             TextRange::new(TextSize::new(2), TextSize::new(3)),
+            ErrorKind::InternalError,
             "a".to_owned(),
-            ErrorKind::InternalError,
-            None,
         );
-        errors.add(
+        add(
+            &errors,
             TextRange::new(TextSize::new(1), TextSize::new(3)),
-            "b".to_owned(),
             ErrorKind::InternalError,
-            None,
+            "b".to_owned(),
         );
         assert_eq!(
             errors
@@ -237,35 +235,35 @@ mod tests {
             Arc::new("contents".to_owned()),
         );
         let errors = ErrorCollector::new(mi.dupe(), ErrorStyle::Delayed);
-        errors.add(
+        add(
+            &errors,
             TextRange::new(TextSize::new(1), TextSize::new(3)),
-            "a".to_owned(),
             ErrorKind::InternalError,
-            None,
+            "a".to_owned(),
         );
-        errors.add(
+        add(
+            &errors,
             TextRange::new(TextSize::new(1), TextSize::new(3)),
-            "b".to_owned(),
             ErrorKind::AsyncError,
-            None,
+            "b".to_owned(),
         );
-        errors.add(
+        add(
+            &errors,
             TextRange::new(TextSize::new(1), TextSize::new(3)),
-            "c".to_owned(),
             ErrorKind::BadAssignment,
-            None,
+            "c".to_owned(),
         );
-        errors.add(
+        add(
+            &errors,
             TextRange::new(TextSize::new(2), TextSize::new(3)),
-            "d".to_owned(),
             ErrorKind::MatchError,
-            None,
+            "d".to_owned(),
         );
-        errors.add(
+        add(
+            &errors,
             TextRange::new(TextSize::new(1), TextSize::new(3)),
-            "e".to_owned(),
             ErrorKind::NotIterable,
-            None,
+            "e".to_owned(),
         );
 
         let display_config = ErrorDisplayConfig::new(HashMap::from([
@@ -289,11 +287,11 @@ mod tests {
             Arc::new(format!("# {}{}\ncontents", "@", "generated")),
         );
         let errors = ErrorCollector::new(mi.dupe(), ErrorStyle::Delayed);
-        errors.add(
+        add(
+            &errors,
             TextRange::new(TextSize::new(1), TextSize::new(3)),
-            "a".to_owned(),
             ErrorKind::InternalError,
-            None,
+            "a".to_owned(),
         );
 
         let display_config = ErrorDisplayConfig::default();
@@ -312,17 +310,17 @@ mod tests {
             Arc::new("test".to_owned()),
         );
         let errors = ErrorCollector::new(mi.dupe(), ErrorStyle::Delayed);
-        errors.add(
+        add(
+            &errors,
             TextRange::new(TextSize::new(1), TextSize::new(1)),
+            ErrorKind::InternalError,
             "Overload".to_owned(),
-            ErrorKind::InternalError,
-            None,
         );
-        errors.add(
+        add(
+            &errors,
             TextRange::new(TextSize::new(1), TextSize::new(1)),
-            "A specific error".to_owned(),
             ErrorKind::InternalError,
-            None,
+            "A specific error".to_owned(),
         );
         assert_eq!(
             errors

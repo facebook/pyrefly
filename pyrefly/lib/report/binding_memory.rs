@@ -126,7 +126,7 @@ mod tests {
     fn test_binding_memory() {
         let module = ModuleName::from_str("my_module");
 
-        let v = Key::Usage(ShortIdentifier::new(&Identifier::new(
+        let v = Key::BoundName(ShortIdentifier::new(&Identifier::new(
             "my_usage",
             TextRange::default(),
         )));
@@ -135,7 +135,7 @@ mod tests {
             ReportKey {
                 module,
                 type_name: "Key",
-                ctor: "Usage".to_owned(),
+                ctor: "BoundName".to_owned(),
                 size: mem::size_of_val(&v),
             }
         );

@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::StmtClassDef;
@@ -30,7 +31,6 @@ use crate::types::class::ClassFieldProperties;
 use crate::types::class::ClassType;
 use crate::types::types::TParams;
 use crate::types::types::Type;
-use crate::util::prelude::SliceExt;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // Given a constructor (__new__ or metaclass __call__) that returns `ty`, return true if the type is:
@@ -63,9 +63,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let scoped_tparams = self.scoped_type_params(x.type_params.as_deref(), errors);
         let bases = bases.map(|x| self.base_class_of(x, errors));
         let name = &x.name;
-        let tparams_info = self.class_tparams(name, scoped_tparams, bases, legacy_tparams, errors);
+        let class_tparams = self.class_tparams(name, scoped_tparams, bases, legacy_tparams, errors);
 
-        let tparams = self.type_params(name.range, tparams_info, errors);
+        let tparams = self.type_params(name.range, class_tparams, errors);
 
         Class::new(
             def_index,
@@ -151,13 +151,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.get_metadata_for_class(cls).has_base_any()
     }
 
-    pub fn class_self_param(&self, cls: &Class, named: bool) -> Param {
+    pub fn class_self_param(&self, cls: &Class, posonly: bool) -> Param {
         let ty = self.instantiate(cls);
         let req = Required::Required;
-        if named {
-            Param::Pos(Name::new_static("self"), ty, req)
+        let name = Name::new_static("self");
+        if posonly {
+            Param::PosOnly(Some(name), ty, req)
         } else {
-            Param::PosOnly(ty, req)
+            Param::Pos(name, ty, req)
         }
     }
 }

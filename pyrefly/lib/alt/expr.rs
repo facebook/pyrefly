@@ -7,6 +7,10 @@
 
 use dupe::Dupe;
 use num_traits::ToPrimitive;
+use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::prelude::VecExt;
+use pyrefly_util::visit::Visit;
+use ruff_python_ast::Arguments;
 use ruff_python_ast::BoolOp;
 use ruff_python_ast::Comprehension;
 use ruff_python_ast::Expr;
@@ -59,9 +63,6 @@ use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
 use crate::types::types::CalleeKind;
 use crate::types::types::Type;
-use crate::util::prelude::SliceExt;
-use crate::util::prelude::VecExt;
-use crate::util::visit::Visit;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // Helper method for inferring the type of a boolean operation over a sequence of values.
@@ -275,7 +276,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut arg_name = false;
         let mut restriction = None;
         let mut default = None;
-        let mut variance = PreInferenceVariance::PUndefined;
+        let mut variance = None;
 
         let check_name_arg = |arg: &Expr| {
             if let Expr::StringLiteral(lit) = arg {
@@ -304,7 +305,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let mut try_set_variance = |kw: &Keyword, v: PreInferenceVariance| {
             if self.literal_bool_infer(&kw.value, errors) {
-                if variance != PreInferenceVariance::PUndefined {
+                if variance.is_some() {
                     self.error(
                         errors,
                         kw.range,
@@ -313,7 +314,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         "Contradictory variance specifications".to_owned(),
                     );
                 } else {
-                    variance = v;
+                    variance = Some(v);
                 }
             }
         };
@@ -416,6 +417,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             ));
         }
+
+        let variance = variance.unwrap_or(PreInferenceVariance::PInvariant);
+
         TypeVar::new(
             name,
             self.module_info().dupe(),
@@ -656,74 +660,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.expr_infer_type_info_with_hint(x, None, errors)
     }
 
-    fn check_type_is_class_object(
-        &self,
-        ty: Type,
-        contains_subscript: bool,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) {
-        if let Some(ts) = ty.as_decomposed_tuple_or_union() {
-            for t in ts {
-                self.check_type_is_class_object(t, contains_subscript, range, errors);
-            }
-        } else if let Type::ClassDef(cls) = &ty {
-            let metadata = self.get_metadata_for_class(cls);
-            if metadata.is_new_type() {
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::InvalidArgument,
-                    None,
-                    format!("NewType `{}` not allowed in isinstance", cls.name()),
-                );
-            }
-        } else if contains_subscript
-            && matches!(&ty, Type::Type(box Type::ClassType(cls)) if !cls.targs().is_empty())
-        {
-            // If the raw expression contains something that structurally looks like `A[T]` and
-            // part of the expression resolves to a parameterized class type, then we likely have a
-            // literal parameterized type, which is a runtime exception.
-            self.error(
-                errors,
-                range,
-                ErrorKind::InvalidArgument,
-                None,
-                format!(
-                    "Expected class object, got parameterized generic type: `{}`",
-                    self.for_display(ty)
-                ),
-            );
-        } else if self.unwrap_class_object_silently(&ty).is_none() {
-            self.error(
-                errors,
-                range,
-                ErrorKind::InvalidArgument,
-                None,
-                format!("Expected class object, got `{}`", self.for_display(ty)),
-            );
-        }
-    }
-
-    fn check_second_arg_is_class_object(&self, x: &ExprCall, errors: &ErrorCollector) {
-        if x.arguments.args.len() == 2 {
-            let arg_expr = &x.arguments.args[1];
-            let isinstance_class_type = self.expr_infer(arg_expr, errors);
-            let mut contains_subscript = false;
-            arg_expr.visit(&mut |e| {
-                if matches!(e, Expr::Subscript(_)) {
-                    contains_subscript = true;
-                }
-            });
-            self.check_type_is_class_object(
-                isinstance_class_type,
-                contains_subscript,
-                x.range,
-                errors,
-            );
-        }
-    }
-
     /// Apply a decorator. This effectively synthesizes a function call.
     pub fn apply_decorator(
         &self,
@@ -756,7 +692,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Vec<Type> {
         elts.map(|x| match x {
-            Expr::Starred(ExprStarred { box value, .. }) => {
+            Expr::Starred(ExprStarred { value, .. }) => {
                 let hint = elt_hint
                     .as_ref()
                     .map(|ty| self.stdlib.iterable(ty.clone()).to_type());
@@ -788,7 +724,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> TypeInfo {
         let res = match x {
             Expr::Name(x) => self
-                .get(&Key::Usage(ShortIdentifier::expr_name(x)))
+                .get(&Key::BoundName(ShortIdentifier::expr_name(x)))
                 .arc_clone(),
             Expr::Attribute(x) => {
                 let base = self.expr_infer_type_info(&x.value, errors);
@@ -831,10 +767,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 base = Type::type_form(Type::SpecialForm(SpecialForm::Tuple));
             }
             match base {
-                Type::Forall(box forall) => {
+                Type::Forall(forall) => {
                     let tys =
                         xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors));
-                    self.specialize_forall(forall, tys, range, errors)
+                    self.specialize_forall(*forall, tys, range, errors)
                 }
                 // Note that we have to check for `builtins.type` by name here because this code runs
                 // when we're bootstrapping the stdlib and don't have access to class objects yet.
@@ -932,7 +868,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // We could have a more precise type here, but this matches Pyright.
                     self.stdlib.str().clone().to_type()
                 }
-                Type::ClassType(ref cls)
+                Type::ClassType(ref cls) | Type::SelfType(ref cls)
                     if let Some(elts) = self.named_tuple_element_types(cls) =>
                 {
                     self.infer_tuple_index(
@@ -943,7 +879,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                     )
                 }
-                Type::ClassType(_) => self.call_method_or_error(
+                Type::ClassType(_) | Type::SelfType(_) => self.call_method_or_error(
                     &base,
                     &dunder::GETITEM,
                     range,
@@ -999,6 +935,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             }
         })
+    }
+
+    fn has_exactly_two_posargs(&self, arguments: &Arguments) -> bool {
+        arguments.keywords.is_empty()
+            && arguments.args.len() == 2
+            && arguments
+                .args
+                .iter()
+                .all(|e| !matches!(e, Expr::Starred(_)))
     }
 
     /// This function should not be used directly: we want every expression to record a type trace,
@@ -1060,7 +1005,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     _ => &Vec::new(),
                 };
                 let default_hint = match hint {
-                    Some(Type::Tuple(Tuple::Unbounded(box elt))) => Some(elt),
+                    Some(Type::Tuple(Tuple::Unbounded(elt))) => Some(&**elt),
                     _ => None,
                 };
                 let mut prefix = Vec::new();
@@ -1070,7 +1015,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let mut encountered_invalid_star = false;
                 for elt in x.elts.iter() {
                     match elt {
-                        Expr::Starred(ExprStarred { box value, .. }) => {
+                        Expr::Starred(ExprStarred { value, .. }) => {
                             let ty = self.expr_infer(value, errors);
                             match ty {
                                 Type::Tuple(Tuple::Concrete(elts)) => {
@@ -1328,20 +1273,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Type::any_implicit()
                     }
                 } else {
-                    let func_range = x.func.range();
                     self.distribute_over_union(&ty_fun, |ty| match ty.callee_kind() {
                         Some(CalleeKind::Function(FunctionKind::AssertType)) => self
                             .call_assert_type(
                                 &x.arguments.args,
                                 &x.arguments.keywords,
-                                x.range,
+                                x.arguments.range,
                                 errors,
                             ),
                         Some(CalleeKind::Function(FunctionKind::RevealType)) => self
                             .call_reveal_type(
                                 &x.arguments.args,
                                 &x.arguments.keywords,
-                                x.range,
+                                x.arguments.range,
                                 errors,
                             ),
                         Some(CalleeKind::Function(FunctionKind::Cast)) => {
@@ -1350,7 +1294,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.call_typing_cast(
                                 &x.arguments.args,
                                 &x.arguments.keywords,
-                                func_range,
+                                x.arguments.range,
                                 errors,
                             )
                         }
@@ -1360,25 +1304,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .call_assert_type(
                                 &x.arguments.args,
                                 &x.arguments.keywords,
-                                x.range,
+                                x.arguments.range,
                                 errors,
                             ),
                         None if ty.is_error() && is_special_name(&x.func, "reveal_type") => self
                             .call_reveal_type(
                                 &x.arguments.args,
                                 &x.arguments.keywords,
-                                x.range,
+                                x.arguments.range,
                                 errors,
                             ),
+                        Some(CalleeKind::Function(FunctionKind::IsInstance))
+                            if self.has_exactly_two_posargs(&x.arguments) =>
+                        {
+                            self.call_isinstance(&x.arguments.args[0], &x.arguments.args[1], errors)
+                        }
+                        Some(CalleeKind::Function(FunctionKind::IsSubclass))
+                            if self.has_exactly_two_posargs(&x.arguments) =>
+                        {
+                            self.call_issubclass(&x.arguments.args[0], &x.arguments.args[1], errors)
+                        }
                         _ => {
-                            if matches!(
-                                ty_fun.callee_kind(),
-                                Some(CalleeKind::Function(
-                                    FunctionKind::IsInstance | FunctionKind::IsSubclass
-                                ))
-                            ) {
-                                self.check_second_arg_is_class_object(x, errors);
-                            }
                             let args = x.arguments.args.map(|arg| match arg {
                                 Expr::Starred(x) => CallArg::Star(&x.value, x.range),
                                 _ => CallArg::Expr(arg),
@@ -1386,7 +1332,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let callable = self.as_call_target_or_error(
                                 ty.clone(),
                                 CallStyle::FreeForm,
-                                func_range,
+                                x.func.range(),
                                 errors,
                                 None,
                             );
@@ -1394,7 +1340,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 callable,
                                 &args,
                                 &x.arguments.keywords,
-                                func_range,
+                                x.arguments.range,
                                 errors,
                                 None,
                                 hint.cloned(),
@@ -1428,8 +1374,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::BooleanLiteral(x) => Lit::from_boolean_literal(x).to_type(),
             Expr::NoneLiteral(_) => Type::None,
             Expr::EllipsisLiteral(_) => Type::Ellipsis,
-            Expr::Starred(ExprStarred { value: box x, .. }) => {
-                let ty = self.expr_untype(x, TypeFormContext::TypeArgument, errors);
+            Expr::Starred(ExprStarred { value, .. }) => {
+                let ty = self.expr_untype(value, TypeFormContext::TypeArgument, errors);
                 Type::Unpack(Box::new(ty))
             }
             Expr::Slice(x) => {
@@ -1485,7 +1431,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             }) => {
                 let lower_literal = match lower_expr {
-                    Some(box expr) => {
+                    Some(expr) => {
                         let lower_type = self.expr_infer(expr, errors);
                         match &lower_type {
                             Type::Literal(lit) => lit.as_index_i64(),
@@ -1495,7 +1441,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None => Some(0),
                 };
                 let upper_literal = match upper_expr {
-                    Some(box expr) => {
+                    Some(expr) => {
                         let upper_type = self.expr_infer(expr, errors);
                         match &upper_type {
                             Type::Literal(lit) => lit.as_index_i64(),

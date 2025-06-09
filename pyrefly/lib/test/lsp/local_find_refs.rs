@@ -150,6 +150,39 @@ References:
 }
 
 #[test]
+fn attribute_reference_triggered_from_attribute_definition_test() {
+    let code = r#"
+class MyClass:
+    attribute = 5
+#    ^
+
+    def method(self) -> None:
+        self.attribute
+
+
+obj = MyClass()
+print(obj.attribute)
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 |     attribute = 5
+         ^
+References:
+3 |     attribute = 5
+        ^^^^^^^^^
+7 |         self.attribute
+                 ^^^^^^^^^
+11 | print(obj.attribute)
+               ^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn synthetic_reference_regression_test() {
     let code = r#"
 foo = 3

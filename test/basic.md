@@ -4,7 +4,7 @@
 
 ```scrut {output_stream: stderr}
 $ echo "" > $TMPDIR/empty.py && $PYREFLY check --python-version 3.13.0 $TMPDIR/empty.py -a
- INFO 0 errors* (glob)
+ INFO errors shown: 0* (glob)
 [0]
 ```
 
@@ -12,7 +12,7 @@ $ echo "" > $TMPDIR/empty.py && $PYREFLY check --python-version 3.13.0 $TMPDIR/e
 
 ```scrut {output_stream: stderr}
 $ $PYREFLY check $TEST_PY
- INFO 0 errors* (glob)
+ INFO errors shown: 0* (glob)
 [0]
 ```
 
@@ -63,6 +63,6 @@ $ python3 -m venv $TMPDIR/venv && \
 > echo "x = 1" > $site_packages/third_party/test2.py && \
 > touch $TMPDIR/pyrefly.toml && \
 > $PYREFLY check $TMPDIR/test.py
- INFO 0 errors* (glob)
+ INFO errors shown: 0* (glob)
 [0]
 ```

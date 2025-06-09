@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::convert::Infallible;
 use std::fmt;
 use std::fmt::Display;
 use std::str::FromStr;
@@ -13,6 +14,8 @@ use std::sync::Arc;
 use dupe::Dupe;
 use itertools::Itertools;
 use parse_display::Display;
+use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::with_hash::WithHash;
 use regex::Match;
 use regex::Regex;
 use ruff_python_ast::Arguments;
@@ -32,8 +35,6 @@ use serde::de;
 use serde::de::Visitor;
 
 use crate::ruff::ast::Ast;
-use crate::util::prelude::SliceExt;
-use crate::util::with_hash::WithHash;
 
 #[derive(Debug, Clone, Copy, Dupe, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PythonVersion {
@@ -160,7 +161,7 @@ impl PythonVersion {
 pub struct PythonPlatform(String);
 
 impl FromStr for PythonPlatform {
-    type Err = !;
+    type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self::new(s))
@@ -310,12 +311,7 @@ impl SysInfo {
                 ..
             }) if attr.as_str() == "TYPE_CHECKING" => Some(Value::Bool(true)),
             Expr::Call(ExprCall {
-                func:
-                    box Expr::Attribute(ExprAttribute {
-                        value: box value,
-                        attr,
-                        ..
-                    }),
+                func: box Expr::Attribute(ExprAttribute { value, attr, .. }),
                 arguments:
                     Arguments {
                         args: box [arg],

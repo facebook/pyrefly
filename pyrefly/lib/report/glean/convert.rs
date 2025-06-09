@@ -37,7 +37,7 @@ impl Glean {
 
         let entries = vec![
             GleanEntry::SchemaId {
-                schema_id: PYTHON_SCHEMA_ID.to_owned(),
+                schema_id: builtin::SCHEMA_ID.to_owned(),
             },
             GleanEntry::Predicate {
                 predicate: "python.Name.4".to_owned(),

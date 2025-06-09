@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_util::arc_id::ArcId;
 use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
@@ -16,7 +17,6 @@ use crate::error::expectation::Expectation;
 use crate::module::ignore::Ignore;
 use crate::module::module_path::ModulePath;
 use crate::state::load::Load;
-use crate::util::arc_id::ArcId;
 
 /// The errors from a collection of modules.
 #[derive(Debug)]

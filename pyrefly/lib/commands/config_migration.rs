@@ -17,6 +17,8 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 use clap::Parser;
+use pyrefly_util::fs_anyhow;
+use pyrefly_util::upward_search::UpwardSearch;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -28,8 +30,6 @@ use crate::config::mypy::MypyConfig;
 use crate::config::pyright;
 use crate::config::pyright::PyrightConfig;
 use crate::config::util::PyProject;
-use crate::util::fs_anyhow;
-use crate::util::upward_search::UpwardSearch;
 
 #[derive(Clone, Debug, Parser)]
 pub struct Args {
@@ -174,10 +174,10 @@ pub fn write_pyproject(pyproject_path: &Path, config: ConfigFile) -> anyhow::Res
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_util::globs::Globs;
     use serde::Deserialize;
 
     use super::*;
-    use crate::util::globs::Globs;
 
     // helper function for ConfigFile::from_file
     fn from_file(path: &Path) -> anyhow::Result<()> {
@@ -185,10 +185,12 @@ mod tests {
         if errs.is_empty() {
             Ok(())
         } else {
+            for e in errs {
+                e.print();
+            }
             Err(anyhow::anyhow!(format!(
-                "ConfigFile::from_file({}) failed: {:#?}",
+                "ConfigFile::from_file({}) failed",
                 path.display(),
-                ConfigFile::from_file(path).1
             )))
         }
     }
@@ -215,7 +217,7 @@ mod tests {
         // We're not going to check the whole output because most of it will be default values, which may change.
         // We only actually care about the includes.
         let output_lines = output.lines().collect::<Vec<_>>();
-        assert_eq!(output_lines[0], r#"project_includes = ["src/**/*.py"]"#);
+        assert_eq!(output_lines[0], r#"project-includes = ["src/**/*.py"]"#);
         from_file(&output_path)
     }
 
@@ -258,6 +260,7 @@ check_untyped_defs = True
         // We care about the config getting serialized in a way that can be checked-in to a repo,
         // i.e. without absolutized paths. So we need to check the raw file.
         #[derive(Deserialize)]
+        #[serde(rename_all = "kebab-case")]
         struct CheckConfig {
             project_includes: Vec<String>,
             search_path: Vec<String>,

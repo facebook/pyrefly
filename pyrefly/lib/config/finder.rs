@@ -13,14 +13,65 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use path_absolutize::Absolutize;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::lock::Mutex;
+use pyrefly_util::upward_search::UpwardSearch;
+use tracing::Level;
+use tracing::debug;
+use tracing::enabled;
+use tracing::error;
+use tracing::info;
+use tracing::warn;
 
 use crate::config::config::ConfigFile;
+use crate::error::kind::Severity;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
 use crate::module::module_path::ModulePathDetails;
-use crate::util::arc_id::ArcId;
-use crate::util::lock::Mutex;
-use crate::util::upward_search::UpwardSearch;
+
+pub struct ConfigError {
+    severity: Severity,
+    msg: anyhow::Error,
+}
+
+impl ConfigError {
+    pub fn error(msg: anyhow::Error) -> Self {
+        Self {
+            severity: Severity::Error,
+            msg,
+        }
+    }
+
+    pub fn warn(msg: anyhow::Error) -> Self {
+        Self {
+            severity: Severity::Warn,
+            msg,
+        }
+    }
+
+    pub fn print(&self) {
+        match self.severity {
+            Severity::Error => {
+                error!("{:#}", self.msg);
+            }
+            Severity::Warn => {
+                warn!("{:#}", self.msg);
+            }
+            Severity::Info => {
+                info!("{:#}", self.msg);
+            }
+        }
+    }
+}
+
+/// When debugging is enabled, log errors.
+pub fn debug_log(errors: Vec<ConfigError>) {
+    if enabled!(Level::DEBUG) {
+        for e in errors {
+            debug!("{:#}", e.msg);
+        }
+    }
+}
 
 /// A way to find a config file given a directory or Python file.
 /// Uses a lot of caching.
@@ -28,7 +79,7 @@ pub struct ConfigFinder<T = ArcId<ConfigFile>> {
     /// The cached state, with previously found entries.
     search: UpwardSearch<T>,
     /// The errors that have occurred when loading.
-    errors: Arc<Mutex<Vec<anyhow::Error>>>,
+    errors: Arc<Mutex<Vec<ConfigError>>>,
 
     /// Function to run before checking the state. If this returns a value, it is _not_ cached.
     /// If this returns anything other than `Ok`, the rest of the functions are used.
@@ -40,7 +91,7 @@ pub struct ConfigFinder<T = ArcId<ConfigFile>> {
 impl<T: Dupe + Debug + Send + Sync + 'static> ConfigFinder<T> {
     /// Create a new ConfigFinder a way to load a config file, and a default if that errors or there is no file.
     pub fn new(
-        load: Box<dyn Fn(&Path) -> (T, Vec<anyhow::Error>) + Send + Sync>,
+        load: Box<dyn Fn(&Path) -> (T, Vec<ConfigError>) + Send + Sync>,
         fallback: Box<dyn Fn(ModuleName, &ModulePath) -> T + Send + Sync>,
     ) -> Self {
         Self::new_custom(Box::new(|_, _| Ok(None)), load, fallback)
@@ -64,7 +115,7 @@ impl<T: Dupe + Debug + Send + Sync + 'static> ConfigFinder<T> {
     /// The `before` function is not cached in any way.
     fn new_custom(
         before: Box<dyn Fn(ModuleName, &ModulePath) -> anyhow::Result<Option<T>> + Send + Sync>,
-        load: Box<dyn Fn(&Path) -> (T, Vec<anyhow::Error>) + Send + Sync>,
+        load: Box<dyn Fn(&Path) -> (T, Vec<ConfigError>) + Send + Sync>,
         fallback: Box<dyn Fn(ModuleName, &ModulePath) -> T + Send + Sync>,
     ) -> Self {
         let errors = Arc::new(Mutex::new(Vec::new()));
@@ -96,11 +147,11 @@ impl<T: Dupe + Debug + Send + Sync + 'static> ConfigFinder<T> {
     }
 
     /// Collect all the current errors that have been produced, and clear them.
-    pub fn errors(&self) -> Vec<anyhow::Error> {
+    pub fn errors(&self) -> Vec<ConfigError> {
         mem::take(&mut self.errors.lock())
     }
 
-    pub fn add_errors(&self, errors: Vec<anyhow::Error>) {
+    pub fn add_errors(&self, errors: Vec<ConfigError>) {
         self.errors.lock().extend(errors);
     }
 
@@ -115,7 +166,7 @@ impl<T: Dupe + Debug + Send + Sync + 'static> ConfigFinder<T> {
             Ok(Some(x)) => return x,
             Ok(None) => {}
             Err(e) => {
-                self.errors.lock().push(e);
+                self.errors.lock().push(ConfigError::error(e));
             }
         }
 

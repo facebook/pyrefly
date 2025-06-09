@@ -91,13 +91,14 @@ kwarg(xs=[B()], ys=[B()])
 );
 
 testcase!(
+    bug = "Unpacked assignments do not currently use contextual typing",
     test_context_assign_unpacked_list,
     r#"
 class A: ...
 class B(A): ...
 
 xs: list[A] = []
-[*xs] = [B(), B()]
+[*xs] = [B(), B()]  # E: `list[B]` is not assignable to `list[A]`
 "#,
 );
 
@@ -325,26 +326,25 @@ x: C[list[A]] = C([B()])
 );
 
 testcase!(
-    bug = "TODO: We do not currently validate assignments in multi-target assigns. Depending how we fix it, contextual typing may not work",
+    bug = "We do not currently propagate context through unpacked assignment",
     test_context_assign_unpacked_tuple,
     r#"
 class A: ...
 class B(A): ...
 
 xs: list[A] = []
-(xs, _) = ([B()], None)
+(xs, _) = ([B()], None)  # E: list[B]` is not assignable to `list[A]
 "#,
 );
 
 testcase!(
-    bug = "TODO: No context propagated to subscript assignment target, error message is bad",
     test_context_assign_subscript,
     r#"
 class A: ...
 class B(A): ...
 
 xs: list[list[A]] = [[]]
-xs[0] = [B()] # E: No matching overload found for function `list.__setitem__`  # E: `list[B]` is not assignable to parameter with type `list[A]`
+xs[0] = [B()]
 "#,
 );
 

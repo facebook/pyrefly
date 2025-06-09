@@ -10,13 +10,13 @@
 import * as React from 'react';
 import Layout from '@theme/Layout';
 import PerformanceComparisonChartSection from '../components/landing-page/PerformanceComparisonChartSection';
-import QuotesGrid from '../components/landing-page/quotesGrid';
 import WhyPyrefly from '../components/landing-page/whyPyrefly';
+import PyreflyVideo from '../components/landing-page/PyreflyVideo';
 import LandingPageSection from '../components/landing-page/landingPageSection';
 import LandingPageHeader from '../components/landing-page/landingPageHeader';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 
-export default function NewLandingPage(): React.ReactElement {
+export default function LandingPage(): React.ReactElement {
     const { siteConfig } = useDocusaurusContext();
 
     return (
@@ -38,7 +38,13 @@ export default function NewLandingPage(): React.ReactElement {
                 id="performance-comparison-section"
                 title="Performance Comparison"
                 child={<PerformanceComparisonChartSection />}
+            />
+            <LandingPageSection
+                id="pyrefly-video"
+                title="Check it out in the intro video"
+                child={<PyreflyVideo />}
                 isLastSection={true}
+                isTitleCentered={true}
             />
         </Layout>
     );

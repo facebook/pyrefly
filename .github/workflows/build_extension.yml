@@ -3,6 +3,10 @@ on:
   workflow_dispatch:
   workflow_call:
   push:
+    paths:
+      - '**/*'
+      - '!.*'
+      - '.github/workflows/build_extension.yml'
 
 jobs:
   get_version:
@@ -22,7 +26,7 @@ jobs:
           echo "PYREFLY_VERSION=$VERSION" >> $GITHUB_OUTPUT
   build_extension:
     needs: get_version
-    if: success()
+    if: ${{ success() }}
     strategy:
       fail-fast: false
       matrix:
@@ -38,8 +42,7 @@ jobs:
           - os: ubuntu-latest
             platform: linux
             arch: x64
-            # necessary for glibc 2.31
-            container: ubuntu:20.04
+            rust_target: x86_64-unknown-linux-musl
             github_env: $GITHUB_ENV
           - os: ubuntu-24.04-arm
             platform: linux
@@ -56,8 +59,7 @@ jobs:
           - os: ubuntu-latest
             platform: alpine
             arch: x64
-            # necessary for glibc 2.31
-            container: ubuntu:20.04
+            rust_target: x86_64-unknown-linux-musl
             github_env: $GITHUB_ENV
           - os: ubuntu-24.04-arm
             platform: alpine
@@ -83,7 +85,7 @@ jobs:
         # https://stackoverflow.com/questions/66733076/github-actions-set-environment-variable-for-windows-build-with-powershell
         run: echo "toolchain=$(cat pyrefly/rust-toolchain)" && echo "toolchain=$(cat pyrefly/rust-toolchain)" >> ${{ matrix.github_env }}
       - name: install toolchain dependencies
-        if: matrix.container == 'ubuntu:20.04'
+        if: ${{ matrix.container == 'ubuntu:20.04' }}
         shell: bash
         run: |
           apt-get update && apt-get -y install curl build-essential
@@ -95,8 +97,17 @@ jobs:
         # by Cargo have long paths and will cause builds/tests to fail
         if: ${{ matrix.os == 'windows-latest' }}
         run: echo "CARGO_HOME=C:\\cargo" >> ${{ matrix.github_env }}
+      - name: build pyrefly binary (cross-compile)
+        if: ${{ matrix.rust_target != '' }}
+        uses: houseabsolute/actions-rust-cross@v1
+        with:
+          command: build
+          target: ${{ matrix.rust_target }}
+          args: "--release --all-features --artifact-dir lsp/bin --manifest-path pyrefly/Cargo.toml -Z unstable-options"
+          toolchain: ${{ env.toolchain }}
       - name: build pyrefly binary
-        run: cargo build --release --all-features --target-dir lsp/bin --manifest-path pyrefly/Cargo.toml
+        if: ${{ matrix.rust_target == '' }}
+        run: cargo build --release --all-features --artifact-dir lsp/bin --manifest-path pyrefly/Cargo.toml -Z unstable-options
       - uses: actions/setup-node@v4
         with:
           node-version: 22

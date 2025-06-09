@@ -14,10 +14,10 @@ use std::fmt::Display;
 use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::display::intersperse_iter;
 
 use crate::types::types::AnyStyle;
 use crate::types::types::Type;
-use crate::util::display::intersperse_iter;
 
 #[derive(Debug, Clone, Default, VisitMut, TypeEq, PartialEq, Eq)]
 pub struct Annotation {
@@ -74,7 +74,7 @@ pub enum Qualifier {
     ReadOnly,
     ClassVar,
     Final,
-    #[expect(dead_code)] // Will be used in the future
+    #[allow(dead_code)] // Will be used in the future
     InitVar,
     Annotated,
     TypeAlias,

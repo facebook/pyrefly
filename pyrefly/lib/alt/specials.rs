@@ -7,6 +7,8 @@
 
 use std::slice;
 
+use pyrefly_util::display::DisplayWithCtx;
+use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprList;
@@ -29,8 +31,6 @@ use crate::types::special_form::SpecialForm;
 use crate::types::tuple::Tuple;
 use crate::types::types::AnyStyle;
 use crate::types::types::Type;
-use crate::util::display::DisplayWithCtx;
-use crate::util::prelude::SliceExt;
 
 fn is_chained_attribute_access(x: &Expr) -> bool {
     match x {
@@ -123,16 +123,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         return None;
                     }
                 }
-                Type::Unpack(box ty) if ty.is_kind_type_var_tuple() => {
+                Type::Unpack(ty) if ty.is_kind_type_var_tuple() => {
                     has_unpack = true;
                     if middle.is_none() {
-                        middle = Some(ty)
+                        middle = Some(*ty)
                     } else {
                         self.extra_unpack_error(errors, value.range());
                         return None;
                     }
                 }
-                Type::Unpack(box ty) => {
+                Type::Unpack(ty) => {
                     self.error(
                         errors,
                         value.range(),
@@ -201,18 +201,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if is_valid_literal(&t) {
                     literals.push(t)
                 } else {
-                    errors.add(
+                    self.error(
+                        errors,
                         x.range(),
-                        format!("Invalid type inside literal, `{t}`"),
                         ErrorKind::InvalidLiteral,
                         None,
+                        format!("Invalid type inside literal, `{t}`"),
                     );
                     literals.push(Type::any_error())
                 }
             }
             Expr::Attribute(ExprAttribute {
                 range,
-                value: box value,
+                value,
                 attr: member_name,
                 ctx: _,
             }) if is_chained_attribute_access(value) => {
@@ -225,15 +226,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     Type::Any(AnyStyle::Error) => literals.push(Type::any_error()),
                     _ => {
-                        errors.add(
+                        self.error(
+                            errors,
                             *range,
+                            ErrorKind::InvalidLiteral,
+                            None,
                             format!(
                                 "`{}.{}` is not a valid enum member",
                                 value.display_with(self.module_info()),
                                 member_name.id
                             ),
-                            ErrorKind::InvalidLiteral,
-                            None,
                         );
                         literals.push(Type::any_error())
                     }
@@ -245,22 +247,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::Type(box lit @ Type::Literal(_)) => literals.push(lit.clone()),
                     Type::Any(AnyStyle::Error) => literals.push(Type::any_error()),
                     _ => {
-                        errors.add(
+                        self.error(
+                            errors,
                             x.range(),
-                            "Invalid literal expression".to_owned(),
                             ErrorKind::InvalidLiteral,
                             None,
+                            "Invalid literal expression".to_owned(),
                         );
                         literals.push(Type::any_error())
                     }
                 });
             }
             _ => {
-                errors.add(
+                self.error(
+                    errors,
                     x.range(),
-                    "Invalid literal expression".to_owned(),
                     ErrorKind::InvalidLiteral,
                     None,
+                    "Invalid literal expression".to_owned(),
                 );
                 literals.push(Type::any_error())
             }
@@ -374,7 +378,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             )),
                             Some((Tuple::Concrete(elts), false)) => {
                                 Type::type_form(Type::callable(
-                                    elts.map(|t| Param::PosOnly(t.clone(), Required::Required)),
+                                    elts.map(|t| {
+                                        Param::PosOnly(None, t.clone(), Required::Required)
+                                    }),
                                     ret,
                                 ))
                             }
