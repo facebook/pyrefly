@@ -613,7 +613,6 @@
   ],
   "typeddicts_required.py": [
     "Line 62: Expected 1 errors",
-    "Line 63: Expected 1 errors",
     "Line 74: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveMovie']`\"]"
   ],
   "typeddicts_type_consistency.py": [

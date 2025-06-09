@@ -10545,6 +10545,16 @@
     },
     {
       "code": -2,
+      "column": 8,
+      "concise_description": "Cannot combine Required and NotRequired for a TypedDict field",
+      "description": "Cannot combine Required and NotRequired for a TypedDict field",
+      "line": 63,
+      "name": "invalid-annotation",
+      "stop_column": 34,
+      "stop_line": 63
+    },
+    {
+      "code": -2,
       "column": 75,
       "concise_description": "Expected a type form, got instance of `Literal['RecursiveMovie']`",
       "description": "Expected a type form, got instance of `Literal['RecursiveMovie']`",

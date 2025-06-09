@@ -3,7 +3,7 @@
   "pass": 55,
   "fail": 81,
   "pass_rate": 0.4,
-  "differences": 407,
+  "differences": 406,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -140,7 +140,7 @@
     "typeddicts_readonly_consistency.py": 3,
     "typeddicts_readonly_inheritance.py": 7,
     "typeddicts_readonly_update.py": 2,
-    "typeddicts_required.py": 3,
+    "typeddicts_required.py": 2,
     "typeddicts_type_consistency.py": 2,
     "typeddicts_usage.py": 2
   },
