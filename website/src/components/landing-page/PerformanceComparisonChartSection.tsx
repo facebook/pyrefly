@@ -12,63 +12,58 @@ import * as stylex from '@stylexjs/stylex';
 import PerformanceComparisonChart from './PerformanceComparisonChart';
 import PerformanceComparisonDescription from './PerformanceComparisonDescription';
 import PerformanceComparisonButton from './PerformanceComparisonButton';
-import { Project, ProjectValue } from './PerformanceComparisonTypes';
-import { useState, useEffect } from 'react';
+import { Project } from './PerformanceComparisonTypes';
+import { useState } from 'react';
 import { landingPageCardStyles } from './landingPageCardStyles';
+import DelayedComponent from '../../utils/DelayedComponent';
 
 export default function PerformanceComparisonChartSection(): React.ReactElement {
-    const [selectedProject, setSelectedProject] = useState<ProjectValue>(
-        Project.PYTORCH
-    );
-    const [isLoaded, setIsLoaded] = useState(false);
-
-    useEffect(() => {
-        // Delay the animation to start after the Why Pyrefly section animations
-        const timer = setTimeout(() => {
-            setIsLoaded(true);
-        }, 1200); // slightly later than Performance Comparison Header (1100ms)
-
-        return () => clearTimeout(timer);
-    }, []);
+    const [selectedProject, setSelectedProject] = useState(Project.PYTORCH);
 
     return (
-        <div
-            {...stylex.props(
-                landingPageCardStyles.card,
-                styles.body,
-                isLoaded && styles.bodyVisible
+        <DelayedComponent delayInSeconds={1.2}>
+            {(isLoaded) => (
+                <div
+                    {...stylex.props(
+                        landingPageCardStyles.card,
+                        styles.body,
+                        isLoaded && styles.bodyVisible
+                    )}
+                >
+                    <div
+                        {...stylex.props(
+                            styles.buttonRow,
+                            isLoaded && styles.contentVisible
+                        )}
+                    >
+                        <PerformanceComparisonButton
+                            project={Project.PYTORCH}
+                            selectedProject={selectedProject}
+                            setSelectedProject={setSelectedProject}
+                        />
+                        <PerformanceComparisonButton
+                            project={Project.INSTAGRAM}
+                            selectedProject={selectedProject}
+                            setSelectedProject={setSelectedProject}
+                        />
+                    </div>
+                    <div
+                        {...stylex.props(
+                            styles.chartContainer,
+                            isLoaded && styles.contentVisible
+                        )}
+                    >
+                        <PerformanceComparisonDescription
+                            project={selectedProject}
+                        />
+                        <PerformanceComparisonChart
+                            project={selectedProject}
+                            isLoaded={isLoaded}
+                        />
+                    </div>
+                </div>
             )}
-        >
-            <div
-                {...stylex.props(
-                    styles.buttonRow,
-                    isLoaded && styles.contentVisible
-                )}
-            >
-                <PerformanceComparisonButton
-                    project={Project.PYTORCH}
-                    selectedProject={selectedProject}
-                    setSelectedProject={setSelectedProject}
-                />
-                <PerformanceComparisonButton
-                    project={Project.INSTAGRAM}
-                    selectedProject={selectedProject}
-                    setSelectedProject={setSelectedProject}
-                />
-            </div>
-            <div
-                {...stylex.props(
-                    styles.chartContainer,
-                    isLoaded && styles.contentVisible
-                )}
-            >
-                <PerformanceComparisonDescription project={selectedProject} />
-                <PerformanceComparisonChart
-                    project={selectedProject}
-                    isLoaded={isLoaded}
-                />
-            </div>
-        </div>
+        </DelayedComponent>
     );
 }
 

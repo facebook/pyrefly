@@ -26,7 +26,7 @@ fn dedup_errors(errors: &[Error]) -> SmallMap<usize, String> {
     let mut deduped_errors = SmallMap::new();
     for error in errors {
         let e: &mut String = deduped_errors
-            .entry(error.source_range().start.row.to_zero_indexed())
+            .entry(error.source_range().start.line.to_zero_indexed())
             .or_default();
         let contains_error = e.contains(error.error_kind().to_name());
         if e.is_empty() {
@@ -188,8 +188,8 @@ mod tests {
     use std::sync::Arc;
 
     use pretty_assertions::assert_str_eq;
+    use ruff_source_file::LineColumn;
     use ruff_source_file::OneIndexed;
-    use ruff_source_file::SourceLocation;
     use tempfile;
     use vec1::Vec1;
 
@@ -201,11 +201,11 @@ mod tests {
     use crate::module::module_path::ModulePath;
 
     fn sourcerange(row: usize, column: usize) -> SourceRange {
-        let row = OneIndexed::new(row).unwrap();
+        let line = OneIndexed::new(row).unwrap();
         let column = OneIndexed::new(column).unwrap();
         SourceRange {
-            start: SourceLocation { row, column },
-            end: SourceLocation { row, column },
+            start: LineColumn { line, column },
+            end: LineColumn { line, column },
         }
     }
 

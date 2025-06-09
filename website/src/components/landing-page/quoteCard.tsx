@@ -10,7 +10,7 @@
 import * as React from 'react';
 import * as stylex from '@stylexjs/stylex';
 import typography from './typography';
-import { useEffect, useState } from 'react';
+import DelayedComponent from '../../utils/DelayedComponent';
 interface QuoteCardProps {
     quote: string;
     author: string;
@@ -22,26 +22,29 @@ export default function QuoteCard({
     author,
     project,
 }: QuoteCardProps): React.ReactElement {
-    const [isLoaded, setIsLoaded] = useState(false);
-
-    useEffect(() => {
-        // Trigger animation after component mounts
-        setIsLoaded(true);
-    }, []);
-
     return (
-        <div
-            {...stylex.props(
-                styles.quoteCard,
-                isLoaded && styles.quoteCardVisible
+        <DelayedComponent delayInSeconds={0}>
+            {(isLoaded) => (
+                <div
+                    {...stylex.props(
+                        styles.quoteCard,
+                        isLoaded && styles.quoteCardVisible
+                    )}
+                >
+                    <p {...stylex.props(styles.quoteText, typography.p)}>
+                        {quote}
+                    </p>
+                    <div {...stylex.props(styles.quoteAuthor, typography.p)}>
+                        <strong {...stylex.props(styles.authorName)}>
+                            {author}
+                        </strong>
+                        <span {...stylex.props(styles.projectName)}>
+                            {project}
+                        </span>
+                    </div>
+                </div>
             )}
-        >
-            <p {...stylex.props(styles.quoteText, typography.p)}>{quote}</p>
-            <div {...stylex.props(styles.quoteAuthor, typography.p)}>
-                <strong {...stylex.props(styles.authorName)}>{author}</strong>
-                <span {...stylex.props(styles.projectName)}>{project}</span>
-            </div>
-        </div>
+        </DelayedComponent>
     );
 }
 

@@ -366,6 +366,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::BooleanLiteral(..) => "bool literal",
             Expr::BoolOp(..) => "boolean operation",
             Expr::FString(..) => "f-string",
+            Expr::TString(..) => "t-string",
             Expr::UnaryOp(..) => "unary operation",
             // There are many Expr variants. Not all of them are likely to be used
             // in annotations, even accidentally. We can add branches for specific

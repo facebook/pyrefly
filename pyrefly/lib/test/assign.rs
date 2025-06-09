@@ -682,7 +682,7 @@ assert_type(c1, Literal[1])
 [d1, d2]: list[int] = ["test", "more"] # E: Parse error: Only single target (not list) can be annotated
 assert_type(d1, str)
 
-*e = ["test"] # E: Starred assignment target must be in a list or tuple
+*e = ["test"] # E: starred assignment target must be in a list or tuple
 assert_type(e, list[str])
 "#,
 );
@@ -707,8 +707,7 @@ xs[2]: str = "test" # E: Subscripts should not be annotated # E: Cannot set item
 testcase!(
     test_assign_annotated_starred,
     r#"
-# TODO(stroxler) Ideally we wouldn't get two errors here, they are partially duplicated.
-*e: int = (42,)  # E: Parse error: Invalid annotated assignment target # E: Starred assignment target must be in a list or tuple
+*e: int = (42,)  # E: Parse error: Invalid annotated assignment target
 "#,
 );
 

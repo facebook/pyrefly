@@ -17,9 +17,9 @@ use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprBytesLiteral;
 use ruff_python_ast::ExprFString;
 use ruff_python_ast::ExprStringLiteral;
-use ruff_python_ast::FStringElement;
 use ruff_python_ast::FStringPart;
 use ruff_python_ast::Int;
+use ruff_python_ast::InterpolatedStringElement;
 use ruff_python_ast::name::Name;
 
 use crate::types::class::ClassType;
@@ -115,7 +115,9 @@ impl Lit {
                 FStringPart::FString(x) => {
                     for fstring_part in x.elements.iter() {
                         match fstring_part {
-                            FStringElement::Literal(x) => collected_literals.push(x.value.clone()),
+                            InterpolatedStringElement::Literal(x) => {
+                                collected_literals.push(x.value.clone())
+                            }
                             _ => return None,
                         }
                     }

@@ -1364,6 +1364,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     _ => self.stdlib.str().clone().to_type(),
                 }
             }
+            Expr::TString(x) => self.error(
+                errors,
+                x.range,
+                ErrorKind::Unsupported,
+                None,
+                "t-strings are not yet supported".to_owned(),
+            ),
             Expr::StringLiteral(x) => Lit::from_string_literal(x).to_type(),
             Expr::BytesLiteral(x) => Lit::from_bytes_literal(x).to_type(),
             Expr::NumberLiteral(x) => match &x.value {

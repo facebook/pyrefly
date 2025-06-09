@@ -26,7 +26,7 @@ pub struct CommonGlobalArgs {
     #[arg(long, short = 'j', default_value = "0", global = true, env = clap_env("THREADS"))]
     pub threads: ThreadCount,
 
-    /// Controls whether colored output is used.
+    /// Control whether colored output is used.
     #[arg(long, default_value = "auto", global = true, env = clap_env("COLOR"))]
     color: ColorChoice,
 

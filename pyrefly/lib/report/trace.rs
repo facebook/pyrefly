@@ -63,7 +63,6 @@ fn trace_module(transaction: &Transaction, handle: &Handle) -> Option<ModuleOutp
     })
 }
 
-/// Report on how many there are of each binding, and how much memory they take up, per module.
 pub fn trace(transaction: &Transaction) -> String {
     let mut modules = Vec::new();
     for h in transaction.handles() {

@@ -17,7 +17,6 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 
-use crate::binding::binding::AnnotationStyle;
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
@@ -172,57 +171,6 @@ impl<'a> BindingsBuilder<'a> {
                 }
             };
         self.insert_binding(key, binding);
-    }
-
-    /// If someone does `x = C["test"]`, that might be a type alias, it might not.
-    /// Use this heuristic to detect things that are definitely type aliases.
-    fn is_definitely_type_alias_rhs(&mut self, x: &Expr) -> bool {
-        match x {
-            Expr::Subscript(x) => matches!(
-                self.as_special_export(&x.value),
-                Some(SpecialExport::Union | SpecialExport::Optional)
-            ),
-            _ => false,
-        }
-    }
-
-    pub fn bind_name_assign(
-        &mut self,
-        name: &Identifier,
-        mut value: Box<Expr>,
-        direct_ann: Option<(&Expr, Idx<KeyAnnotation>)>,
-    ) -> Option<Idx<KeyAnnotation>> {
-        let user = self.declare_user(Key::Definition(ShortIdentifier::new(name)));
-        let is_definitely_type_alias = if let Some((e, _)) = direct_ann
-            && self.as_special_export(e) == Some(SpecialExport::TypeAlias)
-        {
-            true
-        } else {
-            self.is_definitely_type_alias_rhs(value.as_ref())
-        };
-        if is_definitely_type_alias {
-            self.ensure_type(&mut value, &mut None);
-        } else {
-            self.ensure_expr(&mut value, user.usage());
-        }
-        let style = if self.scopes.in_class_body() {
-            FlowStyle::ClassField {
-                initial_value: Some((*value).clone()),
-            }
-        } else {
-            FlowStyle::Other
-        };
-        let (cannonical_ann, default) = self.bind_user(&name.id, &user, style);
-        let ann = match direct_ann {
-            Some((_, idx)) => Some((AnnotationStyle::Direct, idx)),
-            None => cannonical_ann.map(|idx| (AnnotationStyle::Forwarded, idx)),
-        };
-        let mut binding = Binding::NameAssign(name.id.clone(), ann, value);
-        if let Some(default) = default {
-            binding = Binding::Default(default, Box::new(binding));
-        }
-        self.insert_binding_user(user, binding);
-        cannonical_ann
     }
 
     /// Bind the annotation in an `AnnAssign`
@@ -401,7 +349,11 @@ impl<'a> BindingsBuilder<'a> {
                             _ => {}
                         }
                     }
-                    self.bind_name_assign(&Ast::expr_name_identifier(name.clone()), x.value, None);
+                    self.bind_single_name_assign(
+                        &Ast::expr_name_identifier(name.clone()),
+                        x.value,
+                        None,
+                    );
                 } else {
                     self.bind_targets_with_value(&mut x.targets, &mut x.value);
                 }
@@ -483,9 +435,11 @@ impl<'a> BindingsBuilder<'a> {
                         },
                     );
                     let cannonical_ann_idx = match value {
-                        Some(value) => {
-                            self.bind_name_assign(&name, value, Some((&x.annotation, ann_idx)))
-                        }
+                        Some(value) => self.bind_single_name_assign(
+                            &name,
+                            value,
+                            Some((&x.annotation, ann_idx)),
+                        ),
                         None => self.bind_definition(
                             &name,
                             Binding::AnnotatedType(

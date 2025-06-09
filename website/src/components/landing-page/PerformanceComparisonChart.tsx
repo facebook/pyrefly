@@ -68,10 +68,13 @@ export default function PerformanceComparisonChart({
                     <div {...stylex.props(styles.BarTimerContainer)}>
                         <div {...stylex.props(styles.progressBarContainer)}>
                             <ProgressBar
-                                durationInSeconds={typechecker.durationInSeconds}
+                                durationInSeconds={
+                                    typechecker.durationInSeconds
+                                }
                                 maxDurationInSeconds={maxDuration}
                                 highlight={
-                                    typechecker.typechecker === TypeChecker.PYREFLY
+                                    typechecker.typechecker ===
+                                    TypeChecker.PYREFLY
                                 }
                                 isLoaded={isLoaded}
                             />
@@ -94,13 +97,12 @@ const styles = stylex.create({
         flex: 1,
         display: 'flex',
         '@media(max-width: 760px)': {
-            flexDirection: 'column'
-        }
+            flexDirection: 'column',
+        },
     },
     BarTimerContainer: {
         flex: 2,
         display: 'flex',
-
     },
     typecheckerNameContainer: {
         display: 'flex',

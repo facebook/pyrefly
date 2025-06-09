@@ -11,70 +11,54 @@ import * as React from 'react';
 import * as stylex from '@stylexjs/stylex';
 import WhyPyreflyGridItem from './whyPyreflyGridItem';
 import Firefly from './firefly';
-import { useEffect, useState } from 'react';
 import useBaseUrl from '@docusaurus/useBaseUrl';
+import DelayedComponent from '../../utils/DelayedComponent';
 
 export default function WhyPyrefly(): React.ReactElement {
-    const [isLoaded, setIsLoaded] = useState(false);
-    const [startAnimation, setStartAnimation] = useState(false);
-
-    useEffect(() => {
-        // Delay the animation to start after the header animations
-        const timer = setTimeout(() => {
-            setIsLoaded(true);
-
-            // Start the grid items animation after the container animation
-            const gridTimer = setTimeout(() => {
-                setStartAnimation(true);
-            }, 150);
-
-            return () => clearTimeout(gridTimer);
-        }, 500); // start animation after landing page header button group (400ms), last grid item would finish at 950ms
-
-        return () => clearTimeout(timer);
-    }, []);
+    const onboardingBaseURL = useBaseUrl('/en/docs/installation/');
 
     return (
-        <div
-            {...stylex.props(
-                styles.whyPyreflyContainer,
-                isLoaded && styles.whyPyreflyContainerVisible
+        <DelayedComponent delayInSeconds={0.5}>
+            {(isLoaded) => (
+                <div
+                    {...stylex.props(
+                        styles.whyPyreflyContainer,
+                        isLoaded && styles.whyPyreflyContainerVisible
+                    )}
+                >
+                    <div {...stylex.props(styles.whyPyreflyGrid)}>
+                        {/* Short-term benefits */}
+                        <WhyPyreflyGridItem
+                            title="Scale with Confidence"
+                            content="Type check over 1.85 million lines of code per second."
+                            footnote="Tested using Meta infrastructure (166 cores, 228 GB RAM)"
+                            index={0}
+                        />
+                        <WhyPyreflyGridItem
+                            title="Developer Delight"
+                            content="Get lightning fast autocomplete, and catch errors with instant feedback in your favorite editor."
+                            index={1}
+                        />
+                        <WhyPyreflyGridItem
+                            title="Easy Onboarding"
+                            contentWithLink={{
+                                link: {
+                                    text: 'Start type checking',
+                                    url: `${onboardingBaseURL}`,
+                                },
+                                afterText: ' your code in minutes.',
+                            }}
+                            index={2}
+                        />
+                    </div>
+                    <section {...stylex.props(styles.fireflyContainer)}>
+                        <Firefly />
+                        <Firefly />
+                        <Firefly />
+                    </section>
+                </div>
             )}
-        >
-            <div {...stylex.props(styles.whyPyreflyGrid)}>
-                {/* Short-term benefits */}
-                <WhyPyreflyGridItem
-                    title="Scale with Confidence"
-                    content="Type check over 1.85 million lines of code per second."
-                    footnote="Tested using Meta infrastructure (166 cores, 228 GB RAM)"
-                    index={0}
-                    startAnimation={startAnimation}
-                />
-                <WhyPyreflyGridItem
-                    title="Developer Delight"
-                    content="Get lightning fast autocomplete, and catch errors with instant feedback in your favorite editor."
-                    index={1}
-                    startAnimation={startAnimation}
-                />
-                <WhyPyreflyGridItem
-                    title="Easy Onboarding"
-                    contentWithLink={{
-                        link: {
-                            text: 'Start type checking',
-                            url: `${useBaseUrl('/en/docs/installation/')}`,
-                        },
-                        afterText: ' your code in minutes.',
-                    }}
-                    index={2}
-                    startAnimation={startAnimation}
-                />
-            </div>
-            <section {...stylex.props(styles.fireflyContainer)}>
-                <Firefly />
-                <Firefly />
-                <Firefly />
-            </section>
-        </div>
+        </DelayedComponent>
     );
 }
 

@@ -14,6 +14,7 @@ use pyrefly_util::gas::Gas;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::visit::Visit;
+use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::Identifier;
@@ -105,18 +106,10 @@ impl<'a> Transaction<'a> {
 
     fn identifier_at(&self, handle: &Handle, position: TextSize) -> Option<Identifier> {
         let mod_module = self.get_ast(handle)?;
-        fn f(x: &Expr, find: TextSize, res: &mut Option<Identifier>) {
-            if let Expr::Name(x) = x
-                && x.range.contains_inclusive(find)
-            {
-                *res = Some(Ast::expr_name_identifier(x.clone()));
-            } else {
-                x.recurse(&mut |x| f(x, find, res));
-            }
+        match Ast::locate_node(&mod_module, position).first() {
+            Some(AnyNodeRef::ExprName(name)) => Some(Ast::expr_name_identifier((*name).clone())),
+            _ => None,
         }
-        let mut res = None;
-        mod_module.visit(&mut |x| f(x, position, &mut res));
-        res
     }
 
     fn import_at(&self, handle: &Handle, position: TextSize) -> Option<ImportIdentifier> {

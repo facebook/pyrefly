@@ -10,7 +10,7 @@
 import * as React from 'react';
 import * as stylex from '@stylexjs/stylex';
 import typography from './typography';
-import { useState, useEffect } from 'react';
+import DelayedComponent from '../../utils/DelayedComponent';
 interface LandingPageSectionProps {
     title?: string;
     child: React.ReactNode;
@@ -18,6 +18,7 @@ interface LandingPageSectionProps {
     isFirstSection?: boolean;
     isLastSection?: boolean;
     hasBrownBackground?: boolean;
+    isTitleCentered?: boolean;
 }
 
 export default function LandingPageSection({
@@ -26,23 +27,21 @@ export default function LandingPageSection({
     id = '',
     isFirstSection = false,
     isLastSection = false,
+    isTitleCentered = false,
 }: LandingPageSectionProps): React.ReactElement {
-    const [isTitleVisible, setIsTitleVisible] = useState(false);
-
-    useEffect(() => {
-        // Only apply animation for performance comparison section
+    // Determine the delay based on section ID
+    const getTitleDelayInSeconds = () => {
         if (id === 'performance-comparison-section') {
-            // Delay the title animation to start after the Why Pyrefly section animations
-            const timer = setTimeout(() => {
-                setIsTitleVisible(true);
-            }, 1100); // Slightly later than why pyrefly animations (950ms)
-
-            return () => clearTimeout(timer);
-        } else {
-            // For other sections, make title visible immediately
-            setIsTitleVisible(true);
+            return 1.1;
+        } else if (id === 'pyrefly-video') {
+            return 1.3;
         }
-    }, [id]);
+        return 0; // No delay for other sections
+    };
+
+    // Determine if title should be animated
+    const shouldAnimateTitle =
+        id === 'performance-comparison-section' || id === 'pyrefly-video';
 
     return (
         <section
@@ -55,19 +54,35 @@ export default function LandingPageSection({
         >
             <div className="container">
                 {title != null ? (
-                    <h2
-                        {...stylex.props(
-                            styles.sectionTitle,
-                            typography.h2,
-                            id === 'performance-comparison-section' &&
-                                styles.animatedTitle,
-                            id === 'performance-comparison-section' &&
-                                isTitleVisible &&
-                                styles.titleVisible
-                        )}
-                    >
-                        {title}
-                    </h2>
+                    shouldAnimateTitle ? (
+                        <DelayedComponent
+                            delayInSeconds={getTitleDelayInSeconds()}
+                        >
+                            {(isTitleVisible) => (
+                                <h2
+                                    {...stylex.props(
+                                        styles.sectionTitle,
+                                        typography.h2,
+                                        styles.animatedTitle,
+                                        isTitleVisible && styles.titleVisible,
+                                        isTitleCentered && styles.centeredTitle
+                                    )}
+                                >
+                                    {title}
+                                </h2>
+                            )}
+                        </DelayedComponent>
+                    ) : (
+                        <h2
+                            {...stylex.props(
+                                styles.sectionTitle,
+                                typography.h2,
+                                isTitleCentered && styles.centeredTitle
+                            )}
+                        >
+                            {title}
+                        </h2>
+                    )
                 ) : (
                     <></>
                 )}
@@ -107,5 +122,8 @@ const styles = stylex.create({
         opacity: 1,
         filter: 'blur(0px)',
         transform: 'translateY(0)',
+    },
+    centeredTitle: {
+        textAlign: 'center',
     },
 });
