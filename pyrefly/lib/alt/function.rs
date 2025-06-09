@@ -247,6 +247,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self_type = self_type.map(Type::type_form);
         }
 
+        if is_overload && stub_or_impl == FunctionStubOrImpl::Impl {
+            self.error(
+                errors,
+                def.name.range,
+                ErrorKind::InvalidOverload,
+                None,
+                "@overload decorator should not be used on function implementations.".to_owned(),
+            );
+        }
+        
         // Determine the type of the parameter based on its binding. Left is annotated parameter, right is unannotated
         let mut get_param_ty = |name: &Identifier, default: Option<&Expr>| {
             let ty = match self.bindings().get_function_param(name) {
