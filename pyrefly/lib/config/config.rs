@@ -518,6 +518,7 @@ impl ConfigFile {
             {
                 let system_env = PythonEnvironment::get_interpreter_env(&interpreter);
                 self.python_environment.override_empty(system_env);
+                self.python_interpreter = Some(interpreter);
             } else {
                 self.python_environment.set_empty_to_default();
                 warn!(
