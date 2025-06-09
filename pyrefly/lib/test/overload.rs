@@ -386,3 +386,19 @@ def g(x: int):
     f(C(x))
     "#,
 );
+
+testcase!(
+    test_implementation_before_overload,
+    r#"
+from typing import overload
+
+def f(x: int | str) -> int | str: # E: Function implementation must come after all @overload declarations.
+    return x
+
+@overload
+def f(x: int) -> int: ... # E: Overloaded function must have an implementation
+
+@overload
+def f(x: str) -> str: ...
+    "#,
+);
