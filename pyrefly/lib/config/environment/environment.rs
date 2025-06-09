@@ -212,9 +212,16 @@ print(json.dumps({'python_platform': platform, 'python_version': version, 'site_
         static SYSTEM_INTERP: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
             // disable query with `which` on wasm
             #[cfg(not(target_arch = "wasm32"))]
-            for interpreter in PythonEnvironment::DEFAULT_INTERPRETERS {
-                if let Ok(interpreter_path) = which(interpreter) {
-                    return Some(interpreter_path);
+            for binary_name in PythonEnvironment::DEFAULT_INTERPRETERS {
+                let Ok(binary_path) = which(binary_name) else {
+                    continue;
+                };
+                let mut check = Command::new(&binary_path);
+                check.arg("--version");
+                if let Ok(output) = check.output()
+                    && output.status.success()
+                {
+                    return Some(binary_path);
                 }
             }
             None
