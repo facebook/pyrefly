@@ -386,3 +386,48 @@ def g(x: int):
     f(C(x))
     "#,
 );
+
+testcase!(
+     test_overload_with_docstring,
+    r#"
+from typing import overload, Any
+
+@overload
+def foo(a: int) -> int: ...  
+
+@overload
+def foo(a: str) -> str:
+    """Docstring"""
+
+def foo(*args, **kwargs) -> Any:
+    pass
+    
+    "#,
+); 
+
+testcase!(
+     test_overload_with_docstring2,
+    r#"
+from typing import overload, Any
+
+@overload
+def foo(a: int) -> int: ...  
+
+@overload
+def foo(a: str) -> str: 
+    """Docstring"""
+    return 123             # E: Returned type `Literal[123]` is not assignable to declared return type `str`
+
+def foo(*args, **kwargs) -> Any:
+    pass
+    
+    "#,
+); 
+
+testcase!(
+     test_overload_with_docstring3,
+    r#"
+def foo() -> int: # E: Function declared to return `int` but is missing an explicit `return`
+    """hello"""
+    "#,
+); 

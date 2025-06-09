@@ -60,6 +60,7 @@ use crate::util::visit::Visit;
 
 struct Decorators {
     has_no_type_check: bool,
+    is_overload: bool,
     decorators: Box<[Idx<Key>]>,
 }
 
@@ -430,6 +431,9 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn decorators(&mut self, decorator_list: Vec<Decorator>) -> Decorators {
+        let is_overload = decorator_list
+            .iter()
+            .any(|d| self.as_special_export(&d.expression) == Some(SpecialExport::Overload));
         let has_no_type_check = decorator_list
             .iter()
             .any(|d| self.as_special_export(&d.expression) == Some(SpecialExport::NoTypeCheck));
@@ -439,6 +443,7 @@ impl<'a> BindingsBuilder<'a> {
             .into_boxed_slice();
         Decorators {
             has_no_type_check,
+            is_overload,
             decorators,
         }
     }
@@ -455,7 +460,7 @@ impl<'a> BindingsBuilder<'a> {
         function_idx: Idx<KeyFunction>,
         class_key: Option<Idx<KeyClass>>,
     ) -> (FunctionStubOrImpl, Option<SelfAssignments>) {
-        let stub_or_impl = if is_ellipse(&body) || is_docstring(&body[0]) {
+        let stub_or_impl = if is_ellipse(&body) || (is_docstring(&body[0]) && decorators.is_overload)  {
             FunctionStubOrImpl::Stub
         } else {
             FunctionStubOrImpl::Impl
