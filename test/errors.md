@@ -27,13 +27,11 @@ $ echo "x: str = 12" > $TMPDIR/shown1.py && \
 [1]
 ```
 
-## We return an error when all files are filtered by project_excludes
+## We return an error when an entire project_includes pattern is matched by project_excludes
 
 ```scrut {output_stream: stderr}
-$ echo "x: str = 12" > $TMPDIR/excluded.py && \
-> $PYREFLY check --python-version 3.13.0 $TMPDIR/excluded.py --project-excludes="$TMPDIR/*"
-All found `project_includes` files were filtered by `project_excludes` patterns.
-`project_includes`:* (glob)
-`project_excludes`:* (glob)
+$ $PYREFLY check --python-version 3.13.0 "$TMPDIR/*" --project-excludes="$TMPDIR/*"
+Pattern * is matched by `project-excludes`. (glob)
+`project-excludes`: * (glob)
 [1]
 ```
