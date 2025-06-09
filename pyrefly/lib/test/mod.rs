@@ -20,6 +20,7 @@ mod constructors;
 mod contextual;
 mod dataclasses;
 mod decorators;
+mod delayed_inference;
 mod descriptors;
 mod enums;
 mod flow;

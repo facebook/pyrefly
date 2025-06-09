@@ -115,9 +115,9 @@ testcase!(
     r#"
 from typing import Iterator, assert_type
 
-def gen_numbers() -> Iterator[int]: 
-    yield 1 
-    yield 2 
+def gen_numbers() -> Iterator[int]:
+    yield 1
+    yield 2
     yield 3
 
 assert_type(gen_numbers(), Iterator[int])
@@ -165,6 +165,35 @@ from typing import AsyncGenerator, assert_type, Coroutine, Any
 async def async_count_up_to() -> AsyncGenerator[int, None]:
     yield 2
 assert_type(async_count_up_to(), AsyncGenerator[int, None])
+"#,
+);
+
+// Normal async functions have their annotated return types "wrapped"
+// into a coroutine. But async generators are annotated with their
+// actual return type `AsyncGenerator`.
+//
+// At one point, the logic we were using to determine whether to wrap
+// was based on checking the type, rather than a syntactic check. But
+// this produces multiple issues, because the subtype check can pass
+// when it shouldn't (e.g. if Any is in the return type, or if
+// the return type is actually an `AsyncGenerator` *value* without the
+// function itself being a generator).
+//
+// These tests are checks against regressing to that behavior.
+testcase!(
+    test_that_async_functions_are_not_incorrectly_treated_as_generators,
+    r#"
+from typing import AsyncGenerator, assert_type, Coroutine, Any, Never
+
+async def async_any_or_none() -> Any | None:
+    return 2
+assert_type(async_any_or_none(), Coroutine[Any, Any, Any | None])
+
+async def async_coroutine_of_async_generator() -> AsyncGenerator[int, None]:
+    async def inner() -> AsyncGenerator[int, None]:
+        yield 2
+    return inner()
+assert_type(async_coroutine_of_async_generator(), Coroutine[Any, Any, AsyncGenerator[int, None]])
 "#,
 );
 
@@ -217,7 +246,7 @@ testcase!(
     r#"
 from typing import assert_type, Any, Literal, AsyncGenerator
 
-async def async_count_up_to(): 
+async def async_count_up_to():
     yield 2
     return 4 # E: Return statement with value is not allowed in async generator
 assert_type(async_count_up_to(), AsyncGenerator[Literal[2], Any])
@@ -325,4 +354,27 @@ async def test() -> None:
     for z in gen():  # E: Type `AsyncGenerator[int, None]` is not iterable
         pass
 "#,
+);
+
+testcase!(
+    bug = "We don't understand yield in lambda, and mis-attribute the yield to the surrounding function",
+    test_lambda_yield,
+    r#"
+from typing import assert_type
+def f(x: int):
+    callback = lambda: (yield x)  # E: Invalid `yield` outside of a function
+    l = [i for i in callback()]
+    assert_type(l, list[int])  # E: assert_type(list[Any], list[int])
+    return l
+assert_type(f(1), list[int])  # E: assert_type(list[Any], list[int])
+"#,
+);
+
+testcase!(
+    test_generator_only_yield_from,
+    r#"
+from typing import Iterator
+def generator_with_only_yield_from() -> Iterator[int]:
+    yield from [1, 2, 3]
+    "#,
 );

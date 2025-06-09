@@ -9,10 +9,9 @@ use std::thread;
 use std::thread::ThreadId;
 
 use dupe::Dupe;
+use pyrefly_util::lock::Mutex;
 use starlark_map::small_set::SmallSet;
 use starlark_map::smallset;
-
-use crate::util::lock::Mutex;
 
 /// Recursive calculations by the same thread return None, but
 /// if they are different threads they may start calculating.

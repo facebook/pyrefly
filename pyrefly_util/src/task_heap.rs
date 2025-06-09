@@ -16,8 +16,8 @@ use std::sync::atomic::Ordering;
 
 use dupe::Dupe;
 
-use crate::util::lock::Condvar;
-use crate::util::lock::Mutex;
+use crate::lock::Condvar;
+use crate::lock::Mutex;
 
 /// Used to signal that all the tasks should be cancelled.
 pub struct Cancelled;
@@ -232,9 +232,9 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::util::lock::Mutex;
-    use crate::util::thread_pool::ThreadCount;
-    use crate::util::thread_pool::ThreadPool;
+    use crate::lock::Mutex;
+    use crate::thread_pool::ThreadCount;
+    use crate::thread_pool::ThreadPool;
 
     fn wait() {
         // at 100ms we occasionally lose the race condition, so sleep for a bit longer

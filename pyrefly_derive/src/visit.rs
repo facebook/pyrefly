@@ -22,7 +22,7 @@ pub(crate) fn derive_visit(input: proc_macro::TokenStream) -> proc_macro::TokenS
     deriver(
         input,
         quote! { & },
-        quote! { crate::util::visit::Visit },
+        quote! { pyrefly_util::visit::Visit },
         quote! { visit },
         quote! { fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) },
     )
@@ -32,7 +32,7 @@ pub(crate) fn derive_visit_mut(input: proc_macro::TokenStream) -> proc_macro::To
     deriver(
         input,
         quote! { &mut },
-        quote! { crate::util::visit::VisitMut },
+        quote! { pyrefly_util::visit::VisitMut },
         quote! { visit_mut },
         quote! { fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) },
     )

@@ -10,7 +10,9 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
+use pyrefly_util::fs_anyhow;
 use ruff_text_size::TextRange;
+use vec1::vec1;
 
 use crate::error::collector::ErrorCollector;
 use crate::error::kind::ErrorKind;
@@ -21,7 +23,6 @@ use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
 use crate::module::module_path::ModulePathDetails;
 use crate::state::memory::MemoryFilesLookup;
-use crate::util::fs_anyhow;
 
 /// The result of loading a module, including its `ModuleInfo` and `ErrorCollector`.
 #[derive(Debug)]
@@ -66,12 +67,12 @@ impl Load {
         if let Some(err) = self_error {
             errors.add(
                 TextRange::default(),
-                format!(
-                    "Failed to load `{name}` from `{}`, got {err:#}",
-                    module_info.path()
-                ),
                 ErrorKind::ImportError,
                 None,
+                vec1![format!(
+                    "Failed to load `{name}` from `{}`, got {err:#}",
+                    module_info.path()
+                )],
             );
         }
         Self {

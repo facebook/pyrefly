@@ -353,7 +353,7 @@ testcase!(
 class C:
     pass
 def f(x):
-    [None for y in x if "5" + 5]  # E: `+` is not supported between `Literal['5']` and `Literal[5]`  # E: Argument `Literal[5]` is not assignable to parameter with type `str`
+    [None for y in x if "5" + 5]  # E: `+` is not supported between `Literal['5']` and `Literal[5]`
     "#,
 );
 
@@ -1129,5 +1129,19 @@ if 0.1:
     vari = "test"
     raise SystemExit
 assert_type(vari, Literal["test"])
+"#,
+);
+
+testcase!(
+    bug = "Merge flow is lax about possibly-undefined locals, so we don't catch that `z` may be uninitialized.",
+    test_named_inside_boolean_op,
+    r#"
+from typing import assert_type, Literal
+b: bool = True
+y = 5
+x0 = True or (y := b) and False
+assert_type(y, Literal[5, True])  # this is as expected
+x0 = True or (z := b) and False
+assert_type(z, bool)  # here, we did not catch that `z` may not be initialized
 "#,
 );

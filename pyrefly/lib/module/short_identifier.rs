@@ -7,13 +7,13 @@
 
 use std::fmt;
 
+use pyrefly_util::display::DisplayWith;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 
 use crate::module::module_info::ModuleInfo;
-use crate::util::display::DisplayWith;
 
 /// An identifier, where we can drop the `Name` part because it came from a `ModuleInfo`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

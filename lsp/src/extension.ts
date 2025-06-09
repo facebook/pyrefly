@@ -79,7 +79,6 @@ export async function activate(context: ExtensionContext) {
     const bundledPyreflyPath = vscode.Uri.joinPath(
         context.extensionUri,
         'bin',
-        'release',
         // process.platform returns win32 on any windows CPU architecture
         process.platform === 'win32' ? 'pyrefly.exe' : 'pyrefly'
     );

@@ -6,9 +6,7 @@
  */
 
 use std::collections::HashMap;
-use std::io::Write as _;
 use std::num::NonZeroUsize;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -19,9 +17,16 @@ use std::time::Instant;
 use anstream::ColorChoice;
 use anyhow::anyhow;
 use dupe::Dupe;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::thread_pool::ThreadCount;
+use pyrefly_util::thread_pool::init_thread_pool;
+use pyrefly_util::trace::init_tracing;
 use ruff_python_ast::name::Name;
 use ruff_source_file::LineIndex;
 use ruff_source_file::OneIndexed;
+use ruff_source_file::PositionEncoding;
+use ruff_source_file::SourceLocation;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
@@ -43,11 +48,6 @@ use crate::sys_info::PythonVersion;
 use crate::sys_info::SysInfo;
 use crate::types::class::Class;
 use crate::types::types::Type;
-use crate::util::arc_id::ArcId;
-use crate::util::prelude::SliceExt;
-use crate::util::thread_pool::ThreadCount;
-use crate::util::thread_pool::init_thread_pool;
-use crate::util::trace::init_tracing;
 
 #[macro_export]
 macro_rules! testcase {
@@ -230,24 +230,30 @@ impl TestEnv {
 
 pub fn code_frame_of_source_at_range(source: &str, range: TextRange) -> String {
     let index = LineIndex::from_source_text(source);
-    let start_loc = index.source_location(range.start(), source);
-    let end_loc = index.source_location(range.end(), source);
+    let start_loc = index.line_column(range.start(), source);
+    let end_loc = index.line_column(range.end(), source);
     if (range.start().checked_add(TextSize::from(1))) == Some(range.end()) {
-        let full_line = source.lines().nth(start_loc.row.to_zero_indexed()).unwrap();
+        let full_line = source
+            .lines()
+            .nth(start_loc.line.to_zero_indexed())
+            .unwrap();
         format!(
             "{} | {}\n{}   {}^",
-            start_loc.row,
+            start_loc.line,
             full_line,
-            " ".repeat(start_loc.row.to_string().len()),
+            " ".repeat(start_loc.line.to_string().len()),
             " ".repeat(start_loc.column.to_zero_indexed())
         )
-    } else if start_loc.row == end_loc.row {
-        let full_line = source.lines().nth(start_loc.row.to_zero_indexed()).unwrap();
+    } else if start_loc.line == end_loc.line {
+        let full_line = source
+            .lines()
+            .nth(start_loc.line.to_zero_indexed())
+            .unwrap();
         format!(
             "{} | {}\n{}   {}{}",
-            start_loc.row,
+            start_loc.line,
             full_line,
-            " ".repeat(start_loc.row.to_string().len()),
+            " ".repeat(start_loc.line.to_string().len()),
             " ".repeat(start_loc.column.to_zero_indexed()),
             "^".repeat(std::cmp::max(
                 end_loc.column.to_zero_indexed() - start_loc.column.to_zero_indexed(),
@@ -285,9 +291,12 @@ pub fn extract_cursors_for_test(source: &str) -> Vec<TextSize> {
                 panic!("Invalid cursor at {}:{}", line_index, row_index);
             }
             let position = index.offset(
-                OneIndexed::from_zero_indexed(line_index - 1),
-                OneIndexed::from_zero_indexed(row_index),
+                SourceLocation {
+                    line: OneIndexed::from_zero_indexed(line_index - 1),
+                    character_offset: OneIndexed::from_zero_indexed(row_index),
+                },
                 source,
+                PositionEncoding::Utf32,
             );
             ranges.push(position);
         }
@@ -469,52 +478,5 @@ pub fn get_class(name: &str, handle: &Handle, state: &State) -> Class {
     match &**solutions.get(&KeyExport(Name::new(name))) {
         Type::ClassDef(cls) => cls.dupe(),
         _ => unreachable!(),
-    }
-}
-
-// Utility structure to facilitate setting up non-memory filesystem structure under test directories.
-pub enum TestPathKind {
-    File,
-    FileWithContents(String),
-    Directory(Vec<TestPath>),
-}
-pub struct TestPath {
-    pub name: String,
-    pub kind: TestPathKind,
-}
-
-impl TestPath {
-    pub fn file(name: &str) -> Self {
-        Self {
-            name: name.to_owned(),
-            kind: TestPathKind::File,
-        }
-    }
-
-    pub fn dir(name: &str, children: Vec<TestPath>) -> Self {
-        Self {
-            name: name.to_owned(),
-            kind: TestPathKind::Directory(children),
-        }
-    }
-
-    pub fn setup_test_directory(root: &Path, paths: Vec<TestPath>) {
-        for path in paths {
-            match path.kind {
-                TestPathKind::File => {
-                    std::fs::File::create(root.join(path.name)).unwrap();
-                }
-                TestPathKind::Directory(children) => {
-                    let dir = root.join(path.name);
-                    std::fs::create_dir(&dir).unwrap();
-                    Self::setup_test_directory(&dir, children);
-                }
-                TestPathKind::FileWithContents(contents) => {
-                    let path = root.join(path.name);
-                    let mut f = std::fs::File::create(path).unwrap();
-                    f.write_all(contents.as_bytes()).unwrap();
-                }
-            }
-        }
     }
 }

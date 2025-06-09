@@ -24,7 +24,7 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
 fn basic_test() {
     let code = r#"
 from typing import Literal
-#        ^
+#        ^     ^        ^
 def f(x: list[int], y: str, z: Literal[42]):
 #   ^               ^       ^
     return x
@@ -39,6 +39,14 @@ yyy = f([1, 2, 3], "test", 42)
 2 | from typing import Literal
              ^
 Hover Result: `Module[typing]`
+
+2 | from typing import Literal
+                   ^
+Hover Result: None
+
+2 | from typing import Literal
+                            ^
+Hover Result: `type[Literal]`
 
 4 | def f(x: list[int], y: str, z: Literal[42]):
         ^
@@ -84,6 +92,25 @@ Hover Result: `Module[typing]`
 }
 
 #[test]
+fn import_alias_test() {
+    let code = r#"
+import typing as t
+#                ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | import typing as t
+                     ^
+Hover Result: `Module[typing]`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn duplicate_import_test() {
     let code = r#"
 from typing import List
@@ -91,13 +118,12 @@ import typing
 #        ^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
-    // TODO(kylei): The result should be `Module[typing]`
     assert_eq!(
         r#"
 # main.py
 3 | import typing
              ^
-Hover Result: None
+Hover Result: `Module[typing]`
 "#
         .trim(),
         report.trim(),

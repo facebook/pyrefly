@@ -54,7 +54,7 @@ class C1[T]:
     x: tuple[T, ...]
     def __init__(self, x: tuple[T, ...]) -> None:
         self.x = x
-        self.y: T = x  # E: `tuple[TypeVar[T], ...]` is not assignable to attribute `y` with type `TypeVar[T]`
+        self.y: T = x  # E: `tuple[T, ...]` is not assignable to attribute `y` with type `T`
 class C2[*Ts]:
     x: tuple[*Ts]
     def __init__(self, x: tuple[*Ts]) -> None:
@@ -121,19 +121,18 @@ def helper(x: A[int, str]): ...
 def test[*Ts](x: A[int, str], y: A[str, str, str], z: A[*Ts]):
     helper(x)
     helper(y)  # E: Argument `A[tuple[str, str, str]]` is not assignable to parameter `x` with type `A[tuple[int, str]]`
-    helper(z)  # E: Argument `A[TypeVarTuple[Ts]]` is not assignable to parameter `x` with type `A[tuple[int, str]]`
+    helper(z)  # E: Argument `A[Ts]` is not assignable to parameter `x` with type `A[tuple[int, str]]`
 "#,
 );
 
 testcase!(
-    bug = "TODO: typevartuple should be iterable",
     test_type_var_tuple_iterate,
     r#"
 from typing import TypeVarTuple
 
 _Ts = TypeVarTuple("_Ts")
 def f(*args: *_Ts) -> None: 
-    f(*args) # E: Type `TypeVarTuple[_Ts]` is not iterable
+    f(*args)
 "#,
 );
 

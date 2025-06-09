@@ -5,16 +5,21 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Display;
 use std::mem;
 
+use pyrefly_util::gas::Gas;
+use pyrefly_util::lock::RwLock;
+use pyrefly_util::recurser::Recurser;
+use pyrefly_util::uniques::UniqueFactory;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::error::collector::ErrorCollector;
@@ -31,11 +36,6 @@ use crate::types::simplify::unions_with_literals;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 use crate::types::types::Var;
-use crate::util::gas::Gas;
-use crate::util::lock::RwLock;
-use crate::util::recurser::Recurser;
-use crate::util::uniques::UniqueFactory;
-use crate::util::visit::VisitMut;
 
 /// Error message when a variable has leaked from one module to another.
 ///
@@ -218,18 +218,18 @@ impl Solver {
                 *x = simplify_tuples(mem::take(tuple));
             }
             // When a param spec is resolved, collapse any Concatenate and Callable types that use it
-            if let Type::Concatenate(box ts, box Type::ParamSpecValue(paramlist)) = x {
+            if let Type::Concatenate(ts, box Type::ParamSpecValue(paramlist)) = x {
                 let params = mem::take(paramlist).prepend_types(ts).into_owned();
                 *x = Type::ParamSpecValue(params);
             }
-            if let Type::Concatenate(box ts, box Type::Concatenate(ts2, pspec)) = x {
+            if let Type::Concatenate(ts, box Type::Concatenate(ts2, pspec)) = x {
                 *x = Type::Concatenate(
                     ts.iter().chain(ts2.iter()).cloned().collect(),
                     pspec.clone(),
                 );
             }
             let (callable, kind) = match x {
-                Type::Callable(box c) => (Some(c), None),
+                Type::Callable(c) => (Some(&mut **c), None),
                 Type::Function(box Function {
                     signature: c,
                     metadata: k,
@@ -237,7 +237,7 @@ impl Solver {
                 _ => (None, None),
             };
             if let Some(Callable {
-                params: Params::ParamSpec(box ts, pspec),
+                params: Params::ParamSpec(ts, pspec),
                 ret,
             }) = callable
             {
@@ -260,10 +260,10 @@ impl Solver {
                     Type::Ellipsis if ts.is_empty() => {
                         *x = new_callable(Callable::ellipsis(ret.clone()));
                     }
-                    Type::Concatenate(box ts2, box pspec) => {
+                    Type::Concatenate(ts2, pspec) => {
                         *x = new_callable(Callable::concatenate(
                             ts.iter().chain(ts2.iter()).cloned().collect(),
-                            pspec.clone(),
+                            (**pspec).clone(),
                             ret.clone(),
                         ));
                     }
@@ -378,10 +378,10 @@ impl Solver {
         let kind = tcc.kind.as_error_kind();
         match tcc.context {
             Some(ctx) => {
-                errors.add(loc, msg, kind, Some(&|| ctx.clone()));
+                errors.add(loc, kind, Some(&|| ctx.clone()), vec1![msg]);
             }
             None => {
-                errors.add(loc, msg, kind, None);
+                errors.add(loc, kind, None, vec1![msg]);
             }
         }
     }
@@ -448,22 +448,19 @@ impl Solver {
         fn expand(
             t: Type,
             variables: &SmallMap<Var, Variable>,
-            seen: &mut HashSet<Var>,
+            recurser: &Recurser<Var>,
             res: &mut Vec<Type>,
         ) {
             match t {
-                Type::Var(v) if seen.insert(v) => {
-                    match variables.get(&v) {
-                        Some(Variable::Answer(t)) => {
-                            expand(t.clone(), variables, seen, res);
-                        }
-                        _ => res.push(v.to_type()),
+                Type::Var(v) if let Some(_guard) = recurser.recurse(v) => match variables.get(&v) {
+                    Some(Variable::Answer(t)) => {
+                        expand(t.clone(), variables, recurser, res);
                     }
-                    seen.remove(&v);
-                }
+                    _ => res.push(v.to_type()),
+                },
                 Type::Union(ts) => {
                     for t in ts {
-                        expand(t, variables, seen, res);
+                        expand(t, variables, recurser, res);
                     }
                 }
                 _ => res.push(t),
@@ -488,7 +485,7 @@ impl Solver {
                 // possibilities, so just ignore it.
                 let mut res = Vec::new();
                 // First expand all union/var into a list of the possible unions
-                expand(t, &lock, &mut HashSet::new(), &mut res);
+                expand(t, &lock, &Recurser::new(), &mut res);
                 // Then remove any reference to self, before unioning it back together
                 res.retain(|x| x != &Type::Var(v));
                 lock.insert(v, Variable::Answer(unions(res)));

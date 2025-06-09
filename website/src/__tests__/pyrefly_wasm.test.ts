@@ -134,10 +134,7 @@ tes
             const firstCompletion = completions[0];
             expect(firstCompletion.label).toEqual('test');
             // Autocompletion kind is defined here: https://fburl.com/code/9v0zg9e7
-            // By default, all auto complete seem to default to 6 (VARIABLE) right now, if this
-            // test breaks in the future, it's likely because the kind was updated and we need to update the kind
-            // to be 3 (FUNCTION)
-            expect(firstCompletion.kind).toEqual(6); // CompletionItemKind.VARIABLE
+            expect(firstCompletion.kind).toEqual(3); // CompletionItemKind.FUNCTION
             expect(firstCompletion.detail).toEqual('(x: int) -> str');
         });
     });

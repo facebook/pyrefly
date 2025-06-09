@@ -12,6 +12,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::lock::Mutex;
+use pyrefly_util::prelude::SliceExt;
 use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
@@ -28,9 +31,6 @@ use crate::sys_info::PythonVersion;
 use crate::sys_info::SysInfo;
 use crate::test::util::TestEnv;
 use crate::test::util::init_test;
-use crate::util::arc_id::ArcId;
-use crate::util::lock::Mutex;
-use crate::util::prelude::SliceExt;
 
 #[test]
 fn test_multiple_config() {

@@ -15,6 +15,7 @@ use std::sync::LazyLock;
 use anyhow::Context;
 use anyhow::anyhow;
 use itertools::Itertools;
+use pyrefly_util::lock::Mutex;
 use serde::Deserialize;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
@@ -27,7 +28,6 @@ use crate::config::environment::finder::Finder as _;
 use crate::config::environment::venv::Venv;
 use crate::sys_info::PythonPlatform;
 use crate::sys_info::PythonVersion;
-use crate::util::lock::Mutex;
 
 static INTERPRETER_ENV_REGISTRY: LazyLock<Mutex<SmallMap<PathBuf, Option<PythonEnvironment>>>> =
     LazyLock::new(|| Mutex::new(SmallMap::new()));
@@ -60,18 +60,37 @@ impl Display for SitePackagePathSource {
 /// other than the first available on the path should be used (i.e.
 /// should we always look at a venv/conda environment instead?)
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Default)]
+#[serde(rename_all = "kebab-case")]
 pub struct PythonEnvironment {
     /// The platform any `sys.platform` check should evaluate against.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "python_platform"
+    )]
     pub python_platform: Option<PythonPlatform>,
 
     /// The platform any `sys.version` check should evaluate against.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "python_version"
+    )]
     pub python_version: Option<PythonVersion>,
 
     /// Directories containing third-party package imports, searched
     /// after first checking `search_path` and `typeshed`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "site_package_path"
+    )]
     pub site_package_path: Option<Vec<PathBuf>>,
 
     /// Is the `site_package_path` here one we got from

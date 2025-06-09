@@ -10,6 +10,9 @@
 use std::fmt;
 use std::fmt::Display;
 
+use pyrefly_util::display::Fmt;
+use pyrefly_util::display::append;
+use pyrefly_util::display::commas_iter;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
@@ -23,13 +26,11 @@ use crate::types::qname::QName;
 use crate::types::type_var::Restriction;
 use crate::types::types::AnyStyle;
 use crate::types::types::BoundMethod;
+use crate::types::types::Forall;
+use crate::types::types::Forallable;
 use crate::types::types::NeverStyle;
 use crate::types::types::SuperObj;
 use crate::types::types::Type;
-use crate::types::types::TypeAliasStyle;
-use crate::util::display::Fmt;
-use crate::util::display::append;
-use crate::util::display::commas_iter;
 
 /// Information about the classes we have seen.
 /// Set to None to indicate we have seen different values, or Some if they are all the same.
@@ -271,14 +272,21 @@ impl<'a> TypeDisplayContext<'a> {
                 )
             }
             Type::Tuple(t) => t.fmt_with_type(f, |t| self.display(t)),
-            Type::Forall(forall) => {
+            Type::Forall(box Forall {
+                tparams,
+                body: body @ Forallable::Function(_),
+            }) => {
                 write!(
                     f,
-                    "Forall[{}, {}]",
-                    commas_iter(|| forall.tparams.iter()),
-                    self.display(&forall.body.clone().as_type()),
+                    "[{}]{}",
+                    commas_iter(|| tparams.iter()),
+                    self.display(&body.clone().as_type()),
                 )
             }
+            Type::Forall(box Forall {
+                tparams,
+                body: Forallable::TypeAlias(ta),
+            }) => ta.fmt_with_type(f, &|t| self.display(t), Some(tparams)),
             Type::Type(ty) => write!(f, "type[{}]", self.display(ty)),
             Type::TypeGuard(ty) => write!(f, "TypeGuard[{}]", self.display(ty)),
             Type::TypeIs(ty) => write!(f, "TypeIs[{}]", self.display(ty)),
@@ -304,12 +312,7 @@ impl<'a> TypeDisplayContext<'a> {
                 AnyStyle::Explicit => write!(f, "Any"),
                 AnyStyle::Implicit | AnyStyle::Error => write!(f, "Unknown"),
             },
-            Type::TypeAlias(ta) if ta.style == TypeAliasStyle::LegacyImplicit => {
-                write!(f, "{}", self.display(&ta.as_type()))
-            }
-            Type::TypeAlias(ta) => {
-                write!(f, "TypeAlias[{}, {}]", ta.name, self.display(&ta.as_type()))
-            }
+            Type::TypeAlias(ta) => ta.fmt_with_type(f, &|t| self.display(t), None),
             Type::SuperInstance(box (cls, obj)) => {
                 write!(f, "super[")?;
                 self.fmt_qname(cls.qname(), f)?;
@@ -342,6 +345,7 @@ pub mod tests {
     use std::sync::Arc;
 
     use dupe::Dupe;
+    use pyrefly_util::uniques::UniqueFactory;
     use ruff_python_ast::Identifier;
     use ruff_text_size::TextSize;
 
@@ -363,11 +367,9 @@ pub mod tests {
     use crate::types::type_var::PreInferenceVariance;
     use crate::types::type_var::Restriction;
     use crate::types::type_var::TypeVar;
-    use crate::types::type_var::Variance;
     use crate::types::typed_dict::TypedDict;
     use crate::types::types::TParam;
     use crate::types::types::TParams;
-    use crate::util::uniques::UniqueFactory;
 
     pub fn fake_class(name: &str, module: &str, range: u32, tparams: Vec<TParam>) -> Class {
         let mi = ModuleInfo::new(
@@ -396,7 +398,7 @@ pub mod tests {
                     default: None,
                 },
             ),
-            variance: Variance::Invariant,
+            variance: PreInferenceVariance::PInvariant,
         }
     }
 
@@ -540,16 +542,45 @@ pub mod tests {
 
     #[test]
     fn test_display_optional_parameter() {
-        let param1 = Param::PosOnly(Type::any_explicit(), Required::Optional);
+        let param1 = Param::PosOnly(
+            Some(Name::new_static("x")),
+            Type::any_explicit(),
+            Required::Optional,
+        );
         let param2 = Param::Pos(
-            Name::new_static("x"),
+            Name::new_static("y"),
             Type::any_explicit(),
             Required::Optional,
         );
         let callable = Callable::list(ParamList::new(vec![param1, param2]), Type::None);
         assert_eq!(
             Type::Callable(Box::new(callable)).to_string(),
-            "(_: Any = ..., x: Any = ...) -> None"
+            "(x: Any = ..., /, y: Any = ...) -> None"
+        );
+    }
+
+    #[test]
+    fn test_posonly_parameter_only() {
+        let param = Param::PosOnly(
+            Some(Name::new_static("x")),
+            Type::any_explicit(),
+            Required::Required,
+        );
+        let callable = Callable::list(ParamList::new(vec![param]), Type::None);
+        assert_eq!(
+            Type::Callable(Box::new(callable)).to_string(),
+            "(x: Any, /) -> None"
+        );
+    }
+
+    #[test]
+    fn test_anon_posonly_parameters() {
+        let param1 = Param::PosOnly(None, Type::any_explicit(), Required::Required);
+        let param2 = Param::PosOnly(None, Type::any_explicit(), Required::Optional);
+        let callable = Callable::list(ParamList::new(vec![param1, param2]), Type::None);
+        assert_eq!(
+            Type::Callable(Box::new(callable)).to_string(),
+            "(Any, _: Any = ...) -> None"
         );
     }
 

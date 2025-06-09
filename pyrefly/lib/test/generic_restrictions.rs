@@ -11,7 +11,7 @@ testcase!(
     test_quantified_subtyping_no_constraint,
     r#"
 def test[T](x: T) -> None:
-    y: int = x  # E: `TypeVar[T]` is not assignable to `int`
+    y: int = x  # E: `T` is not assignable to `int`
     z: object = x  # OK
  "#,
 );
@@ -73,7 +73,7 @@ class C(B): ...
 def test[T: B](x: T) -> None:
     a: A = x  # OK
     b: B = x  # OK
-    c: C = x  # E: `TypeVar[T]` is not assignable to `C`
+    c: C = x  # E: `T` is not assignable to `C`
 
 test(A())  # Not OK
 test(B())
@@ -91,8 +91,8 @@ class D(C): ...
 
 def test[T: (B, C)](x: T) -> None:
     a: A = x  # OK
-    b: B = x  # E: `TypeVar[T]` is not assignable to `B`
-    c: C = x  # E: `TypeVar[T]` is not assignable to `C`
+    b: B = x  # E: `T` is not assignable to `B`
+    c: C = x  # E: `T` is not assignable to `C`
 
 test(A())  # Not OK
 test(B())
@@ -183,13 +183,12 @@ class C[T = int]:
     def meth(self, /) -> Self:
         return self
     attr: T
-reveal_type(C.meth)  # E: Forall[T, (C[TypeVar[T]]) -> C[TypeVar[T]]
+reveal_type(C.meth)  # E: [T](self: C[T], /) -> C[T]
 assert_type(C.attr, int)  # E: assert_type(Any, int) failed  # E: Instance-only attribute `attr` of class `C` is not visible on the class
  "#,
 );
 
 testcase!(
-    bug = "Should succeed with no errors",
     test_union_bound_attr_get,
     r#"
 from typing import assert_type
@@ -198,13 +197,12 @@ class A:
 class B:
     x: str
 def f[T: A | B](x: T) -> T:
-    assert_type(x.x, int | str) # E: assert_type # E: attribute base undefined
+    assert_type(x.x, int | str)
     return x
     "#,
 );
 
 testcase!(
-    bug = "Should succeed with no errors",
     test_constraints_attr_get,
     r#"
 from typing import assert_type
@@ -213,7 +211,7 @@ class A:
 class B:
     x: str
 def f[T: (A, B)](x: T) -> T:
-    assert_type(x.x, int | str) # E: assert_type # E: attribute base undefined
+    assert_type(x.x, int | str)
     return x
     "#,
 );
@@ -226,5 +224,96 @@ def f[T](x: T) -> T:
     assert_type(x.__doc__, str | None)
     x.nonsense # E: `object` has no attribute `nonsense`
     return x
+    "#,
+);
+
+testcase!(
+    test_pass_along_bounded_typevar,
+    r#"
+from typing import TypeVar
+T = TypeVar('T', bound='A')
+class A:
+    def f(self: T) -> T:
+        return self
+    def g(self: T) -> T:
+        return self.f()
+    "#,
+);
+
+testcase!(
+    test_preserve_generic_self,
+    r#"
+class A:
+    def m[S: A](self: S) -> S:
+        return self
+def g[T: A](a: T) -> T:
+    return a.m()
+    "#,
+);
+
+testcase!(
+    test_pass_along_constrained_typevar,
+    r#"
+from typing import Self, TypeVar
+
+class B():
+    def f(self) -> Self:
+        return self 
+class C(B):
+    pass
+class D(B):
+    pass
+
+T = TypeVar( "T", C, D)
+def g(b: T) -> T:
+    return b.f()
+    "#,
+);
+
+testcase!(
+    test_constrained_typevar_attr_access,
+    r#"
+class A:
+    x: int
+class B:
+    x: int
+class Foo[T: (A, B)]:
+    y: T
+    def foo(self) -> None:
+        self.y.__class__
+    "#,
+);
+
+testcase!(
+    test_constrained_typevar_protocol_subtype,
+    r#"
+from typing import Protocol
+class P(Protocol):
+    x: int
+class A:
+    x: int
+class B:
+    x: int
+class Foo[T: (A, B)]:
+    y: T
+    def foo(self) -> None:
+        p: P = self.y
+    "#,
+);
+
+testcase!(
+    bug = "this should work",
+    test_constrained_typevar_mutate_attr,
+    r#"
+class A:
+    x: int
+class B:
+    x: int
+class Foo[T: (A, B)]:
+    y: T
+    def foo(self) -> None:
+        self.y.x = 1  # E: TODO: attr::check_assign_to_attribute_and_infer_narrow
+        self.y.x = ""  # Not OK # E: TODO: attr::check_assign_to_attribute_and_infer_narrow
+        del self.y.x  # E: TODO: Answers::solve_expectation::Delete
     "#,
 );

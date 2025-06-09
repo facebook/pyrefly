@@ -20,16 +20,13 @@
 #![deny(clippy::cloned_instead_of_copied)]
 #![deny(clippy::derive_partial_eq_without_eq)]
 #![deny(clippy::inefficient_to_string)]
+#![deny(clippy::mem_replace_option_with_some)]
 #![deny(clippy::str_to_string)]
 #![deny(clippy::string_to_string)]
 #![deny(clippy::trivially_copy_pass_by_ref)]
-#![feature(associated_const_equality)]
-#![feature(associated_type_defaults)]
 #![feature(box_patterns)]
-#![feature(const_type_name)]
 #![feature(if_let_guard)]
 #![feature(let_chains)]
-#![feature(never_type)]
 #![feature(hash_extract_if)]
 
 mod alt;
@@ -51,7 +48,6 @@ mod state;
 mod sys_info;
 mod test;
 mod types;
-mod util;
 
 /// This interface is NOT stable and should not be relied upon.
 /// It will change during minor version increments.
@@ -77,15 +73,6 @@ pub mod library {
                 pub use crate::module::module_path::ModulePath;
                 pub use crate::sys_info::PythonPlatform;
                 pub use crate::sys_info::PythonVersion;
-                pub use crate::util::arc_id::ArcId;
-                pub use crate::util::args::clap_env;
-                pub use crate::util::args::get_args_expanded;
-                pub use crate::util::globs;
-                pub use crate::util::thread_pool::init_thread_pool;
-                pub use crate::util::trace::debug_log;
-                pub use crate::util::trace::init_tracing;
-                #[cfg(not(target_arch = "wasm32"))]
-                pub use crate::util::watcher::Watcher;
             }
         }
     }

@@ -16,14 +16,12 @@ use anyhow::Context as _;
 use clap::Parser;
 use clap::Subcommand;
 use dupe::Dupe;
-use library::ArcId;
 use library::ConfigFile;
-use library::Watcher;
-use library::clap_env;
+use library::ConfigSource;
+use library::ModulePath;
+use library::ProjectLayout;
 use library::finder::ConfigFinder;
-use library::get_args_expanded;
-use library::globs::FilteredGlobs;
-use library::globs::Globs;
+use library::finder::debug_log;
 use library::run::BuckCheckArgs;
 use library::run::CheckArgs;
 use library::run::CommandExitStatus;
@@ -33,13 +31,15 @@ use library::run::LspArgs;
 use library::standard_config_finder;
 use path_absolutize::Absolutize;
 use pyrefly::library::library::library::library;
-use pyrefly::library::library::library::library::ConfigSource;
-use pyrefly::library::library::library::library::ModulePath;
-use pyrefly::library::library::library::library::ProjectLayout;
-use pyrefly::library::library::library::library::debug_log;
+use pyrefly::library::library::library::library::finder::ConfigError;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::args::clap_env;
+use pyrefly_util::args::get_args_expanded;
+use pyrefly_util::globs::FilteredGlobs;
+use pyrefly_util::globs::Globs;
+use pyrefly_util::watcher::Watcher;
 use starlark_map::small_map::SmallMap;
 use tracing::debug;
-use tracing::error;
 use tracing::info;
 
 // fbcode likes to set its own allocator in fbcode.default_allocator
@@ -56,10 +56,10 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 struct Args {
     /// Set this to true to run profiling of fast jobs.
     /// Will run the command repeatedly.
-    #[clap(long = "profiling", global = true, hide = true, env = clap_env("PROFILING"))]
+    #[arg(long = "profiling", global = true, hide = true, env = clap_env("PROFILING"))]
     profiling: bool,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     common: CommonGlobalArgs,
 
     #[command(subcommand)]
@@ -75,10 +75,10 @@ struct FullCheckArgs {
     /// are ignored, and we use the default excludes unless overridden with the `--project-excludes` flag.
     files: Vec<String>,
     /// Files to exclude when type checking.
-    #[clap(long, env = clap_env("PROJECT_EXCLUDES"))]
+    #[arg(long, env = clap_env("PROJECT_EXCLUDES"))]
     project_excludes: Option<Vec<String>>,
     /// Watch for file changes and re-check them.
-    #[clap(long, env = clap_env("WATCH"), conflicts_with = "check_all")]
+    #[arg(long, env = clap_env("WATCH"), conflicts_with = "check_all")]
     watch: bool,
 
     /// Explicitly set the Pyre configuration to use when type checking or starting a language server.
@@ -88,10 +88,10 @@ struct FullCheckArgs {
     /// When not set, Pyre will perform an upward-filesystem-walk approach to find the nearest
     /// pyrefly.toml or pyproject.toml with `tool.pyre` section'. If no config is found, Pyre exits with error.
     /// If both a pyrefly.toml and valid pyproject.toml are found, pyrefly.toml takes precedence.
-    #[clap(long, short, env = clap_env("CONFIG"))]
+    #[arg(long, short, env = clap_env("CONFIG"), value_name = "FILE")]
     config: Option<PathBuf>,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     args: CheckArgs,
 }
 
@@ -150,7 +150,7 @@ fn absolutize(globs: Globs) -> anyhow::Result<Globs> {
 fn get_explicit_config(
     path: &Path,
     args: &library::run::CheckArgs,
-) -> (ArcId<ConfigFile>, Vec<anyhow::Error>) {
+) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
     let (file_config, parse_errors) = ConfigFile::from_file(path);
     let (config, validation_errors) = args.override_config(file_config);
     (
@@ -295,7 +295,7 @@ async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<Com
                     .push(path.clone());
             }
             for error in config_finder.errors() {
-                error!("{error:#}");
+                error.print();
             }
             for (config, files) in configs_to_files.into_iter() {
                 match &config.source {

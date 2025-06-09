@@ -8,10 +8,12 @@
 use std::mem;
 use std::sync::LazyLock;
 
+use pyrefly_util::prelude::SliceExt;
 use regex::Regex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprList;
+use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
@@ -20,6 +22,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::alt::class::class_metadata::BaseClass;
 use crate::binding::binding::AnnotationTarget;
@@ -29,16 +32,20 @@ use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassField;
 use crate::binding::binding::BindingClassMetadata;
 use crate::binding::binding::BindingClassSynthesizedFields;
+use crate::binding::binding::BindingVariance;
 use crate::binding::binding::ClassBinding;
 use crate::binding::binding::ClassFieldInitialValue;
 use crate::binding::binding::ExprOrBinding;
+use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassSynthesizedFields;
+use crate::binding::binding::KeyVariance;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamBuilder;
+use crate::binding::bindings::User;
 use crate::binding::scope::ClassIndices;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
@@ -46,13 +53,14 @@ use crate::binding::scope::MethodThatSetsAttr;
 use crate::binding::scope::Scope;
 use crate::binding::scope::ScopeKind;
 use crate::error::kind::ErrorKind;
+use crate::graph::index::Idx;
 use crate::module::module_name::ModuleName;
 use crate::module::short_identifier::ShortIdentifier;
+use crate::ruff::ast::Ast;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
 use crate::types::special_form::SpecialForm;
 use crate::types::types::Type;
-use crate::util::prelude::SliceExt;
 
 enum IllegalIdentifierHandling {
     Error,
@@ -75,14 +83,19 @@ impl<'a> BindingsBuilder<'a> {
         res
     }
 
-    fn class_indices(&mut self, class_name: &Identifier) -> ClassIndices {
+    fn class_object_and_indices(&mut self, class_name: &Identifier) -> (User, ClassIndices) {
         let def_index = self.def_index();
-        ClassIndices {
+        let class_indices = ClassIndices {
             def_index,
             class_idx: self.idx_for_promise(KeyClass(ShortIdentifier::new(class_name))),
             metadata_idx: self.idx_for_promise(KeyClassMetadata(def_index)),
             synthesized_fields_idx: self.idx_for_promise(KeyClassSynthesizedFields(def_index)),
-        }
+            variance_idx: self.idx_for_promise(KeyVariance(def_index)),
+        };
+        // The user - used for first-usage tracking of any expressions we analyze in a class definition -
+        // is the `Idx<Key>` of the class object bound to the class name.
+        let class_object = self.declare_user(Key::Definition(ShortIdentifier::new(class_name)));
+        (class_object, class_indices)
     }
 
     pub fn class_def(&mut self, mut x: StmtClassDef) {
@@ -92,15 +105,17 @@ impl<'a> BindingsBuilder<'a> {
             self.bind_definition(
                 &x.name,
                 Binding::Type(Type::type_form(Type::any_explicit())),
-                FlowStyle::None,
+                FlowStyle::Other,
             );
             return;
         }
 
-        let class_indices = self.class_indices(&x.name);
+        let (class_object, class_indices) = self.class_object_and_indices(&x.name);
+        let mut key_class_fields: SmallSet<Idx<KeyClassField>> = SmallSet::new();
 
         let body = mem::take(&mut x.body);
-        let decorators = self.ensure_and_bind_decorators(mem::take(&mut x.decorator_list));
+        let decorators =
+            self.ensure_and_bind_decorators(mem::take(&mut x.decorator_list), class_object.usage());
 
         self.scopes.push(Scope::annotation(x.range));
 
@@ -117,11 +132,12 @@ impl<'a> BindingsBuilder<'a> {
                 Expr::StringLiteral(v) => {
                     self.error(
                         base.range(),
+                        ErrorKind::InvalidInheritance,
+                        None,
                         format!(
                             "Cannot use string annotation `{}` as a base class",
                             v.value.to_str()
                         ),
-                        ErrorKind::InvalidInheritance,
                     );
                 }
                 _ => {}
@@ -134,16 +150,17 @@ impl<'a> BindingsBuilder<'a> {
         if let Some(args) = &mut x.arguments {
             args.keywords.iter_mut().for_each(|keyword| {
                 if let Some(name) = &keyword.arg {
-                    self.ensure_expr(&mut keyword.value);
+                    self.ensure_expr(&mut keyword.value, class_object.usage());
                     keywords.push((name.id.clone(), keyword.value.clone()));
                 } else {
                     self.error(
                         keyword.range(),
+                        ErrorKind::InvalidInheritance,
+                        None,
                         format!(
                             "The use of unpacking in class header of `{}` is not supported",
                             x.name
                         ),
-                        ErrorKind::InvalidInheritance,
                     )
                 }
             });
@@ -164,6 +181,7 @@ impl<'a> BindingsBuilder<'a> {
             class_indices.synthesized_fields_idx,
             BindingClassSynthesizedFields(class_indices.class_idx),
         );
+
         let legacy_tparam_builder = legacy.unwrap();
         legacy_tparam_builder.add_name_definitions(self);
 
@@ -208,10 +226,12 @@ impl<'a> BindingsBuilder<'a> {
                     name.cloned(),
                     ClassFieldProperties::new(stat_info.annot.is_some(), stat_info.loc),
                 );
-                self.insert_binding(
-                    KeyClassField(class_indices.def_index, name.into_key().clone()),
-                    binding,
-                );
+
+                let key_field = KeyClassField(class_indices.def_index, name.into_key().clone());
+
+                key_class_fields.insert(self.idx_for_promise(key_field.clone()));
+
+                self.insert_binding(key_field, binding);
             }
         }
         if let ScopeKind::Class(class_scope) = last_scope.kind {
@@ -234,8 +254,12 @@ impl<'a> BindingsBuilder<'a> {
                         name.clone(),
                         ClassFieldProperties::new(annotation.is_some(), range),
                     );
+
+                    let key_field = KeyClassField(class_indices.def_index, name.key().clone());
+                    key_class_fields.insert(self.idx_for_promise(key_field.clone()));
+
                     self.insert_binding(
-                        KeyClassField(class_indices.def_index, name.key().clone()),
+                        key_field,
                         BindingClassField {
                             class_idx: class_indices.class_idx,
                             name: name.into_key(),
@@ -250,7 +274,7 @@ impl<'a> BindingsBuilder<'a> {
                         },
                     );
                 } else if annotation.is_some() {
-                    self.error(range, format!("Cannot annotate attribute `{}`, which is already annotated in the class body", &name), ErrorKind::InvalidAnnotation);
+                    self.error(range, ErrorKind::InvalidAnnotation, None, format!("Cannot annotate attribute `{}`, which is already annotated in the class body", &name), );
                 }
             }
         } else {
@@ -259,10 +283,11 @@ impl<'a> BindingsBuilder<'a> {
 
         let legacy_tparams = legacy_tparam_builder.lookup_keys();
 
-        self.bind_definition(
+        self.bind_definition_user(
             &x.name,
+            class_object,
             Binding::ClassDef(class_indices.class_idx, decorators.into_boxed_slice()),
-            FlowStyle::None,
+            FlowStyle::Other,
         );
         fields_possibly_defined_by_this_class.reserve(0); // Attempt to shrink to capacity
         self.insert_binding_idx(
@@ -271,9 +296,18 @@ impl<'a> BindingsBuilder<'a> {
                 def_index: class_indices.def_index,
                 def: x,
                 fields: fields_possibly_defined_by_this_class,
-                bases: bases.into_boxed_slice(),
+                bases: bases.clone().into_boxed_slice(),
                 legacy_tparams: legacy_tparams.into_boxed_slice(),
             }),
+        );
+
+        self.insert_binding_idx(
+            class_indices.variance_idx,
+            BindingVariance {
+                class_key: class_indices.class_idx,
+                base_classes: bases.into_boxed_slice(),
+                fields: key_class_fields,
+            },
         );
     }
 
@@ -288,8 +322,9 @@ impl<'a> BindingsBuilder<'a> {
                 _ => {
                     self.error(
                         item.range(),
-                        "Expected a string literal".to_owned(),
                         ErrorKind::InvalidLiteral,
+                        None,
+                        "Expected a string literal".to_owned(),
                     );
                     None
                 }
@@ -311,16 +346,18 @@ impl<'a> BindingsBuilder<'a> {
                     [k, _] => {
                         self.error(
                             k.range(),
-                            "Expected first item to be a string literal".to_owned(),
                             ErrorKind::InvalidArgument,
+                            None,
+                            "Expected first item to be a string literal".to_owned(),
                         );
                         None
                     }
                     _ => {
                         self.error(
                             item.range(),
-                            "Expected a pair".to_owned(),
                             ErrorKind::InvalidArgument,
+                            None,
+                            "Expected a pair".to_owned(),
                         );
                         None
                     }
@@ -328,8 +365,9 @@ impl<'a> BindingsBuilder<'a> {
                 _ => {
                     self.error(
                         item.range(),
-                        "Expected a tuple".to_owned(),
                         ErrorKind::InvalidArgument,
+                        None,
+                        "Expected a tuple".to_owned(),
                     );
                     None
                 }
@@ -340,6 +378,8 @@ impl<'a> BindingsBuilder<'a> {
     fn synthesize_class_def(
         &mut self,
         class_name: Identifier,
+        class_object: User,
+        class_indices: ClassIndices,
         base: Option<Expr>,
         keywords: Box<[(Name, Expr)]>,
         // name, position, annotation, value
@@ -349,12 +389,17 @@ impl<'a> BindingsBuilder<'a> {
         class_kind: SynthesizedClassKind,
         special_base: Option<Box<BaseClass>>,
     ) {
-        let class_indices = self.class_indices(&class_name);
+        let mut key_class_fields: SmallSet<Idx<KeyClassField>> = SmallSet::new();
+
         self.insert_binding_idx(
             class_indices.metadata_idx,
             BindingClassMetadata {
                 class_idx: class_indices.class_idx,
-                bases: base.into_iter().collect::<Vec<_>>().into_boxed_slice(),
+                bases: base
+                    .clone()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
                 keywords,
                 decorators: Box::new([]),
                 is_new_type: class_kind == SynthesizedClassKind::NewType,
@@ -365,6 +410,7 @@ impl<'a> BindingsBuilder<'a> {
             class_indices.synthesized_fields_idx,
             BindingClassSynthesizedFields(class_indices.class_idx),
         );
+
         let mut fields = SmallMap::new();
         for (idx, (member_name, range, member_annotation, member_value)) in
             member_definitions.into_iter().enumerate()
@@ -376,8 +422,9 @@ impl<'a> BindingsBuilder<'a> {
                     IllegalIdentifierHandling::Error => {
                         self.error(
                             range,
-                            format!("`{member_name}` is not a valid identifier"),
                             ErrorKind::BadClassDefinition,
+                            None,
+                            format!("`{member_name}` is not a valid identifier"),
                         );
                         continue;
                     }
@@ -390,10 +437,12 @@ impl<'a> BindingsBuilder<'a> {
                     IllegalIdentifierHandling::Error => {
                         self.error(
                             range,
+                            ErrorKind::BadClassDefinition,
+                            None,
                             format!(
                                 "NamedTuple field name may not start with an underscore: `{member_name}`"
                             ),
-                            ErrorKind::BadClassDefinition,
+
                         );
                         continue;
                     }
@@ -404,8 +453,9 @@ impl<'a> BindingsBuilder<'a> {
             if fields.contains_key(&member_name) {
                 self.error(
                     range,
-                    format!("Duplicate field `{member_name}`"),
                     ErrorKind::BadClassDefinition,
+                    None,
+                    format!("Duplicate field `{member_name}`"),
                 );
                 continue;
             }
@@ -447,8 +497,12 @@ impl<'a> BindingsBuilder<'a> {
             } else {
                 None
             };
+
+            let key_field = KeyClassField(class_indices.def_index, member_name.clone());
+            key_class_fields.insert(self.idx_for_promise(key_field.clone()));
+
             self.insert_binding(
-                KeyClassField(class_indices.def_index, member_name.clone()),
+                key_field,
                 BindingClassField {
                     class_idx: class_indices.class_idx,
                     name: member_name,
@@ -461,18 +515,46 @@ impl<'a> BindingsBuilder<'a> {
                 },
             );
         }
-        self.bind_definition(
+        self.bind_definition_user(
             &class_name,
+            class_object,
             Binding::ClassDef(class_indices.class_idx, Box::new([])),
-            FlowStyle::None,
+            FlowStyle::Other,
         );
         self.insert_binding_idx(
             class_indices.class_idx,
             BindingClass::FunctionalClassDef(class_indices.def_index, class_name, fields),
         );
+
+        self.insert_binding_idx(
+            class_indices.variance_idx,
+            BindingVariance {
+                class_key: class_indices.class_idx,
+                base_classes: base
+                    .clone()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+                fields: key_class_fields,
+            },
+        );
     }
 
-    pub fn synthesize_enum_def(&mut self, class_name: Identifier, base: Expr, members: &[Expr]) {
+    pub fn synthesize_enum_def(
+        &mut self,
+        name: &ExprName,
+        func: &mut Expr,
+        arg_name: &mut Expr,
+        members: &mut [Expr],
+    ) {
+        let class_name = Ast::expr_name_identifier(name.clone());
+        let (class_object, class_indices) = self.class_object_and_indices(&class_name);
+        self.check_functional_definition_name(&name.id, arg_name);
+        self.ensure_expr(func, class_object.usage());
+        self.ensure_expr(arg_name, class_object.usage());
+        for arg in &mut *members {
+            self.ensure_expr(arg, class_object.usage());
+        }
         let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<Expr>)> =
             match members {
                 // Enum('Color', 'RED, GREEN, BLUE')
@@ -526,16 +608,18 @@ impl<'a> BindingsBuilder<'a> {
                         (Some(k), _) => {
                             self.error(
                                 k.range(),
-                                "Expected first item to be a string literal".to_owned(),
                                 ErrorKind::InvalidArgument,
+                                None,
+                                "Expected first item to be a string literal".to_owned(),
                             );
                             None
                         }
                         _ => {
                             self.error(
                                 item.range(),
-                                "Expected a key-value pair".to_owned(),
                                 ErrorKind::InvalidArgument,
+                                None,
+                                "Expected a key-value pair".to_owned(),
                             );
                             None
                         }
@@ -544,8 +628,9 @@ impl<'a> BindingsBuilder<'a> {
                 _ => {
                     self.error(
                         class_name.range,
-                        "Expected valid functional enum definition".to_owned(),
                         ErrorKind::InvalidArgument,
+                        None,
+                        "Expected valid functional enum definition".to_owned(),
                     );
                     Vec::new()
                 }
@@ -555,7 +640,9 @@ impl<'a> BindingsBuilder<'a> {
             .collect();
         self.synthesize_class_def(
             class_name,
-            Some(base),
+            class_object,
+            class_indices,
+            Some(func.clone()),
             Box::new([]),
             member_definitions,
             IllegalIdentifierHandling::Error,
@@ -569,10 +656,16 @@ impl<'a> BindingsBuilder<'a> {
     // but cannot specify the type of each element
     pub fn synthesize_collections_named_tuple_def(
         &mut self,
-        class_name: Identifier,
-        members: &[Expr],
+        name: &ExprName,
+        func: &mut Expr,
+        arg_name: &Expr,
+        members: &mut [Expr],
         keywords: &mut [Keyword],
     ) {
+        let class_name = Ast::expr_name_identifier(name.clone());
+        let (class_object, class_indices) = self.class_object_and_indices(&class_name);
+        self.ensure_expr(func, class_object.usage());
+        self.check_functional_definition_name(&name.id, arg_name);
         let member_definitions: Vec<(String, TextRange, Option<Expr>)> = match members {
             // namedtuple('Point', 'x y')
             // namedtuple('Point', 'x, y')
@@ -604,8 +697,9 @@ impl<'a> BindingsBuilder<'a> {
             _ => {
                 self.error(
                     class_name.range,
-                    "Expected valid functional named tuple definition".to_owned(),
                     ErrorKind::InvalidArgument,
+                    None,
+                    "Expected valid functional named tuple definition".to_owned(),
                 );
                 Vec::new()
             }
@@ -614,7 +708,7 @@ impl<'a> BindingsBuilder<'a> {
         let mut illegal_identifier_handling = IllegalIdentifierHandling::Error;
         let mut defaults: Vec<Option<Expr>> = vec![None; n_members];
         for kw in keywords {
-            self.ensure_expr(&mut kw.value);
+            self.ensure_expr(&mut kw.value, class_object.usage());
             if let Some(name) = &kw.arg
                 && name.id == "rename"
                 && let Expr::BooleanLiteral(lit) = &kw.value
@@ -630,11 +724,12 @@ impl<'a> BindingsBuilder<'a> {
                 if n_defaults > n_members {
                     self.error(
                         kw.value.range(),
+                        ErrorKind::InvalidArgument,
+                        None,
                         format!(
                             "Too many defaults values: expected up to {}, got {}",
                             n_members, n_defaults
                         ),
-                        ErrorKind::InvalidArgument,
                     );
                     let n_to_drop = n_defaults - n_members;
                     defaults = elts[n_to_drop..].map(|x| Some(x.clone()));
@@ -644,8 +739,9 @@ impl<'a> BindingsBuilder<'a> {
             } else {
                 self.error(
                     kw.value.range(),
-                    "Unrecognized argument for typed dictionary definition".to_owned(),
                     ErrorKind::InvalidArgument,
+                    None,
+                    "Unrecognized argument for typed dictionary definition".to_owned(),
                 );
             }
         }
@@ -658,6 +754,8 @@ impl<'a> BindingsBuilder<'a> {
         let range = class_name.range();
         self.synthesize_class_def(
             class_name,
+            class_object,
+            class_indices,
             None,
             Box::new([]),
             member_definitions_with_defaults,
@@ -671,10 +769,15 @@ impl<'a> BindingsBuilder<'a> {
     // This functional form allows specifying types for each element, but not default values
     pub fn synthesize_typing_named_tuple_def(
         &mut self,
-        class_name: Identifier,
-        base: Expr,
+        name: &ExprName,
+        func: &mut Expr,
+        arg_name: &Expr,
         members: &[Expr],
     ) {
+        let class_name = Ast::expr_name_identifier(name.clone());
+        let (class_object, class_indices) = self.class_object_and_indices(&class_name);
+        self.ensure_expr(func, class_object.usage());
+        self.check_functional_definition_name(&name.id, arg_name);
         let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<Expr>)> =
             match members {
                 // NamedTuple('Point', [('x', int), ('y', int)])
@@ -692,8 +795,9 @@ impl<'a> BindingsBuilder<'a> {
                 _ => {
                     self.error(
                         class_name.range,
-                        "Expected valid functional named tuple definition".to_owned(),
                         ErrorKind::InvalidArgument,
+                        None,
+                        "Expected valid functional named tuple definition".to_owned(),
                     );
                     Vec::new()
                 }
@@ -710,7 +814,9 @@ impl<'a> BindingsBuilder<'a> {
             .collect();
         self.synthesize_class_def(
             class_name,
-            Some(base),
+            class_object,
+            class_indices,
+            Some(func.clone()),
             Box::new([]),
             member_definitions,
             IllegalIdentifierHandling::Error,
@@ -721,10 +827,22 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     // Synthesize a class definition for NewType
-    pub fn synthesize_typing_new_type(&mut self, class_name: Identifier, base: Expr) {
+    pub fn synthesize_typing_new_type(
+        &mut self,
+        name: &ExprName,
+        new_type_name: &mut Expr,
+        base: &mut Expr,
+    ) {
+        let class_name = Ast::expr_name_identifier(name.clone());
+        let (class_object, class_indices) = self.class_object_and_indices(&class_name);
+        self.ensure_expr(new_type_name, class_object.usage());
+        self.check_functional_definition_name(&name.id, new_type_name);
+        self.ensure_type(base, &mut None);
         self.synthesize_class_def(
             class_name,
-            Some(base),
+            class_object,
+            class_indices,
+            Some(base.clone()),
             Box::new([]),
             Vec::new(),
             IllegalIdentifierHandling::Error,
@@ -736,14 +854,19 @@ impl<'a> BindingsBuilder<'a> {
 
     pub fn synthesize_typed_dict_def(
         &mut self,
-        class_name: Identifier,
-        base: Expr,
+        name: &ExprName,
+        func: &mut Expr,
+        arg_name: &Expr,
         args: &mut [Expr],
         keywords: &mut [Keyword],
     ) {
+        let class_name = Ast::expr_name_identifier(name.clone());
+        let (class_object, class_indices) = self.class_object_and_indices(&class_name);
+        self.ensure_expr(func, class_object.usage());
+        self.check_functional_definition_name(&name.id, arg_name);
         let mut base_class_keywords: Box<[(Name, Expr)]> = Box::new([]);
         for kw in keywords {
-            self.ensure_expr(&mut kw.value);
+            self.ensure_expr(&mut kw.value, class_object.usage());
             if let Some(name) = &kw.arg
                 && name.id == "total"
                 && matches!(kw.value, Expr::BooleanLiteral(_))
@@ -752,8 +875,9 @@ impl<'a> BindingsBuilder<'a> {
             } else {
                 self.error(
                     kw.value.range(),
-                    "Unrecognized argument for typed dictionary definition".to_owned(),
                     ErrorKind::InvalidArgument,
+                    None,
+                    "Unrecognized argument for typed dictionary definition".to_owned(),
                 );
             }
         }
@@ -763,7 +887,7 @@ impl<'a> BindingsBuilder<'a> {
                 .iter_mut()
                 .filter_map(|item| {
                     if let Some(key) = &mut item.key {
-                        self.ensure_expr(key);
+                        self.ensure_expr(key, class_object.usage());
                     }
                     self.ensure_type(&mut item.value.clone(), &mut None);
                     match (&item.key, &item.value) {
@@ -773,16 +897,18 @@ impl<'a> BindingsBuilder<'a> {
                         (Some(k), _) => {
                             self.error(
                                 k.range(),
-                                "Expected first item to be a string literal".to_owned(),
                                 ErrorKind::InvalidArgument,
+                                None,
+                                "Expected first item to be a string literal".to_owned(),
                             );
                             None
                         }
                         _ => {
                             self.error(
                                 item.range(),
-                                "Expected a key-value pair".to_owned(),
                                 ErrorKind::InvalidArgument,
+                                None,
+                                "Expected a key-value pair".to_owned(),
                             );
                             None
                         }
@@ -792,15 +918,18 @@ impl<'a> BindingsBuilder<'a> {
             _ => {
                 self.error(
                     class_name.range,
-                    "Expected valid functional typed dictionary definition".to_owned(),
                     ErrorKind::InvalidArgument,
+                    None,
+                    "Expected valid functional typed dictionary definition".to_owned(),
                 );
                 Vec::new()
             }
         };
         self.synthesize_class_def(
             class_name,
-            Some(base),
+            class_object,
+            class_indices,
+            Some(func.clone()),
             base_class_keywords,
             member_definitions,
             IllegalIdentifierHandling::Allow,
@@ -808,6 +937,27 @@ impl<'a> BindingsBuilder<'a> {
             SynthesizedClassKind::TypedDict,
             None,
         );
+    }
+
+    // Check that the variable name in a functional class definition matches the first argument string
+    fn check_functional_definition_name(&mut self, name: &Name, arg: &Expr) {
+        if let Expr::StringLiteral(x) = arg {
+            if x.value.to_str() != name.as_str() {
+                self.error(
+                    arg.range(),
+                    ErrorKind::InvalidArgument,
+                    None,
+                    format!("Expected string literal \"{}\"", name),
+                );
+            }
+        } else {
+            self.error(
+                arg.range(),
+                ErrorKind::InvalidArgument,
+                None,
+                format!("Expected string literal \"{}\"", name),
+            );
+        }
     }
 }
 

@@ -139,63 +139,7 @@ testcase!(
     test_list_class_inner_generic,
     r#"
 x = [3]
-x.append("test")  # E: Argument `Literal['test']` is not assignable to parameter with type `int`
-"#,
-);
-
-testcase!(
-    test_empty_list_class,
-    r#"
-from typing import assert_type, Any
-x = []
-assert_type(x, list[Any])
-"#,
-);
-
-testcase!(
-    test_empty_list_is_generic,
-    r#"
-from typing import assert_type
-def foo[T](x: list[T], y: list[T]) -> T: ...
-r = foo([], [1])
-assert_type(r, int)
-"#,
-);
-
-testcase!(
-    test_empty_list_append,
-    r#"
-from typing import assert_type
-x = []
-x.append(4)
-assert_type(x, list[int])
-"#,
-);
-
-testcase!(
-    test_empty_list_check,
-    r#"
-from typing import Literal, assert_type
-x = []
-def f(x: list[Literal[4]]): ...
-f(x)
-assert_type(x, list[Literal[4]])
-"#,
-);
-
-// NOTE(grievejia): There's also an argument to be made that `y` should be inferred as
-// `list[int] | list[Any]`, and `e` inferred as `int | Any`. The test case here is to ensure
-// that if we ever want to take the alternative behavior, an explicit acknowledgement (of
-// changing this test case) is required.
-testcase!(
-    test_or_empty_list,
-    r#"
-from typing import assert_type
-def test(x: list[int]) -> None:
-    y = x or []
-    assert_type(y, list[int])
-    for e in y:
-        assert_type(e, int)
+x.append("test")  # E: Argument `Literal['test']` is not assignable to parameter `object` with type `int`
 "#,
 );
 
@@ -386,36 +330,6 @@ y = "bar"  # E: `y` is marked final
 );
 
 testcase!(
-    test_solver_variables,
-    r#"
-from typing import assert_type, Any
-
-def foo[T](x: list[T]) -> T: ...
-
-def bar():
-    if False:
-        return foo([])
-    return foo([])
-
-assert_type(bar(), Any)
-"#,
-);
-
-testcase!(
-    test_solver_variables_2,
-    r#"
-from typing import assert_type, Any
-def foo[T](x: list[T]) -> T: ...
-def bar(random: bool):
-    if random:
-        x = foo([])
-    else:
-        x = foo([1])
-    assert_type(x, int)
-    "#,
-);
-
-testcase!(
     test_reveal_type,
     r#"
 from typing import reveal_type
@@ -579,7 +493,7 @@ class D:
 def f(x: list[int], y: dict[str, bool]) -> None:
     assert_type(x[0], int)
     assert_type(y["test"], bool)
-    x["foo"]  # E: Cannot index into `list[int]`  # E: `Literal['foo']` is not assignable to parameter with type `SupportsIndex`
+    x["foo"]  # E: Cannot index into `list[int]`
     c = C()
     c[0]  # E: Cannot index into `C`\n  Object of class `C` has no attribute `__getitem__`
     d = D()
@@ -961,7 +875,7 @@ assert_type(A, type[A])
 testcase!(
     test_compare_int_str_error,
     r#"
-0 < "oops"  # E: Argument `Literal['oops']` is not assignable to parameter with type `int`
+0 < "oops"  # E: Argument `Literal['oops']` is not assignable to parameter `value` with type `int`
     "#,
 );
 
@@ -1432,6 +1346,30 @@ def k(x: B | D):
 
 def l(x: int | None):
     if x: ...
+"#,
+);
+
+testcase!(
+    test_self_subscript,
+    r#"
+from collections.abc import Mapping
+
+class Repro(Mapping):
+    def __init__(self, settings) -> None:
+        self._settings = settings
+
+    def __getitem__(self, key):
+        return self._settings[key]
+
+    def __len__(self) -> int:
+        return len(self._settings)
+
+    def __iter__(self):
+        raise NotImplementedError
+
+    def f(self):
+        print(self)
+        print(self["test"])
 "#,
 );
 

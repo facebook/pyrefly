@@ -3,6 +3,7 @@ members = [
     "pyrefly",
     "pyrefly_derive",
     "pyrefly_wasm",
+    "pyrefly_util",
 ]
 resolver = "2"
 

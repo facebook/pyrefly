@@ -98,6 +98,7 @@ use lsp_types::notification::DidChangeWorkspaceFolders;
 use lsp_types::notification::DidCloseTextDocument;
 use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::notification::DidSaveTextDocument;
+use lsp_types::notification::Exit;
 use lsp_types::notification::Notification as _;
 use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::Completion;
@@ -112,6 +113,17 @@ use lsp_types::request::RegisterCapability;
 use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WorkspaceConfiguration;
 use path_absolutize::Absolutize;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::arc_id::WeakArcId;
+use pyrefly_util::args::clap_env;
+use pyrefly_util::events::CategorizedEvents;
+use pyrefly_util::lock::Mutex;
+use pyrefly_util::lock::RwLock;
+use pyrefly_util::prelude::VecExt;
+use pyrefly_util::task_heap::CancellationHandle;
+use pyrefly_util::task_heap::Cancelled;
+use pyrefly_util::thread_pool::ThreadCount;
+use pyrefly_util::thread_pool::ThreadPool;
 use serde::de::DeserializeOwned;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -140,17 +152,6 @@ use crate::state::state::TransactionData;
 use crate::types::lsp::position_to_text_size;
 use crate::types::lsp::source_range_to_range;
 use crate::types::lsp::text_size_to_position;
-use crate::util::arc_id::ArcId;
-use crate::util::arc_id::WeakArcId;
-use crate::util::args::clap_env;
-use crate::util::events::CategorizedEvents;
-use crate::util::lock::Mutex;
-use crate::util::lock::RwLock;
-use crate::util::prelude::VecExt;
-use crate::util::task_heap::CancellationHandle;
-use crate::util::task_heap::Cancelled;
-use crate::util::thread_pool::ThreadCount;
-use crate::util::thread_pool::ThreadPool;
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
 pub(crate) enum IndexingMode {
@@ -168,7 +169,7 @@ pub(crate) enum IndexingMode {
 
 #[derive(Debug, Parser, Clone)]
 pub struct Args {
-    #[clap(long, value_enum, default_value_t, env = clap_env("INDEXING_MODE"))]
+    #[arg(long, value_enum, default_value_t, env = clap_env("INDEXING_MODE"))]
     pub(crate) indexing_mode: IndexingMode,
 }
 
@@ -184,6 +185,7 @@ struct IDETransactionManager<'a> {
 }
 
 impl<'a> IDETransactionManager<'a> {
+    #[expect(clippy::result_large_err)] // Both results are basically the same size
     /// Produce a possibly committable transaction in order to recheck in-memory files.
     fn get_possibly_committable_transaction(
         &mut self,
@@ -244,6 +246,7 @@ enum ServerEvent {
     DidChangeConfiguration,
     LspResponse(Response),
     LspRequest(Request),
+    Exit,
 }
 
 #[derive(Clone, Dupe)]
@@ -520,6 +523,8 @@ fn dispatch_lsp_events(
                     priority_events_sender.send(ServerEvent::CancelRequest(id))
                 } else if as_notification::<DidChangeConfiguration>(&x).is_some() {
                     queued_events_sender.send(ServerEvent::DidChangeConfiguration)
+                } else if as_notification::<Exit>(&x).is_some() {
+                    queued_events_sender.send(ServerEvent::Exit)
                 } else {
                     eprintln!("Unhandled notification: {x:?}");
                     Ok(())
@@ -609,7 +614,14 @@ pub fn run_lsp(
             _ => unreachable!(),
         };
         if let Ok(event) = received {
-            server.process_event(&mut ide_transaction_manager, &mut canceled_requests, event)?;
+            match server.process_event(
+                &mut ide_transaction_manager,
+                &mut canceled_requests,
+                event,
+            )? {
+                ProcessEvent::Continue => {}
+                ProcessEvent::Exit => break,
+            }
         } else {
             break;
         }
@@ -684,16 +696,25 @@ fn module_info_to_uri_with_document_content_provider(module_info: &ModuleInfo) -
     }
 }
 
+enum ProcessEvent {
+    Continue,
+    Exit,
+}
+
 impl Server {
     const FILEWATCHER_ID: &str = "FILEWATCHER";
 
+    /// Process the event and return next step.
     fn process_event<'a>(
         &'a self,
         ide_transaction_manager: &mut IDETransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
         event: ServerEvent,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ProcessEvent> {
         match event {
+            ServerEvent::Exit => {
+                return Ok(ProcessEvent::Exit);
+            }
             ServerEvent::RecheckFinished => {
                 self.validate_in_memory(ide_transaction_manager)?;
             }
@@ -741,7 +762,7 @@ impl Server {
                         ErrorCode::RequestCanceled as i32,
                         message,
                     ));
-                    return Ok(());
+                    return Ok(ProcessEvent::Continue);
                 }
                 eprintln!("Handling non-canceled request {} ({})", x.method, x.id);
                 if let Some(params) = as_request::<GotoDefinition>(&x) {
@@ -814,7 +835,7 @@ impl Server {
                 }
             }
         }
-        Ok(())
+        Ok(ProcessEvent::Continue)
     }
 
     fn new(
@@ -1420,19 +1441,31 @@ impl Server {
         let info = transaction.get_module_info(&handle)?;
         let range = position_to_text_size(&info, params.text_document_position_params.position);
         let t = transaction.get_type_at(&handle, range)?;
-        let docstring = transaction.docstring(&handle, range);
-        let value = match docstring {
-            None => format!("```python\n{}\n```", t),
-            Some(docstring) => format!(
-                "```python\n{}\n```\n---\n{}",
-                t,
-                docstring.as_string().trim()
-            ),
-        };
+        let mut kind_formatted: String = "".to_owned();
+        let mut docstring_formatted: String = "".to_owned();
+        if let Some((definition_metadata, text_range_with_module_info, docstring)) =
+            transaction.find_definition(&handle, range)
+        {
+            if let Some(symbol_kind) = definition_metadata.symbol_kind() {
+                kind_formatted = format!(
+                    "{} {}: ",
+                    &symbol_kind.display_for_hover(),
+                    text_range_with_module_info
+                        .module_info
+                        .code_at(text_range_with_module_info.range)
+                );
+            }
+            if let Some(docstring) = docstring {
+                docstring_formatted = format!("\n---\n{}", docstring.as_string().trim());
+            }
+        }
         Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
-                value,
+                value: format!(
+                    "```python\n{}{}\n```{}",
+                    kind_formatted, t, docstring_formatted
+                ),
             }),
             range: None,
         })

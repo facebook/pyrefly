@@ -11,7 +11,7 @@ use std::fmt::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 
-use crate::types::types::TParamInfo;
+use crate::types::types::TParam;
 use crate::types::types::Type;
 
 /// Python's legacy (pre-PEP 695) type variable syntax is not syntactic at all, it requires
@@ -24,7 +24,7 @@ use crate::types::types::Type;
 /// represents that variable as a type parameter.
 #[derive(Debug, Clone, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LegacyTypeParameterLookup {
-    Parameter(TParamInfo),
+    Parameter(TParam),
     NotParameter(Type),
 }
 
@@ -38,7 +38,7 @@ impl Display for LegacyTypeParameterLookup {
 }
 
 impl LegacyTypeParameterLookup {
-    pub fn parameter(&self) -> Option<&TParamInfo> {
+    pub fn parameter(&self) -> Option<&TParam> {
         match self {
             Self::Parameter(p) => Some(p),
             Self::NotParameter(_) => None,

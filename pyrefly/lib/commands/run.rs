@@ -9,29 +9,29 @@ use std::process::ExitCode;
 
 use clap::ColorChoice;
 use clap::Parser;
+use pyrefly_util::args::clap_env;
+use pyrefly_util::thread_pool::ThreadCount;
+use pyrefly_util::thread_pool::init_thread_pool;
+use pyrefly_util::trace::init_tracing;
 
 pub use crate::commands::buck_check::Args as BuckCheckArgs;
 pub use crate::commands::check::Args as CheckArgs;
 pub use crate::commands::init::Args as InitArgs;
 pub use crate::commands::lsp::Args as LspArgs;
-use crate::util::args::clap_env;
-use crate::util::thread_pool::ThreadCount;
-use crate::util::thread_pool::init_thread_pool;
-use crate::util::trace::init_tracing;
 #[derive(Debug, Parser, Clone)]
 pub struct CommonGlobalArgs {
     /// Number of threads to use for parallelization.
     /// Setting the value to 1 implies sequential execution without any parallelism.
     /// Setting the value to 0 means to pick the number of threads automatically using default heuristics.
-    #[clap(long, short = 'j', default_value = "0", global = true, env = clap_env("THREADS"))]
+    #[arg(long, short = 'j', default_value = "0", global = true, env = clap_env("THREADS"))]
     pub threads: ThreadCount,
 
-    /// Controls whether colored output is used.
-    #[clap(long, default_value = "auto", global = true, env = clap_env("COLOR"))]
+    /// Control whether colored output is used.
+    #[arg(long, default_value = "auto", global = true, env = clap_env("COLOR"))]
     color: ColorChoice,
 
     /// Enable verbose logging.
-    #[clap(long = "verbose", short = 'v', global = true, env = clap_env("VERBOSE"))]
+    #[arg(long = "verbose", short = 'v', global = true, env = clap_env("VERBOSE"))]
     pub verbose: bool,
 }
 

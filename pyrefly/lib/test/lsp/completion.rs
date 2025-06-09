@@ -118,16 +118,16 @@ def foo():
       ^
 Completion Results:
 - (Variable) xxxx: Literal[3]
-- (Variable) bar: () -> None
-- (Variable) foo: () -> None
+- (Function) bar: () -> None
+- (Function) foo: () -> None
 
 8 |     y
         ^
 Completion Results:
 - (Variable) yyyy: Literal[4]
 - (Variable) xxxx: Literal[3]
-- (Variable) bar: () -> None
-- (Variable) foo: () -> None
+- (Function) bar: () -> None
+- (Function) foo: () -> None
 "#
         .trim(),
         report.trim(),
@@ -174,6 +174,97 @@ Completion Results:
 
 
 # lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+// TODO(kylei): ruff's ast gives us names = ["imp"] for `from foo imp`
+#[test]
+fn from_import_imp_test() {
+    let foo_code = r#"
+imperial_guard = "cool"
+"#;
+    let main_code = r#"
+from foo imp
+#          ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main_code), ("foo", foo_code)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from foo imp
+               ^
+Completion Results:
+- (Variable) imperial_guard
+
+
+# foo.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+// TODO(kylei): ruff's ast gives us names = [] for `from foo import <>`
+#[test]
+fn from_import_empty_test() {
+    let foo_code = r#"
+imperial_guard = "cool"
+"#;
+    let main_code = r#"
+from foo import 
+#              ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main_code), ("foo", foo_code)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from foo import 
+                   ^
+Completion Results:
+
+
+# foo.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn from_import_basic() {
+    let foo_code = r#"
+imperial_guard = "cool"
+"#;
+    let main_code = r#"
+from foo import imperial
+#          ^           ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main_code), ("foo", foo_code)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from foo import imperial
+               ^
+Completion Results:
+
+2 | from foo import imperial
+                           ^
+Completion Results:
+- (Variable) imperial_guard
+
+
+# foo.py
 "#
         .trim(),
         report.trim(),

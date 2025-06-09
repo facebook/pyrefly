@@ -417,12 +417,12 @@
     },
     {
       "code": -2,
-      "column": 1,
-      "concise_description": "NewType `UserId` not allowed in isinstance",
-      "description": "NewType `UserId` not allowed in isinstance",
+      "column": 16,
+      "concise_description": "NewType `UserId` not allowed in isinstance()",
+      "description": "NewType `UserId` not allowed in isinstance()",
       "line": 20,
       "name": "invalid-argument",
-      "stop_column": 23,
+      "stop_column": 22,
       "stop_line": 20
     },
     {
@@ -550,8 +550,8 @@
     {
       "code": -2,
       "column": 26,
-      "concise_description": "`|` is not supported between `Literal['GenericTypeAlias1[T1]']` and `type[TypeVar(T1, constraints=(str, int), variance=PUndefined)]`\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar(T1, constraints=(str, int), variance=PUndefined)] (trying to access __ror__)",
-      "description": "`|` is not supported between `Literal['GenericTypeAlias1[T1]']` and `type[TypeVar(T1, constraints=(str, int), variance=PUndefined)]`\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar(T1, constraints=(str, int), variance=PUndefined)] (trying to access __ror__)",
+      "concise_description": "`|` is not supported between `Literal['GenericTypeAlias1[T1]']` and `type[TypeVar(T1, constraints=(str, int), variance=PInvariant)]`\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar(T1, constraints=(str, int), variance=PInvariant)] (trying to access __ror__)",
+      "description": "`|` is not supported between `Literal['GenericTypeAlias1[T1]']` and `type[TypeVar(T1, constraints=(str, int), variance=PInvariant)]`\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar(T1, constraints=(str, int), variance=PInvariant)] (trying to access __ror__)",
       "line": 58,
       "name": "internal-error",
       "stop_column": 54,
@@ -590,8 +590,8 @@
     {
       "code": -2,
       "column": 26,
-      "concise_description": "`|` is not supported between `Literal['GenericTypeAlias2[T1, T2]']` and `type[TypeVar(T1, constraints=(str, int), variance=PUndefined)]`\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar(T1, constraints=(str, int), variance=PUndefined)] (trying to access __ror__)",
-      "description": "`|` is not supported between `Literal['GenericTypeAlias2[T1, T2]']` and `type[TypeVar(T1, constraints=(str, int), variance=PUndefined)]`\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar(T1, constraints=(str, int), variance=PUndefined)] (trying to access __ror__)",
+      "concise_description": "`|` is not supported between `Literal['GenericTypeAlias2[T1, T2]']` and `type[TypeVar(T1, constraints=(str, int), variance=PInvariant)]`\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar(T1, constraints=(str, int), variance=PInvariant)] (trying to access __ror__)",
+      "description": "`|` is not supported between `Literal['GenericTypeAlias2[T1, T2]']` and `type[TypeVar(T1, constraints=(str, int), variance=PInvariant)]`\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar(T1, constraints=(str, int), variance=PInvariant)] (trying to access __ror__)",
       "line": 65,
       "name": "internal-error",
       "stop_column": 58,
@@ -661,21 +661,11 @@
     },
     {
       "code": -2,
-      "column": 8,
+      "column": 22,
       "concise_description": "Expected class object, got `TypeAlias[GoodAlias1, type[int]]`",
       "description": "Expected class object, got `TypeAlias[GoodAlias1, type[int]]`",
       "line": 31,
       "name": "invalid-argument",
-      "stop_column": 33,
-      "stop_line": 31
-    },
-    {
-      "code": -2,
-      "column": 22,
-      "concise_description": "Argument `TypeAlias[GoodAlias1, type[int]]` is not assignable to parameter with type `UnionType | type | tuple[Unknown, ...]` in function `isinstance`",
-      "description": "Argument `TypeAlias[GoodAlias1, type[int]]` is not assignable to parameter with type `UnionType | type | tuple[Unknown, ...]` in function `isinstance`",
-      "line": 31,
-      "name": "bad-argument-type",
       "stop_column": 32,
       "stop_line": 31
     },
@@ -854,8 +844,8 @@
     {
       "code": -2,
       "column": 63,
-      "concise_description": "Argument `tuple[type[TypeVar(T, variance=PUndefined)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
-      "description": "Argument `tuple[type[TypeVar(T, variance=PUndefined)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "concise_description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "line": 17,
       "name": "bad-argument-type",
       "stop_column": 67,
@@ -864,8 +854,8 @@
     {
       "code": -2,
       "column": 73,
-      "concise_description": "Argument `tuple[type[TypeVar(S, variance=PUndefined)], type[TypeVar(T, variance=PUndefined)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
-      "description": "Argument `tuple[type[TypeVar(S, variance=PUndefined)], type[TypeVar(T, variance=PUndefined)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "concise_description": "Argument `tuple[type[TypeVar(S, variance=PInvariant)], type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "description": "Argument `tuple[type[TypeVar(S, variance=PInvariant)], type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "line": 18,
       "name": "bad-argument-type",
       "stop_column": 79,
@@ -874,8 +864,8 @@
     {
       "code": -2,
       "column": 79,
-      "concise_description": "Argument `tuple[type[TypeVar(T, variance=PUndefined)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
-      "description": "Argument `tuple[type[TypeVar(T, variance=PUndefined)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "concise_description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "line": 19,
       "name": "bad-argument-type",
       "stop_column": 83,
@@ -884,8 +874,8 @@
     {
       "code": -2,
       "column": 17,
-      "concise_description": "Argument `tuple[type[TypeVar(S, variance=PUndefined)], type[TypeVar(TStr, bound=str, variance=PUndefined)], type[ParamSpec(P)], type[TypeVarTuple(Ts)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
-      "description": "Argument `tuple[type[TypeVar(S, variance=PUndefined)], type[TypeVar(TStr, bound=str, variance=PUndefined)], type[ParamSpec(P)], type[TypeVarTuple(Ts)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "concise_description": "Argument `tuple[type[TypeVar(S, variance=PInvariant)], type[TypeVar(TStr, bound=str, variance=PInvariant)], type[ParamSpec(P)], type[TypeVarTuple(Ts)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "description": "Argument `tuple[type[TypeVar(S, variance=PInvariant)], type[TypeVar(TStr, bound=str, variance=PInvariant)], type[ParamSpec(P)], type[TypeVarTuple(Ts)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "line": 23,
       "name": "bad-argument-type",
       "stop_column": 33,
@@ -974,8 +964,8 @@
     {
       "code": -2,
       "column": 61,
-      "concise_description": "Argument `tuple[type[TypeVar(T, variance=PUndefined)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
-      "description": "Argument `tuple[type[TypeVar(T, variance=PUndefined)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "concise_description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "line": 43,
       "name": "bad-argument-type",
       "stop_column": 65,
@@ -984,8 +974,8 @@
     {
       "code": -2,
       "column": 57,
-      "concise_description": "Argument `tuple[type[TypeVar(S, variance=PUndefined)], type[TypeVar(T, variance=PUndefined)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
-      "description": "Argument `tuple[type[TypeVar(S, variance=PUndefined)], type[TypeVar(T, variance=PUndefined)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "concise_description": "Argument `tuple[type[TypeVar(S, variance=PInvariant)], type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "description": "Argument `tuple[type[TypeVar(S, variance=PInvariant)], type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "line": 45,
       "name": "bad-argument-type",
       "stop_column": 65,
@@ -994,8 +984,8 @@
     {
       "code": -2,
       "column": 72,
-      "concise_description": "Argument `tuple[type[TypeVar(T, variance=PUndefined)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
-      "description": "Argument `tuple[type[TypeVar(T, variance=PUndefined)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "concise_description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "line": 47,
       "name": "bad-argument-type",
       "stop_column": 76,
@@ -1187,7 +1177,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Any, int) failed",
       "description": "assert_type(Any, int) failed",
       "line": 96,
@@ -1309,16 +1299,6 @@
     },
     {
       "code": -2,
-      "column": 61,
-      "concise_description": "`() -> AsyncIterator[int]` is not assignable to `() -> Coroutine[Any, Any, AsyncIterator[int]]`",
-      "description": "`() -> AsyncIterator[int]` is not assignable to `() -> Coroutine[Any, Any, AsyncIterator[int]]`",
-      "line": 185,
-      "name": "bad-assignment",
-      "stop_column": 72,
-      "stop_line": 185
-    },
-    {
-      "code": -2,
       "column": 5,
       "concise_description": "Expected to yield a value of type `int`, but a bare `yield` gives `None` instead",
       "description": "Expected to yield a value of type `int`, but a bare `yield` gives `None` instead",
@@ -1331,7 +1311,7 @@
   "annotations_methods.py": [
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(B, A) failed",
       "description": "assert_type(B, A) failed",
       "line": 42,
@@ -1495,12 +1475,12 @@
   "callables_annotation.py": [
     {
       "code": -2,
-      "column": 5,
+      "column": 7,
       "concise_description": "Expected 1 more positional argument",
       "description": "Expected 1 more positional argument",
       "line": 25,
       "name": "bad-argument-count",
-      "stop_column": 7,
+      "stop_column": 10,
       "stop_line": 25
     },
     {
@@ -1526,20 +1506,20 @@
     {
       "code": -2,
       "column": 8,
-      "concise_description": "Expected 2 more positional arguments",
-      "description": "Expected 2 more positional arguments",
+      "concise_description": "Unexpected keyword argument `a`",
+      "description": "Unexpected keyword argument `a`",
       "line": 29,
-      "name": "bad-argument-count",
+      "name": "unexpected-keyword",
       "stop_column": 11,
       "stop_line": 29
     },
     {
       "code": -2,
       "column": 8,
-      "concise_description": "Unexpected keyword argument `a`",
-      "description": "Unexpected keyword argument `a`",
+      "concise_description": "Expected 2 more positional arguments",
+      "description": "Expected 2 more positional arguments",
       "line": 29,
-      "name": "unexpected-keyword",
+      "name": "bad-argument-count",
       "stop_column": 11,
       "stop_line": 29
     },
@@ -1697,22 +1677,22 @@
   "callables_kwargs.py": [
     {
       "code": -2,
-      "column": 5,
+      "column": 10,
       "concise_description": "Missing argument `v1` in function `func1`",
       "description": "Missing argument `v1` in function `func1`",
       "line": 46,
       "name": "missing-argument",
-      "stop_column": 10,
+      "stop_column": 12,
       "stop_line": 46
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 10,
       "concise_description": "Missing argument `v3` in function `func1`",
       "description": "Missing argument `v3` in function `func1`",
       "line": 46,
       "name": "missing-argument",
-      "stop_column": 10,
+      "stop_column": 12,
       "stop_line": 46
     },
     {
@@ -1727,22 +1707,22 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 10,
       "concise_description": "Missing argument `v1` in function `func1`",
       "description": "Missing argument `v1` in function `func1`",
       "line": 52,
       "name": "missing-argument",
-      "stop_column": 10,
+      "stop_column": 22,
       "stop_line": 52
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 10,
       "concise_description": "Missing argument `v3` in function `func1`",
       "description": "Missing argument `v3` in function `func1`",
       "line": 52,
       "name": "missing-argument",
-      "stop_column": 10,
+      "stop_column": 22,
       "stop_line": 52
     },
     {
@@ -2010,8 +1990,8 @@
     {
       "code": -2,
       "column": 8,
-      "concise_description": "`(int, str) -> Any` is not assignable to variable `cb11` with type `Proto11`",
-      "description": "`(int, str) -> Any` is not assignable to variable `cb11` with type `Proto11`",
+      "concise_description": "`(x: int, y: str, /) -> Any` is not assignable to variable `cb11` with type `Proto11`",
+      "description": "`(x: int, y: str, /) -> Any` is not assignable to variable `cb11` with type `Proto11`",
       "line": 238,
       "name": "bad-assignment",
       "stop_column": 17,
@@ -2657,17 +2637,17 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "Argument `Class4[str]` is not assignable to parameter `self` with type `Class4[int]` in function `Class4.__init__`",
       "description": "Argument `Class4[str]` is not assignable to parameter `self` with type `Class4[int]` in function `Class4.__init__`",
       "line": 56,
       "name": "bad-argument-type",
-      "stop_column": 12,
+      "stop_column": 14,
       "stop_line": 56
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Class5[list[int]], Class5[set[str]]) failed",
       "description": "assert_type(Class5[list[int]], Class5[set[str]]) failed",
       "line": 74,
@@ -2677,27 +2657,17 @@
     },
     {
       "code": -2,
-      "column": 13,
-      "concise_description": "No matching overload found for function `Class5.__init__`, reporting errors for closest overload: `(value: int) -> None`",
-      "description": "No matching overload found for function `Class5.__init__`, reporting errors for closest overload: `(value: int) -> None`",
+      "column": 19,
+      "concise_description": "No matching overload found for function `Class5.__init__`\n  Possible overloads:\n  (value: int) -> None [closest match]\n  (value: str) -> None\n  (value: list[int]) -> None",
+      "description": "No matching overload found for function `Class5.__init__`\n  Possible overloads:\n  (value: int) -> None [closest match]\n  (value: str) -> None\n  (value: list[int]) -> None",
       "line": 74,
       "name": "no-matching-overload",
-      "stop_column": 19,
+      "stop_column": 23,
       "stop_line": 74
     },
     {
       "code": -2,
-      "column": 20,
-      "concise_description": "Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `Class5.__init__`",
-      "description": "Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `Class5.__init__`",
-      "line": 74,
-      "name": "bad-argument-type",
-      "stop_column": 22,
-      "stop_line": 74
-    },
-    {
-      "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Class5[list[int]], Class5[float]) failed",
       "description": "assert_type(Class5[list[int]], Class5[float]) failed",
       "line": 75,
@@ -2707,22 +2677,12 @@
     },
     {
       "code": -2,
-      "column": 13,
-      "concise_description": "No matching overload found for function `Class5.__init__`, reporting errors for closest overload: `(value: int) -> None`",
-      "description": "No matching overload found for function `Class5.__init__`, reporting errors for closest overload: `(value: int) -> None`",
+      "column": 19,
+      "concise_description": "No matching overload found for function `Class5.__init__`\n  Possible overloads:\n  (value: int) -> None [closest match]\n  (value: str) -> None\n  (value: list[int]) -> None",
+      "description": "No matching overload found for function `Class5.__init__`\n  Possible overloads:\n  (value: int) -> None [closest match]\n  (value: str) -> None\n  (value: list[int]) -> None",
       "line": 75,
       "name": "no-matching-overload",
-      "stop_column": 19,
-      "stop_line": 75
-    },
-    {
-      "code": -2,
-      "column": 20,
-      "concise_description": "Argument `float` is not assignable to parameter `value` with type `int` in function `Class5.__init__`",
-      "description": "Argument `float` is not assignable to parameter `value` with type `int` in function `Class5.__init__`",
-      "line": 75,
-      "name": "bad-argument-type",
-      "stop_column": 23,
+      "stop_column": 24,
       "stop_line": 75
     },
     {
@@ -2739,22 +2699,22 @@
   "constructors_call_metaclass.py": [
     {
       "code": -2,
-      "column": 1,
+      "column": 7,
       "concise_description": "Missing argument `x` in function `Class3.__new__`",
       "description": "Missing argument `x` in function `Class3.__new__`",
       "line": 51,
       "name": "missing-argument",
-      "stop_column": 7,
+      "stop_column": 9,
       "stop_line": 51
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 7,
       "concise_description": "Missing argument `x` in function `Class4.__new__`",
       "description": "Missing argument `x` in function `Class4.__new__`",
       "line": 65,
       "name": "missing-argument",
-      "stop_column": 7,
+      "stop_column": 9,
       "stop_line": 65
     }
   ],
@@ -2771,74 +2731,74 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 13,
       "concise_description": "Argument `type[Class11[str]]` is not assignable to parameter `cls` with type `type[Class11[int]]` in function `Class11.__new__`",
       "description": "Argument `type[Class11[str]]` is not assignable to parameter `cls` with type `type[Class11[int]]` in function `Class11.__new__`",
       "line": 145,
       "name": "bad-argument-type",
-      "stop_column": 13,
+      "stop_column": 15,
       "stop_line": 145
     }
   ],
   "constructors_call_type.py": [
     {
       "code": -2,
-      "column": 5,
+      "column": 8,
       "concise_description": "Missing argument `x` in function `Meta1.__call__`",
       "description": "Missing argument `x` in function `Meta1.__call__`",
       "line": 30,
       "name": "missing-argument",
-      "stop_column": 8,
+      "stop_column": 10,
       "stop_line": 30
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 8,
       "concise_description": "Missing argument `y` in function `Meta1.__call__`",
       "description": "Missing argument `y` in function `Meta1.__call__`",
       "line": 30,
       "name": "missing-argument",
-      "stop_column": 8,
+      "stop_column": 10,
       "stop_line": 30
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 8,
       "concise_description": "Missing argument `x` in function `Class2.__new__`",
       "description": "Missing argument `x` in function `Class2.__new__`",
       "line": 40,
       "name": "missing-argument",
-      "stop_column": 8,
+      "stop_column": 10,
       "stop_line": 40
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 8,
       "concise_description": "Missing argument `y` in function `Class2.__new__`",
       "description": "Missing argument `y` in function `Class2.__new__`",
       "line": 40,
       "name": "missing-argument",
-      "stop_column": 8,
+      "stop_column": 10,
       "stop_line": 40
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 8,
       "concise_description": "Missing argument `x` in function `Class3.__init__`",
       "description": "Missing argument `x` in function `Class3.__init__`",
       "line": 50,
       "name": "missing-argument",
-      "stop_column": 8,
+      "stop_column": 10,
       "stop_line": 50
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 8,
       "concise_description": "Missing argument `y` in function `Class3.__init__`",
       "description": "Missing argument `y` in function `Class3.__init__`",
       "line": 50,
       "name": "missing-argument",
-      "stop_column": 8,
+      "stop_column": 10,
       "stop_line": 50
     },
     {
@@ -2855,7 +2815,7 @@
   "constructors_callable.py": [
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "revealed type: (x: int) -> Class1",
       "description": "revealed type: (x: int) -> Class1",
       "line": 36,
@@ -2865,22 +2825,22 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 3,
       "concise_description": "Missing argument `x`",
       "description": "Missing argument `x`",
       "line": 38,
       "name": "missing-argument",
-      "stop_column": 3,
+      "stop_column": 5,
       "stop_line": 38
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 3,
       "concise_description": "Missing argument `x`",
       "description": "Missing argument `x`",
       "line": 39,
       "name": "missing-argument",
-      "stop_column": 3,
+      "stop_column": 8,
       "stop_line": 39
     },
     {
@@ -2895,7 +2855,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "revealed type: () -> Class2",
       "description": "revealed type: () -> Class2",
       "line": 49,
@@ -2925,7 +2885,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "revealed type: (*args: Unknown, **kwargs: Unknown) -> Self@Class3",
       "description": "revealed type: (*args: Unknown, **kwargs: Unknown) -> Self@Class3",
       "line": 63,
@@ -2935,7 +2895,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Self, Class3) failed",
       "description": "assert_type(Self, Class3) failed",
       "line": 64,
@@ -2945,7 +2905,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "revealed type: (x: int) -> int",
       "description": "revealed type: (x: int) -> int",
       "line": 77,
@@ -2955,22 +2915,22 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 3,
       "concise_description": "Missing argument `x`",
       "description": "Missing argument `x`",
       "line": 79,
       "name": "missing-argument",
-      "stop_column": 3,
+      "stop_column": 5,
       "stop_line": 79
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 3,
       "concise_description": "Missing argument `x`",
       "description": "Missing argument `x`",
       "line": 80,
       "name": "missing-argument",
-      "stop_column": 3,
+      "stop_column": 8,
       "stop_line": 80
     },
     {
@@ -2985,7 +2945,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "revealed type: (*args: Any, **kwargs: Any) -> NoReturn",
       "description": "revealed type: (*args: Any, **kwargs: Any) -> NoReturn",
       "line": 97,
@@ -2995,7 +2955,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "revealed type: () -> Class6Proxy",
       "description": "revealed type: () -> Class6Proxy",
       "line": 125,
@@ -3015,7 +2975,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "revealed type: () -> Any",
       "description": "revealed type: () -> Any",
       "line": 142,
@@ -3035,7 +2995,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "revealed type: (x: int) -> Class7[Unknown]",
       "description": "revealed type: (x: int) -> Class7[Unknown]",
       "line": 161,
@@ -3045,7 +3005,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Class7[Any], Class7[int]) failed",
       "description": "assert_type(Class7[Any], Class7[int]) failed",
       "line": 164,
@@ -3055,7 +3015,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Class7[Any], Class7[str]) failed",
       "description": "assert_type(Class7[Any], Class7[str]) failed",
       "line": 165,
@@ -3075,7 +3035,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Self@Class8",
       "description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Self@Class8",
       "line": 182,
@@ -3085,7 +3045,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Self, Class8[str]) failed",
       "description": "assert_type(Self, Class8[str]) failed",
       "line": 183,
@@ -3105,7 +3065,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "revealed type: (ParamSpec(@_)) -> @_",
       "description": "revealed type: (ParamSpec(@_)) -> @_",
       "line": 193,
@@ -3115,7 +3075,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Any, Class9) failed",
       "description": "assert_type(Any, Class9) failed",
       "line": 194,
@@ -3228,12 +3188,12 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 4,
       "concise_description": "Missing argument `a` in function `DC2.__init__`",
       "description": "Missing argument `a` in function `DC2.__init__`",
       "line": 32,
       "name": "missing-argument",
-      "stop_column": 4,
+      "stop_column": 10,
       "stop_line": 32
     },
     {
@@ -3248,12 +3208,12 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 4,
       "concise_description": "Missing argument `a` in function `DC2.__init__`",
       "description": "Missing argument `a` in function `DC2.__init__`",
       "line": 35,
       "name": "missing-argument",
-      "stop_column": 4,
+      "stop_column": 15,
       "stop_line": 35
     },
     {
@@ -3268,12 +3228,12 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 4,
       "concise_description": "Missing argument `a` in function `DC2.__init__`",
       "description": "Missing argument `a` in function `DC2.__init__`",
       "line": 38,
       "name": "missing-argument",
-      "stop_column": 4,
+      "stop_column": 13,
       "stop_line": 38
     },
     {
@@ -3288,12 +3248,12 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 4,
       "concise_description": "Missing argument `a` in function `DC3.__init__`",
       "description": "Missing argument `a` in function `DC3.__init__`",
       "line": 47,
       "name": "missing-argument",
-      "stop_column": 4,
+      "stop_column": 10,
       "stop_line": 47
     },
     {
@@ -3308,12 +3268,12 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 4,
       "concise_description": "Missing argument `a` in function `DC3.__init__`",
       "description": "Missing argument `a` in function `DC3.__init__`",
       "line": 50,
       "name": "missing-argument",
-      "stop_column": 4,
+      "stop_column": 15,
       "stop_line": 50
     },
     {
@@ -3328,12 +3288,12 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 4,
       "concise_description": "Missing argument `a` in function `DC3.__init__`",
       "description": "Missing argument `a` in function `DC3.__init__`",
       "line": 53,
       "name": "missing-argument",
-      "stop_column": 4,
+      "stop_column": 13,
       "stop_line": 53
     },
     {
@@ -3348,12 +3308,12 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 4,
       "concise_description": "Missing argument `c` in function `DC4.__init__`",
       "description": "Missing argument `c` in function `DC4.__init__`",
       "line": 61,
       "name": "missing-argument",
-      "stop_column": 4,
+      "stop_column": 18,
       "stop_line": 61
     },
     {
@@ -3389,28 +3349,7 @@
       "stop_line": 50
     }
   ],
-  "dataclasses_postinit.py": [
-    {
-      "code": -2,
-      "column": 17,
-      "concise_description": "Argument `Literal[3]` is not assignable to parameter `x` with type `InitVar[int]` in function `DC1.__init__`",
-      "description": "Argument `Literal[3]` is not assignable to parameter `x` with type `InitVar[int]` in function `DC1.__init__`",
-      "line": 23,
-      "name": "bad-argument-type",
-      "stop_column": 18,
-      "stop_line": 23
-    },
-    {
-      "code": -2,
-      "column": 23,
-      "concise_description": "Argument `Literal['']` is not assignable to parameter `y` with type `InitVar[str]` in function `DC1.__init__`",
-      "description": "Argument `Literal['']` is not assignable to parameter `y` with type `InitVar[str]` in function `DC1.__init__`",
-      "line": 23,
-      "name": "bad-argument-type",
-      "stop_column": 25,
-      "stop_line": 23
-    }
-  ],
+  "dataclasses_postinit.py": [],
   "dataclasses_slots.py": [
     {
       "code": -2,
@@ -3456,12 +3395,12 @@
   "dataclasses_transform_class.py": [
     {
       "code": -2,
-      "column": 8,
+      "column": 17,
       "concise_description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
       "description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
       "line": 60,
       "name": "missing-argument",
-      "stop_column": 17,
+      "stop_column": 55,
       "stop_line": 60
     },
     {
@@ -3516,12 +3455,12 @@
     },
     {
       "code": -2,
-      "column": 8,
+      "column": 17,
       "concise_description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
       "description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
       "line": 68,
       "name": "missing-argument",
-      "stop_column": 17,
+      "stop_column": 36,
       "stop_line": 68
     },
     {
@@ -3556,12 +3495,12 @@
     },
     {
       "code": -2,
-      "column": 8,
+      "column": 17,
       "concise_description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
       "description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
       "line": 74,
       "name": "missing-argument",
-      "stop_column": 17,
+      "stop_column": 36,
       "stop_line": 74
     },
     {
@@ -3586,12 +3525,12 @@
     },
     {
       "code": -2,
-      "column": 8,
+      "column": 17,
       "concise_description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
       "description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
       "line": 76,
       "name": "missing-argument",
-      "stop_column": 17,
+      "stop_column": 23,
       "stop_line": 76
     },
     {
@@ -3669,8 +3608,8 @@
     {
       "code": -2,
       "column": 39,
-      "concise_description": "Argument `tuple[Forall[S, T, (*, converter: (TypeVar[S]) -> TypeVar[T], default: TypeVar[S] | None, default_factory: (() -> TypeVar[S]) | None) -> TypeVar[T]]]` is not assignable to parameter `field_specifiers` with type `tuple[((...) -> Any) | type[Any], ...]` in function `typing.dataclass_transform`",
-      "description": "Argument `tuple[Forall[S, T, (*, converter: (TypeVar[S]) -> TypeVar[T], default: TypeVar[S] | None, default_factory: (() -> TypeVar[S]) | None) -> TypeVar[T]]]` is not assignable to parameter `field_specifiers` with type `tuple[((...) -> Any) | type[Any], ...]` in function `typing.dataclass_transform`",
+      "concise_description": "Argument `tuple[[S, T](*, converter: (S) -> T, default: S | None, default_factory: (() -> S) | None) -> T]` is not assignable to parameter `field_specifiers` with type `tuple[((...) -> Any) | type[Any], ...]` in function `typing.dataclass_transform`",
+      "description": "Argument `tuple[[S, T](*, converter: (S) -> T, default: S | None, default_factory: (() -> S) | None) -> T]` is not assignable to parameter `field_specifiers` with type `tuple[((...) -> Any) | type[Any], ...]` in function `typing.dataclass_transform`",
       "line": 29,
       "name": "bad-argument-type",
       "stop_column": 53,
@@ -4146,12 +4085,12 @@
   "dataclasses_usage.py": [
     {
       "code": -2,
-      "column": 6,
+      "column": 19,
       "concise_description": "Missing argument `unit_price` in function `InventoryItem.__init__`",
       "description": "Missing argument `unit_price` in function `InventoryItem.__init__`",
       "line": 50,
       "name": "missing-argument",
-      "stop_column": 19,
+      "stop_column": 27,
       "stop_line": 50
     },
     {
@@ -4173,16 +4112,6 @@
       "name": "bad-argument-type",
       "stop_column": 37,
       "stop_line": 52
-    },
-    {
-      "code": -2,
-      "column": 23,
-      "concise_description": "`Literal[0]` is not assignable to `InitVar[int]`",
-      "description": "`Literal[0]` is not assignable to `InitVar[int]`",
-      "line": 72,
-      "name": "bad-assignment",
-      "stop_column": 24,
-      "stop_line": 72
     },
     {
       "code": -2,
@@ -4216,12 +4145,12 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 4,
       "concise_description": "Missing argument `y` in function `DC8.__init__`",
       "description": "Missing argument `y` in function `DC8.__init__`",
       "line": 130,
       "name": "missing-argument",
-      "stop_column": 4,
+      "stop_column": 7,
       "stop_line": 130
     },
     {
@@ -4233,22 +4162,12 @@
       "name": "bad-argument-type",
       "stop_column": 7,
       "stop_line": 179
-    },
-    {
-      "code": -2,
-      "column": 22,
-      "concise_description": "`DC15` is not assignable to `DataclassProto`",
-      "description": "`DC15` is not assignable to `DataclassProto`",
-      "line": 205,
-      "name": "bad-assignment",
-      "stop_column": 26,
-      "stop_line": 205
     }
   ],
   "directives_assert_type.py": [
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(int | str, int) failed",
       "description": "assert_type(int | str, int) failed",
       "line": 27,
@@ -4258,7 +4177,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(Any, int) failed",
       "description": "assert_type(Any, int) failed",
       "line": 28,
@@ -4268,7 +4187,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(Literal[4], int) failed",
       "description": "assert_type(Literal[4], int) failed",
       "line": 29,
@@ -4278,7 +4197,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type needs 2 positional arguments, got 0",
       "description": "assert_type needs 2 positional arguments, got 0",
       "line": 31,
@@ -4288,7 +4207,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(Literal[''], int) failed",
       "description": "assert_type(Literal[''], int) failed",
       "line": 32,
@@ -4298,7 +4217,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type needs 2 positional arguments, got 3",
       "description": "assert_type needs 2 positional arguments, got 3",
       "line": 33,
@@ -4310,46 +4229,67 @@
   "directives_cast.py": [
     {
       "code": -2,
-      "column": 8,
+      "column": 12,
       "concise_description": "`typing.cast` missing required argument `typ`",
       "description": "`typing.cast` missing required argument `typ`",
       "line": 15,
       "name": "missing-argument",
-      "stop_column": 12,
+      "stop_column": 14,
       "stop_line": 15
     },
     {
       "code": -2,
-      "column": 8,
+      "column": 12,
       "concise_description": "`typing.cast` missing required argument `val`",
       "description": "`typing.cast` missing required argument `val`",
       "line": 15,
       "name": "missing-argument",
-      "stop_column": 12,
+      "stop_column": 14,
       "stop_line": 15
     },
     {
       "code": -2,
-      "column": 8,
+      "column": 12,
       "concise_description": "First argument to `typing.cast` must be a type",
       "description": "First argument to `typing.cast` must be a type",
       "line": 16,
       "name": "bad-argument-type",
-      "stop_column": 12,
+      "stop_column": 19,
       "stop_line": 16
     },
     {
       "code": -2,
-      "column": 8,
+      "column": 12,
       "concise_description": "`typing.cast` expected 2 arguments, got 3",
       "description": "`typing.cast` expected 2 arguments, got 3",
       "line": 17,
       "name": "bad-argument-count",
-      "stop_column": 12,
+      "stop_column": 25,
       "stop_line": 17
     }
   ],
-  "directives_deprecated.py": [],
+  "directives_deprecated.py": [
+    {
+      "code": -2,
+      "column": 23,
+      "concise_description": "Call to deprecated function `_directives_deprecated_library.norwegian_blue`",
+      "description": "Call to deprecated function `_directives_deprecated_library.norwegian_blue`",
+      "line": 24,
+      "name": "deprecated",
+      "stop_column": 26,
+      "stop_line": 24
+    },
+    {
+      "code": -2,
+      "column": 6,
+      "concise_description": "Call to deprecated function `lorem`",
+      "description": "Call to deprecated function `lorem`",
+      "line": 69,
+      "name": "deprecated",
+      "stop_column": 8,
+      "stop_line": 69
+    }
+  ],
   "directives_no_type_check.py": [
     {
       "code": -2,
@@ -4383,29 +4323,29 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 6,
       "concise_description": "Missing argument `a` in function `func1`",
       "description": "Missing argument `a` in function `func1`",
       "line": 32,
       "name": "missing-argument",
-      "stop_column": 6,
+      "stop_column": 8,
       "stop_line": 32
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 6,
       "concise_description": "Missing argument `b` in function `func1`",
       "description": "Missing argument `b` in function `func1`",
       "line": 32,
       "name": "missing-argument",
-      "stop_column": 6,
+      "stop_column": 8,
       "stop_line": 32
     }
   ],
   "directives_reveal_type.py": [
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "revealed type: int | str",
       "description": "revealed type: int | str",
       "line": 14,
@@ -4415,7 +4355,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "revealed type: list[int]",
       "description": "revealed type: list[int]",
       "line": 15,
@@ -4425,7 +4365,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "revealed type: Any",
       "description": "revealed type: Any",
       "line": 16,
@@ -4435,7 +4375,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "revealed type: ForwardReference",
       "description": "revealed type: ForwardReference",
       "line": 17,
@@ -4445,7 +4385,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "reveal_type needs 1 positional argument, got 0",
       "description": "reveal_type needs 1 positional argument, got 0",
       "line": 19,
@@ -4455,7 +4395,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "reveal_type needs 1 positional argument, got 2",
       "description": "reveal_type needs 1 positional argument, got 2",
       "line": 20,
@@ -4514,7 +4454,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(Any, Color) failed",
       "description": "assert_type(Any, Color) failed",
       "line": 20,
@@ -4524,7 +4464,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Literal[Color.RED], Color) failed",
       "description": "assert_type(Literal[Color.RED], Color) failed",
       "line": 26,
@@ -4537,7 +4477,7 @@
   "enums_expansion.py": [
     {
       "code": -2,
-      "column": 9,
+      "column": 20,
       "concise_description": "assert_type(CustomFlags, Literal[CustomFlags.FLAG3]) failed",
       "description": "assert_type(CustomFlags, Literal[CustomFlags.FLAG3]) failed",
       "line": 53,
@@ -4549,7 +4489,7 @@
   "enums_member_names.py": [
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(str, Literal['BLUE', 'GREEN', 'RED']) failed",
       "description": "assert_type(str, Literal['BLUE', 'GREEN', 'RED']) failed",
       "line": 30,
@@ -4561,7 +4501,7 @@
   "enums_member_values.py": [
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(int, Literal[1]) failed",
       "description": "assert_type(int, Literal[1]) failed",
       "line": 21,
@@ -4571,7 +4511,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(int, Literal[1]) failed",
       "description": "assert_type(int, Literal[1]) failed",
       "line": 22,
@@ -4581,7 +4521,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(int, Literal[1, 3]) failed",
       "description": "assert_type(int, Literal[1, 3]) failed",
       "line": 26,
@@ -4591,7 +4531,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(Any, Literal[1, 2, 3]) failed",
       "description": "assert_type(Any, Literal[1, 2, 3]) failed",
       "line": 30,
@@ -4601,7 +4541,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(tuple[Literal[1], float, float], Literal[1]) failed",
       "description": "assert_type(tuple[Literal[1], float, float], Literal[1]) failed",
       "line": 54,
@@ -4611,7 +4551,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(auto, Literal[1]) failed",
       "description": "assert_type(auto, Literal[1]) failed",
       "line": 68,
@@ -4641,7 +4581,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Ellipsis, int) failed",
       "description": "assert_type(Ellipsis, int) failed",
       "line": 96,
@@ -4653,7 +4593,7 @@
   "enums_members.py": [
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Any, str) failed",
       "description": "assert_type(Any, str) failed",
       "line": 27,
@@ -4673,7 +4613,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Any, str) failed",
       "description": "assert_type(Any, str) failed",
       "line": 28,
@@ -4703,7 +4643,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type((x: Any) -> str, Any) failed",
       "description": "assert_type((x: Any) -> str, Any) failed",
       "line": 82,
@@ -4723,7 +4663,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type((x: int) -> int, Any) failed",
       "description": "assert_type((x: int) -> int, Any) failed",
       "line": 83,
@@ -4743,7 +4683,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type((self: Self) -> str, Any) failed",
       "description": "assert_type((self: Self) -> str, Any) failed",
       "line": 84,
@@ -4763,7 +4703,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type((self: Self) -> None, Any) failed",
       "description": "assert_type((self: Self) -> None, Any) failed",
       "line": 85,
@@ -4783,7 +4723,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Literal[TrafficLight.AMBER], Literal[TrafficLight.YELLOW]) failed",
       "description": "assert_type(Literal[TrafficLight.AMBER], Literal[TrafficLight.YELLOW]) failed",
       "line": 100,
@@ -4793,7 +4733,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(nonmember[int], Any) failed",
       "description": "assert_type(nonmember[int], Any) failed",
       "line": 116,
@@ -4823,7 +4763,7 @@
     },
     {
       "code": -2,
-      "column": 9,
+      "column": 20,
       "concise_description": "revealed type: int",
       "description": "revealed type: int",
       "line": 128,
@@ -4833,7 +4773,7 @@
     },
     {
       "code": -2,
-      "column": 9,
+      "column": 20,
       "concise_description": "assert_type(int, Any) failed",
       "description": "assert_type(int, Any) failed",
       "line": 129,
@@ -4853,7 +4793,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Literal[Pet5.DOG], int) failed",
       "description": "assert_type(Literal[Pet5.DOG], int) failed",
       "line": 146,
@@ -4863,7 +4803,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Literal[Pet5.FISH], int) failed",
       "description": "assert_type(Literal[Pet5.FISH], int) failed",
       "line": 147,
@@ -4875,7 +4815,7 @@
   "exceptions_context_managers.py": [
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(str, int | str) failed",
       "description": "assert_type(str, int | str) failed",
       "line": 50,
@@ -4885,7 +4825,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(str, int | str) failed",
       "description": "assert_type(str, int | str) failed",
       "line": 57,
@@ -4950,8 +4890,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "`+` is not supported between `TypeVar[AnyStr]` and `TypeVar[AnyStr]`\n  TODO: Expr::binop_infer attribute base undefined for type: TypeVar[AnyStr] (trying to access __add__)",
-      "description": "`+` is not supported between `TypeVar[AnyStr]` and `TypeVar[AnyStr]`\n  TODO: Expr::binop_infer attribute base undefined for type: TypeVar[AnyStr] (trying to access __add__)",
+      "concise_description": "`+` is not supported between `AnyStr` and `AnyStr`\n  TODO: Expr::binop_infer attribute base undefined for type: AnyStr (trying to access __add__)",
+      "description": "`+` is not supported between `AnyStr` and `AnyStr`\n  TODO: Expr::binop_infer attribute base undefined for type: AnyStr (trying to access __add__)",
       "line": 34,
       "name": "internal-error",
       "stop_column": 17,
@@ -4989,7 +4929,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(MyStr, str) failed",
       "description": "assert_type(MyStr, str) failed",
       "line": 67,
@@ -4999,7 +4939,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(MyStr, str) failed",
       "description": "assert_type(MyStr, str) failed",
       "line": 68,
@@ -5030,8 +4970,8 @@
     {
       "code": -2,
       "column": 8,
-      "concise_description": "Cannot index into `MyMap1[str, int]`\n  Argument `Literal[0]` is not assignable to parameter with type `str` in function `typing.Mapping.__getitem__`",
-      "description": "Cannot index into `MyMap1[str, int]`\n  Argument `Literal[0]` is not assignable to parameter with type `str` in function `typing.Mapping.__getitem__`",
+      "concise_description": "Cannot index into `MyMap1[str, int]`\n  Argument `Literal[0]` is not assignable to parameter `key` with type `str` in function `typing.Mapping.__getitem__`",
+      "description": "Cannot index into `MyMap1[str, int]`\n  Argument `Literal[0]` is not assignable to parameter `key` with type `str` in function `typing.Mapping.__getitem__`",
       "line": 157,
       "name": "bad-argument-type",
       "stop_column": 9,
@@ -5040,8 +4980,8 @@
     {
       "code": -2,
       "column": 8,
-      "concise_description": "Cannot index into `MyMap2[int, str]`\n  Argument `Literal[0]` is not assignable to parameter with type `str` in function `typing.Mapping.__getitem__`",
-      "description": "Cannot index into `MyMap2[int, str]`\n  Argument `Literal[0]` is not assignable to parameter with type `str` in function `typing.Mapping.__getitem__`",
+      "concise_description": "Cannot index into `MyMap2[int, str]`\n  Argument `Literal[0]` is not assignable to parameter `key` with type `str` in function `typing.Mapping.__getitem__`",
+      "description": "Cannot index into `MyMap2[int, str]`\n  Argument `Literal[0]` is not assignable to parameter `key` with type `str` in function `typing.Mapping.__getitem__`",
       "line": 158,
       "name": "bad-argument-type",
       "stop_column": 9,
@@ -5141,7 +5081,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Any, int) failed",
       "description": "assert_type(Any, int) failed",
       "line": 127,
@@ -5152,8 +5092,8 @@
     {
       "code": -2,
       "column": 7,
-      "concise_description": "Class `Foo5` uses type variables not specified in `Generic` or `Protocol` base",
-      "description": "Class `Foo5` uses type variables not specified in `Generic` or `Protocol` base",
+      "concise_description": "TypeVar `T5` with a default cannot follow TypeVarTuple `Ts`",
+      "description": "TypeVar `T5` with a default cannot follow TypeVarTuple `Ts`",
       "line": 138,
       "name": "invalid-type-var",
       "stop_column": 11,
@@ -5161,109 +5101,9 @@
     },
     {
       "code": -2,
-      "column": 7,
-      "concise_description": "Type parameter `Ts` without a default cannot follow type parameter `T5` with a default",
-      "description": "Type parameter `Ts` without a default cannot follow type parameter `T5` with a default",
-      "line": 138,
-      "name": "invalid-type-var",
-      "stop_column": 11,
-      "stop_line": 138
-    },
-    {
-      "code": -2,
-      "column": 7,
-      "concise_description": "Class `Foo6` uses type variables not specified in `Generic` or `Protocol` base",
-      "description": "Class `Foo6` uses type variables not specified in `Generic` or `Protocol` base",
-      "line": 148,
-      "name": "invalid-type-var",
-      "stop_column": 11,
-      "stop_line": 148
-    },
-    {
-      "code": -2,
-      "column": 7,
-      "concise_description": "Type parameter `Ts` without a default cannot follow type parameter `P` with a default",
-      "description": "Type parameter `Ts` without a default cannot follow type parameter `P` with a default",
-      "line": 148,
-      "name": "invalid-type-var",
-      "stop_column": 11,
-      "stop_line": 148
-    },
-    {
-      "code": -2,
-      "column": 13,
-      "concise_description": "Expected a valid ParamSpec expression, got `int`",
-      "description": "Expected a valid ParamSpec expression, got `int`",
-      "line": 151,
-      "name": "invalid-param-spec",
-      "stop_column": 27,
-      "stop_line": 151
-    },
-    {
-      "code": -2,
-      "column": 34,
-      "concise_description": "Expected a valid ParamSpec expression, got `int`",
-      "description": "Expected a valid ParamSpec expression, got `int`",
-      "line": 151,
-      "name": "invalid-param-spec",
-      "stop_column": 63,
-      "stop_line": 151
-    },
-    {
-      "code": -2,
-      "column": 34,
-      "concise_description": "Expected 2 type arguments for `Foo6`, got 3",
-      "description": "Expected 2 type arguments for `Foo6`, got 3",
-      "line": 151,
-      "name": "bad-specialization",
-      "stop_column": 63,
-      "stop_line": 151
-    },
-    {
-      "code": -2,
-      "column": 13,
-      "concise_description": "Expected a valid ParamSpec expression, got `int`",
-      "description": "Expected a valid ParamSpec expression, got `int`",
-      "line": 152,
-      "name": "invalid-param-spec",
-      "stop_column": 36,
-      "stop_line": 152
-    },
-    {
-      "code": -2,
-      "column": 13,
-      "concise_description": "Expected 2 type arguments for `Foo6`, got 3",
-      "description": "Expected 2 type arguments for `Foo6`, got 3",
-      "line": 152,
-      "name": "bad-specialization",
-      "stop_column": 36,
-      "stop_line": 152
-    },
-    {
-      "code": -2,
-      "column": 43,
-      "concise_description": "Expected a valid ParamSpec expression, got `int`",
-      "description": "Expected a valid ParamSpec expression, got `int`",
-      "line": 152,
-      "name": "invalid-param-spec",
-      "stop_column": 66,
-      "stop_line": 152
-    },
-    {
-      "code": -2,
-      "column": 43,
-      "concise_description": "Expected 2 type arguments for `Foo6`, got 3",
-      "description": "Expected 2 type arguments for `Foo6`, got 3",
-      "line": 152,
-      "name": "bad-specialization",
-      "stop_column": 66,
-      "stop_line": 152
-    },
-    {
-      "code": -2,
-      "column": 1,
-      "concise_description": "assert_type(Forall[DefaultIntT, (Foo7[TypeVar[DefaultIntT]]) -> Foo7[TypeVar[DefaultIntT]]], (Foo7[int]) -> Foo7[int]) failed",
-      "description": "assert_type(Forall[DefaultIntT, (Foo7[TypeVar[DefaultIntT]]) -> Foo7[TypeVar[DefaultIntT]]], (Foo7[int]) -> Foo7[int]) failed",
+      "column": 12,
+      "concise_description": "assert_type([DefaultIntT](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed",
+      "description": "assert_type([DefaultIntT](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed",
       "line": 166,
       "name": "assert-type",
       "stop_column": 57,
@@ -5271,7 +5111,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Any, int) failed",
       "description": "assert_type(Any, int) failed",
       "line": 167,
@@ -5334,8 +5174,8 @@
     {
       "code": -2,
       "column": 30,
-      "concise_description": "Expected default `TypeVar(X1, bound=int, variance=PUndefined)` of `Ok1` to be assignable to the upper bound of `float`",
-      "description": "Expected default `TypeVar(X1, bound=int, variance=PUndefined)` of `Ok1` to be assignable to the upper bound of `float`",
+      "concise_description": "Expected default `TypeVar(X1, bound=int, variance=PInvariant)` of `Ok1` to be assignable to the upper bound of `float`",
+      "description": "Expected default `TypeVar(X1, bound=int, variance=PInvariant)` of `Ok1` to be assignable to the upper bound of `float`",
       "line": 66,
       "name": "invalid-type-var",
       "stop_column": 32,
@@ -5344,8 +5184,8 @@
     {
       "code": -2,
       "column": 38,
-      "concise_description": "Expected default `TypeVar(X1, bound=int, variance=PUndefined)` of `AlsoOk1` to be assignable to the upper bound of `int`",
-      "description": "Expected default `TypeVar(X1, bound=int, variance=PUndefined)` of `AlsoOk1` to be assignable to the upper bound of `int`",
+      "concise_description": "Expected default `TypeVar(X1, bound=int, variance=PInvariant)` of `AlsoOk1` to be assignable to the upper bound of `int`",
+      "description": "Expected default `TypeVar(X1, bound=int, variance=PInvariant)` of `AlsoOk1` to be assignable to the upper bound of `int`",
       "line": 67,
       "name": "invalid-type-var",
       "stop_column": 40,
@@ -5354,8 +5194,8 @@
     {
       "code": -2,
       "column": 40,
-      "concise_description": "Expected default `TypeVar(X1, bound=int, variance=PUndefined)` of `Invalid1` to be assignable to the upper bound of `str`",
-      "description": "Expected default `TypeVar(X1, bound=int, variance=PUndefined)` of `Invalid1` to be assignable to the upper bound of `str`",
+      "concise_description": "Expected default `TypeVar(X1, bound=int, variance=PInvariant)` of `Invalid1` to be assignable to the upper bound of `str`",
+      "description": "Expected default `TypeVar(X1, bound=int, variance=PInvariant)` of `Invalid1` to be assignable to the upper bound of `str`",
       "line": 68,
       "name": "invalid-type-var",
       "stop_column": 42,
@@ -5364,8 +5204,8 @@
     {
       "code": -2,
       "column": 52,
-      "concise_description": "Expected default `TypeVar(Y1, bound=int, variance=PUndefined)` of `Invalid2` to be one of the following constraints: `float`, `str`",
-      "description": "Expected default `TypeVar(Y1, bound=int, variance=PUndefined)` of `Invalid2` to be one of the following constraints: `float`, `str`",
+      "concise_description": "Expected default `TypeVar(Y1, bound=int, variance=PInvariant)` of `Invalid2` to be one of the following constraints: `float`, `str`",
+      "description": "Expected default `TypeVar(Y1, bound=int, variance=PInvariant)` of `Invalid2` to be one of the following constraints: `float`, `str`",
       "line": 74,
       "name": "invalid-type-var",
       "stop_column": 54,
@@ -5374,8 +5214,8 @@
     {
       "code": -2,
       "column": 54,
-      "concise_description": "Expected default `TypeVar(Y2, constraints=(int, str), variance=PUndefined)` of `AlsoOk2` to be one of the following constraints: `int`, `str`, `bool`",
-      "description": "Expected default `TypeVar(Y2, constraints=(int, str), variance=PUndefined)` of `AlsoOk2` to be one of the following constraints: `int`, `str`, `bool`",
+      "concise_description": "Expected default `TypeVar(Y2, constraints=(int, str), variance=PInvariant)` of `AlsoOk2` to be one of the following constraints: `int`, `str`, `bool`",
+      "description": "Expected default `TypeVar(Y2, constraints=(int, str), variance=PInvariant)` of `AlsoOk2` to be one of the following constraints: `int`, `str`, `bool`",
       "line": 77,
       "name": "invalid-type-var",
       "stop_column": 56,
@@ -5384,8 +5224,8 @@
     {
       "code": -2,
       "column": 63,
-      "concise_description": "Expected default `TypeVar(Y2, constraints=(int, str), variance=PUndefined)` of `AlsoInvalid2` to be one of the following constraints: `bool`, `complex`",
-      "description": "Expected default `TypeVar(Y2, constraints=(int, str), variance=PUndefined)` of `AlsoInvalid2` to be one of the following constraints: `bool`, `complex`",
+      "concise_description": "Expected default `TypeVar(Y2, constraints=(int, str), variance=PInvariant)` of `AlsoInvalid2` to be one of the following constraints: `bool`, `complex`",
+      "description": "Expected default `TypeVar(Y2, constraints=(int, str), variance=PInvariant)` of `AlsoInvalid2` to be one of the following constraints: `bool`, `complex`",
       "line": 78,
       "name": "invalid-type-var",
       "stop_column": 65,
@@ -5458,8 +5298,8 @@
     {
       "code": -2,
       "column": 14,
-      "concise_description": "Concatenate[int, ParamSpec[P]] is not allowed in this context.",
-      "description": "Concatenate[int, ParamSpec[P]] is not allowed in this context.",
+      "concise_description": "Concatenate[int, P] is not allowed in this context.",
+      "description": "Concatenate[int, P] is not allowed in this context.",
       "line": 27,
       "name": "invalid-annotation",
       "stop_column": 33,
@@ -5609,12 +5449,12 @@
     },
     {
       "code": -2,
-      "column": 9,
+      "column": 10,
       "concise_description": "Expected *-unpacked P.args and **-unpacked P.kwargs",
       "description": "Expected *-unpacked P.args and **-unpacked P.kwargs",
       "line": 49,
       "name": "invalid-param-spec",
-      "stop_column": 10,
+      "stop_column": 27,
       "stop_line": 49
     },
     {
@@ -5639,33 +5479,23 @@
     },
     {
       "code": -2,
-      "column": 9,
+      "column": 10,
       "concise_description": "Expected *-unpacked P.args and **-unpacked P.kwargs",
       "description": "Expected *-unpacked P.args and **-unpacked P.kwargs",
       "line": 70,
       "name": "invalid-param-spec",
-      "stop_column": 10,
+      "stop_column": 30,
       "stop_line": 70
     },
     {
       "code": -2,
-      "column": 9,
+      "column": 10,
       "concise_description": "Expected 1 more positional argument",
       "description": "Expected 1 more positional argument",
       "line": 72,
       "name": "bad-argument-count",
-      "stop_column": 10,
+      "stop_column": 27,
       "stop_line": 72
-    },
-    {
-      "code": -2,
-      "column": 13,
-      "concise_description": "Expected 1 more positional argument in function `foo`",
-      "description": "Expected 1 more positional argument in function `foo`",
-      "line": 83,
-      "name": "bad-argument-count",
-      "stop_column": 16,
-      "stop_line": 83
     },
     {
       "code": -2,
@@ -5674,6 +5504,16 @@
       "description": "Unexpected keyword argument `x` in function `foo`",
       "line": 83,
       "name": "unexpected-keyword",
+      "stop_column": 16,
+      "stop_line": 83
+    },
+    {
+      "code": -2,
+      "column": 13,
+      "concise_description": "Expected 1 more positional argument in function `foo`",
+      "description": "Expected 1 more positional argument in function `foo`",
+      "line": 83,
+      "name": "bad-argument-count",
       "stop_column": 16,
       "stop_line": 83
     },
@@ -5702,18 +5542,8 @@
     {
       "code": -2,
       "column": 4,
-      "concise_description": "Expected 2 more positional arguments",
-      "description": "Expected 2 more positional arguments",
-      "line": 26,
-      "name": "bad-argument-count",
-      "stop_column": 9,
-      "stop_line": 26
-    },
-    {
-      "code": -2,
-      "column": 4,
-      "concise_description": "Unexpected keyword argument `a`",
-      "description": "Unexpected keyword argument `a`",
+      "concise_description": "Expected argument `a` to be positional",
+      "description": "Expected argument `a` to be positional",
       "line": 26,
       "name": "unexpected-keyword",
       "stop_column": 9,
@@ -5722,8 +5552,8 @@
     {
       "code": -2,
       "column": 11,
-      "concise_description": "Unexpected keyword argument `b`",
-      "description": "Unexpected keyword argument `b`",
+      "concise_description": "Expected argument `b` to be positional",
+      "description": "Expected argument `b` to be positional",
       "line": 26,
       "name": "unexpected-keyword",
       "stop_column": 17,
@@ -5732,8 +5562,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "Argument `Literal['A']` is not assignable to parameter with type `bool`",
-      "description": "Argument `Literal['A']` is not assignable to parameter with type `bool`",
+      "concise_description": "Argument `Literal['A']` is not assignable to parameter `b` with type `bool`",
+      "description": "Argument `Literal['A']` is not assignable to parameter `b` with type `bool`",
       "line": 27,
       "name": "bad-argument-type",
       "stop_column": 12,
@@ -5897,7 +5727,7 @@
   "generics_self_advanced.py": [
     {
       "code": -2,
-      "column": 9,
+      "column": 20,
       "concise_description": "assert_type(ChildB, Self) failed",
       "description": "assert_type(ChildB, Self) failed",
       "line": 38,
@@ -5907,7 +5737,7 @@
     },
     {
       "code": -2,
-      "column": 9,
+      "column": 20,
       "concise_description": "assert_type(Any, list[Self]) failed",
       "description": "assert_type(Any, list[Self]) failed",
       "line": 43,
@@ -5927,7 +5757,7 @@
     },
     {
       "code": -2,
-      "column": 9,
+      "column": 20,
       "concise_description": "assert_type(Any, Self) failed",
       "description": "assert_type(Any, Self) failed",
       "line": 44,
@@ -5947,7 +5777,7 @@
     },
     {
       "code": -2,
-      "column": 9,
+      "column": 20,
       "concise_description": "assert_type(ChildB, Self) failed",
       "description": "assert_type(ChildB, Self) failed",
       "line": 45,
@@ -6513,7 +6343,7 @@
     },
     {
       "code": -2,
-      "column": 13,
+      "column": 24,
       "concise_description": "assert_type(str, int) failed",
       "description": "assert_type(str, int) failed",
       "line": 67,
@@ -6523,9 +6353,9 @@
     },
     {
       "code": -2,
-      "column": 13,
-      "concise_description": "assert_type(type[TypeVar[T]], TypeVar) failed",
-      "description": "assert_type(type[TypeVar[T]], TypeVar) failed",
+      "column": 24,
+      "concise_description": "assert_type(type[T], TypeVar) failed",
+      "description": "assert_type(type[T], TypeVar) failed",
       "line": 116,
       "name": "assert-type",
       "stop_column": 36,
@@ -6607,72 +6437,72 @@
   "generics_typevartuple_args.py": [
     {
       "code": -2,
-      "column": 1,
+      "column": 8,
       "concise_description": "Unpacked argument `tuple[Literal[0], Literal['']]` is not assignable to parameter `*args` with type `tuple[*@_, Env]` in function `exec_le`",
       "description": "Unpacked argument `tuple[Literal[0], Literal['']]` is not assignable to parameter `*args` with type `tuple[*@_, Env]` in function `exec_le`",
       "line": 33,
       "name": "bad-argument-type",
-      "stop_column": 8,
+      "stop_column": 19,
       "stop_line": 33
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 8,
       "concise_description": "Unpacked argument `tuple[Literal[0], Literal['']]` is not assignable to parameter `*args` with type `tuple[*@_, Env]` in function `exec_le`",
       "description": "Unpacked argument `tuple[Literal[0], Literal['']]` is not assignable to parameter `*args` with type `tuple[*@_, Env]` in function `exec_le`",
       "line": 34,
       "name": "bad-argument-type",
-      "stop_column": 8,
+      "stop_column": 30,
       "stop_line": 34
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 6,
       "concise_description": "Unpacked argument `tuple[Literal[1], Literal['2'], Literal[3]]` is not assignable to parameter `*args` with type `tuple[int, ...]` in function `func1`",
       "description": "Unpacked argument `tuple[Literal[1], Literal['2'], Literal[3]]` is not assignable to parameter `*args` with type `tuple[int, ...]` in function `func1`",
       "line": 48,
       "name": "bad-argument-type",
-      "stop_column": 6,
+      "stop_column": 17,
       "stop_line": 48
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 6,
       "concise_description": "Unpacked argument `tuple[Literal[1], Literal[1], Literal['']]` is not assignable to parameter `*args` with type `tuple[int, *tuple[str, ...], str]` in function `func2`",
       "description": "Unpacked argument `tuple[Literal[1], Literal[1], Literal['']]` is not assignable to parameter `*args` with type `tuple[int, *tuple[str, ...], str]` in function `func2`",
       "line": 57,
       "name": "bad-argument-type",
-      "stop_column": 6,
+      "stop_column": 16,
       "stop_line": 57
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 6,
       "concise_description": "Unpacked argument `tuple[Literal[1]]` is not assignable to parameter `*args` with type `tuple[int, *tuple[str, ...], str]` in function `func2`",
       "description": "Unpacked argument `tuple[Literal[1]]` is not assignable to parameter `*args` with type `tuple[int, *tuple[str, ...], str]` in function `func2`",
       "line": 58,
       "name": "bad-argument-type",
-      "stop_column": 6,
+      "stop_column": 9,
       "stop_line": 58
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 6,
       "concise_description": "Unpacked argument `tuple[Literal['']]` is not assignable to parameter `*args` with type `tuple[int, *tuple[str, ...], str]` in function `func2`",
       "description": "Unpacked argument `tuple[Literal['']]` is not assignable to parameter `*args` with type `tuple[int, *tuple[str, ...], str]` in function `func2`",
       "line": 59,
       "name": "bad-argument-type",
-      "stop_column": 6,
+      "stop_column": 10,
       "stop_line": 59
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 6,
       "concise_description": "Unpacked argument `tuple[Literal[1]]` is not assignable to parameter `*args` with type `tuple[int, str]` in function `func3`",
       "description": "Unpacked argument `tuple[Literal[1]]` is not assignable to parameter `*args` with type `tuple[int, str]` in function `func3`",
       "line": 67,
       "name": "bad-argument-type",
-      "stop_column": 6,
+      "stop_column": 9,
       "stop_line": 67
     },
     {
@@ -6874,8 +6704,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "Returned type `tuple[*tuple[Unknown, ...], Unknown]` is not assignable to declared return type `tuple[*TypeVarTuple[Ts], TypeVar[T]]`",
-      "description": "Returned type `tuple[*tuple[Unknown, ...], Unknown]` is not assignable to declared return type `tuple[*TypeVarTuple[Ts], TypeVar[T]]`",
+      "concise_description": "Returned type `tuple[*tuple[Unknown, ...], Unknown]` is not assignable to declared return type `tuple[*Ts, T]`",
+      "description": "Returned type `tuple[*tuple[Unknown, ...], Unknown]` is not assignable to declared return type `tuple[*Ts, T]`",
       "line": 56,
       "name": "bad-return",
       "stop_column": 30,
@@ -6886,7 +6716,7 @@
   "generics_typevartuple_specialization.py": [
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed",
       "description": "assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed",
       "line": 51,
@@ -6896,17 +6726,7 @@
     },
     {
       "code": -2,
-      "column": 7,
-      "concise_description": "Class `Array2` uses type variables not specified in `Generic` or `Protocol` base",
-      "description": "Class `Array2` uses type variables not specified in `Generic` or `Protocol` base",
-      "line": 59,
-      "name": "invalid-type-var",
-      "stop_column": 13,
-      "stop_line": 59
-    },
-    {
-      "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(tuple[float, *tuple[Any, ...]], tuple[float]) failed",
       "description": "assert_type(tuple[float, *tuple[Any, ...]], tuple[float]) failed",
       "line": 94,
@@ -6976,7 +6796,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed",
       "description": "assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed",
       "line": 157,
@@ -7020,7 +6840,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(list[int], list[int] | set[int]) failed",
       "description": "assert_type(list[int], list[int] | set[int]) failed",
       "line": 43,
@@ -7447,7 +7267,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(Matrix[Literal[2], int], Matrix[Literal[2], Literal[7]]) failed",
       "description": "assert_type(Matrix[Literal[2], int], Matrix[Literal[2], Literal[7]]) failed",
       "line": 72,
@@ -7489,7 +7309,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(str, LiteralString) failed",
       "description": "assert_type(str, LiteralString) failed",
       "line": 52,
@@ -7529,7 +7349,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(str, Literal['hello']) failed",
       "description": "assert_type(str, Literal['hello']) failed",
       "line": 111,
@@ -7652,8 +7472,8 @@
     {
       "code": -2,
       "column": 16,
-      "concise_description": "Invalid type inside literal, `TypeVar(T, variance=PUndefined)`",
-      "description": "Invalid type inside literal, `TypeVar(T, variance=PUndefined)`",
+      "concise_description": "Invalid type inside literal, `TypeVar(T, variance=PInvariant)`",
+      "description": "Invalid type inside literal, `TypeVar(T, variance=PInvariant)`",
       "line": 50,
       "name": "invalid-literal",
       "stop_column": 17,
@@ -7795,22 +7615,22 @@
     },
     {
       "code": -2,
-      "column": 6,
+      "column": 11,
       "concise_description": "Missing argument `y` in function `Point.__new__`",
       "description": "Missing argument `y` in function `Point.__new__`",
       "line": 44,
       "name": "missing-argument",
-      "stop_column": 11,
+      "stop_column": 14,
       "stop_line": 44
     },
     {
       "code": -2,
-      "column": 6,
+      "column": 11,
       "concise_description": "Missing argument `y` in function `Point.__new__`",
       "description": "Missing argument `y` in function `Point.__new__`",
       "line": 45,
       "name": "missing-argument",
-      "stop_column": 11,
+      "stop_column": 16,
       "stop_line": 45
     },
     {
@@ -7877,32 +7697,32 @@
   "namedtuples_define_functional.py": [
     {
       "code": -2,
-      "column": 8,
+      "column": 14,
       "concise_description": "Missing argument `y` in function `Point1.__new__`",
       "description": "Missing argument `y` in function `Point1.__new__`",
       "line": 16,
       "name": "missing-argument",
-      "stop_column": 14,
+      "stop_column": 19,
       "stop_line": 16
     },
     {
       "code": -2,
-      "column": 8,
+      "column": 14,
       "concise_description": "Missing argument `x` in function `Point2.__new__`",
       "description": "Missing argument `x` in function `Point2.__new__`",
       "line": 21,
       "name": "missing-argument",
-      "stop_column": 14,
+      "stop_column": 16,
       "stop_line": 21
     },
     {
       "code": -2,
-      "column": 8,
+      "column": 14,
       "concise_description": "Missing argument `y` in function `Point2.__new__`",
       "description": "Missing argument `y` in function `Point2.__new__`",
       "line": 21,
       "name": "missing-argument",
-      "stop_column": 14,
+      "stop_column": 16,
       "stop_line": 21
     },
     {
@@ -7917,12 +7737,12 @@
     },
     {
       "code": -2,
-      "column": 8,
+      "column": 14,
       "concise_description": "Missing argument `y` in function `Point4.__new__`",
       "description": "Missing argument `y` in function `Point4.__new__`",
       "line": 31,
       "name": "missing-argument",
-      "stop_column": 14,
+      "stop_column": 22,
       "stop_line": 31
     },
     {
@@ -8007,12 +7827,12 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 4,
       "concise_description": "Missing argument `a` in function `NT5.__new__`",
       "description": "Missing argument `a` in function `NT5.__new__`",
       "line": 66,
       "name": "missing-argument",
-      "stop_column": 4,
+      "stop_column": 6,
       "stop_line": 66
     }
   ],
@@ -8072,8 +7892,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Item assignment is not supported on `Point`\n  Object of class `Point` has no attribute `__setitem__`",
-      "description": "Item assignment is not supported on `Point`\n  Object of class `Point` has no attribute `__setitem__`",
+      "concise_description": "Cannot set item in `Point`\n  Object of class `Point` has no attribute `__setitem__`",
+      "description": "Cannot set item in `Point`\n  Object of class `Point` has no attribute `__setitem__`",
       "line": 41,
       "name": "missing-attribute",
       "stop_column": 5,
@@ -8092,8 +7912,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Item deletion is not supported on `Point`\n  Object of class `Point` has no attribute `__delitem__`",
-      "description": "Item deletion is not supported on `Point`\n  Object of class `Point` has no attribute `__delitem__`",
+      "concise_description": "Cannot delete item in `Point`\n  Object of class `Point` has no attribute `__delitem__`",
+      "description": "Cannot delete item in `Point`\n  Object of class `Point` has no attribute `__delitem__`",
       "line": 43,
       "name": "missing-attribute",
       "stop_column": 9,
@@ -8198,21 +8018,11 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Cannot index into `Bytes`\n  No matching overload found for function `Bytes.__getitem__`, reporting errors for closest overload: `(__i: int) -> int`",
-      "description": "Cannot index into `Bytes`\n  No matching overload found for function `Bytes.__getitem__`, reporting errors for closest overload: `(__i: int) -> int`",
+      "concise_description": "Cannot index into `Bytes`\n  No matching overload found for function `Bytes.__getitem__`\n  Possible overloads:\n  (__i: int) -> int [closest match]\n  (__s: slice[Any, Any, Any]) -> bytes",
+      "description": "Cannot index into `Bytes`\n  No matching overload found for function `Bytes.__getitem__`\n  Possible overloads:\n  (__i: int) -> int [closest match]\n  (__s: slice[Any, Any, Any]) -> bytes",
       "line": 39,
       "name": "no-matching-overload",
       "stop_column": 6,
-      "stop_line": 39
-    },
-    {
-      "code": -2,
-      "column": 3,
-      "concise_description": "Argument `Literal['']` is not assignable to parameter `__i` with type `int` in function `Bytes.__getitem__`",
-      "description": "Argument `Literal['']` is not assignable to parameter `__i` with type `int` in function `Bytes.__getitem__`",
-      "line": 39,
-      "name": "bad-argument-type",
-      "stop_column": 5,
       "stop_line": 39
     }
   ],
@@ -8262,87 +8072,47 @@
   "overloads_evaluation.py": [
     {
       "code": -2,
-      "column": 1,
-      "concise_description": "No matching overload found for function `example1_1`, reporting errors for closest overload: `(x: str) -> str`",
-      "description": "No matching overload found for function `example1_1`, reporting errors for closest overload: `(x: str) -> str`",
+      "column": 11,
+      "concise_description": "No matching overload found for function `example1_1`\n  Possible overloads:\n  (x: int, y: str) -> int\n  (x: str) -> str [closest match]",
+      "description": "No matching overload found for function `example1_1`\n  Possible overloads:\n  (x: int, y: str) -> int\n  (x: str) -> str [closest match]",
       "line": 38,
       "name": "no-matching-overload",
-      "stop_column": 11,
+      "stop_column": 13,
       "stop_line": 38
     },
     {
       "code": -2,
-      "column": 1,
-      "concise_description": "Missing argument `x` in function `example1_1`",
-      "description": "Missing argument `x` in function `example1_1`",
-      "line": 38,
-      "name": "missing-argument",
-      "stop_column": 11,
-      "stop_line": 38
-    },
-    {
-      "code": -2,
-      "column": 1,
-      "concise_description": "No matching overload found for function `example1_1`, reporting errors for closest overload: `(x: int, y: str) -> int`",
-      "description": "No matching overload found for function `example1_1`, reporting errors for closest overload: `(x: int, y: str) -> int`",
+      "column": 11,
+      "concise_description": "No matching overload found for function `example1_1`\n  Possible overloads:\n  (x: int, y: str) -> int [closest match]\n  (x: str) -> str",
+      "description": "No matching overload found for function `example1_1`\n  Possible overloads:\n  (x: int, y: str) -> int [closest match]\n  (x: str) -> str",
       "line": 46,
       "name": "no-matching-overload",
-      "stop_column": 11,
+      "stop_column": 17,
       "stop_line": 46
     },
     {
       "code": -2,
-      "column": 15,
-      "concise_description": "Argument `Literal[1]` is not assignable to parameter `y` with type `str` in function `example1_1`",
-      "description": "Argument `Literal[1]` is not assignable to parameter `y` with type `str` in function `example1_1`",
-      "line": 46,
-      "name": "bad-argument-type",
-      "stop_column": 16,
-      "stop_line": 46
-    },
-    {
-      "code": -2,
-      "column": 1,
-      "concise_description": "No matching overload found for function `example1_1`, reporting errors for closest overload: `(x: int, y: str) -> int`",
-      "description": "No matching overload found for function `example1_1`, reporting errors for closest overload: `(x: int, y: str) -> int`",
+      "column": 11,
+      "concise_description": "No matching overload found for function `example1_1`\n  Possible overloads:\n  (x: int, y: str) -> int [closest match]\n  (x: str) -> str",
+      "description": "No matching overload found for function `example1_1`\n  Possible overloads:\n  (x: int, y: str) -> int [closest match]\n  (x: str) -> str",
       "line": 51,
       "name": "no-matching-overload",
-      "stop_column": 11,
+      "stop_column": 14,
       "stop_line": 51
     },
     {
       "code": -2,
-      "column": 1,
-      "concise_description": "Missing argument `y` in function `example1_1`",
-      "description": "Missing argument `y` in function `example1_1`",
-      "line": 51,
-      "name": "missing-argument",
-      "stop_column": 11,
-      "stop_line": 51
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "No matching overload found for function `example2`, reporting errors for closest overload: `(x: int, y: str, z: int) -> str`",
-      "description": "No matching overload found for function `example2`, reporting errors for closest overload: `(x: int, y: str, z: int) -> str`",
+      "column": 20,
+      "concise_description": "No matching overload found for function `example2`\n  Possible overloads:\n  (x: int, y: str, z: int) -> str [closest match]\n  (x: int, y: int, z: int) -> int",
+      "description": "No matching overload found for function `example2`\n  Possible overloads:\n  (x: int, y: str, z: int) -> str [closest match]\n  (x: int, y: int, z: int) -> int",
       "line": 105,
       "name": "no-matching-overload",
-      "stop_column": 20,
+      "stop_column": 29,
       "stop_line": 105
     },
     {
       "code": -2,
-      "column": 24,
-      "concise_description": "Argument `int | str` is not assignable to parameter `y` with type `str` in function `example2`",
-      "description": "Argument `int | str` is not assignable to parameter `y` with type `str` in function `example2`",
-      "line": 105,
-      "name": "bad-argument-type",
-      "stop_column": 25,
-      "stop_line": 105
-    },
-    {
-      "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(Any, int | str) failed",
       "description": "assert_type(Any, int | str) failed",
       "line": 106,
@@ -8352,57 +8122,27 @@
     },
     {
       "code": -2,
-      "column": 5,
-      "concise_description": "No matching overload found for function `example2`, reporting errors for closest overload: `(x: int, y: str, z: int) -> str`",
-      "description": "No matching overload found for function `example2`, reporting errors for closest overload: `(x: int, y: str, z: int) -> str`",
+      "column": 13,
+      "concise_description": "No matching overload found for function `example2`\n  Possible overloads:\n  (x: int, y: str, z: int) -> str [closest match]\n  (x: int, y: int, z: int) -> int",
+      "description": "No matching overload found for function `example2`\n  Possible overloads:\n  (x: int, y: str, z: int) -> str [closest match]\n  (x: int, y: int, z: int) -> int",
       "line": 115,
       "name": "no-matching-overload",
-      "stop_column": 13,
+      "stop_column": 22,
       "stop_line": 115
     },
     {
       "code": -2,
-      "column": 14,
-      "concise_description": "Argument `int | str` is not assignable to parameter `x` with type `int` in function `example2`",
-      "description": "Argument `int | str` is not assignable to parameter `x` with type `int` in function `example2`",
-      "line": 115,
-      "name": "bad-argument-type",
-      "stop_column": 15,
-      "stop_line": 115
-    },
-    {
-      "code": -2,
-      "column": 17,
-      "concise_description": "Argument `int | str` is not assignable to parameter `y` with type `str` in function `example2`",
-      "description": "Argument `int | str` is not assignable to parameter `y` with type `str` in function `example2`",
-      "line": 115,
-      "name": "bad-argument-type",
-      "stop_column": 18,
-      "stop_line": 115
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "No matching overload found for function `expand_bool`, reporting errors for closest overload: `(x: Literal[False]) -> Literal[0]`",
-      "description": "No matching overload found for function `expand_bool`, reporting errors for closest overload: `(x: Literal[False]) -> Literal[0]`",
+      "column": 23,
+      "concise_description": "No matching overload found for function `expand_bool`\n  Possible overloads:\n  (x: Literal[False]) -> Literal[0] [closest match]\n  (x: Literal[True]) -> Literal[1]",
+      "description": "No matching overload found for function `expand_bool`\n  Possible overloads:\n  (x: Literal[False]) -> Literal[0] [closest match]\n  (x: Literal[True]) -> Literal[1]",
       "line": 134,
       "name": "no-matching-overload",
-      "stop_column": 23,
+      "stop_column": 26,
       "stop_line": 134
     },
     {
       "code": -2,
-      "column": 24,
-      "concise_description": "Argument `bool` is not assignable to parameter `x` with type `Literal[False]` in function `expand_bool`",
-      "description": "Argument `bool` is not assignable to parameter `x` with type `Literal[False]` in function `expand_bool`",
-      "line": 134,
-      "name": "bad-argument-type",
-      "stop_column": 25,
-      "stop_line": 134
-    },
-    {
-      "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(Any, Literal[0, 1]) failed",
       "description": "assert_type(Any, Literal[0, 1]) failed",
       "line": 135,
@@ -8412,27 +8152,17 @@
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "No matching overload found for function `expand_enum`, reporting errors for closest overload: `(x: Literal[Color.RED]) -> Literal[0]`",
-      "description": "No matching overload found for function `expand_enum`, reporting errors for closest overload: `(x: Literal[Color.RED]) -> Literal[0]`",
+      "column": 23,
+      "concise_description": "No matching overload found for function `expand_enum`\n  Possible overloads:\n  (x: Literal[Color.RED]) -> Literal[0] [closest match]\n  (x: Literal[Color.BLUE]) -> Literal[1]",
+      "description": "No matching overload found for function `expand_enum`\n  Possible overloads:\n  (x: Literal[Color.RED]) -> Literal[0] [closest match]\n  (x: Literal[Color.BLUE]) -> Literal[1]",
       "line": 160,
       "name": "no-matching-overload",
-      "stop_column": 23,
+      "stop_column": 26,
       "stop_line": 160
     },
     {
       "code": -2,
-      "column": 24,
-      "concise_description": "Argument `Color` is not assignable to parameter `x` with type `Literal[Color.RED]` in function `expand_enum`",
-      "description": "Argument `Color` is not assignable to parameter `x` with type `Literal[Color.RED]` in function `expand_enum`",
-      "line": 160,
-      "name": "bad-argument-type",
-      "stop_column": 25,
-      "stop_line": 160
-    },
-    {
-      "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(Any, Literal[0, 1]) failed",
       "description": "assert_type(Any, Literal[0, 1]) failed",
       "line": 161,
@@ -8442,27 +8172,17 @@
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "No matching overload found for function `expand_type_union`, reporting errors for closest overload: `(x: type[int]) -> int`",
-      "description": "No matching overload found for function `expand_type_union`, reporting errors for closest overload: `(x: type[int]) -> int`",
+      "column": 29,
+      "concise_description": "No matching overload found for function `expand_type_union`\n  Possible overloads:\n  (x: type[int]) -> int [closest match]\n  (x: type[str]) -> str",
+      "description": "No matching overload found for function `expand_type_union`\n  Possible overloads:\n  (x: type[int]) -> int [closest match]\n  (x: type[str]) -> str",
       "line": 180,
       "name": "no-matching-overload",
-      "stop_column": 29,
+      "stop_column": 32,
       "stop_line": 180
     },
     {
       "code": -2,
-      "column": 30,
-      "concise_description": "Argument `type[int | str]` is not assignable to parameter `x` with type `type[int]` in function `expand_type_union`",
-      "description": "Argument `type[int | str]` is not assignable to parameter `x` with type `type[int]` in function `expand_type_union`",
-      "line": 180,
-      "name": "bad-argument-type",
-      "stop_column": 31,
-      "stop_line": 180
-    },
-    {
-      "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(Any, int | str) failed",
       "description": "assert_type(Any, int | str) failed",
       "line": 181,
@@ -8472,27 +8192,17 @@
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "No matching overload found for function `expand_tuple`, reporting errors for closest overload: `(x: tuple[int, int]) -> int`",
-      "description": "No matching overload found for function `expand_tuple`, reporting errors for closest overload: `(x: tuple[int, int]) -> int`",
+      "column": 24,
+      "concise_description": "No matching overload found for function `expand_tuple`\n  Possible overloads:\n  (x: tuple[int, int]) -> int [closest match]\n  (x: tuple[int, str]) -> str",
+      "description": "No matching overload found for function `expand_tuple`\n  Possible overloads:\n  (x: tuple[int, int]) -> int [closest match]\n  (x: tuple[int, str]) -> str",
       "line": 204,
       "name": "no-matching-overload",
-      "stop_column": 24,
+      "stop_column": 32,
       "stop_line": 204
     },
     {
       "code": -2,
-      "column": 25,
-      "concise_description": "Argument `tuple[Literal[1], int | str]` is not assignable to parameter `x` with type `tuple[int, int]` in function `expand_tuple`",
-      "description": "Argument `tuple[Literal[1], int | str]` is not assignable to parameter `x` with type `tuple[int, int]` in function `expand_tuple`",
-      "line": 204,
-      "name": "bad-argument-type",
-      "stop_column": 31,
-      "stop_line": 204
-    },
-    {
-      "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(Any, int | str) failed",
       "description": "assert_type(Any, int | str) failed",
       "line": 205,
@@ -8502,7 +8212,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(str, int) failed",
       "description": "assert_type(str, int) failed",
       "line": 234,
@@ -8512,7 +8222,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(list[int], Any) failed",
       "description": "assert_type(list[int], Any) failed",
       "line": 264,
@@ -8522,7 +8232,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(list[int], Any) failed",
       "description": "assert_type(list[int], Any) failed",
       "line": 280,
@@ -8532,7 +8242,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(list[int], Any) failed",
       "description": "assert_type(list[int], Any) failed",
       "line": 345,
@@ -8544,12 +8254,12 @@
   "protocols_class_objects.py": [
     {
       "code": -2,
-      "column": 12,
+      "column": 15,
       "concise_description": "Cannot instantiate `Proto` because it is a protocol",
       "description": "Cannot instantiate `Proto` because it is a protocol",
       "line": 26,
       "name": "bad-instantiation",
-      "stop_column": 15,
+      "stop_column": 17,
       "stop_line": 26
     },
     {
@@ -8860,16 +8570,6 @@
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "Returned type `HasParent` is not assignable to declared return type `TypeVar[GenericHasParent]`",
-      "description": "Returned type `HasParent` is not assignable to declared return type `TypeVar[GenericHasParent]`",
-      "line": 87,
-      "name": "bad-return",
-      "stop_column": 26,
-      "stop_line": 87
-    },
-    {
-      "code": -2,
       "column": 25,
       "concise_description": "`ConcreteHasProperty1` is not assignable to `HasPropertyProto`",
       "description": "`ConcreteHasProperty1` is not assignable to `HasPropertyProto`",
@@ -9016,7 +8716,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Any, list[int]) failed",
       "description": "assert_type(Any, list[int]) failed",
       "line": 81,
@@ -9025,7 +8725,38 @@
       "stop_line": 81
     }
   ],
-  "protocols_runtime_checkable.py": [],
+  "protocols_runtime_checkable.py": [
+    {
+      "code": -2,
+      "column": 22,
+      "concise_description": "Protocol `Proto1` is not decorated with @runtime_checkable and cannot be used with isinstance()",
+      "description": "Protocol `Proto1` is not decorated with @runtime_checkable and cannot be used with isinstance()",
+      "line": 23,
+      "name": "invalid-argument",
+      "stop_column": 28,
+      "stop_line": 23
+    },
+    {
+      "code": -2,
+      "column": 22,
+      "concise_description": "Protocol `DataProtocol` has non-method members and cannot be used with issubclass()",
+      "description": "Protocol `DataProtocol` has non-method members and cannot be used with issubclass()",
+      "line": 55,
+      "name": "invalid-argument",
+      "stop_column": 34,
+      "stop_line": 55
+    },
+    {
+      "code": -2,
+      "column": 22,
+      "concise_description": "Protocol `DataProtocol` has non-method members and cannot be used with issubclass()",
+      "description": "Protocol `DataProtocol` has non-method members and cannot be used with issubclass()",
+      "line": 61,
+      "name": "invalid-argument",
+      "stop_column": 53,
+      "stop_line": 61
+    }
+  ],
   "protocols_self.py": [
     {
       "code": -2,
@@ -9051,12 +8782,12 @@
   "protocols_subtyping.py": [
     {
       "code": -2,
-      "column": 6,
+      "column": 12,
       "concise_description": "Cannot instantiate `Proto1` because it is a protocol",
       "description": "Cannot instantiate `Proto1` because it is a protocol",
       "line": 16,
       "name": "bad-instantiation",
-      "stop_column": 12,
+      "stop_column": 14,
       "stop_line": 16
     },
     {
@@ -9592,8 +9323,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "Returned type `ClassC[Never]` is not assignable to declared return type `ClassC[TypeVar[U]]`",
-      "description": "Returned type `ClassC[Never]` is not assignable to declared return type `ClassC[TypeVar[U]]`",
+      "concise_description": "Returned type `ClassC[Never]` is not assignable to declared return type `ClassC[U]`",
+      "description": "Returned type `ClassC[Never]` is not assignable to declared return type `ClassC[U]`",
       "line": 105,
       "name": "bad-return",
       "stop_column": 27,
@@ -9667,7 +9398,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(type, type[Any]) failed",
       "description": "assert_type(type, type[Any]) failed",
       "line": 84,
@@ -9697,7 +9428,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(Any, tuple[type, ...]) failed",
       "description": "assert_type(Any, tuple[type, ...]) failed",
       "line": 102,
@@ -9707,7 +9438,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(Any, tuple[type, ...]) failed",
       "description": "assert_type(Any, tuple[type, ...]) failed",
       "line": 106,
@@ -9717,7 +9448,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(Any, tuple[type, ...]) failed",
       "description": "assert_type(Any, tuple[type, ...]) failed",
       "line": 110,
@@ -9747,7 +9478,7 @@
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 16,
       "concise_description": "assert_type(type, type[Any]) failed",
       "description": "assert_type(type, type[Any]) failed",
       "line": 139,
@@ -9798,8 +9529,8 @@
     {
       "code": -2,
       "column": 16,
-      "concise_description": "Can't apply arguments to non-class, got TypeAlias[TA7, type[type[TypeVar(T, variance=PUndefined)]]]",
-      "description": "Can't apply arguments to non-class, got TypeAlias[TA7, type[type[TypeVar(T, variance=PUndefined)]]]",
+      "concise_description": "Can't apply arguments to non-class, got TypeAlias[TA7, type[type[TypeVar(T, variance=PInvariant)]]]",
+      "description": "Can't apply arguments to non-class, got TypeAlias[TA7, type[type[TypeVar(T, variance=PInvariant)]]]",
       "line": 152,
       "name": "bad-specialization",
       "stop_column": 22,
@@ -9808,8 +9539,8 @@
     {
       "code": -2,
       "column": 16,
-      "concise_description": "Can't apply arguments to non-class, got TypeAlias[TA8, type[type[TypeVar(T, variance=PUndefined)]]]",
-      "description": "Can't apply arguments to non-class, got TypeAlias[TA8, type[type[TypeVar(T, variance=PUndefined)]]]",
+      "concise_description": "Can't apply arguments to non-class, got TypeAlias[TA8, type[type[TypeVar(T, variance=PInvariant)]]]",
+      "description": "Can't apply arguments to non-class, got TypeAlias[TA8, type[type[TypeVar(T, variance=PInvariant)]]]",
       "line": 156,
       "name": "bad-specialization",
       "stop_column": 22,
@@ -9817,7 +9548,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Any, int) failed",
       "description": "assert_type(Any, int) failed",
       "line": 160,
@@ -9827,7 +9558,7 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 12,
       "concise_description": "assert_type(Any, int) failed",
       "description": "assert_type(Any, int) failed",
       "line": 161,
@@ -9909,7 +9640,7 @@
     },
     {
       "code": -2,
-      "column": 13,
+      "column": 24,
       "concise_description": "assert_type(tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int], tuple[int]) failed",
       "description": "assert_type(tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int], tuple[int]) failed",
       "line": 95,
@@ -9929,7 +9660,7 @@
     },
     {
       "code": -2,
-      "column": 13,
+      "column": 24,
       "concise_description": "assert_type(tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int], tuple[int, int] | tuple[str, str]) failed",
       "description": "assert_type(tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int], tuple[int, int] | tuple[str, str]) failed",
       "line": 99,
@@ -9959,7 +9690,7 @@
     },
     {
       "code": -2,
-      "column": 13,
+      "column": 24,
       "concise_description": "assert_type(tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int], tuple[int, str, int]) failed",
       "description": "assert_type(tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int], tuple[int, str, int]) failed",
       "line": 103,
@@ -9969,7 +9700,7 @@
     },
     {
       "code": -2,
-      "column": 13,
+      "column": 24,
       "concise_description": "assert_type(tuple[int | str, int | str], tuple[int | str, str]) failed",
       "description": "assert_type(tuple[int | str, int | str], tuple[int | str, str]) failed",
       "line": 115,
@@ -9979,7 +9710,7 @@
     },
     {
       "code": -2,
-      "column": 13,
+      "column": 24,
       "concise_description": "assert_type(tuple[int | str, int | str], tuple[int | str, int]) failed",
       "description": "assert_type(tuple[int | str, int | str], tuple[int | str, int]) failed",
       "line": 117,
@@ -10432,22 +10163,22 @@
   "typeddicts_operations.py": [
     {
       "code": -2,
-      "column": 1,
-      "concise_description": "Expected `str`, got `Literal[1982]`",
-      "description": "Expected `str`, got `Literal[1982]`",
+      "column": 17,
+      "concise_description": "`Literal[1982]` is not assignable to TypedDict key `name` with type `str`",
+      "description": "`Literal[1982]` is not assignable to TypedDict key `name` with type `str`",
       "line": 22,
-      "name": "bad-assignment",
-      "stop_column": 14,
+      "name": "typed-dict-key-error",
+      "stop_column": 21,
       "stop_line": 22
     },
     {
       "code": -2,
-      "column": 1,
-      "concise_description": "Expected `int`, got `Literal['']`",
-      "description": "Expected `int`, got `Literal['']`",
+      "column": 17,
+      "concise_description": "`Literal['']` is not assignable to TypedDict key `year` with type `int`",
+      "description": "`Literal['']` is not assignable to TypedDict key `year` with type `int`",
       "line": 23,
-      "name": "bad-assignment",
-      "stop_column": 14,
+      "name": "typed-dict-key-error",
+      "stop_column": 19,
       "stop_line": 23
     },
     {
@@ -10728,12 +10459,12 @@
     },
     {
       "code": -2,
-      "column": 1,
-      "concise_description": "Expected `str`, got `Literal[3]`",
-      "description": "Expected `str`, got `Literal[3]`",
+      "column": 14,
+      "concise_description": "`Literal[3]` is not assignable to TypedDict key `ident` with type `str`",
+      "description": "`Literal[3]` is not assignable to TypedDict key `ident` with type `str`",
       "line": 82,
-      "name": "bad-assignment",
-      "stop_column": 11,
+      "name": "typed-dict-key-error",
+      "stop_column": 15,
       "stop_line": 82
     },
     {
@@ -10773,8 +10504,8 @@
     {
       "code": -2,
       "column": 14,
-      "concise_description": "Argument `TypedDict[B]` is not assignable to parameter with type `TypedDict[A]` in function `typing._TypedDict.update`",
-      "description": "Argument `TypedDict[B]` is not assignable to parameter with type `TypedDict[A]` in function `typing._TypedDict.update`",
+      "concise_description": "Argument `TypedDict[B]` is not assignable to parameter `m` with type `TypedDict[A]` in function `typing._TypedDict.update`",
+      "description": "Argument `TypedDict[B]` is not assignable to parameter `m` with type `TypedDict[A]` in function `typing._TypedDict.update`",
       "line": 34,
       "name": "bad-argument-type",
       "stop_column": 15,
@@ -10928,12 +10659,12 @@
     },
     {
       "code": -2,
-      "column": 1,
-      "concise_description": "Expected `int`, got `Literal['1982']`",
-      "description": "Expected `int`, got `Literal['1982']`",
+      "column": 17,
+      "concise_description": "`Literal['1982']` is not assignable to TypedDict key `year` with type `int`",
+      "description": "`Literal['1982']` is not assignable to TypedDict key `year` with type `int`",
       "line": 24,
-      "name": "bad-assignment",
-      "stop_column": 14,
+      "name": "typed-dict-key-error",
+      "stop_column": 23,
       "stop_line": 24
     },
     {

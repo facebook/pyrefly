@@ -7,7 +7,8 @@
 
 use std::mem;
 
-use itertools::Either;
+use pyrefly_util::prelude::VecExt;
+use pyrefly_util::visit::Visit;
 use ruff_python_ast::AnyParameterRef;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
@@ -35,19 +36,17 @@ use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyFunction;
 use crate::binding::binding::KeyLegacyTypeParam;
-use crate::binding::binding::KeyYield;
-use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::ReturnExplicit;
 use crate::binding::binding::ReturnImplicit;
 use crate::binding::binding::ReturnType;
 use crate::binding::bindings::BindingsBuilder;
-use crate::binding::bindings::FuncYieldsAndReturns;
 use crate::binding::bindings::LegacyTParamBuilder;
+use crate::binding::expr::Usage;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
 use crate::binding::scope::Scope;
-use crate::binding::scope::ScopeKind;
+use crate::binding::scope::YieldsAndReturns;
 use crate::config::base::UntypedDefBehavior;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
@@ -55,8 +54,6 @@ use crate::module::short_identifier::ShortIdentifier;
 use crate::ruff::ast::Ast;
 use crate::sys_info::SysInfo;
 use crate::types::types::Type;
-use crate::util::prelude::VecExt;
-use crate::util::visit::Visit;
 
 struct Decorators {
     has_no_type_check: bool,
@@ -64,9 +61,9 @@ struct Decorators {
     decorators: Box<[Idx<Key>]>,
 }
 
-struct SelfAssignments {
-    method_name: Name,
-    instance_attributes: SmallMap<Name, InstanceAttribute>,
+pub struct SelfAssignments {
+    pub method_name: Name,
+    pub instance_attributes: SmallMap<Name, InstanceAttribute>,
 }
 
 /// Determine whether a function definition is annotated.
@@ -188,7 +185,7 @@ impl<'a> BindingsBuilder<'a> {
                 class_key,
             );
         }
-        if let Some(box args) = &x.vararg {
+        if let Some(args) = &x.vararg {
             self.bind_function_param(
                 AnnotationTarget::ArgsParam(args.name.id.clone()),
                 AnyParameterRef::Variadic(args),
@@ -196,7 +193,7 @@ impl<'a> BindingsBuilder<'a> {
                 class_key,
             );
         }
-        if let Some(box kwargs) = &x.kwarg {
+        if let Some(kwargs) = &x.kwarg {
             self.bind_function_param(
                 AnnotationTarget::KwargsParam(kwargs.name.id.clone()),
                 AnyParameterRef::Variadic(kwargs),
@@ -204,13 +201,7 @@ impl<'a> BindingsBuilder<'a> {
                 class_key,
             );
         }
-        if let Scope {
-            kind: ScopeKind::Method(method_scope),
-            ..
-        } = self.scopes.current_mut()
-        {
-            method_scope.self_name = self_name;
-        }
+        self.scopes.set_self_name_if_applicable(self_name);
     }
 
     fn to_return_annotation_with_range(
@@ -239,6 +230,7 @@ impl<'a> BindingsBuilder<'a> {
         x: &mut StmtFunctionDef,
         func_name: &Identifier,
         class_key: Option<Idx<KeyClass>>,
+        usage: Usage,
     ) -> (
         Option<(TextRange, Idx<KeyAnnotation>)>,
         Vec<Idx<KeyLegacyTypeParam>>,
@@ -255,13 +247,12 @@ impl<'a> BindingsBuilder<'a> {
         for (param, default) in Ast::parameters_iter_mut(&mut x.parameters) {
             self.ensure_type_opt(param.annotation.as_deref_mut(), &mut legacy);
             if let Some(default) = default {
-                self.ensure_expr_opt(default.as_deref_mut());
+                self.ensure_expr_opt(default.as_deref_mut(), usage);
             }
         }
 
-        let return_ann_with_range = mem::take(&mut x.returns).map(|box e| {
-            self.to_return_annotation_with_range(e, func_name, class_key, &mut legacy)
-        });
+        let return_ann_with_range = mem::take(&mut x.returns)
+            .map(|e| self.to_return_annotation_with_range(*e, func_name, class_key, &mut legacy));
 
         let legacy_tparam_builder = legacy.unwrap();
         legacy_tparam_builder.add_name_definitions(self);
@@ -281,27 +272,13 @@ impl<'a> BindingsBuilder<'a> {
         func_name: &Identifier,
         function_idx: Idx<KeyFunction>,
         class_key: Option<Idx<KeyClass>>,
-    ) -> (FuncYieldsAndReturns, Option<SelfAssignments>) {
-        if class_key.is_none() {
-            self.scopes.push(Scope::function(range));
-        } else {
-            self.scopes.push(Scope::method(range, func_name.clone()));
-        }
-        self.function_yields_and_returns
-            .push(FuncYieldsAndReturns::default());
+    ) -> (YieldsAndReturns, Option<SelfAssignments>) {
+        self.scopes
+            .push_function_scope(range, func_name, class_key.is_some());
         self.parameters(parameters, function_idx, class_key);
         self.init_static_scope(&body, false);
         self.stmts(body);
-        let func_scope = self.scopes.pop();
-        let self_assignments = match func_scope.kind {
-            ScopeKind::Method(method_scope) => Some(SelfAssignments {
-                method_name: method_scope.name.id,
-                instance_attributes: method_scope.instance_attributes,
-            }),
-            _ => None,
-        };
-        let yields_and_returns = self.function_yields_and_returns.pop().unwrap();
-        (yields_and_returns, self_assignments)
+        self.scopes.pop_function_scope()
     }
 
     fn unchecked_function_body_scope(
@@ -314,11 +291,8 @@ impl<'a> BindingsBuilder<'a> {
         class_key: Option<Idx<KeyClass>>,
     ) -> Option<SelfAssignments> {
         // Push a scope to create the parameter keys (but do nothing else with it).
-        if class_key.is_none() {
-            self.scopes.push(Scope::function(range));
-        } else {
-            self.scopes.push(Scope::method(range, func_name.clone()));
-        }
+        self.scopes
+            .push_function_scope(range, func_name, class_key.is_some());
         self.parameters(parameters, function_idx, class_key);
         self.scopes.pop();
         // If we are in a class, use a simple visiter to find `self.<attr>` assignments.
@@ -354,21 +328,22 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         func_name: &Identifier,
         is_async: bool,
-        yields_and_returns: FuncYieldsAndReturns,
+        yields_and_returns: YieldsAndReturns,
         return_ann_with_range: Option<(TextRange, Idx<KeyAnnotation>)>,
         implicit_return_if_inferring_return_type: Option<Idx<Key>>,
         stub_or_impl: FunctionStubOrImpl,
         decorators: Box<[Idx<Key>]>,
     ) {
-        let is_generator = !yields_and_returns.yields.is_empty();
+        let is_generator =
+            !(yields_and_returns.yields.is_empty() && yields_and_returns.yield_froms.is_empty());
         let return_ann = return_ann_with_range.as_ref().map(|(_, key)| *key);
 
         // Collect the keys of explicit returns.
         let return_keys = yields_and_returns
             .returns
-            .into_map(|x| {
-                self.insert_binding(
-                    Key::ReturnExplicit(x.range),
+            .into_map(|(idx, x)| {
+                self.insert_binding_idx(
+                    idx,
                     Binding::ReturnExplicit(ReturnExplicit {
                         annot: return_ann,
                         expr: x.value,
@@ -382,20 +357,12 @@ impl<'a> BindingsBuilder<'a> {
         // Collect the keys of yield expressions.
         let yield_keys = yields_and_returns
             .yields
-            .into_map(|x| match x {
-                Either::Left(x) => {
-                    // Add binding to get the send type for a yield expression.
-                    Either::Left(
-                        self.insert_binding(KeyYield(x.range), BindingYield::Yield(return_ann, x)),
-                    )
-                }
-                Either::Right(x) => {
-                    // Add binding to get the return type for a yield from expression.
-                    Either::Right(self.insert_binding(
-                        KeyYieldFrom(x.range),
-                        BindingYieldFrom::YieldFrom(return_ann, x),
-                    ))
-                }
+            .into_map(|(idx, x)| self.insert_binding_idx(idx, BindingYield::Yield(return_ann, x)))
+            .into_boxed_slice();
+        let yield_from_keys = yields_and_returns
+            .yield_froms
+            .into_map(|(idx, x)| {
+                self.insert_binding_idx(idx, BindingYieldFrom::YieldFrom(return_ann, x))
             })
             .into_boxed_slice();
 
@@ -406,6 +373,7 @@ impl<'a> BindingsBuilder<'a> {
                     returns: return_keys,
                     implicit_return,
                     yields: yield_keys,
+                    yield_froms: yield_from_keys,
                     is_async,
                     stub_or_impl,
                     decorators,
@@ -430,7 +398,7 @@ impl<'a> BindingsBuilder<'a> {
         );
     }
 
-    fn decorators(&mut self, decorator_list: Vec<Decorator>) -> Decorators {
+    fn decorators(&mut self, decorator_list: Vec<Decorator>, usage: Usage) -> Decorators {
         let (is_overload, has_no_type_check) = decorator_list
             .iter()
             .fold((false, false), |(overload, no_check), d| {
@@ -445,7 +413,7 @@ impl<'a> BindingsBuilder<'a> {
             });
 
         let decorators = self
-            .ensure_and_bind_decorators(decorator_list)
+            .ensure_and_bind_decorators(decorator_list, usage)
             .into_boxed_slice();
         Decorators {
             has_no_type_check,
@@ -536,23 +504,22 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn function_def(&mut self, mut x: StmtFunctionDef) {
+        let func_name = x.name.clone();
+        let def_user = self.declare_user(Key::Definition(ShortIdentifier::new(&func_name)));
+
         // Get preceding function definition, if any. Used for building an overload type.
         let (function_idx, pred_idx) = self.create_function_index(&x.name);
 
-        let (class_key, metadata_key) = match &self.scopes.current().kind {
-            ScopeKind::Class(class_scope) => (
-                Some(class_scope.indices.class_idx),
-                Some(class_scope.indices.metadata_idx),
-            ),
+        let (class_key, metadata_key) = match self.scopes.current_class_and_metadata_keys() {
+            Some((class_key, metadata_key)) => (Some(class_key), Some(metadata_key)),
             _ => (None, None),
         };
 
-        let func_name = x.name.clone();
         self.scopes.push(Scope::annotation(x.range));
         let (return_ann_with_range, legacy_tparams) =
-            self.function_header(&mut x, &func_name, class_key);
+            self.function_header(&mut x, &func_name, class_key, def_user.usage());
 
-        let decorators = self.decorators(mem::take(&mut x.decorator_list));
+        let decorators = self.decorators(mem::take(&mut x.decorator_list), def_user.usage());
 
         let (stub_or_impl, self_assignments) = self.function_body(
             &mut x.parameters,
@@ -569,14 +536,8 @@ impl<'a> BindingsBuilder<'a> {
         // Pop the annotation scope to get back to the parent scope, and handle this
         // case where we need to track assignments to `self` from methods.
         self.scopes.pop();
-        if let Some(self_assignments) = self_assignments
-            && let ScopeKind::Class(class_scope) = &mut self.scopes.current_mut().kind
-        {
-            class_scope.add_attributes_defined_by_method(
-                self_assignments.method_name,
-                self_assignments.instance_attributes,
-            );
-        }
+        self.scopes
+            .record_self_assignments_if_applicable(self_assignments);
 
         self.insert_binding_idx(
             function_idx,
@@ -590,8 +551,9 @@ impl<'a> BindingsBuilder<'a> {
             },
         );
 
-        self.bind_definition(
+        self.bind_definition_user(
             &func_name,
+            def_user,
             Binding::Function(function_idx, pred_idx, metadata_key),
             FlowStyle::FunctionDef(function_idx, return_ann_with_range.is_some()),
         );

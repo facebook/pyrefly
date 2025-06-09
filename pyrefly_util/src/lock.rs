@@ -49,7 +49,7 @@ impl<T> RwLock<T> {
         self.0.read().unwrap()
     }
 
-    pub(crate) fn write(&self) -> sync::RwLockWriteGuard<'_, T> {
+    pub fn write(&self) -> sync::RwLockWriteGuard<'_, T> {
         self.0.write().unwrap()
     }
 

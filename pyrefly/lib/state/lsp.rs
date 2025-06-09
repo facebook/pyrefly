@@ -10,6 +10,11 @@ use itertools::Itertools;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::DocumentSymbol;
+use pyrefly_util::gas::Gas;
+use pyrefly_util::prelude::VecExt;
+use pyrefly_util::task_heap::Cancelled;
+use pyrefly_util::visit::Visit;
+use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::Identifier;
@@ -24,6 +29,7 @@ use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
+use crate::common::symbol_kind::SymbolKind;
 use crate::export::definitions::DocString;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
@@ -45,10 +51,6 @@ use crate::sys_info::SysInfo;
 use crate::types::lsp::source_range_to_range;
 use crate::types::module::Module;
 use crate::types::types::Type;
-use crate::util::gas::Gas;
-use crate::util::prelude::VecExt;
-use crate::util::task_heap::Cancelled;
-use crate::util::visit::Visit;
 
 const INITIAL_GAS: Gas = Gas::new(20);
 
@@ -56,7 +58,38 @@ const INITIAL_GAS: Gas = Gas::new(20);
 pub enum DefinitionMetadata {
     Attribute(Name),
     Module,
-    Variable,
+    Variable(Option<SymbolKind>),
+    VariableOrAttribute(Name, Option<SymbolKind>),
+}
+
+impl DefinitionMetadata {
+    pub fn symbol_kind(&self) -> Option<SymbolKind> {
+        match self {
+            DefinitionMetadata::Attribute(_) => Some(SymbolKind::Attribute),
+            DefinitionMetadata::Module => Some(SymbolKind::Module),
+            DefinitionMetadata::Variable(symbol_kind) => symbol_kind.as_ref().copied(),
+            DefinitionMetadata::VariableOrAttribute(_, symbol_kind) => {
+                symbol_kind.as_ref().copied()
+            }
+        }
+    }
+}
+
+enum ImportIdentifier {
+    // The name of a module. ex: `x` in `import x` or `from x import name`
+    Module(ModuleName),
+    // A name from a module's exports. ex: `name` in `from x import name`
+    // Note: these are also definitions
+    Name(ModuleName),
+}
+
+impl ImportIdentifier {
+    fn module_name(&self) -> ModuleName {
+        match self {
+            ImportIdentifier::Module(module_name) => *module_name,
+            ImportIdentifier::Name(module_name) => *module_name,
+        }
+    }
 }
 
 impl<'a> Transaction<'a> {
@@ -73,29 +106,49 @@ impl<'a> Transaction<'a> {
 
     fn identifier_at(&self, handle: &Handle, position: TextSize) -> Option<Identifier> {
         let mod_module = self.get_ast(handle)?;
-        fn f(x: &Expr, find: TextSize, res: &mut Option<Identifier>) {
-            if let Expr::Name(x) = x
-                && x.range.contains_inclusive(find)
-            {
-                *res = Some(Ast::expr_name_identifier(x.clone()));
-            } else {
-                x.recurse(&mut |x| f(x, find, res));
-            }
+        match Ast::locate_node(&mod_module, position).first() {
+            Some(AnyNodeRef::ExprName(name)) => Some(Ast::expr_name_identifier((*name).clone())),
+            _ => None,
         }
-        let mut res = None;
-        mod_module.visit(&mut |x| f(x, position, &mut res));
-        res
     }
 
-    fn import_at(&self, handle: &Handle, position: TextSize) -> Option<ModuleName> {
-        let module = self.get_ast(handle)?;
-        for (module, text_range) in Ast::imports(&module, handle.module(), handle.path().is_init())
-        {
-            if text_range.contains_inclusive(position) {
-                return Some(module);
+    fn import_at(&self, handle: &Handle, position: TextSize) -> Option<ImportIdentifier> {
+        fn visit_stmt(x: &Stmt, find: TextSize, res: &mut Option<ImportIdentifier>) {
+            match x {
+                Stmt::Import(stmt_import) => {
+                    let mut parts = Vec::new();
+                    for name in stmt_import.names.iter() {
+                        parts.push(name.name.clone());
+                        if name.range.contains_inclusive(find) {
+                            *res = Some(ImportIdentifier::Module(ModuleName::from_parts(
+                                parts.clone(),
+                            )));
+                        }
+                    }
+                }
+                Stmt::ImportFrom(stmt_import_from) => {
+                    if let Some(id) = &stmt_import_from.module {
+                        if id.range.contains_inclusive(find) {
+                            *res = Some(ImportIdentifier::Module(ModuleName::from_name(&id.id)));
+                        } else {
+                            for name in stmt_import_from.names.iter() {
+                                if name.range.contains_inclusive(find) {
+                                    *res =
+                                        Some(ImportIdentifier::Name(ModuleName::from_name(&id.id)));
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => x.recurse(&mut |x| visit_stmt(x, find, res)),
             }
         }
-        None
+
+        let mut res = None;
+        self.get_ast(handle)?
+            .body
+            .visit(&mut |x| visit_stmt(x, position, &mut res));
+        res
     }
 
     fn definition_at(&self, handle: &Handle, position: TextSize) -> Option<Key> {
@@ -126,15 +179,16 @@ impl<'a> Transaction<'a> {
         }
         if let Some(id) = self.identifier_at(handle, position) {
             if self.get_bindings(handle)?.is_valid_usage(&id) {
-                return self.get_type(handle, &Key::Usage(ShortIdentifier::new(&id)));
+                return self.get_type(handle, &Key::BoundName(ShortIdentifier::new(&id)));
             } else {
                 return None;
             }
         }
         if let Some(m) = self.import_at(handle, position) {
+            let module_name = m.module_name();
             return Some(Type::Module(Module::new(
-                m.components().first().unwrap().clone(),
-                OrderedSet::from_iter([(m)]),
+                module_name.components().first().unwrap().clone(),
+                OrderedSet::from_iter([module_name]),
             )));
         }
         let attribute = self.attribute_at(handle, position)?;
@@ -180,6 +234,7 @@ impl<'a> Transaction<'a> {
                     handle,
                     Export {
                         location: TextRange::default(),
+                        symbol_kind: Some(SymbolKind::Module),
                         docstring,
                     },
                 ))
@@ -244,11 +299,13 @@ impl<'a> Transaction<'a> {
                 handle,
                 Export {
                     location,
+                    symbol_kind,
                     docstring,
                 },
             ) = self.key_to_export(handle, &key, INITIAL_GAS)?;
+            let name = Name::new(self.get_module_info(&handle)?.code_at(location));
             return Some((
-                DefinitionMetadata::Variable,
+                DefinitionMetadata::VariableOrAttribute(name, symbol_kind),
                 TextRangeWithModuleInfo::new(self.get_module_info(&handle)?, location),
                 docstring,
             ));
@@ -261,17 +318,23 @@ impl<'a> Transaction<'a> {
                 handle,
                 Export {
                     location,
+                    symbol_kind,
                     docstring,
                 },
-            ) = self.key_to_export(handle, &Key::Usage(ShortIdentifier::new(&id)), INITIAL_GAS)?;
+            ) = self.key_to_export(
+                handle,
+                &Key::BoundName(ShortIdentifier::new(&id)),
+                INITIAL_GAS,
+            )?;
             return Some((
-                DefinitionMetadata::Variable,
+                DefinitionMetadata::Variable(symbol_kind),
                 TextRangeWithModuleInfo::new(self.get_module_info(&handle)?, location),
                 docstring,
             ));
         }
         if let Some(m) = self.import_at(handle, position) {
-            let handle = self.import_handle(handle, m, None).ok()?;
+            let module_name = m.module_name();
+            let handle = self.import_handle(handle, module_name, None).ok()?;
             return Some((
                 DefinitionMetadata::Module,
                 TextRangeWithModuleInfo::new(self.get_module_info(&handle)?, TextRange::default()),
@@ -303,10 +366,6 @@ impl<'a> Transaction<'a> {
         position: TextSize,
     ) -> Option<TextRangeWithModuleInfo> {
         self.find_definition(handle, position).map(|x| x.1)
-    }
-
-    pub fn docstring(&self, handle: &Handle, position: TextSize) -> Option<DocString> {
-        self.find_definition(handle, position).map(|x| x.2)?
     }
 
     pub fn find_local_references(&self, handle: &Handle, position: TextSize) -> Vec<TextRange> {
@@ -365,9 +424,19 @@ impl<'a> Transaction<'a> {
                 self.local_attribute_references_from_definition(handle, &definition, &expected_name)
             }
             DefinitionMetadata::Module => Vec::new(),
-            DefinitionMetadata::Variable => self
+            DefinitionMetadata::Variable(_) => self
                 .local_variable_references_from_definition(handle, &definition)
                 .unwrap_or_default(),
+            DefinitionMetadata::VariableOrAttribute(expected_name, _) => [
+                self.local_attribute_references_from_definition(
+                    handle,
+                    &definition,
+                    &expected_name,
+                ),
+                self.local_variable_references_from_definition(handle, &definition)
+                    .unwrap_or_default(),
+            ]
+            .concat(),
         };
         if definition.module_info.path() == handle.path() {
             references.push(definition.range);
@@ -450,6 +519,7 @@ impl<'a> Transaction<'a> {
                 definition_handle,
                 Export {
                     location,
+                    symbol_kind: _,
                     docstring: _,
                 },
             )) = self.binding_to_export(handle, binding, INITIAL_GAS)
@@ -492,7 +562,28 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
     ) -> Option<Vec<CompletionItem>> {
-        if self.identifier_at(handle, position).is_some() {
+        if let Some(import) = self.import_at(handle, position) {
+            return match import {
+                ImportIdentifier::Name(module_name) => {
+                    let handle = self.import_handle(handle, module_name, None).ok()?;
+                    let exports = self.get_exports(&handle);
+                    let completions = exports
+                        .keys()
+                        .map(|name| CompletionItem {
+                            label: name.to_string(),
+                            // todo(kylei): completion kind for exports
+                            kind: Some(CompletionItemKind::VARIABLE),
+                            ..Default::default()
+                        })
+                        .collect();
+                    Some(completions)
+                }
+                ImportIdentifier::Module(_module_name) => {
+                    // TODO(kylei): completion for module names
+                    None
+                }
+            };
+        } else if self.identifier_at(handle, position).is_some() {
             let bindings = self.get_bindings(handle)?;
             let module_info = self.get_module_info(handle)?;
             let names = bindings
@@ -501,11 +592,16 @@ impl<'a> Transaction<'a> {
                 .filter_map(|idx| {
                     let key = bindings.idx_to_key(idx);
                     if let Key::Definition(id) = key {
+                        let binding = bindings.get(idx);
                         let detail = self.get_type(handle, key).map(|t| t.to_string());
                         Some(CompletionItem {
                             label: module_info.code_at(id.range()).to_owned(),
                             detail,
-                            kind: Some(CompletionItemKind::VARIABLE),
+                            kind: binding
+                                .symbol_kind()
+                                .map_or(Some(CompletionItemKind::VARIABLE), |k| {
+                                    Some(k.to_lsp_completion_item_kind())
+                                }),
                             ..Default::default()
                         })
                     } else {

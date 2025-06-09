@@ -1,5 +1,5 @@
 import React from 'react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import * as stylex from '@stylexjs/stylex';
 import typography from './typography';
@@ -8,12 +8,6 @@ import { log, LoggingEvent } from '../../utils/LoggingUtils';
 
 const PipInstallPyrefly: React.FC = () => {
     const [isCopied, setIsCopied] = useState(false);
-    const [isLoaded, setIsLoaded] = useState(false);
-
-    useEffect(() => {
-        // Trigger animation after component mounts
-        setIsLoaded(true);
-    }, []);
 
     const codeString = `pip install pyrefly && pyrefly init`;
 
@@ -31,12 +25,7 @@ const PipInstallPyrefly: React.FC = () => {
     };
 
     return (
-        <div
-            {...stylex.props(
-                styles.codeSnippet,
-                isLoaded && styles.codeSnippetVisible
-            )}
-        >
+        <div {...stylex.props(styles.codeSnippet, styles.codeSnippetVisible)}>
             <pre
                 {...stylex.props(
                     landingPageCardStyles.card,

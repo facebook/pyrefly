@@ -85,16 +85,25 @@ def h0():
 "#,
 );
 
+// Note: the root cause of behavior in this test is that if there is no assignment, we ignore the
+// mutable capture entirely (leading to an error saying the mutation is invalid), whereas
+// if there is an assignment we incorrectly mark the name as defined in the local scope.
 testcase!(
-    bug = "We should not allow `del` on globals or nonlocals. It is allowed at runtime but is not safe / statically analyzable.",
+    bug = "We fail to mark a del of a mutable capture as illegal, unless there is no assignment",
     test_global_del,
     r#"
 x: str = ""
 def f():
     global x
+    x = "foo"
     del x  # Not okay: it will work at runtime, but is not statically analyzable
+# A minor variation on f(), relevant to specific implementation bugs in our scope analysis
+# Here we do error, but for the wrong reason - we think `x` is an immutable capture.
+def g():
+    global x
+    del x  # E: `x` is not mutable from the current scope
 f()
-x += "foo"  # This will crash at runtime!
+f()  # This will crash at runtime!
 "#,
 );
 
@@ -237,17 +246,26 @@ def outer():
 "#,
 );
 
+// Note: the root cause of behavior in this test is that if there is no assignment, we ignore the
+// mutable capture entirely (leading to an error saying the mutation is invalid), whereas
+// if there is an assignment we incorrectly mark the name as defined in the local scope.
 testcase!(
-    bug = "We should not allow `del` on globals or nonlocals. It is allowed at runtime but is not safe / statically analyzable.",
+    bug = "We fail to mark a del of a mutable capture as illegal, unless there is no assignment",
     test_nonlocal_del,
     r#"
 def outer():
     x: str = ""
     def f():
         nonlocal x
-        del x  # Not okay: it will work at runtime, but is not statically analyzable
+        x = "foo"
+        del x  # not okay: it will work at runtime, but is not statically analyzable
+    # A minor variation on f(), relevant to specific implementation bugs in our scope analysis
+    # Here we do error, but for the wrong reason - we think `x` is an immutable capture.
+    def g():
+        nonlocal x
+        del x  # E: `x` is not mutable from the current scope
     f()
-    x += "foo"  # This will crash at runtime!
+    f()  # This will crash at runtime!
 "#,
 );
 
@@ -396,5 +414,15 @@ def f() -> None:
     x += 1  # E: `x` is not mutable from the current scope
     # Same problem here, `del` defines a local, and the runtime gives the same error.
     del y  # E: `y` is not mutable from the current scope
+"#,
+);
+
+testcase!(
+    test_comprehension_shadows_variable,
+    r#"
+from typing import assert_type, reveal_type
+x: list[int] = [1, 2, 3]
+y = [x for x in x]
+assert_type(y, list[int])
 "#,
 );

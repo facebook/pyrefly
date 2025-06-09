@@ -8,12 +8,12 @@
 use std::path::PathBuf;
 
 use dupe::Dupe;
+use pyrefly_util::display;
 use starlark_map::small_map::SmallMap;
 
 use crate::error::error::Error;
 use crate::error::kind::ErrorKind;
 use crate::module::module_path::ModulePath;
-use crate::util::display;
 
 type ErrorCounts = SmallMap<ErrorKind, usize>;
 

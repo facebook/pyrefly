@@ -6,6 +6,7 @@
  */
 
 use num_traits::ToPrimitive;
+use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprNumberLiteral;
@@ -35,7 +36,6 @@ use crate::types::tuple::Tuple;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::CalleeKind;
 use crate::types::types::Type;
-use crate::util::prelude::SliceExt;
 
 /// Beyond this size, don't try and narrow an enum.
 ///
@@ -150,7 +150,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn narrow_isinstance(&self, left: &Type, right: &Type) -> Type {
-        if let Some(ts) = right.as_decomposed_tuple_or_union() {
+        if let Some(ts) = right.as_decomposed_tuple_or_union(self.stdlib) {
             self.unions(ts.iter().map(|t| self.narrow_isinstance(left, t)).collect())
         } else if let Some(right) = self.unwrap_class_object_silently(right) {
             self.intersect_with_fallback(left, &right, || right.clone())
@@ -160,10 +160,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn narrow_is_not_instance(&self, left: &Type, right: &Type) -> Type {
-        if let Some(ts) = right.as_decomposed_tuple_or_union() {
+        if let Some(ts) = right.as_decomposed_tuple_or_union(self.stdlib) {
             self.intersects(&ts.map(|t| self.narrow_is_not_instance(left, t)))
         } else if let Some(right) = self.unwrap_class_object_silently(right) {
             self.subtract(left, &right)
+        } else {
+            left.clone()
+        }
+    }
+
+    fn narrow_issubclass(&self, left: &Type, right: &Type, range: TextRange) -> Type {
+        if let Some(ts) = right.as_decomposed_tuple_or_union(self.stdlib) {
+            self.unions(
+                ts.iter()
+                    .map(|t| self.narrow_issubclass(left, t, range))
+                    .collect(),
+            )
+        } else if let Some(left) = self.untype_opt(left.clone(), range)
+            && let Some(right) = self.unwrap_class_object_silently(right)
+        {
+            Type::type_form(self.intersect(&left, &right))
+        } else {
+            left.clone()
+        }
+    }
+
+    fn narrow_is_not_subclass(&self, left: &Type, right: &Type, range: TextRange) -> Type {
+        if let Some(ts) = right.as_decomposed_tuple_or_union(self.stdlib) {
+            self.intersects(&ts.map(|t| self.narrow_is_not_subclass(left, t, range)))
+        } else if let Some(left) = self.untype_opt(left.clone(), range)
+            && let Some(right) = self.unwrap_class_object_silently(right)
+        {
+            Type::type_form(self.subtract(&left, &right))
         } else {
             left.clone()
         }
@@ -200,11 +228,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     Type::Tuple(Tuple::Unpacked(box (
                         prefix,
-                        Type::Tuple(Tuple::Unbounded(box middle)),
+                        Type::Tuple(Tuple::Unbounded(middle)),
                         suffix,
                     ))) if prefix.len() + suffix.len() < len => {
                         let middle_elements =
-                            vec![middle.clone(); len - prefix.len() - suffix.len()];
+                            vec![(**middle).clone(); len - prefix.len() - suffix.len()];
                         Type::tuple(
                             prefix
                                 .iter()
@@ -214,8 +242,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .collect(),
                         )
                     }
-                    Type::Tuple(Tuple::Unbounded(box elements)) => {
-                        Type::tuple(vec![elements.clone(); len])
+                    Type::Tuple(Tuple::Unbounded(elements)) => {
+                        Type::tuple(vec![(**elements).clone(); len])
                     }
                     Type::ClassType(class)
                         if let Some(elements) = self.named_tuple_element_types(class)
@@ -347,23 +375,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::IsSubclass(v) => {
                 let right = self.expr_infer(v, errors);
-                if let Some(left) = self.untype_opt(ty.clone(), v.range())
-                    && let Some(right) = self.unwrap_class_object_silently(&right)
-                {
-                    Type::type_form(self.intersect(&left, &right))
-                } else {
-                    ty.clone()
-                }
+                self.narrow_issubclass(ty, &right, v.range())
             }
             AtomicNarrowOp::IsNotSubclass(v) => {
                 let right = self.expr_infer(v, errors);
-                if let Some(left) = self.untype_opt(ty.clone(), v.range())
-                    && let Some(right) = self.unwrap_class_object_silently(&right)
-                {
-                    Type::type_form(self.subtract(&left, &right))
-                } else {
-                    ty.clone()
-                }
+                self.narrow_is_not_subclass(ty, &right, v.range())
             }
             AtomicNarrowOp::TypeGuard(t, arguments) => {
                 if let Some(call_target) = self.as_call_target(t.clone()) {
@@ -380,8 +396,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None,
                         None,
                     );
-                    if let Type::TypeGuard(box t) = ret {
-                        return t.clone();
+                    if let Type::TypeGuard(t) = ret {
+                        return *t;
                     }
                 }
                 ty.clone()
@@ -402,7 +418,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None,
                         None,
                     );
-                    if let Type::TypeIs(box t) = ret {
+                    if let Type::TypeIs(t) = ret {
                         return self.intersect(ty, &t);
                     }
                 }
@@ -423,7 +439,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None,
                         None,
                     );
-                    if let Type::TypeIs(box t) = ret {
+                    if let Type::TypeIs(t) = ret {
                         return self.subtract(ty, &t);
                     }
                 }

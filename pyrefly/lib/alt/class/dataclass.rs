@@ -31,6 +31,7 @@ use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
+use crate::types::types::AnyStyle;
 use crate::types::types::Type;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -68,6 +69,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             );
         }
+        let dataclass_fields_type = self.stdlib.dict(
+            self.stdlib.str().clone().to_type(),
+            Type::Any(AnyStyle::Implicit),
+        );
+        fields.insert(
+            dunder::DATACLASS_FIELDS,
+            ClassSynthesizedField::new(dataclass_fields_type.to_type()),
+        );
+
         if dataclass.kws.is_set(&DataclassKeywords::ORDER) {
             fields.extend(self.get_dataclass_rich_comparison_methods(cls));
         }
@@ -120,7 +130,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         fields: &SmallSet<Name>,
         kw_only: bool,
     ) -> ClassSynthesizedField {
-        let mut params = vec![self.class_self_param(cls, true)];
+        let mut params = vec![self.class_self_param(cls, false)];
         for (name, field, field_flags) in self.iter_fields(cls, fields) {
             if field_flags.is_set(&DataclassKeywords::INIT) {
                 params.push(field.as_param(
@@ -174,7 +184,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let make_signature = |other_type| {
             let other = Param::Pos(Name::new_static("other"), other_type, Required::Required);
             Callable::list(
-                ParamList::new(vec![self.class_self_param(cls, true), other]),
+                ParamList::new(vec![self.class_self_param(cls, false), other]),
                 self.stdlib.bool().clone().to_type(),
             )
         };
@@ -203,7 +213,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn get_dataclass_hash(&self, cls: &Class) -> ClassSynthesizedField {
-        let params = vec![self.class_self_param(cls, true)];
+        let params = vec![self.class_self_param(cls, false)];
         let ret = self.stdlib.int().clone().to_type();
         ClassSynthesizedField::new(Type::Function(Box::new(Function {
             signature: Callable::list(ParamList::new(params), ret),

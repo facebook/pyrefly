@@ -11,12 +11,16 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_util::arc_id::ArcId;
 use ruff_python_ast::ModModule;
+use ruff_source_file::LineColumn;
 use ruff_source_file::LineIndex;
 use ruff_source_file::OneIndexed;
+use ruff_source_file::PositionEncoding;
 use ruff_source_file::SourceLocation;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::vec1;
 
 use crate::error::collector::ErrorCollector;
 use crate::error::kind::ErrorKind;
@@ -30,35 +34,35 @@ pub static GENERATED_TOKEN: &str = concat!("@", "generated");
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, Hash, Default)]
 pub struct SourceRange {
-    pub start: SourceLocation,
-    pub end: SourceLocation,
+    pub start: LineColumn,
+    pub end: LineColumn,
 }
 
 impl Display for SourceRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.start.row == self.end.row {
+        if self.start.line == self.end.line {
             if self.start.column == self.end.column {
-                write!(f, "{}:{}", self.start.row, self.start.column)
+                write!(f, "{}:{}", self.start.line, self.start.column)
             } else {
                 write!(
                     f,
                     "{}:{}-{}",
-                    self.start.row, self.start.column, self.end.column
+                    self.start.line, self.start.column, self.end.column
                 )
             }
         } else {
             write!(
                 f,
                 "{}:{}-{}:{}",
-                self.start.row, self.start.column, self.end.row, self.end.column
+                self.start.line, self.start.column, self.end.line, self.end.column
             )
         }
     }
 }
 
 /// Information about a module, notably its name, path, and contents.
-#[derive(Debug, Clone, Dupe)]
-pub struct ModuleInfo(Arc<ModuleInfoInner>);
+#[derive(Debug, Clone, Dupe, PartialEq, Eq, Hash)]
+pub struct ModuleInfo(ArcId<ModuleInfoInner>);
 
 #[derive(Debug, Clone)]
 struct ModuleInfoInner {
@@ -76,7 +80,7 @@ impl ModuleInfo {
         let index = LineIndex::from_source_text(&contents);
         let ignore = Ignore::new(&contents);
         let is_generated = contents.contains(GENERATED_TOKEN);
-        Self(Arc::new(ModuleInfoInner {
+        Self(ArcId::new(ModuleInfoInner {
             name,
             path,
             index,
@@ -110,12 +114,12 @@ impl ModuleInfo {
 
     pub fn source_range(&self, range: TextRange) -> SourceRange {
         SourceRange {
-            start: self.source_location(range.start()),
-            end: self.source_location(range.end()),
+            start: self.line_column(range.start()),
+            end: self.line_column(range.end()),
         }
     }
 
-    pub fn source_location(&self, offset: TextSize) -> SourceLocation {
+    pub fn line_column(&self, offset: TextSize) -> LineColumn {
         assert!(
             offset.to_usize() <= self.len(),
             "Module {}({}): offset out of range, expected {} <= {}",
@@ -124,7 +128,7 @@ impl ModuleInfo {
             offset.to_usize(),
             self.len()
         );
-        self.0.index.source_location(offset, &self.0.contents)
+        self.0.index.line_column(offset, &self.0.contents)
     }
 
     pub fn code_at(&self, range: TextRange) -> &str {
@@ -156,12 +160,12 @@ impl ModuleInfo {
         for err in parse_errors {
             errors.add(
                 err.location,
-                format!("Parse error: {}", err.error),
                 ErrorKind::ParseError,
                 None,
+                vec1![format!("Parse error: {}", err.error)],
             );
         }
-        SemanticSyntaxContext::new(version, errors).visit(&module);
+        SemanticSyntaxContext::new(self.contents(), version, errors).visit(&module);
         module
     }
 
@@ -171,14 +175,39 @@ impl ModuleInfo {
 
     pub fn to_text_size(&self, line: u32, column: u32) -> TextSize {
         self.0.index.offset(
-            OneIndexed::from_zero_indexed(line as usize),
-            OneIndexed::from_zero_indexed(column as usize),
+            SourceLocation {
+                line: OneIndexed::from_zero_indexed(line as usize),
+                character_offset: OneIndexed::from_zero_indexed(column as usize),
+            },
             &self.0.contents,
+            PositionEncoding::Utf32,
         )
     }
 
-    pub fn is_ignored(&self, source_range: &SourceRange, msg: &str) -> bool {
-        self.0.ignore.is_ignored(source_range, msg)
+    fn content_at_line(&self, line: OneIndexed) -> &str {
+        let start = self.0.index.line_start(line, &self.0.contents);
+        let end = self.0.index.line_end(line, &self.0.contents);
+        &self.0.contents[start.to_usize()..end.to_usize()]
+    }
+
+    pub fn is_ignored(&self, source_range: &SourceRange) -> bool {
+        // Extend the range of the error to include comment lines before it.
+        // This makes it so that the preceding ignore could "see through" comments.
+        let start_line = {
+            let mut start_line = source_range.start.line;
+            while let Some(earlier_line) = start_line.checked_sub(OneIndexed::MIN) {
+                let earlier_line_content = &self.content_at_line(earlier_line).trim();
+                if Ignore::get_suppression_kind(earlier_line_content).is_some() {
+                    break;
+                } else if earlier_line_content.starts_with('#') {
+                    start_line = earlier_line;
+                } else {
+                    break;
+                }
+            }
+            start_line
+        };
+        self.0.ignore.is_ignored(start_line, source_range.end.line)
     }
 
     pub fn ignore(&self) -> &Ignore {
@@ -199,13 +228,15 @@ impl TextRangeWithModuleInfo {
 }
 
 pub struct SemanticSyntaxContext<'me> {
+    content: &'me str,
     version: ruff_python_ast::PythonVersion,
     errors: &'me ErrorCollector,
 }
 
 impl<'me> SemanticSyntaxContext<'me> {
-    pub fn new(version: PythonVersion, errors: &'me ErrorCollector) -> Self {
+    pub fn new(content: &'me str, version: PythonVersion, errors: &'me ErrorCollector) -> Self {
         Self {
+            content,
             version: ruff_python_ast::PythonVersion {
                 major: version.major as u8,
                 minor: version.minor as u8,
@@ -225,10 +256,6 @@ impl<'me> SemanticSyntaxContext<'me> {
 impl<'me> ruff_python_parser::semantic_errors::SemanticSyntaxContext
     for SemanticSyntaxContext<'me>
 {
-    fn seen_docstring_boundary(&self) -> bool {
-        false
-    }
-
     fn python_version(&self) -> ruff_python_ast::PythonVersion {
         self.version
     }
@@ -239,9 +266,62 @@ impl<'me> ruff_python_parser::semantic_errors::SemanticSyntaxContext
     ) {
         self.errors.add(
             error.range,
-            error.to_string(),
             ErrorKind::InvalidSyntax,
             None,
+            vec1![error.to_string()],
         );
+    }
+
+    fn future_annotations_or_stub(&self) -> bool {
+        false
+    }
+
+    fn source(&self) -> &str {
+        self.content
+    }
+
+    fn global(&self, _: &str) -> Option<TextRange> {
+        // TODO: Properly implement this
+        None
+    }
+
+    fn in_async_context(&self) -> bool {
+        // TODO: Properly implement this
+        true
+    }
+
+    fn in_await_allowed_context(&self) -> bool {
+        // TODO: Properly implement this
+        true
+    }
+
+    fn in_yield_allowed_context(&self) -> bool {
+        // TODO: Properly implement this
+        true
+    }
+
+    fn in_sync_comprehension(&self) -> bool {
+        // TODO: Properly implement this
+        false
+    }
+
+    fn in_module_scope(&self) -> bool {
+        // TODO: Properly implement this
+        false
+    }
+
+    fn in_function_scope(&self) -> bool {
+        // TODO: Properly implement this
+        true
+    }
+
+    fn in_generator_scope(&self) -> bool {
+        // TODO: Properly implement this
+        false
+    }
+
+    fn in_notebook(&self) -> bool {
+        // TODO: Properly implement this
+        false
     }
 }

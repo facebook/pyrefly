@@ -35,7 +35,7 @@ $ PYREFLY_STDLIB_SEARCH_PATH=$TYPESHED_ROOT/typeshed/stdlib $PYREFLY check --pyt
 ```scrut {output_stream: stderr}
 $ mkdir -p $TMPDIR/src_project/src/foo && echo "x: int = 0" > $TMPDIR/src_project/src/foo/bar.py && echo "from foo.bar import x" > $TMPDIR/src_project/src/foo/baz.py && cd $TMPDIR/src_project && $PYREFLY check
  INFO Checking current directory with default configuration
- INFO 0 errors* (glob)
+ INFO errors shown: 0* (glob)
 [0]
 ```
 
@@ -43,6 +43,20 @@ $ mkdir -p $TMPDIR/src_project/src/foo && echo "x: int = 0" > $TMPDIR/src_projec
 
 ```scrut {output_stream: stderr}
 $ mkdir $TMPDIR/foo && touch $TMPDIR/foo/bar.py && echo "x: str = 0" > $TMPDIR/foo/problem.py && cd $TMPDIR/foo && $PYREFLY check *.py --project-excludes=problem.py
- INFO 0 errors* (glob)
+ INFO errors shown: 0* (glob)
 [0]
+```
+
+## Removing -stubs prefix (this import should work)
+
+```scrut
+$ mkdir $TMPDIR/test-stubs && touch $TMPDIR/test-stubs/utils.pyi && touch $TMPDIR/test-stubs/main.pyi && \
+> echo "x: int = 1" > $TMPDIR/test-stubs/utils.pyi && \
+> echo "from test.utils import x" > $TMPDIR/test-stubs/main.pyi && \
+> $PYREFLY check --python-version 3.13.0 "$TMPDIR/test-stubs/main.pyi"
+*test-stubs/main.pyi:1:1-25: Could not find import of `test.utils` [import-error] (glob)
+*Looked in these locations* (glob)
+*Fallback search path* (glob)
+*Site package path* (glob)
+[1]
 ```

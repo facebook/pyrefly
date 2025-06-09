@@ -16,8 +16,8 @@ use ruff_python_ast::Stmt;
 use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
 use ruff_python_ast::visitor::source_order::walk_stmt;
 
-use crate::util::visit::Visit;
-use crate::util::visit::VisitMut;
+use crate::visit::Visit;
+use crate::visit::VisitMut;
 
 impl Visit<Expr> for ModModule {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Expr)) {

@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::iter::once;
+
 use lsp_server::Message;
 use lsp_server::Notification;
 use lsp_server::Request;
@@ -15,8 +17,10 @@ use lsp_types::ConfigurationParams;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeConfiguration;
 use lsp_types::notification::DidChangeWorkspaceFolders;
+use lsp_types::notification::Exit;
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
+use lsp_types::request::Shutdown;
 use lsp_types::request::WorkspaceConfiguration;
 use tempfile::TempDir;
 
@@ -29,6 +33,58 @@ use crate::test::lsp::lsp_interaction_util::run_test_lsp;
 #[test]
 fn test_initialize_basic() {
     run_test_lsp(TestCase::default());
+}
+
+#[test]
+#[should_panic]
+fn test_shutdown() {
+    run_test_lsp(TestCase {
+        messages_from_language_client: vec![
+            Message::Request(Request {
+                id: RequestId::from(2),
+                method: Shutdown::METHOD.to_owned(),
+                params: serde_json::json!(null),
+            }),
+            Message::Notification(Notification {
+                method: Exit::METHOD.to_owned(),
+                params: serde_json::json!(null),
+            }),
+            // This second request should never be received by the server since it has already shut down.
+            // `run_test_lsp` panics if any request does not get handled.
+            Message::Request(Request {
+                id: RequestId::from(3),
+                method: "should not get here".to_owned(),
+                params: serde_json::json!(null),
+            }),
+        ],
+        expected_messages_from_language_server: vec![Message::Response(Response {
+            id: RequestId::from(2),
+            result: Some(serde_json::json!(null)),
+            error: None,
+        })],
+        ..Default::default()
+    });
+}
+
+#[test]
+#[should_panic]
+fn test_exit_without_shutdown() {
+    run_test_lsp(TestCase {
+        messages_from_language_client: vec![
+            Message::Notification(Notification {
+                method: Exit::METHOD.to_owned(),
+                params: serde_json::json!(null),
+            }),
+            // This second request should never be received by the server since it has already shut down.
+            // `run_test_lsp` panics if any request does not get handled.
+            Message::Request(Request {
+                id: RequestId::from(3),
+                method: "should not get here".to_owned(),
+                params: serde_json::json!(null),
+            }),
+        ],
+        ..Default::default()
+    });
 }
 
 #[test]
@@ -66,104 +122,118 @@ fn test_initialize_with_python_path() {
     });
 }
 
-fn test_go_to_def(root: &TempDir, workspace_folders: Option<Vec<(String, Url)>>) {
+fn test_go_to_def(
+    root: &TempDir,
+    workspace_folders: Option<Vec<(String, Url)>>,
+    // request file name, relative to root
+    request_file_name: &str,
+    // (line, character, response_file_name (relative to root), response_line_start, response_character_start, response_line_end, response_character_end)
+    requests: Vec<(u32, u32, String, u32, u32, u32, u32)>,
+) {
+    run_test_lsp(TestCase {
+        messages_from_language_client: once(Message::from(build_did_open_notification(
+                root.path().join(request_file_name),
+        ))).chain(
+            requests.iter().enumerate().map(
+                |(i, (request_line, request_character, _response_file_name, _response_line_start, _response_character_start, _response_line_end, _response_character_end))| {
+                Message::from(Request {
+                    id: RequestId::from((2 + i) as i32),
+                    method: "textDocument/definition".to_owned(),
+                    params: serde_json::json!({
+                        "textDocument": {
+                            "uri": Url::from_file_path(root.path().join(request_file_name)).unwrap().to_string()
+                        },
+                        "position": {
+                            "line": request_line,
+                            "character": request_character
+                        }
+                    }),
+                })
+            })).collect(),
+        expected_messages_from_language_server: requests.iter().enumerate().map(
+            |(
+                i,
+                (
+                    _request_line,
+                    _request_character,
+                    response_file_name,
+                    response_line_start,
+                    response_character_start,
+                    response_line_end,
+                    response_character_end,
+                ),
+            )| {
+                Message::Response(Response {
+                    id: RequestId::from((2 + i) as i32),
+                    result: Some(serde_json::json!({
+                        "uri": Url::from_file_path(root.path().join(response_file_name)).unwrap().to_string(),
+                        "range": {
+                            "start": {
+                                "line": response_line_start,
+                                "character": response_character_start
+                            },
+                            "end": {
+                                "line": response_line_end,
+                                "character": response_character_end
+                            }
+                        }
+                    })),
+                    error: None,
+                })
+            },
+        ).collect(),
+        workspace_folders,
+        ..Default::default()
+    });
+}
+
+fn test_go_to_def_basic(root: &TempDir, workspace_folders: Option<Vec<(String, Url)>>) {
+    test_go_to_def(
+        root,
+        workspace_folders,
+        "foo.py",
+        vec![
+            (5, 7, "bar.py".to_owned(), 0, 0, 0, 0),
+            (6, 16, "bar.py".to_owned(), 6, 6, 6, 9),
+            (8, 9, "bar.py".to_owned(), 7, 4, 7, 7),
+            (9, 7, "bar.py".to_owned(), 6, 6, 6, 9),
+        ],
+    );
+}
+
+#[test]
+fn test_hover_basic() {
+    let root = get_test_files_root();
+    let request_file_name = root.path().join("bar.py");
     run_test_lsp(TestCase {
         messages_from_language_client: vec![
-            Message::from(build_did_open_notification(root.path().join("foo.py"))),
+            Message::from(build_did_open_notification(
+                root.path().join(request_file_name.clone()),
+            )),
             Message::from(Request {
                 id: RequestId::from(2),
-                method: "textDocument/definition".to_owned(),
+                method: "textDocument/hover".to_owned(),
                 params: serde_json::json!({
                     "textDocument": {
-                        "uri": Url::from_file_path(root.path().join("foo.py")).unwrap().to_string()
+                        "uri": Url::from_file_path(root.path().join(request_file_name)).unwrap().to_string()
                     },
                     "position": {
-                        "line": 6,
-                        "character": 16
-                    }
-                }),
-            }),
-            Message::from(Request {
-                id: RequestId::from(3),
-                method: "textDocument/definition".to_owned(),
-                params: serde_json::json!({
-                    "textDocument": {
-                        "uri": Url::from_file_path(root.path().join("foo.py")).unwrap().to_string()
-                    },
-                    "position": {
-                        "line": 8,
-                        "character": 9
-                    }
-                }),
-            }),
-            Message::from(Request {
-                id: RequestId::from(4),
-                method: "textDocument/definition".to_owned(),
-                params: serde_json::json!({
-                    "textDocument": {
-                        "uri": Url::from_file_path(root.path().join("foo.py")).unwrap().to_string()
-                    },
-                    "position": {
-                        "line": 9,
-                        "character": 7
+                        "line": 7,
+                        "character": 5
                     }
                 }),
             }),
         ],
-        expected_messages_from_language_server: vec![
-            Message::Response(Response {
-                id: RequestId::from(2),
-                result: Some(serde_json::json!({
-                    "uri": Url::from_file_path(root.path().join("bar.py")).unwrap().to_string(),
-                    "range": {
-                        "start": {
-                            "line": 6,
-                            "character": 6
-                        },
-                        "end": {
-                            "line": 6,
-                            "character": 9
-                        }
-                    }
-                })),
-                error: None,
-            }),
-            Message::Response(Response {
-                id: RequestId::from(3),
-                result: Some(serde_json::json!({
-                    "uri": Url::from_file_path(root.path().join("bar.py")).unwrap().to_string(),
-                    "range": {
-                        "start": {
-                            "line": 7,
-                            "character": 4
-                        },
-                        "end": {
-                            "line": 7,
-                            "character": 7
-                        }
-                    }
-                })),
-                error: None,
-            }),
-            Message::Response(Response {
-                id: RequestId::from(4),
-                result: Some(serde_json::json!({
-                    "uri": Url::from_file_path(root.path().join("bar.py")).unwrap().to_string(),
-                    "range": {
-                        "start": {
-                            "line": 6,
-                            "character": 6
-                        },
-                        "end": {
-                            "line": 6,
-                            "character": 9
-                        }
-                    }
-                })),
-                error: None,
-            }),
-        ],
-        workspace_folders,
+        expected_messages_from_language_server: vec![Message::Response(Response {
+            id: RequestId::from(2),
+            result: Some(serde_json::json!({
+                "contents": {
+                    "kind": "markdown",
+                    "value": "```python\n(variable) foo: Literal[3]\n```",
+                }
+            })),
+            error: None,
+        })],
         ..Default::default()
     });
 }
@@ -171,7 +241,7 @@ fn test_go_to_def(root: &TempDir, workspace_folders: Option<Vec<(String, Url)>>)
 #[test]
 fn test_go_to_def_single_root() {
     let root = get_test_files_root();
-    test_go_to_def(
+    test_go_to_def_basic(
         &root,
         Some(vec![(
             "test".to_owned(),
@@ -183,19 +253,34 @@ fn test_go_to_def_single_root() {
 #[test]
 fn test_go_to_def_no_root() {
     let root = get_test_files_root();
-    test_go_to_def(&root, Some(vec![]));
+    test_go_to_def_basic(&root, Some(vec![]));
 }
 
 #[test]
 fn test_go_to_def_no_root_uses_upwards_search() {
     let root = get_test_files_root();
-    test_go_to_def(&root, Some(vec![]));
+    test_go_to_def_basic(&root, Some(vec![]));
 }
 
 #[test]
 fn test_go_to_def_no_folder_capability() {
     let root = get_test_files_root();
-    test_go_to_def(&root, None);
+    test_go_to_def_basic(&root, None);
+}
+
+#[test]
+fn test_go_to_def_relative_path() {
+    test_go_to_def(
+        &get_test_files_root(),
+        None,
+        "foo_relative.py",
+        vec![
+            (5, 14, "bar.py".to_owned(), 0, 0, 0, 0),
+            (6, 17, "bar.py".to_owned(), 6, 6, 6, 9),
+            (8, 9, "bar.py".to_owned(), 7, 4, 7, 7),
+            (9, 7, "bar.py".to_owned(), 6, 6, 6, 9),
+        ],
+    );
 }
 
 #[test]
@@ -1045,7 +1130,7 @@ fn test_did_change_workspace_folder() {
 
 fn get_diagnostics_result() -> serde_json::Value {
     serde_json::json!({"items": [
-            {"code":"bad-argument-type","message":"`+` is not supported between `Literal[1]` and `Literal['']`\n  Argument `Literal['']` is not assignable to parameter with type `int` in function `int.__add__`",
+            {"code":"bad-argument-type","message":"`+` is not supported between `Literal[1]` and `Literal['']`\n  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`",
             "range":{"end":{"character":6,"line":5},"start":{"character":0,"line":5}},"severity":1,"source":"Pyrefly"}],"kind":"full"
     })
 }

@@ -93,6 +93,19 @@ D(0, b"1", 2.0)
 );
 
 testcase!(
+    test_asdict,
+    r#"
+import dataclasses
+
+@dataclasses.dataclass
+class A:
+    x: int
+
+print(dataclasses.asdict(A(x=3)))
+    "#,
+);
+
+testcase!(
     test_duplicate_field,
     r#"
 import dataclasses
@@ -336,7 +349,7 @@ testcase!(
     test_bad_keyword,
     r#"
 from dataclasses import dataclass
-@dataclass(flibbertigibbet=True)  # E: No matching overload found  # E: Unexpected keyword argument `flibbertigibbet`
+@dataclass(flibbertigibbet=True)  # E: No matching overload found
 class C:
     pass
     "#,
@@ -544,5 +557,43 @@ class B:
 class C(B):
     def f(self, x: A) -> None:
         pass
+    "#,
+);
+
+testcase!(
+    test_initvar_parameter_types,
+    r#"
+from dataclasses import dataclass, field, InitVar
+
+@dataclass
+class InitVarTest:
+    value: int = field(init=False)
+    mode: InitVar[str]
+    count: InitVar[int]
+
+    def __post_init__(self, mode: str, count: int):
+        if mode == "number":
+            self.value = count * 10
+        else:
+            self.value = 0
+
+# InitVar[str] should accept str arguments, not InitVar[str] arguments
+InitVarTest("number", 5)  # OK
+InitVarTest("text", 3)   # OK
+    "#,
+);
+
+testcase!(
+    test_initvar_multiple_type_arguments,
+    r#"
+from dataclasses import dataclass, InitVar
+
+@dataclass
+class C:
+    x: InitVar[int, str]  # E: Expected 1 type argument for `InitVar`, got 2
+
+@dataclass
+class D:
+    y: InitVar[int]  # OK
     "#,
 );

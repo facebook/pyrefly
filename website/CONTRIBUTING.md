@@ -14,6 +14,7 @@ yarn install-with-wasm-deps
 ```
 
 This builds the wasm dependencies and installs the yarn dependencies.
+If you run into any issues with "SSL peer certificate or SSH remote key was not OK (SSL certificate problem: unable to get local issuer certificate)", double check your `~/.gitconfig` that you aren't setting a proxy, as this will override the proxy override set in `setup_cargo.sh`.
 If you are running into issues with compiling zstd on your mac when running `build.sh` or `start.sh`, see `pyrefly_wasm/README.md` for more details.
 
 ### Running the Website

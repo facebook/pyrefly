@@ -31,6 +31,7 @@ macro_rules! table {
             $($vis)* classes: $t<$crate::binding::binding::KeyClass>,
             $($vis)* class_fields: $t<$crate::binding::binding::KeyClassField>,
             $($vis)* class_synthesized_fields: $t<$crate::binding::binding::KeyClassSynthesizedFields>,
+            $($vis)* variance: $t<$crate::binding::binding::KeyVariance>,
             $($vis)* annotations: $t<$crate::binding::binding::KeyAnnotation>,
             $($vis)* class_metadata: $t<$crate::binding::binding::KeyClassMetadata>,
             $($vis)* legacy_tparams: $t<$crate::binding::binding::KeyLegacyTypeParam>,
@@ -78,6 +79,12 @@ macro_rules! table {
             type Value = $t<$crate::binding::binding::KeyClassSynthesizedFields>;
             fn get(&self) -> &Self::Value { &self.class_synthesized_fields }
             fn get_mut(&mut self) -> &mut Self::Value { &mut self.class_synthesized_fields }
+        }
+
+        impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyVariance> for $name {
+            type Value = $t<$crate::binding::binding::KeyVariance>;
+            fn get(&self) -> &Self::Value { &self.variance }
+            fn get_mut(&mut self) -> &mut Self::Value { &mut self.variance }
         }
 
         impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyAnnotation> for $name {
@@ -140,6 +147,7 @@ macro_rules! table_for_each(
         $f(&($e).classes);
         $f(&($e).class_fields);
         $f(&($e).class_synthesized_fields);
+        $f(&($e).variance);
         $f(&($e).annotations);
         $f(&($e).class_metadata);
         $f(&($e).legacy_tparams);
@@ -158,6 +166,7 @@ macro_rules! table_mut_for_each(
         $f(&mut ($e).classes);
         $f(&mut ($e).class_fields);
         $f(&mut ($e).class_synthesized_fields);
+        $f(&mut ($e).variance);
         $f(&mut ($e).annotations);
         $f(&mut ($e).class_metadata);
         $f(&mut ($e).legacy_tparams);
@@ -176,6 +185,7 @@ macro_rules! table_try_for_each(
         $f(&($e).classes)?;
         $f(&($e).class_fields)?;
         $f(&($e).class_synthesized_fields)?;
+        $f(&($e).variance)?;
         $f(&($e).annotations)?;
         $f(&($e).class_metadata)?;
         $f(&($e).legacy_tparams)?;

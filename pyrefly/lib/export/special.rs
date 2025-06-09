@@ -6,8 +6,6 @@
  */
 
 use dupe::Dupe;
-use ruff_python_ast::Expr;
-use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::name::Name;
 
 use crate::module::module_name::ModuleName;
@@ -41,18 +39,6 @@ pub enum SpecialExport {
     Len,
     NoTypeCheck,
     Overload,
-}
-
-#[derive(Debug)]
-pub enum SpecialEntry<'a> {
-    ImportModule(ModuleName),
-    ImportName(ModuleName, &'a Name),
-    Local,
-}
-
-pub trait SpecialEnv {
-    fn current_module(&self) -> ModuleName;
-    fn lookup_special(&self, name: &Name) -> Option<SpecialEntry>;
 }
 
 impl SpecialExport {
@@ -111,47 +97,6 @@ impl SpecialExport {
             Self::Exit => matches!(m.as_str(), "sys" | "builtins"),
             Self::Quit => matches!(m.as_str(), "builtins"),
             Self::OsExit => matches!(m.as_str(), "os"),
-        }
-    }
-
-    pub fn as_special_export(env: &impl SpecialEnv, e: &Expr) -> Option<SpecialExport> {
-        // Only works for things with `Foo`, or `source.Foo`, or `F` where `from module import Foo as F`.
-        // Does not work for things with nested modules - but no SpecialExport's have that.
-        match e {
-            Expr::Name(name) => {
-                let name = &name.id;
-                match env.lookup_special(name)? {
-                    SpecialEntry::ImportName(m, name2) => {
-                        let special = SpecialExport::new(name2)?;
-                        if special.defined_in(m) {
-                            Some(special)
-                        } else {
-                            None
-                        }
-                    }
-                    SpecialEntry::Local => {
-                        let special = SpecialExport::new(name)?;
-                        if special.defined_in(env.current_module()) {
-                            Some(special)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                }
-            }
-            Expr::Attribute(ExprAttribute {
-                value: box Expr::Name(module),
-                attr: name,
-                ..
-            }) => {
-                let special = SpecialExport::new(&name.id)?;
-                match env.lookup_special(&module.id)? {
-                    SpecialEntry::ImportModule(m) if special.defined_in(m) => Some(special),
-                    _ => None,
-                }
-            }
-            _ => None,
         }
     }
 }

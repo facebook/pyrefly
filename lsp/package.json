@@ -13,7 +13,11 @@
         "url": "https://github.com/facebook/pyrefly"
     },
     "publisher": "meta",
-    "categories": [],
+    "categories": [
+        "Programming Languages",
+        "Linters",
+        "Other"
+    ],
     "keywords": [
         "multi-root ready"
     ],

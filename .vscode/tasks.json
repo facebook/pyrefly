@@ -41,7 +41,10 @@
       },
       "options": {
         "cwd": "${workspaceFolder}/lsp"
-      }
+      },
+      "dependsOn": [
+        "npm install"
+      ]
     },
     {
       "type": "npm",
@@ -54,11 +57,26 @@
       },
       "options": {
         "cwd": "${workspaceFolder}/lsp"
-      }
+      },
+      "dependsOn": [
+        "npm install"
+      ]
+    },
+    {
+      "label": "npm install",
+      "type": "npm",
+      "script": "install",
+      "presentation": {
+        "reveal": "never"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}/lsp"
+      },
+      "group": "build"
     },
     {
       "type": "shell",
-      "command": "cargo build --release --all-features --target-dir ../lsp/bin",
+      "command": "cargo build --release --all-features --artifact-dir ../lsp/bin -Z unstable-options",
       "group": "build",
       "isBackground": true,
       "label": "cargo: build pyrefly for extension",
@@ -93,7 +111,10 @@
       },
       "options": {
         "cwd": "${workspaceFolder}/lsp"
-      }
+      },
+      "dependsOn": [
+        "npm install"
+      ]
     }
   ]
 }

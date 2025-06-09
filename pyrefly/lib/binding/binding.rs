@@ -14,6 +14,13 @@ use dupe::Dupe;
 use itertools::Either;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::assert_bytes;
+use pyrefly_util::assert_words;
+use pyrefly_util::display::DisplayWith;
+use pyrefly_util::display::DisplayWithCtx;
+use pyrefly_util::display::commas_iter;
+use pyrefly_util::uniques::Unique;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
@@ -33,6 +40,7 @@ use starlark_map::small_set::SmallSet;
 
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::class_metadata::BaseClass;
+use crate::alt::class::variance_inference::VarianceMap;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
@@ -40,10 +48,9 @@ use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
 use crate::alt::types::yields::YieldFromResult;
 use crate::alt::types::yields::YieldResult;
-use crate::assert_bytes;
-use crate::assert_words;
 use crate::binding::bindings::Bindings;
 use crate::binding::narrow::NarrowOp;
+use crate::common::symbol_kind::SymbolKind;
 use crate::dunder;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
@@ -60,11 +67,6 @@ use crate::types::tuple::Tuple;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::Type;
 use crate::types::types::Var;
-use crate::util::display::DisplayWith;
-use crate::util::display::DisplayWithCtx;
-use crate::util::display::commas_iter;
-use crate::util::uniques::Unique;
-use crate::util::visit::VisitMut;
 
 assert_words!(Key, 5);
 assert_words!(KeyExpect, 1);
@@ -97,6 +99,10 @@ pub trait Keyed: Hash + Eq + Clone + DisplayWith<ModuleInfo> + Debug + Ranged + 
     type Answer: Clone + Debug + Display + TypeEq + VisitMut<Type>;
 }
 
+/// Should be equivalent to Keyed<EXPORTED=true>.
+/// Once `associated_const_equality` is stabilised, can switch to that.
+pub trait Exported: Keyed {}
+
 impl Keyed for Key {
     type Value = Binding;
     type Answer = TypeInfo;
@@ -114,16 +120,26 @@ impl Keyed for KeyClassField {
     type Value = BindingClassField;
     type Answer = ClassField;
 }
+impl Exported for KeyClassField {}
 impl Keyed for KeyClassSynthesizedFields {
     const EXPORTED: bool = true;
     type Value = BindingClassSynthesizedFields;
     type Answer = ClassSynthesizedFields;
 }
+impl Exported for KeyVariance {}
+impl Keyed for KeyVariance {
+    const EXPORTED: bool = true;
+    type Value = BindingVariance;
+    type Answer = VarianceMap;
+}
+
+impl Exported for KeyClassSynthesizedFields {}
 impl Keyed for KeyExport {
     const EXPORTED: bool = true;
     type Value = BindingExport;
     type Answer = Type;
 }
+impl Exported for KeyExport {}
 impl Keyed for KeyFunction {
     type Value = BindingFunction;
     type Answer = DecoratedFunction;
@@ -137,6 +153,7 @@ impl Keyed for KeyClassMetadata {
     type Value = BindingClassMetadata;
     type Answer = ClassMetadata;
 }
+impl Exported for KeyClassMetadata {}
 impl Keyed for KeyLegacyTypeParam {
     type Value = BindingLegacyTypeParam;
     type Answer = LegacyTypeParameterLookup;
@@ -167,8 +184,8 @@ pub enum Key {
     ReturnImplicit(ShortIdentifier),
     /// The actual type of the return for a function.
     ReturnType(ShortIdentifier),
-    /// I am a use in this module at this location.
-    Usage(ShortIdentifier),
+    /// I am a name in this module at this location, bound to the associated binding.
+    BoundName(ShortIdentifier),
     /// I am an expression that does not have a simple name but needs its type inferred.
     Anon(TextRange),
     /// I am an expression that appears in a statement. The range for this key is the range of the expr itself, which is different than the range of the stmt expr.
@@ -192,6 +209,8 @@ pub enum Key {
     SuperInstance(TextRange),
     /// The intermediate used in an unpacking assignment.
     Unpack(TextRange),
+    /// A usage link - a placeholder used for first-usage type inference.
+    UsageLink(TextRange),
 }
 
 impl Ranged for Key {
@@ -203,7 +222,7 @@ impl Ranged for Key {
             Self::ReturnExplicit(r) => *r,
             Self::ReturnImplicit(x) => x.range(),
             Self::ReturnType(x) => x.range(),
-            Self::Usage(x) => x.range(),
+            Self::BoundName(x) => x.range(),
             Self::Anon(r) => *r,
             Self::StmtExpr(r) => *r,
             Self::ContextExpr(r) => *r,
@@ -212,6 +231,7 @@ impl Ranged for Key {
             Self::Anywhere(_, r) => *r,
             Self::SuperInstance(r) => *r,
             Self::Unpack(r) => *r,
+            Self::UsageLink(r) => *r,
         }
     }
 }
@@ -224,7 +244,7 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::PropertyAssign(x) => {
                 write!(f, "prop assign {}._ = _ {:?}", ctx.display(x), x.range())
             }
-            Self::Usage(x) => write!(f, "use {} {:?}", ctx.display(x), x.range()),
+            Self::BoundName(x) => write!(f, "use {} {:?}", ctx.display(x), x.range()),
             Self::Anon(r) => write!(f, "anon {r:?}"),
             Self::StmtExpr(r) => write!(f, "stmt expr {r:?}"),
             Self::ContextExpr(r) => write!(f, "context expr {r:?}"),
@@ -238,6 +258,7 @@ impl DisplayWith<ModuleInfo> for Key {
             }
             Self::SuperInstance(r) => write!(f, "super {r:?}"),
             Self::Unpack(r) => write!(f, "unpack {r:?}"),
+            Self::UsageLink(r) => write!(f, "usage link {r:?}"),
         }
     }
 }
@@ -295,13 +316,13 @@ impl DisplayWith<Bindings> for BindingExpect {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         let m = ctx.module_info();
         match self {
-            Self::TypeCheckExpr(box x) => {
+            Self::TypeCheckExpr(x) => {
                 write!(f, "type check expr {}", m.display(x))
             }
-            Self::Bool(box x, ..) => {
+            Self::Bool(x, ..) => {
                 write!(f, "check bool expr {}", m.display(x))
             }
-            Self::Delete(box x) => {
+            Self::Delete(x) => {
                 write!(f, "del {}", m.display(x))
             }
             Self::UnpackedLength(x, range, expect) => {
@@ -441,6 +462,22 @@ impl Ranged for KeyClassSynthesizedFields {
 impl DisplayWith<ModuleInfo> for KeyClassSynthesizedFields {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
         write!(f, "synthesized fields of {}", self.0)
+    }
+}
+
+// A key that denotes the variance of a type parameter
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyVariance(pub ClassDefIndex);
+
+impl Ranged for KeyVariance {
+    fn range(&self) -> TextRange {
+        TextRange::default()
+    }
+}
+
+impl DisplayWith<ModuleInfo> for KeyVariance {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
+        write!(f, "variance of {}", self.0)
     }
 }
 
@@ -639,9 +676,9 @@ pub struct ReturnType {
     /// The returns from the function.
     pub returns: Box<[Idx<Key>]>,
     pub implicit_return: Idx<Key>,
-    /// The explicit yields from the function. Left for `yield`, Right for `yield from`.
-    /// If this is non-empty, the function is a generator.
-    pub yields: Box<[Either<Idx<KeyYield>, Idx<KeyYieldFrom>>]>,
+    /// The yeilds and yield froms. If either of these are nonempty, this is a generator function.
+    pub yields: Box<[Idx<KeyYield>]>,
+    pub yield_froms: Box<[Idx<KeyYieldFrom>]>,
     pub is_async: bool,
     /// Used to ignore the implicit return type for stub functions (returning `...`). This is
     /// unsafe, but is convenient and matches Pyright's behavior.
@@ -697,6 +734,15 @@ pub struct TypeParameter {
     pub constraints: Option<(Vec<Expr>, TextRange)>,
 }
 
+/// Represents an `Idx<K>` for some `K: Keyed` other than `Key`
+/// that we want to track for first-usage type inference.
+#[derive(Clone, Debug)]
+pub enum LinkedKey {
+    Yield(Idx<KeyYield>),
+    YieldFrom(Idx<KeyYieldFrom>),
+    Expect(Idx<KeyExpect>),
+}
+
 #[derive(Clone, Debug)]
 pub enum Binding {
     /// An expression, optionally with a Key saying what the type must be.
@@ -722,7 +768,12 @@ pub enum Binding {
     ContextValue(Option<Idx<KeyAnnotation>>, Idx<Key>, TextRange, IsAsync),
     /// A value at a specific position in an unpacked iterable expression.
     /// Example: UnpackedValue(('a', 'b')), 1) represents 'b'.
-    UnpackedValue(Idx<Key>, TextRange, UnpackedPosition),
+    UnpackedValue(
+        Option<Idx<KeyAnnotation>>,
+        Idx<Key>,
+        TextRange,
+        UnpackedPosition,
+    ),
     /// A type where we have an annotation, but also a type we computed.
     /// If the annotation has a type inside it (e.g. `int` then use the annotation).
     /// If the annotation doesn't (e.g. it's `Final`), then use the binding.
@@ -797,7 +848,7 @@ pub enum Binding {
     /// Binding for a function parameter. We either have an annotation, or we will determine the
     /// parameter type when solving the function type. To ensure the parameter is solved before it
     /// can be observed as a Var, we include the function key and force it to be solved first.
-    FunctionParameter(Either<Idx<KeyAnnotation>, (Var, Idx<KeyFunction>, AnnotationTarget)>),
+    FunctionParameter(Either<Idx<KeyAnnotation>, (Var, Idx<KeyFunction>)>),
     /// The result of a `super()` call.
     SuperInstance(SuperStyle, TextRange),
     /// The result of assigning to an attribute. This operation cannot change the *type* of the
@@ -805,6 +856,10 @@ pub enum Binding {
     AssignToAttribute(Box<(ExprAttribute, ExprOrBinding)>),
     /// The result of assigning to a subscript, used for narrowing.
     AssignToSubscript(Box<(ExprSubscript, ExprOrBinding)>),
+    /// A placeholder binding, used to force the solving of some other `K::Value` (for
+    /// example, forcing a `BindingExpect` to be solved) in the context of first-usage-based
+    /// type inference.
+    UsageLink(LinkedKey),
 }
 
 impl DisplayWith<Bindings> for Binding {
@@ -846,8 +901,8 @@ impl DisplayWith<Bindings> for Binding {
             Self::IterableValue(Some(k), x, IsAsync::Sync) => {
                 write!(f, "iter {}: {}", ctx.display(*k), m.display(x))
             }
-            Self::ExceptionHandler(box x, true) => write!(f, "except* {}", m.display(x)),
-            Self::ExceptionHandler(box x, false) => write!(f, "except {}", m.display(x)),
+            Self::ExceptionHandler(x, true) => write!(f, "except* {}", m.display(x)),
+            Self::ExceptionHandler(x, false) => write!(f, "except {}", m.display(x)),
             Self::ContextValue(_ann, x, _, kind) => {
                 let name = match kind {
                     IsAsync::Sync => "context",
@@ -855,7 +910,7 @@ impl DisplayWith<Bindings> for Binding {
                 };
                 write!(f, "{name} {}", ctx.display(*x))
             }
-            Self::UnpackedValue(x, range, pos) => {
+            Self::UnpackedValue(_ann, x, range, pos) => {
                 let pos = match pos {
                     UnpackedPosition::Index(i) => i.to_string(),
                     UnpackedPosition::ReverseIndex(i) => format!("-{i}"),
@@ -1014,6 +1069,72 @@ impl DisplayWith<Bindings> for Binding {
                     binding.display_with(ctx)
                 )
             }
+            Self::UsageLink(usage_key) => {
+                write!(f, "usage link to ",)?;
+                match usage_key {
+                    LinkedKey::Yield(idx) => {
+                        write!(f, "{}", m.display(ctx.idx_to_key(*idx)))
+                    }
+                    LinkedKey::YieldFrom(idx) => {
+                        write!(f, "{}", m.display(ctx.idx_to_key(*idx)))
+                    }
+                    LinkedKey::Expect(idx) => {
+                        write!(f, "{}", m.display(ctx.idx_to_key(*idx)))
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Binding {
+    pub fn symbol_kind(&self) -> Option<SymbolKind> {
+        match self {
+            Binding::TypeVar(_, _, _)
+            | Binding::ParamSpec(_, _, _)
+            | Binding::TypeVarTuple(_, _, _)
+            | Binding::TypeParameter(_)
+            | Binding::CheckLegacyTypeParam(_, _) => Some(SymbolKind::TypeParameter),
+            Binding::StrType => Some(SymbolKind::Str),
+            Binding::BoolType => Some(SymbolKind::Bool),
+            Binding::Function(_, _, _) => Some(SymbolKind::Function),
+            Binding::Import(_, _) => {
+                // TODO: maybe we can resolve it to see its symbol kind
+                Some(SymbolKind::Variable)
+            }
+            Binding::ClassDef(_, _) => Some(SymbolKind::Class),
+            Binding::Module(_, _, _) => Some(SymbolKind::Module),
+            Binding::ScopedTypeAlias(_, _, _) => Some(SymbolKind::TypeAlias),
+            Binding::NameAssign(name, _, _) if name.as_str() == name.to_uppercase() => {
+                Some(SymbolKind::Constant)
+            }
+            Binding::NameAssign(_, _, _) => Some(SymbolKind::Variable),
+            Binding::LambdaParameter(_) | Binding::FunctionParameter(_) => {
+                Some(SymbolKind::Parameter)
+            }
+            Binding::Expr(_, _)
+            | Binding::ReturnExplicit(_)
+            | Binding::ReturnImplicit(_)
+            | Binding::ReturnType(_)
+            | Binding::IterableValue(_, _, _)
+            | Binding::ContextValue(_, _, _, _)
+            | Binding::UnpackedValue(_, _, _, _)
+            | Binding::AnnotatedType(_, _)
+            | Binding::AugAssign(_, _)
+            | Binding::Type(_)
+            | Binding::Forward(_)
+            | Binding::Phi(_)
+            | Binding::Default(_, _)
+            | Binding::Narrow(_, _, _)
+            | Binding::PatternMatchMapping(_, _)
+            | Binding::PatternMatchClassPositional(_, _, _, _)
+            | Binding::PatternMatchClassKeyword(_, _, _)
+            | Binding::Decorator(_)
+            | Binding::ExceptionHandler(_, _)
+            | Binding::SuperInstance(_, _)
+            | Binding::AssignToAttribute(_)
+            | Binding::UsageLink(_)
+            | Binding::AssignToSubscript(_) => None,
         }
     }
 }
@@ -1044,8 +1165,8 @@ impl AnnotationWithTarget {
         let annotation_ty = self.annotation.ty.as_ref()?;
         match self.target {
             AnnotationTarget::ArgsParam(_) => {
-                if let Type::Unpack(box unpacked) = annotation_ty {
-                    Some(unpacked.clone())
+                if let Type::Unpack(unpacked) = annotation_ty {
+                    Some((**unpacked).clone())
                 } else if matches!(annotation_ty, Type::Args(_) | Type::Unpack(_)) {
                     Some(annotation_ty.clone())
                 } else {
@@ -1055,8 +1176,8 @@ impl AnnotationWithTarget {
                 }
             }
             AnnotationTarget::KwargsParam(_) => {
-                if let Type::Unpack(box unpacked) = annotation_ty {
-                    Some(unpacked.clone())
+                if let Type::Unpack(unpacked) = annotation_ty {
+                    Some((**unpacked).clone())
                 } else if matches!(annotation_ty, Type::Kwargs(_) | Type::Unpack(_)) {
                     Some(annotation_ty.clone())
                 } else {
@@ -1215,6 +1336,19 @@ pub struct BindingClassSynthesizedFields(pub Idx<KeyClass>);
 impl DisplayWith<Bindings> for BindingClassSynthesizedFields {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         write!(f, "synthesized fields of {}", ctx.display(self.0))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct BindingVariance {
+    pub class_key: Idx<KeyClass>,
+    pub base_classes: Box<[Expr]>,
+    pub fields: SmallSet<Idx<KeyClassField>>,
+}
+
+impl DisplayWith<Bindings> for BindingVariance {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
+        write!(f, "Variance of {}", ctx.display(self.class_key))
     }
 }
 

@@ -29,13 +29,13 @@ use lsp_types::Url;
 use lsp_types::WorkspaceFoldersServerCapabilities;
 use lsp_types::WorkspaceServerCapabilities;
 use pretty_assertions::assert_eq;
+use pyrefly_util::fs_anyhow;
 use tempfile::TempDir;
 
 use crate::commands::lsp::Args;
 use crate::commands::lsp::IndexingMode;
 use crate::commands::lsp::run_lsp;
 use crate::test::util::init_test;
-use crate::util::fs_anyhow;
 
 #[derive(Default)]
 pub struct TestCase {
@@ -82,7 +82,7 @@ pub fn run_test_lsp(test_case: TestCase) {
         scope.spawn(move || {
             run_lsp(Arc::new(connection), || Ok(()), args)
                 .map(|_| ())
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                .map_err(|e| std::io::Error::other(e.to_string()))
         });
         // this thread sends messages to the language server (from test case)
         scope.spawn(move || {
