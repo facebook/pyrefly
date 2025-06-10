@@ -138,6 +138,12 @@ but we don't want to type check.
     what to use for `project-excludes`. If `project-excludes` should not use
     the default value, override it with a flag as well. When no `FILES...` are passed,
     `project-excludes` overrides the config's value.
+  - Your [`site-package-path`](#site-package-path) is added to your `project-excludes`
+    automatically. If you are trying to perform type checking on a dependency in your
+    `site-package-path` (i.e. `cd <site-package-path>/some_dependency && pyrefly check`),
+    we recommend you pull and set up your dependency from GitHub, but you can achieve
+    this on files in your `site-package-path` by setting `site-package-path = []` in
+    your config.
 
 ### `search-path`
 
@@ -370,11 +376,17 @@ can fit under a single config option description.
 
 If any of [`python-platform`](#python-platform), [`python-version`](#python-version), or
 [`site-package-path`](#site-package-path) are empty, we attempt to query an interpreter
-for the missing values. By default we query `$(which python3)` or `$(which python)` if they're available on the path,
-but the interpreter can be overridden with the [`python-interpreter`](#python-interpreter) config option and flag.
-If the interpreter does not exist, we fall back to Pyrefly's defaults for all unspecified values.
+for the missing values.
 
-The values queried from the interpreter are:
+We look for an interpreter with the following logic:
+1. Use [`python-interpreter`](#python-interpreter) if it's set by a flag or config option.
+2. Find a `venv` at the root of the project by searching for something that looks like a
+   Python interpreter, and looking for a `pyvenv.cfg` file in known locations.
+3. Query `$(which python3)` and `$(which python)` (platform independent) to use
+   a system-installed interpreter.
+4. Fall back to Pyrefly's default values for any unspecified config options.
+
+The config options we query the interpreter for are:
 * `python-platform`: `sys.platform`
 * `python-version`: `sys.version_info[:3]`
 * `site-package-path`: `site.getsitepackages() + [site.getusersitepackages()]`

@@ -26,8 +26,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.77467482.css">
-<script src="/assets/js/runtime~main.a30aa804.js" defer="defer"></script>
-<script src="/assets/js/main.f0a9ba3a.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.0ac8b2ff.js" defer="defer"></script>
+<script src="/assets/js/main.04430056.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -151,6 +151,12 @@ from all <code>project-includes</code> getting filtered by <code>project-exclude
 what to use for <code>project-excludes</code>. If <code>project-excludes</code> should not use
 the default value, override it with a flag as well. When no <code>FILES...</code> are passed,
 <code>project-excludes</code> overrides the config&#x27;s value.</li>
+<li>Your <a href="#site-package-path"><code>site-package-path</code></a> is added to your <code>project-excludes</code>
+automatically. If you are trying to perform type checking on a dependency in your
+<code>site-package-path</code> (i.e. <code>cd &lt;site-package-path&gt;/some_dependency &amp;&amp; pyrefly check</code>),
+we recommend you pull and set up your dependency from GitHub, but you can achieve
+this on files in your <code>site-package-path</code> by setting <code>site-package-path = []</code> in
+your config.</li>
 </ul>
 </li>
 </ul>
@@ -375,10 +381,17 @@ can fit under a single config option description.</p>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="environment-autoconfiguration">Environment Autoconfiguration<a href="#environment-autoconfiguration" class="hash-link" aria-label="Direct link to Environment Autoconfiguration" title="Direct link to Environment Autoconfiguration">​</a></h3>
 <p>If any of <a href="#python-platform"><code>python-platform</code></a>, <a href="#python-version"><code>python-version</code></a>, or
 <a href="#site-package-path"><code>site-package-path</code></a> are empty, we attempt to query an interpreter
-for the missing values. By default we query <code>$(which python3)</code> or <code>$(which python)</code> if they&#x27;re available on the path,
-but the interpreter can be overridden with the <a href="#python-interpreter"><code>python-interpreter</code></a> config option and flag.
-If the interpreter does not exist, we fall back to Pyrefly&#x27;s defaults for all unspecified values.</p>
-<p>The values queried from the interpreter are:</p>
+for the missing values.</p>
+<p>We look for an interpreter with the following logic:</p>
+<ol>
+<li>Use <a href="#python-interpreter"><code>python-interpreter</code></a> if it&#x27;s set by a flag or config option.</li>
+<li>Find a <code>venv</code> at the root of the project by searching for something that looks like a
+Python interpreter, and looking for a <code>pyvenv.cfg</code> file in known locations.</li>
+<li>Query <code>$(which python3)</code> and <code>$(which python)</code> (platform independent) to use
+a system-installed interpreter.</li>
+<li>Fall back to Pyrefly&#x27;s default values for any unspecified config options.</li>
+</ol>
+<p>The config options we query the interpreter for are:</p>
 <ul>
 <li><code>python-platform</code>: <code>sys.platform</code></li>
 <li><code>python-version</code>: <code>sys.version_info[:3]</code></li>
