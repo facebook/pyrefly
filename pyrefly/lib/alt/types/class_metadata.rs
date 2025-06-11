@@ -25,6 +25,7 @@ use crate::alt::class::class_field::ClassField;
 use crate::error::collector::ErrorCollector;
 use crate::error::kind::ErrorKind;
 use crate::types::callable::BoolKeywords;
+use crate::types::callable::DataclassKeywords;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::qname::QName;
@@ -48,6 +49,7 @@ pub struct ClassMetadata {
     /// Is it possible for this class to have type parameters that we don't know about?
     /// This can happen if, e.g., a class inherits from Any.
     has_unknown_tparams: bool,
+    is_frozen_dataclass: bool,
 }
 
 impl VisitMut<Type> for ClassMetadata {
@@ -82,6 +84,17 @@ impl ClassMetadata {
         errors: &ErrorCollector,
     ) -> ClassMetadata {
         let mro = Mro::new(cls, &bases_with_metadata, errors);
+        let is_frozen_dataclass = dataclass_metadata
+            .as_ref()
+            .is_some_and(|dataclass| dataclass.kws.is_set(&DataclassKeywords::FROZEN));
+        if dataclass_metadata.is_some() {
+            Self::validate_frozen_dataclass_inheritance(
+                cls,
+                is_frozen_dataclass,
+                &bases_with_metadata,
+                errors,
+            );
+        }
         ClassMetadata {
             mro,
             metaclass: Metaclass(metaclass),
@@ -96,6 +109,46 @@ impl ClassMetadata {
             is_new_type,
             is_final,
             has_unknown_tparams,
+            is_frozen_dataclass,
+        }
+    }
+
+    fn validate_frozen_dataclass_inheritance(
+        cls: &Class,
+        is_current_frozen: bool,
+        bases_with_metadata: &[(ClassType, Arc<ClassMetadata>)],
+        errors: &ErrorCollector,
+    ) {
+        for (base_type, base_metadata) in bases_with_metadata {
+            if base_metadata.dataclass_metadata().is_some() {
+                let is_base_frozen = base_metadata.is_frozen_dataclass;
+
+                if is_current_frozen != is_base_frozen {
+                    let current_status = if is_current_frozen {
+                        "frozen"
+                    } else {
+                        "non-frozen"
+                    };
+                    let base_status = if is_base_frozen {
+                        "frozen"
+                    } else {
+                        "non-frozen"
+                    };
+
+                    errors.add(
+                        cls.range(),
+                        ErrorKind::InvalidInheritance,
+                        None,
+                        vec1![format!(
+                            "Cannot inherit {} dataclass `{}` from {} dataclass `{}`",
+                            current_status,
+                            ClassName(cls.qname()),
+                            base_status,
+                            ClassName(base_type.qname()),
+                        )],
+                    );
+                }
+            }
         }
     }
 
@@ -114,6 +167,7 @@ impl ClassMetadata {
             is_new_type: false,
             is_final: false,
             has_unknown_tparams: false,
+            is_frozen_dataclass: false,
         }
     }
 

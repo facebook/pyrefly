@@ -597,3 +597,65 @@ class D:
     y: InitVar[int]  # OK
     "#,
 );
+
+// Add these minimal test cases to your existing test file (paste-2.txt)
+
+testcase!(
+    test_non_frozen_cannot_extend_frozen,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class FrozenBase:
+    x: int
+
+@dataclass
+class MutableChild(FrozenBase):  # E: Cannot inherit non-frozen dataclass `main.MutableChild` from frozen dataclass `main.FrozenBase`
+    y: str
+    "#,
+);
+
+testcase!(
+    test_frozen_cannot_extend_non_frozen,
+    r#"
+from dataclasses import dataclass
+
+@dataclass
+class MutableBase:
+    x: int
+
+@dataclass(frozen=True)
+class FrozenChild(MutableBase):  # E: Cannot inherit frozen dataclass `main.FrozenChild` from non-frozen dataclass `main.MutableBase`
+    y: str
+    "#,
+);
+
+testcase!(
+    test_frozen_can_extend_frozen,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class FrozenBase:
+    x: int
+
+@dataclass(frozen=True)
+class FrozenChild(FrozenBase):  # OK
+    y: str
+    "#,
+);
+
+testcase!(
+    test_non_frozen_can_extend_non_frozen,
+    r#"
+from dataclasses import dataclass
+
+@dataclass
+class MutableBase:
+    x: int
+
+@dataclass
+class MutableChild(MutableBase):  # OK
+    y: str
+    "#,
+);
