@@ -137,7 +137,6 @@
   "dataclasses_final.py": [
     "Line 27: Expected 1 errors",
     "Line 35: Expected 1 errors",
-    "Line 36: Expected 1 errors",
     "Line 38: Expected 1 errors"
   ],
   "dataclasses_frozen.py": [
@@ -524,9 +523,6 @@
   "qualifiers_final_annotation.py": [
     "Line 34: Expected 1 errors",
     "Line 38: Expected 1 errors",
-    "Line 54: Expected 1 errors",
-    "Line 65: Expected 1 errors",
-    "Line 67: Expected 1 errors",
     "Line 81: Expected 1 errors",
     "Line 107: Expected 1 errors",
     "Line 149: Expected 1 errors",

@@ -21,7 +21,7 @@ use crate::config::finder::ConfigFinder;
 use crate::state::lsp::AnnotationKind;
 use crate::state::require::Require;
 use crate::state::state::State;
-use crate::types::literal::Lit;
+use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
 
 #[derive(Debug, Parser, Clone)]
@@ -29,10 +29,15 @@ pub struct Args {}
 
 fn format_hints(
     inlay_hints: Vec<(ruff_text_size::TextSize, Type, AnnotationKind)>,
+    stdlib: &Stdlib,
 ) -> Vec<(ruff_text_size::TextSize, String)> {
     let mut qualified_hints = Vec::new();
     for (position, hint, kind) in inlay_hints {
-        let formatted_hint = hint_to_string(hint);
+        let formatted_hint = hint_to_string(hint, stdlib);
+        // TODO: Put this behind a flag
+        if formatted_hint == "Any" {
+            continue;
+        }
         match kind {
             AnnotationKind::Parameter => {
                 qualified_hints.push((position, format!(": {}", formatted_hint)));
@@ -54,20 +59,9 @@ fn sort_inlay_hints(
     sorted_inlay_hints
 }
 
-fn hint_to_string(hint: Type) -> String {
-    match &hint {
-        Type::Literal(literal) => match literal {
-            Lit::Str(_) => "str".to_owned(),
-            Lit::Int(_) => "int".to_owned(),
-            Lit::Bool(_) => "bool".to_owned(),
-            Lit::Bytes(_) => "bytes".to_owned(),
-            Lit::Enum(_) => format!("{}", hint),
-        },
-        Type::Any(_) => "Any".to_owned(),
-        _ => {
-            format!("{}", hint)
-        }
-    }
+fn hint_to_string(hint: Type, stdlib: &Stdlib) -> String {
+    let hint = hint.promote_literals(stdlib).explicit_any();
+    hint.to_string()
 }
 
 impl Args {
@@ -94,10 +88,11 @@ impl Args {
         let transaction = forgetter.as_mut();
         for (handle, _) in handles.all(Require::Everything) {
             transaction.run(&[(handle.dupe(), Require::Everything)]);
+            let stdlib = transaction.get_stdlib(&handle);
             let inferred_types: Option<Vec<(ruff_text_size::TextSize, Type, AnnotationKind)>> =
                 transaction.inferred_types(&handle);
             if let Some(i_types) = inferred_types {
-                let formatted = format_hints(i_types);
+                let formatted = format_hints(i_types, &stdlib.clone());
                 let sorted = sort_inlay_hints(formatted);
 
                 let file_path = handle.path().as_path();
@@ -106,13 +101,6 @@ impl Args {
                 let mut result = file_content;
                 for inlay_hint in sorted {
                     let (position, hint) = inlay_hint;
-                    if hint.contains("@") {
-                        continue;
-                    }
-                    // TODO: Put this behind a flag
-                    if hint.contains("Any") {
-                        continue;
-                    }
                     // Convert the TextSize to a byte offset
                     let offset = (position).into();
                     if offset <= result.len() {
@@ -205,6 +193,28 @@ def greet(name) -> str:
             r#"
     def is_valid() -> bool:
         return True
+    "#,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_complex_function() -> anyhow::Result<()> {
+        // Test a more complex function with multiple types
+        assert_annotations(
+            r#"
+    def process_data(items, factor):
+        result = []
+        for item in items:
+            result.append(item * factor)
+        return result
+    "#,
+            r#"
+    def process_data(items, factor) -> list[Any]:
+        result = []
+        for item in items:
+            result.append(item * factor)
+        return result
     "#,
         );
         Ok(())

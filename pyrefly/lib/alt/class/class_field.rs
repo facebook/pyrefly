@@ -649,9 +649,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let annotation = direct_annotation.or(inherited_annotation.as_ref());
 
+        let is_namedtuple_member = metadata
+            .named_tuple_metadata()
+            .is_some_and(|named_tuple| named_tuple.elements.contains(name));
+        let is_frozen_dataclass_field = metadata.dataclass_metadata().is_some_and(|dataclass| {
+            dataclass.kws.is_set(&DataclassKeywords::FROZEN) && dataclass.fields.contains(name)
+        });
+
+        // Read-onlyness
+        let readonly = is_namedtuple_member
+            || is_frozen_dataclass_field
+            || (annotation.is_some_and(|a| a.is_read_only())
+                && matches!(initial_value, ClassFieldInitialValue::Class(_)));
+
         // Promote literals. The check on `annotation` is an optimization, it does not (currently) affect semantics.
-        // TODO(stroxler): if we see a read-only `Qualifier` like `Final`, it is sound to preserve literals.
-        let value_ty = if annotation.is_none_or(|a| a.ty.is_none()) && value_ty.is_literal() {
+        let value_ty = if (!readonly || is_namedtuple_member)
+            && (annotation.is_none_or(|a| a.ty.is_none()))
+            && value_ty.is_literal()
+        {
             value_ty.clone().promote_literals(self.stdlib)
         } else {
             value_ty.clone()
@@ -717,15 +732,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             ty
         };
-
-        // TODO: handle other kinds of readonlyness
-        let is_namedtuple_member = metadata
-            .named_tuple_metadata()
-            .is_some_and(|named_tuple| named_tuple.elements.contains(name));
-        let is_frozen_dataclass_field = metadata.dataclass_metadata().is_some_and(|dataclass| {
-            dataclass.kws.is_set(&DataclassKeywords::FROZEN) && dataclass.fields.contains(name)
-        });
-        let readonly = is_namedtuple_member || is_frozen_dataclass_field;
 
         // Identify whether this is a descriptor
         let (mut descriptor_getter, mut descriptor_setter) = (None, None);

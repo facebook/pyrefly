@@ -935,7 +935,7 @@ impl<'a> Transaction<'a> {
             .dupe()
     }
 
-    fn get_stdlib(&self, handle: &Handle) -> Arc<Stdlib> {
+    pub fn get_stdlib(&self, handle: &Handle) -> Arc<Stdlib> {
         if self.data.stdlib.len() == 1 {
             // Since we know our one must exist, we can shortcut
             return self.data.stdlib.first().unwrap().1.dupe();

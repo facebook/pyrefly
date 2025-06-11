@@ -70,7 +70,7 @@ from typing import ClassVar
 class C:
     x: ClassVar[int] = 1
 c = C()
-c.x = 2  # E: Cannot assign to read-only field `x`
+c.x = 2  # E: Cannot assign to read-only attribute `x`
 "#,
 );
 
@@ -388,6 +388,22 @@ from typing import Final
 x: Final   # E: Expected a type argument for `Final`
 y: Final[int]  # OK
 z: Final = 1  # OK
+    "#,
+);
+
+testcase!(
+    test_assign_final_attr,
+    r#"
+from typing import Final
+class A:
+    x: Final = 1
+a = A()
+a.x = 1  # E: Cannot assign to read-only attribute `x`
+del a.x  # E: Cannot delete read-only attribute `x`
+class B:
+    x: Final[int] = 1
+b = B()
+b.x += 1  # E: Cannot assign to read-only attribute `x`
     "#,
 );
 

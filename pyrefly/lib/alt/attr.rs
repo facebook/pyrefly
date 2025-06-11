@@ -574,7 +574,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             range,
                             ErrorKind::ReadOnly,
                             context,
-                            format!("Cannot assign to read-only field `{attr_name}`"),
+                            format!("Cannot assign to read-only attribute `{attr_name}`"),
                         );
                     }
                     AttributeInner::Property(_, None, cls) => {
@@ -704,7 +704,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             range,
                             ErrorKind::ReadOnly,
                             context,
-                            format!("Cannot delete read-only field `{attr_name}`"),
+                            format!("Cannot delete read-only attribute `{attr_name}`"),
                         );
                     }
                     AttributeInner::GetAttr(not_found, _, name) => {

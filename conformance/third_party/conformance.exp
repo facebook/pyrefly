@@ -2484,8 +2484,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "Cannot assign to read-only field `xx`",
-      "description": "Cannot assign to read-only field `xx`",
+      "concise_description": "Cannot assign to read-only attribute `xx`",
+      "description": "Cannot assign to read-only attribute `xx`",
       "line": 65,
       "name": "read-only",
       "stop_column": 16,
@@ -2554,8 +2554,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Cannot assign to read-only field `stats`",
-      "description": "Cannot assign to read-only field `stats`",
+      "concise_description": "Cannot assign to read-only attribute `stats`",
+      "description": "Cannot assign to read-only attribute `stats`",
       "line": 105,
       "name": "read-only",
       "stop_column": 19,
@@ -3101,6 +3101,16 @@
     {
       "code": -2,
       "column": 1,
+      "concise_description": "Cannot assign to read-only attribute `final_with_default`",
+      "description": "Cannot assign to read-only attribute `final_with_default`",
+      "line": 36,
+      "name": "read-only",
+      "stop_column": 21,
+      "stop_line": 36
+    },
+    {
+      "code": -2,
+      "column": 1,
       "concise_description": "Instance-only attribute `final_no_default` of class `D` is not visible on the class",
       "description": "Instance-only attribute `final_no_default` of class `D` is not visible on the class",
       "line": 37,
@@ -3113,8 +3123,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Cannot assign to read-only field `a`",
-      "description": "Cannot assign to read-only field `a`",
+      "concise_description": "Cannot assign to read-only attribute `a`",
+      "description": "Cannot assign to read-only attribute `a`",
       "line": 16,
       "name": "read-only",
       "stop_column": 6,
@@ -3123,8 +3133,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Cannot assign to read-only field `b`",
-      "description": "Cannot assign to read-only field `b`",
+      "concise_description": "Cannot assign to read-only attribute `b`",
+      "description": "Cannot assign to read-only attribute `b`",
       "line": 17,
       "name": "read-only",
       "stop_column": 6,
@@ -7882,8 +7892,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Cannot assign to read-only field `x`",
-      "description": "Cannot assign to read-only field `x`",
+      "concise_description": "Cannot assign to read-only attribute `x`",
+      "description": "Cannot assign to read-only attribute `x`",
       "line": 40,
       "name": "read-only",
       "stop_column": 4,
@@ -7902,8 +7912,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot delete read-only field `x`",
-      "description": "Cannot delete read-only field `x`",
+      "concise_description": "Cannot delete read-only attribute `x`",
+      "description": "Cannot delete read-only attribute `x`",
       "line": 42,
       "name": "read-only",
       "stop_column": 8,
@@ -9037,6 +9047,16 @@
     },
     {
       "code": -2,
+      "column": 9,
+      "concise_description": "Cannot assign to read-only attribute `ID5`",
+      "description": "Cannot assign to read-only attribute `ID5`",
+      "line": 54,
+      "name": "read-only",
+      "stop_column": 17,
+      "stop_line": 54
+    },
+    {
+      "code": -2,
       "column": 14,
       "concise_description": "Attribute `id3` is implicitly defined by assignment in method `method1`, which is not a constructor",
       "description": "Attribute `id3` is implicitly defined by assignment in method `method1`, which is not a constructor",
@@ -9054,6 +9074,26 @@
       "name": "implicitly-defined-attribute",
       "stop_column": 17,
       "stop_line": 63
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Cannot assign to read-only attribute `ID7`",
+      "description": "Cannot assign to read-only attribute `ID7`",
+      "line": 65,
+      "name": "read-only",
+      "stop_column": 17,
+      "stop_line": 65
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Cannot assign to read-only attribute `ID7`",
+      "description": "Cannot assign to read-only attribute `ID7`",
+      "line": 67,
+      "name": "read-only",
+      "stop_column": 17,
+      "stop_line": 67
     },
     {
       "code": -2,

@@ -145,7 +145,7 @@ impl Args {
         if found_mypy || found_pyright {
             println!("Found an existing type checking configuration - setting up pyrefly ...");
             let args = config_migration::Args {
-                input_path: Some(path),
+                original_config_path: Some(path),
             };
             return args.run();
         }

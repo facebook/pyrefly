@@ -121,6 +121,168 @@ Definition Result:
 }
 
 #[test]
+fn shadowed_def_test0() {
+    let code = r#"
+def test() -> None:
+  x = 0
+# ^
+  x = 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 |   x = 0
+      ^
+Definition Result:
+3 |   x = 0
+      ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn shadowed_def_test1() {
+    let code = r#"
+def test(flag: bool) -> None:
+  x = 0
+  if flag:
+    x = 1
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 |     x = 1
+        ^
+Definition Result:
+5 |     x = 1
+        ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn function_and_class_name_test() {
+    let code = r#"
+def foo() -> None:
+#   ^
+  pass
+
+class Foo:
+#     ^
+  def bar(self) -> int:
+#     ^
+    return 42
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | def foo() -> None:
+        ^
+Definition Result:
+2 | def foo() -> None:
+        ^^^
+
+6 | class Foo:
+          ^
+Definition Result:
+6 | class Foo:
+          ^^^
+
+8 |   def bar(self) -> int:
+          ^
+Definition Result:
+8 |   def bar(self) -> int:
+          ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn exception_handler_name_test() {
+    let code = r#"
+def test(flag: bool) -> None:
+  try:
+    1 / 0
+  except Exception as e:
+#                     ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 |   except Exception as e:
+                          ^
+Definition Result:
+5 |   except Exception as e:
+                          ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn keyword_argument_test_function() {
+    let code = r#"
+def foo(x: int, y: str) -> None: pass
+
+def test() -> None:
+  foo(0, y="foo")
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 |   foo(0, y="foo")
+             ^
+Definition Result:
+2 | def foo(x: int, y: str) -> None: pass
+        ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn keyword_argument_test_method() {
+    let code = r#"
+class Foo:
+    def foo(self, x: int, y: str) -> None:
+        pass
+
+def test(a: Foo) -> None:
+    a.foo(0, y="foo")
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+7 |     a.foo(0, y="foo")
+                 ^
+Definition Result:
+3 |     def foo(self, x: int, y: str) -> None:
+            ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn named_import_tests() {
     let code_import_provider: &str = r#"
 from typing import Literal

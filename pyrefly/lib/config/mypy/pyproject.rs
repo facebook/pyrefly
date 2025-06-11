@@ -121,7 +121,7 @@ fn make_error_config(disable: Vec<String>, enable: Vec<String>) -> Option<ErrorD
     crate::config::mypy::code_to_kind(errors)
 }
 
-pub fn parse_pyrproject_config(raw_file: &str) -> anyhow::Result<ConfigFile> {
+pub fn parse_pyproject_config(raw_file: &str) -> anyhow::Result<ConfigFile> {
     let mypy = toml::from_str::<PyProject>(raw_file)?
         .tool
         .and_then(|t| t.mypy)
@@ -238,7 +238,7 @@ mod tests {
 name = "test_project"
 description = "A project used in a test"
 "#;
-        let err = parse_pyrproject_config(src).unwrap_err();
+        let err = parse_pyproject_config(src).unwrap_err();
         assert!(err.downcast_ref::<MypyNotFoundError>().is_some());
         Ok(())
     }
@@ -247,7 +247,7 @@ description = "A project used in a test"
     fn test_missing_fields() -> anyhow::Result<()> {
         // Yes, we should never expect to encounter a [tool.mypy] with no fields in it.
         // But this test ensures that all fields are optional.
-        parse_pyrproject_config("[tool.mypy]\n").map(|_| ())
+        parse_pyproject_config("[tool.mypy]\n").map(|_| ())
     }
 
     #[test]
@@ -256,7 +256,7 @@ description = "A project used in a test"
 files = ["a,b", "c"]
 mypy_path = "a:b,c"
 "#;
-        let cfg = parse_pyrproject_config(src)?;
+        let cfg = parse_pyproject_config(src)?;
         assert_eq!(
             cfg.project_includes,
             Globs::new(vec!["a".to_owned(), "b".to_owned(), "c".to_owned()])
@@ -273,7 +273,7 @@ mypy_path = "a:b,c"
         let src_str = r#"[tool.mypy]
 exclude = "test/|foo.py"
 "#;
-        let cfg_str = parse_pyrproject_config(src_str)?;
+        let cfg_str = parse_pyproject_config(src_str)?;
 
         let src_list = r#"[tool.mypy]
 exclude = [
@@ -281,7 +281,7 @@ exclude = [
     "foo.py",
 ]
 "#;
-        let cfg_list = parse_pyrproject_config(src_list)?;
+        let cfg_list = parse_pyproject_config(src_list)?;
         assert_eq!(cfg_str, cfg_list);
         Ok(())
     }
@@ -291,7 +291,7 @@ exclude = [
         let src = r#"[tool.mypy]
 disable_error_code = ["union-attr"]
 "#;
-        let mut cfg = parse_pyrproject_config(src)?;
+        let mut cfg = parse_pyproject_config(src)?;
         cfg.configure();
         let errors = cfg.errors(&PathBuf::from("."));
         assert!(!errors.is_enabled(ErrorKind::MissingAttribute));
@@ -320,7 +320,7 @@ module = [
 ]
 
 "#;
-        let cfg = parse_pyrproject_config(src)?;
+        let cfg = parse_pyproject_config(src)?;
         assert_eq!(
             cfg.root.replace_imports_with_any,
             Some(vec![
@@ -343,10 +343,10 @@ follow_untyped_imports = false
 module = "a"
 follow_untyped_imports = true
 "#;
-        let cfg = parse_pyrproject_config(src)?;
+        let cfg = parse_pyproject_config(src)?;
         assert!(!cfg.use_untyped_imports);
 
-        let cfg = parse_pyrproject_config("[tool.mypy]\n")?;
+        let cfg = parse_pyproject_config("[tool.mypy]\n")?;
         assert!(cfg.use_untyped_imports);
         Ok(())
     }
@@ -373,7 +373,7 @@ disable_error_code = [
 module = "another.project"
 follow_imports = "silent"
 "#;
-        let mut cfg = parse_pyrproject_config(src)?;
+        let mut cfg = parse_pyproject_config(src)?;
         cfg.configure();
         assert!(
             cfg.errors(&PathBuf::from("src"))
@@ -405,7 +405,7 @@ module = [
 ]
 fake_field = "foo"
 "#;
-        let mut cfg = parse_pyrproject_config(src)?;
+        let mut cfg = parse_pyproject_config(src)?;
         cfg.configure();
         assert!(cfg.sub_configs.is_empty());
         Ok(())

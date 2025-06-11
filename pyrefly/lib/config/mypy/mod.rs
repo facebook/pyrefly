@@ -12,7 +12,7 @@ mod regex_converter;
 use std::collections::HashMap;
 
 pub use ini::MypyConfig;
-pub use pyproject::parse_pyrproject_config;
+pub use pyproject::parse_pyproject_config;
 
 use crate::config::error::ErrorDisplayConfig;
 use crate::error::kind::ErrorKind;
