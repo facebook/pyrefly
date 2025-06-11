@@ -124,31 +124,38 @@ impl Glob {
         true
     }
 
-    fn resolve_path(path: PathBuf, results: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+    fn resolve_path(
+        path: PathBuf,
+        results: &mut Vec<PathBuf>,
+        filter: &Globs,
+    ) -> anyhow::Result<()> {
+        if filter.matches(&path)? {
+            return Ok(());
+        }
         if path.is_dir() {
-            Self::resolve_dir(&path, results)?;
+            Self::resolve_dir(&path, results, filter)?;
         } else if Self::should_include_file(&path) {
             results.push(path);
         }
         Ok(())
     }
 
-    fn resolve_dir(path: &Path, results: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+    fn resolve_dir(path: &Path, results: &mut Vec<PathBuf>, filter: &Globs) -> anyhow::Result<()> {
         for entry in fs_anyhow::read_dir(path)? {
             let entry = entry
                 .with_context(|| format!("When iterating over directory `{}`", path.display()))?;
             let path = entry.path();
-            Self::resolve_path(path, results)?;
+            Self::resolve_path(path, results, filter)?;
         }
         Ok(())
     }
 
-    fn resolve_pattern(pattern: &str) -> anyhow::Result<Vec<PathBuf>> {
+    fn resolve_pattern(pattern: &str, filter: &Globs) -> anyhow::Result<Vec<PathBuf>> {
         let mut result = Vec::new();
         let paths = glob::glob(pattern)?;
         for path in paths {
             let path = path?;
-            Self::resolve_path(path, &mut result)?;
+            Self::resolve_path(path, &mut result, filter)?;
         }
         Ok(result)
     }
@@ -210,10 +217,17 @@ impl<'de> Deserialize<'de> for Glob {
 }
 
 impl Glob {
-    fn files(&self) -> anyhow::Result<Vec<PathBuf>> {
+    fn files(&self, filter: &Globs) -> anyhow::Result<Vec<PathBuf>> {
         let pattern = &self.0;
+        if filter.matches(pattern)? {
+            return Err(anyhow::anyhow!(
+                "Pattern {} is matched by `project-excludes`.\n`project-excludes`: {}",
+                pattern.display(),
+                filter.0.iter().map(|p| p.to_string()).join(", "),
+            ));
+        }
         let pattern_str = pattern.to_string_lossy().to_string();
-        let result = Self::resolve_pattern(&pattern_str)
+        let result = Self::resolve_pattern(&pattern_str, filter)
             .with_context(|| format!("When resolving pattern `{pattern_str}`"))?;
         if result.is_empty() {
             return Err(anyhow::anyhow!(
@@ -229,6 +243,10 @@ impl Glob {
 pub struct Globs(Vec<Glob>);
 
 impl Globs {
+    pub fn empty() -> Self {
+        Self::new(vec![])
+    }
+
     /// Create a new `Globs` from the given patterns. If you want them to be relative
     /// to a root, please use `Globs::new_with_root()` instead.
     pub fn new(patterns: Vec<String>) -> Self {
@@ -335,7 +353,7 @@ impl Globs {
                         line.to_str_lossy()
                     )
                 })?;
-                Glob::resolve_path(root.join(path), &mut result)?;
+                Glob::resolve_path(root.join(path), &mut result, &Globs::empty())?;
             }
             Ok(result)
         }
@@ -345,7 +363,7 @@ impl Globs {
         eden_glob(root, globs)
     }
 
-    pub fn files(&self) -> anyhow::Result<Vec<PathBuf>> {
+    fn filtered_files(&self, filter: &Globs) -> anyhow::Result<Vec<PathBuf>> {
         if USE_EDEN {
             match self.files_eden() {
                 Ok(files) if files.is_empty() => {
@@ -363,9 +381,13 @@ impl Globs {
 
         let mut result = SmallSet::new();
         for pattern in &self.0 {
-            result.extend(pattern.files()?);
+            result.extend(pattern.files(filter)?);
         }
         Ok(result.into_iter().collect())
+    }
+
+    pub fn files(&self) -> anyhow::Result<Vec<PathBuf>> {
+        self.filtered_files(&Globs::empty())
     }
 
     pub fn covers(&self, path: &Path) -> bool {
@@ -390,20 +412,7 @@ impl FilteredGlobs {
     }
 
     pub fn files(&self) -> anyhow::Result<Vec<PathBuf>> {
-        let mut result = Vec::new();
-        for file in self.includes.files()? {
-            if !self.excludes.matches(&file)? {
-                result.push(file);
-            }
-        }
-        if result.is_empty() {
-            return Err(anyhow::anyhow!(
-                "All found `project_includes` files were filtered by `project_excludes` patterns.\n`project_includes`: {}\n`project_excludes`: {}",
-                self.includes.0.iter().map(|p| p.to_string()).join(", "),
-                self.excludes.0.iter().map(|p| p.to_string()).join(", "),
-            ));
-        }
-        Ok(result)
+        self.includes.filtered_files(&self.excludes)
     }
 
     pub fn covers(&self, path: &Path) -> bool {
@@ -751,7 +760,7 @@ mod tests {
         );
 
         let glob_files_match = |pattern: &str, expected: &[&str]| -> anyhow::Result<()> {
-            let glob_files = Glob::new_with_root(root, pattern.to_owned()).files()?;
+            let glob_files = Glob::new_with_root(root, pattern.to_owned()).files(&Globs::empty())?;
             let mut glob_files = glob_files
                 .iter()
                 .map(|p| p.strip_prefix(root))
@@ -916,7 +925,7 @@ mod tests {
         // Helper function to assert that a glob pattern returns no files
         let assert_empty_glob = |pattern_str: &str, description: &str| {
             let found_files = Glob::new_with_root(root, pattern_str.to_owned())
-                .files()
+                .files(&Globs::empty())
                 .unwrap_or_else(|_| Vec::new());
             assert!(
                 found_files.is_empty(),
@@ -935,7 +944,7 @@ mod tests {
 
         // Verify that normal files are still found
         let normal_files = Glob::new_with_root(root, "**/*.py".to_owned())
-            .files()
+            .files(&Globs::empty())
             .unwrap();
         assert!(
             !normal_files.is_empty(),
@@ -952,5 +961,71 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_glob_filter_files() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "a",
+                vec![TestPath::file("b.py"), TestPath::file("c.py")],
+            )],
+        );
+
+        let pattern = root.join("**").to_string_lossy().to_string();
+
+        let mut sorted_globs = Glob::resolve_pattern(&pattern, &Globs::empty()).unwrap();
+        sorted_globs.sort();
+        assert_eq!(sorted_globs, vec![root.join("a/b.py"), root.join("a/c.py")]);
+        assert_eq!(
+            Glob::resolve_pattern(
+                &pattern,
+                &Globs::new(vec![root.join("**").to_string_lossy().to_string()])
+            )
+            .unwrap(),
+            Vec::<PathBuf>::new()
+        );
+        assert!(
+            Glob::new(pattern.clone())
+                .files(&Globs::new(vec![
+                    root.join("**").to_string_lossy().to_string()
+                ]))
+                .is_err()
+        );
+        // double check that <path>/** will also match <path>
+        assert!(
+            Glob::new(root.to_string_lossy().to_string())
+                .files(&Globs::new(vec![
+                    root.join("**").to_string_lossy().to_string()
+                ]))
+                .is_err()
+        );
+        assert_eq!(
+            Glob::resolve_pattern(
+                &pattern,
+                &Globs::new(vec![root.join("a/c.py").to_string_lossy().to_string()])
+            )
+            .unwrap(),
+            vec![root.join("a/b.py")],
+        );
+        assert_eq!(
+            Glob::resolve_pattern(
+                &pattern,
+                &Globs::new(vec![root.join("a").to_string_lossy().to_string()])
+            )
+            .unwrap(),
+            Vec::<PathBuf>::new()
+        );
+        assert_eq!(
+            Glob::resolve_pattern(
+                &pattern,
+                &Globs::new(vec![root.join("a/b*").to_string_lossy().to_string()])
+            )
+            .unwrap(),
+            vec![root.join("a/c.py")],
+        );
     }
 }
