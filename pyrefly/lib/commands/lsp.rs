@@ -327,26 +327,23 @@ struct Server {
 struct Workspace {
     #[expect(dead_code)]
     root: PathBuf,
-    python_environment: PythonEnvironment,
+    python_environment: Option<PythonEnvironment>,
     disable_language_services: bool,
     disable_type_errors: bool,
 }
 
 impl Workspace {
-    fn new(workspace_root: &Path, python_environment: PythonEnvironment) -> Self {
+    fn new(workspace_root: &Path, python_environment: Option<PythonEnvironment>) -> Self {
         Self {
             root: workspace_root.to_path_buf(),
-            python_environment: python_environment.clone(),
+            python_environment,
             disable_language_services: false,
             disable_type_errors: false,
         }
     }
 
     fn new_with_default_env(workspace_root: &Path) -> Self {
-        Self::new(
-            workspace_root,
-            PythonEnvironment::get_default_interpreter_env(),
-        )
+        Self::new(workspace_root, None)
     }
 }
 
@@ -354,7 +351,7 @@ impl Default for Workspace {
     fn default() -> Self {
         Self {
             root: PathBuf::from("/"),
-            python_environment: PythonEnvironment::get_default_interpreter_env(),
+            python_environment: None,
             disable_language_services: Default::default(),
             disable_type_errors: false,
         }
@@ -463,8 +460,11 @@ impl Workspaces {
                 && config.python_interpreter.is_none()
             {
                 workspaces.get_with(dir.to_owned(), |w| {
+                    let Some(python_environment) = w.python_environment.clone() else {
+                        return;
+                    };
                     let site_package_path = config.python_environment.site_package_path.take();
-                    config.python_environment = w.python_environment.clone();
+                    config.python_environment = python_environment;
                     if let Some(new) = site_package_path {
                         let mut workspace = config
                             .python_environment
@@ -1961,12 +1961,12 @@ impl Server {
                 let workspace_path = scope_uri.to_file_path().unwrap();
                 if let Some(workspace) = workspaces.get_mut(&workspace_path) {
                     *modified = true;
-                    workspace.python_environment = env;
+                    workspace.python_environment = Some(env);
                 }
             }
             None => {
                 *modified = true;
-                self.workspaces.default.write().python_environment = env;
+                self.workspaces.default.write().python_environment = Some(env);
             }
         }
         self.invalidate_config();
