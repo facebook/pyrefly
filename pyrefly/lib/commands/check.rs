@@ -173,6 +173,9 @@ struct ConfigOverrideArgs {
     /// `python_platform`, or `site_package_path` if any of the values are missing.
     #[arg(long, env = clap_env("PYTHON_INTERPRETER"), value_name = "EXE_PATH")]
     python_interpreter: Option<PathBuf>,
+    /// Whether to search imports in `site-package-path` that do not have a `py.typed` file unconditionally.
+    #[arg(long, env = clap_env("USE_UNTYPED_IMPORTS"))]
+    use_untyped_imports: Option<bool>,
 }
 
 impl OutputFormat {
@@ -537,6 +540,9 @@ impl Args {
         }
         if let Some(x) = &self.config_override.python_interpreter {
             config.python_interpreter = Some(x.clone());
+        }
+        if let Some(x) = &self.config_override.use_untyped_imports {
+            config.use_untyped_imports = *x;
         }
         config.configure();
         let errors = config.validate();
