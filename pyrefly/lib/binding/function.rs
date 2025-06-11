@@ -57,6 +57,7 @@ use crate::types::types::Type;
 
 struct Decorators {
     has_no_type_check: bool,
+    is_overload: bool,
     decorators: Box<[Idx<Key>]>,
 }
 
@@ -398,15 +399,25 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn decorators(&mut self, decorator_list: Vec<Decorator>, usage: Usage) -> Decorators {
-        let has_no_type_check = decorator_list
+        let (is_overload, has_no_type_check) = decorator_list
             .iter()
-            .any(|d| self.as_special_export(&d.expression) == Some(SpecialExport::NoTypeCheck));
+            .fold((false, false), |(overload, no_check), d| {
+                if overload && no_check {
+                    return (true, true);
+                }
+                let special_export = self.as_special_export(&d.expression);
+                (
+                    overload || matches!(special_export, Some(SpecialExport::Overload)),
+                    no_check || matches!(special_export, Some(SpecialExport::NoTypeCheck)),
+                )
+            });
 
         let decorators = self
             .ensure_and_bind_decorators(decorator_list, usage)
             .into_boxed_slice();
         Decorators {
             has_no_type_check,
+            is_overload,
             decorators,
         }
     }
@@ -423,7 +434,7 @@ impl<'a> BindingsBuilder<'a> {
         function_idx: Idx<KeyFunction>,
         class_key: Option<Idx<KeyClass>>,
     ) -> (FunctionStubOrImpl, Option<SelfAssignments>) {
-        let stub_or_impl = if is_ellipse(&body) {
+        let stub_or_impl = if is_ellipse(&body) || (is_docstring(&body[0]) && decorators.is_overload)  {
             FunctionStubOrImpl::Stub
         } else {
             FunctionStubOrImpl::Impl
