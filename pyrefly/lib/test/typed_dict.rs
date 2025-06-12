@@ -122,7 +122,7 @@ def test():
     s['data'] = []
     s['data'] = [42]
     s['data'] = [42, 'hello']
-    s['data'] = ['hello']  
+    s['data'] = ['hello']
     "#,
 );
 
@@ -583,5 +583,19 @@ from typing import TypedDict, Required, NotRequired
 class TD(TypedDict):
     x: Required[NotRequired[int]]  # E: Cannot combine `Required` and `NotRequired` for a TypedDict field
     y: NotRequired[Required[int]]  # E: Cannot combine `Required` and `NotRequired` for a TypedDict field
+"#,
+);
+
+testcase!(
+    test_typed_dict_isinstance_issubclass_not_allowed,
+    r#"
+from typing import *
+
+class D(TypedDict):
+    x: int
+
+x = int
+isinstance(x, D)  # E: TypedDict `D` not allowed as second argument to isinstance()
+issubclass(x, D)  # E: TypedDict `D` not allowed as second argument to issubclass()
 "#,
 );

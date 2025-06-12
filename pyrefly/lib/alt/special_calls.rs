@@ -302,6 +302,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     format!("NewType `{}` not allowed in {}", cls.name(), func_display(),),
                 );
             }
+            // Check if this is a TypedDict
+            if metadata.is_typed_dict() {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::InvalidArgument,
+                    None,
+                    format!(
+                        "TypedDict `{}` not allowed as second argument to {}",
+                        cls.name(),
+                        func_display()
+                    ),
+                );
+            }
             // Check if this is a protocol that needs @runtime_checkable
             if metadata.is_protocol() && !metadata.is_runtime_checkable_protocol() {
                 self.error(
