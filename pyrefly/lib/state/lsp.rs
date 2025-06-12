@@ -1466,9 +1466,58 @@ impl<'a> Transaction<'a> {
         limit_range: Option<TextRange>,
     ) -> Option<Vec<SemanticToken>> {
         let module_info = self.get_module_info(handle)?;
+        let bindings = self.get_bindings(handle)?;
         let ast = self.get_ast(handle)?;
         let legends = SemanticTokensLegends::new();
         let mut tokens = Vec::new();
+        for idx in bindings.keys::<Key>() {
+            let binding = bindings.get(idx);
+            let Some(intermediate_definition) =
+                binding_to_intermediate_definition(&bindings, binding, &mut Gas::new(20))
+            else {
+                continue;
+            };
+            let reference_range = bindings.idx_to_key(idx).range();
+            if let Some(limit_range) = limit_range
+                && !limit_range.contains_range(reference_range)
+            {
+                continue;
+            }
+            let Some(symbol_kind) = (match intermediate_definition {
+                IntermediateDefinition::Local(definition) => {
+                    // Sanity check: the reference should have the same text as the definition.
+                    // This check helps to filter out synthetic bindings.
+                    if module_info.code_at(definition.location)
+                        == module_info.code_at(reference_range)
+                    {
+                        definition.symbol_kind
+                    } else {
+                        None
+                    }
+                }
+                IntermediateDefinition::Module(_name) => {
+                    // TODO: We still run into the risk of synthetic imports, but we cannot do
+                    // the same sanity check as above, since we don't have the location of the
+                    // module. It's safer not to return a token, as opposed to coloring a block
+                    // of code corresponding to a synthetic binding.
+                    None
+                }
+                IntermediateDefinition::NamedImport(_, _name) => {
+                    // TODO: we can try to resolve the import to figure out a better symbol kind
+                    // In addition, we should include more information so that we can decide whether
+                    // the import is a renamed import (e.g. from ... import a as b).
+                    // For now, it's safer to not generate a semantic token for a potentially
+                    // synthetic binding.
+                    None
+                }
+            }) else {
+                continue;
+            };
+            tokens.push(SemanticTokenWithFullRange {
+                range: reference_range,
+                token_type: symbol_kind.to_lsp_semantic_token_type(),
+            });
+        }
         fn visit_expr(
             x: &Expr,
             tokens: &mut Vec<SemanticTokenWithFullRange>,

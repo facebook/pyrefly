@@ -7,6 +7,7 @@
 
 use dupe::Dupe;
 use lsp_types::CompletionItemKind;
+use lsp_types::SemanticTokenType;
 
 /// The kind of symbol of a binding.
 /// It will be displayed in IDEs with different icons.
@@ -56,6 +57,24 @@ impl SymbolKind {
             SymbolKind::Function => "(function)".to_owned(),
             SymbolKind::Class => "(class)".to_owned(),
             SymbolKind::Bool | SymbolKind::Str => "".to_owned(),
+        }
+    }
+
+    pub fn to_lsp_semantic_token_type(self) -> SemanticTokenType {
+        match self {
+            SymbolKind::Module => SemanticTokenType::NAMESPACE,
+            SymbolKind::Attribute => SemanticTokenType::PROPERTY,
+            SymbolKind::Variable => SemanticTokenType::VARIABLE,
+            // todo(samzhou19815): constant should likely differentiate in the modifier
+            SymbolKind::Constant => SemanticTokenType::VARIABLE,
+            SymbolKind::Parameter => SemanticTokenType::PARAMETER,
+            SymbolKind::TypeParameter => SemanticTokenType::TYPE_PARAMETER,
+            SymbolKind::TypeAlias => SemanticTokenType::INTERFACE,
+            // todo(samzhou19815): modifier for async
+            SymbolKind::Function => SemanticTokenType::FUNCTION,
+            SymbolKind::Class => SemanticTokenType::CLASS,
+            SymbolKind::Bool => SemanticTokenType::VARIABLE,
+            SymbolKind::Str => SemanticTokenType::STRING,
         }
     }
 }

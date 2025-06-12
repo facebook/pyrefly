@@ -102,7 +102,7 @@ pub struct PythonEnvironment {
 impl PythonEnvironment {
     const DEFAULT_INTERPRETERS: &[&str] = &["python3", "python"];
 
-    pub fn pyrefly_default() -> Self {
+    fn pyrefly_default() -> Self {
         let mut env = Self::default();
         env.set_empty_to_default();
         env

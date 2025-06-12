@@ -43,7 +43,6 @@ fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
                 "line: {}, column: {}, length: {}, text: {}\n",
                 start_line, start_col, token.length, text
             ));
-            start_col += token.delta_start as usize;
             report.push_str(&format!(
                 "token-type: {}\n\n",
                 SemanticTokensLegends::lsp_semantic_token_legends().token_types
@@ -54,6 +53,67 @@ fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
         report.push('\n');
     }
     assert_eq!(expected.trim(), report.trim());
+}
+
+#[test]
+fn variable_and_constant_test() {
+    // TODO: treat all caps as constants
+    let code = r#"
+foo = 3
+ALL_CAPS = "foo"
+str(foo) + ALL_CAPS
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 0, length: 3, text: foo
+token-type: variable
+
+line: 2, column: 0, length: 8, text: ALL_CAPS
+token-type: variable
+
+line: 3, column: 4, length: 3, text: foo
+token-type: variable
+
+line: 3, column: 11, length: 8, text: ALL_CAPS
+token-type: variable
+"#,
+    );
+}
+
+#[test]
+fn function_test() {
+    let code = r#"
+def foo(v: int) -> int: ...
+bar = 3
+
+foo
+foo(foo(3))
+foo(bar)
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 2, column: 0, length: 3, text: bar
+token-type: variable
+
+line: 4, column: 0, length: 3, text: foo
+token-type: function
+
+line: 5, column: 0, length: 3, text: foo
+token-type: function
+
+line: 5, column: 4, length: 3, text: foo
+token-type: function
+
+line: 6, column: 0, length: 3, text: foo
+token-type: function
+
+line: 6, column: 4, length: 3, text: bar
+token-type: variable"#,
+    );
 }
 
 #[test]
@@ -69,15 +129,46 @@ Test().x
     assert_full_semantic_tokens(
         &[("main", code)],
         r#"
- # main.py
+# main.py
+line: 4, column: 0, length: 4, text: Test
+token-type: class
+
 line: 4, column: 5, length: 3, text: foo
 token-type: property
+
+line: 5, column: 0, length: 4, text: Test
+token-type: class
 
 line: 5, column: 7, length: 3, text: foo
 token-type: method
 
+line: 6, column: 0, length: 4, text: Test
+token-type: class
+
 line: 6, column: 7, length: 1, text: x
 token-type: property"#,
+    );
+}
+
+#[test]
+fn type_param_test() {
+    let code = r#"
+type T = int
+def foo(v: T) -> int: 
+  return 3
+
+type T2 = T
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 2, column: 11, length: 1, text: T
+token-type: interface
+
+line: 5, column: 10, length: 1, text: T
+token-type: interface
+"#,
     );
 }
 
@@ -93,6 +184,7 @@ except:
     assert_full_semantic_tokens(
         &[("main", code)],
         r#"
- # main.py"#,
+# main.py
+"#,
     );
 }

@@ -18,6 +18,7 @@ mod class_subtyping;
 mod class_super;
 mod constructors;
 mod contextual;
+mod cycles;
 mod dataclasses;
 mod decorators;
 mod delayed_inference;
