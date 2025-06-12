@@ -160,4 +160,97 @@ jobs:
 ```
 
 - Your `pyrefly.toml` or Pyrefly configs in your `pyproject.toml` will be automatically detected. Learn how to [configure Pyrefly here](../configuration).
+
+----
+
+# Pre-commit Integration
+
+Pyrefly is fast! This means you can run it before every commit to get immediate feedback on type errors without slowing down your workflow. Pre-commit let's you do this automatically.
+
+⚠️ Warning: `pyrefly check` must be installed and available on your path in CI or locally.
+
+## Quick‑start
+
+Add this to your `.pre-commit-config.yaml`:
+
+```yaml
+- repo: https://github.com/facebook/pyrefly
+  rev: main
+  hooks:
+    - id: pyrefly-typecheck
 ```
+
+## Install pre-commit
+
+You only need to do this once per clone. You can also include this in your as script or in your build/setup commands like `setup.py` or `setup.cfg` so it's installed for everyone.
+
+```bash
+# 1. Once per clone
+pip install pre-commit          # or pipx install pre‑commit
+pre-commit install              # writes .git/hooks/pre-commit
+
+# 2. Upgrade hooks when you bump versions in YAML
+pre-commit autoupdate
+
+# 3. Manual full run (good before the first push or when you add the hook)
+pre-commit run --all-files
+```
+
+## Testing the hook
+
+### Introduce a cheap error
+Edit any `.py` file and deliberately return `None` where the function is annotated to return `int`.
+
+```python
+def foo() -> int:
+    return None
+```
+
+### Stage & commit
+
+Output:
+
+```bash
+git add test.py
+git commit -m "test: pre‑commit hook check"
+pyrefly check............................................................Failed
+- hook id: pyrefly-typecheck
+- exit code: 1
+
+ INFO Checking project configured at `/myproject/pyrefly.toml`
+ERROR /myproject/test.py:2:12-16: Returned type `None` is not assignable to declared return type `int` [bad-return]
+```
+
+You should see Pyrefly fail as above, preventing the commit from being created.
+
+### Fix & recommit
+Correct the code, `git add` it again, and re‑run `git commit`; this time the hook passes.
+
+## CI parity (optional)
+
+Add this to your GitHub Action so the exact same hook set runs server‑side. This prevents anyone from pushing with `--no‑verify`. Note that you still need `pyrefly` installed and available on your path. We plan to create a standalone pre-commit project in the future.
+
+```yaml
+# You can skip this if you already have pyrefly installed
+- name: Install pyrefly
+run: |
+    python -m venv .venv
+    source .venv/bin/activate
+    python -m pip install --upgrade pip
+    pip install pyrefly
+    # persists the venv’s scripts dir
+    echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+
+- uses: pre-commit/action@v3.0.1
+  with:
+    extra_args: --all-files
+```
+
+Most likely you'll have some dependencies installed already, but you can pip install pyrefly directly using the yaml snippet above.
+
+## How this helps your project
+
+- **Earlier feedback**: Developers see type mistakes immediately, not minutes later in CI.
+- **Consistent enforcement**: Every commit—local or on CI—runs the same pyrefly check command.
+- **Clean history**: Because Pyrefly checks before the commit object is created, you avoid "fix type error" fix‑up commits.
+- **Culture of quality**: Blocking problems at the doorstep raises the baseline for new contributors.

@@ -43,14 +43,19 @@ An unofficial Jetbrains extension has been developed [here](https://plugins.jetb
 
 Pyrefly supports native Neovim support through `lspconfig` on Neovim 0.11+. Install and setup Pyrefly using the settings below.
 
-The recommended way to set up Pyrefly in Neovim is:
+The recommended way to set up Pyrefly in **Neovim 0.11+** is:
 1. Install or update the [`neovim/nvim-lspconfig`](https://github.com/neovim/nvim-lspconfig), [`mason-org/mason.nvim`](https://github.com/mason-org/mason.nvim), and [`mason-org/mason-lspconfig.nvim`](https://github.com/mason-org/mason-lspconfig.nvim) plugins with your plugin manager of choice.
-2. Add the following to your Neovim config:
+2. Add the following to your Neovim `init.lua`:
 ```lua
 require("mason").setup()
 require("mason-lspconfig").setup()
 ```
-3. In Neovim, run `:MasonInstall pyrefly`.
+3. In Neovim, run `:MasonInstall pyrefly` or add `pyrefly` to your `ensure_installed` options:
+```lua
+require("mason-lspconfig").setup {
+  ensure_installed = { "pyrefly" },
+}
+```
 
 <details>
     <summary>Alternative setups and configurations</summary>
@@ -124,10 +129,7 @@ require("mason-lspconfig").setup()
             ```lua
             vim.lsp.config('pyrefly', {
                 -- example of how to run `uv` installed Pyrefly without adding to your path
-                cmd = { 'uvx', 'pyrefly', 'lsp' },
-
-                -- only enable for markdown files (probably a bad idea, but it's an example :) )
-                filetypes = { 'markdown' }
+                cmd = { 'uvx', 'pyrefly', 'lsp' }
             })
             ```
         </details>
@@ -135,13 +137,19 @@ require("mason-lspconfig").setup()
         <details>
             <summary>No-plugin Configs</summary>
 
-            You have the option to setup your language server without `neovim/nvim-lspconfig`. Simply copy/modify the Pyrefly defaults from [`nvim-lspconfig`](https://github.com/neovim/nvim-lspconfig/blob/master/lsp/pyrefly.lua) in a block like below.
+            You have the option to setup your language server without
+            `neovim/nvim-lspconfig`. Simply copy/modify the Pyrefly defaults
+            from
+            [`nvim-lspconfig`](https://github.com/neovim/nvim-lspconfig/blob/master/lsp/pyrefly.lua)
+            in a block like below.
+
+            **NOTE: This should be in a file under `nvim/lsp/pyrefly.lua`
 
             ```lua
-            vim.lsp.config('pyrefly', {
-            cmd = { 'pyrefly', 'lsp' },
-            -- ...
-            })
+            ---@type vim.lsp.Config
+            return {
+              cmd = { "pyrefly", "lsp" },
+            }
             ```
         </details>
 
