@@ -179,17 +179,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn attr_infer(
-        &self,
-        base: &TypeInfo,
-        attr_name: &Name,
-        range: TextRange,
-        errors: &ErrorCollector,
-        context: Option<&dyn Fn() -> ErrorContext>,
-    ) -> TypeInfo {
-        TypeInfo::at_facet(base, &FacetKind::Attribute(attr_name.clone()), || {
-            self.attr_infer_for_type(base.ty(), attr_name, range, errors, context)
-        })
+    &self,
+    base: &TypeInfo,
+    attr_name: &str,
+    range: TextRange,
+    errors: &ErrorCollector,
+    context: Option<&Context>,
+) -> TypeInfo {
+    let inferred = self.attr_infer_for_type(base.ty(), attr_name, range, errors, context);
+
+    // 🧪 If Pyrefly failed to infer type, attempt alias chain resolution
+    if inferred.ty().is_unknown() {
+        if let Some(ty) = self.trace_alias_chain(base, attr_name) {
+            return ty;
+        }
     }
+
+    inferred
+}
+
 
     pub fn subscript_infer(
         &self,
