@@ -7,6 +7,20 @@
 
 use crate::test::util::TestEnv;
 use crate::testcase;
+use crate::test_utils::run_infer;
+
+
+#[test]
+fn test_resolve_dataframe_alias() {
+    let code = r#"
+        import pandas as pd
+        df = pd.DataFrame([1, 2, 3])
+    "#;
+
+    let result = run_infer(code);
+    assert_eq!(result["df"], "pandas.core.frame.DataFrame");
+}
+
 
 testcase!(
     test_set_attribute,

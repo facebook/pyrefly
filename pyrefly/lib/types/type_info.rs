@@ -49,7 +49,11 @@ pub struct TypeInfo {
 
 impl TypeInfo {
     pub fn of_ty(ty: Type) -> Self {
-        Self { ty, facets: None }
+        TypeInfo {
+            ty,
+            // If needed, fill in default values for other fields like `range`, `source`, etc.
+            // or use `..Default::default()` if implemented
+        }
     }
 
     pub fn with_ty(self, ty: Type) -> Self {
