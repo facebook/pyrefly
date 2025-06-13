@@ -180,6 +180,9 @@ struct ConfigOverrideArgs {
     /// Whether to search imports in `site-package-path` that do not have a `py.typed` file unconditionally.
     #[arg(long, env = clap_env("USE_UNTYPED_IMPORTS"))]
     use_untyped_imports: Option<bool>,
+    // Whether to ignore type errors in generated code.
+    #[arg(long, env = clap_env("IGNORE_ERRORS_IN_GENERATED_CODE"))]
+    ignore_errors_in_generated_code: Option<bool>,
 }
 
 impl OutputFormat {
@@ -553,6 +556,9 @@ impl Args {
         }
         if let Some(x) = &self.config_override.use_untyped_imports {
             config.use_untyped_imports = *x;
+        }
+        if let Some(x) = &self.config_override.ignore_errors_in_generated_code {
+            config.root.ignore_errors_in_generated_code = Some(*x);
         }
         config.configure();
         let errors = config.validate();
