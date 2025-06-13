@@ -57,6 +57,7 @@ use crate::module::ignore::SuppressionKind;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
 use crate::module::module_path::ModulePathDetails;
+use crate::module::wildcard::ModuleWildcard;
 use crate::report;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
@@ -180,6 +181,12 @@ struct ConfigOverrideArgs {
     /// Whether to search imports in `site-package-path` that do not have a `py.typed` file unconditionally.
     #[arg(long, env = clap_env("USE_UNTYPED_IMPORTS"))]
     use_untyped_imports: Option<bool>,
+    /// Replace specified imports with typing.Any, suppressing related import errors even if the module is found.
+    #[arg(long, env = clap_env("REPLACE_IMPORTS_WITH_ANY"))]
+    replace_imports_with_any: Option<Vec<String>>,
+    /// Ignore missing source packages when only type stubs are available, allowing imports to proceed without source validation.
+    #[arg(long, env = clap_env("IGNORE_MISSING_SOURCE"))]
+    ignore_missing_source: Option<bool>,
 }
 
 impl OutputFormat {
@@ -553,6 +560,17 @@ impl Args {
         }
         if let Some(x) = &self.config_override.use_untyped_imports {
             config.use_untyped_imports = *x;
+        }
+        if let Some(x) = &self.config_override.ignore_missing_source {
+            config.ignore_missing_source = *x;
+        }
+        if let Some(wildcards) = &self.config_override.replace_imports_with_any {
+            config.root.replace_imports_with_any = Some(
+                wildcards
+                    .iter()
+                    .filter_map(|x| ModuleWildcard::new(x).ok())
+                    .collect(),
+            );
         }
         config.configure();
         let errors = config.validate();
