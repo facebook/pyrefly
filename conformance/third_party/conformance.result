@@ -568,8 +568,6 @@
   "typeddicts_operations.py": [],
   "typeddicts_readonly.py": [],
   "typeddicts_readonly_consistency.py": [
-    "Line 38: Expected 1 errors",
-    "Line 81: Expected 1 errors",
     "Line 79: Unexpected errors ['`TypedDict[C2]` is not assignable to `TypedDict[A2]`']"
   ],
   "typeddicts_readonly_inheritance.py": [
@@ -591,7 +589,6 @@
     "Line 74: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveMovie']`\"]"
   ],
   "typeddicts_type_consistency.py": [
-    "Line 21: Expected 1 errors",
     "Line 151: Unexpected errors [\"`dict[str, int]` is not assignable to TypedDict key `z` with type `Literal[''] | TypedDict[Inner3]`\"]"
   ],
   "typeddicts_usage.py": [

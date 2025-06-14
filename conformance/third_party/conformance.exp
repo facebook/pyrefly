@@ -10258,6 +10258,16 @@
     {
       "code": -2,
       "column": 14,
+      "concise_description": "`TypedDict[C1]` is not assignable to `TypedDict[B1]`",
+      "description": "`TypedDict[C1]` is not assignable to `TypedDict[B1]`",
+      "line": 38,
+      "name": "bad-assignment",
+      "stop_column": 15,
+      "stop_line": 38
+    },
+    {
+      "code": -2,
+      "column": 14,
       "concise_description": "`TypedDict[A1]` is not assignable to `TypedDict[C1]`",
       "description": "`TypedDict[A1]` is not assignable to `TypedDict[C1]`",
       "line": 40,
@@ -10274,6 +10284,16 @@
       "name": "bad-assignment",
       "stop_column": 15,
       "stop_line": 79
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "`TypedDict[A2]` is not assignable to `TypedDict[B2]`",
+      "description": "`TypedDict[A2]` is not assignable to `TypedDict[B2]`",
+      "line": 81,
+      "name": "bad-assignment",
+      "stop_column": 15,
+      "stop_line": 81
     },
     {
       "code": -2,
@@ -10465,6 +10485,16 @@
     }
   ],
   "typeddicts_type_consistency.py": [
+    {
+      "code": -2,
+      "column": 10,
+      "concise_description": "`TypedDict[B1]` is not assignable to `TypedDict[A1]`",
+      "description": "`TypedDict[B1]` is not assignable to `TypedDict[A1]`",
+      "line": 21,
+      "name": "bad-assignment",
+      "stop_column": 12,
+      "stop_line": 21
+    },
     {
       "code": -2,
       "column": 10,

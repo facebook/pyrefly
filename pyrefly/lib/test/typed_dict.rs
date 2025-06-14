@@ -238,9 +238,27 @@ def foo(a: Coord, b: Coord3D, c: Pair):
     coord: Coord = b
     coord2: Coord3D = a  # E: `TypedDict[Coord]` is not assignable to `TypedDict[Coord3D]`
     coord3: Coord = c  # E: `TypedDict[Pair]` is not assignable to `TypedDict[Coord]`
-    coord4: Pair = a
+    coord4: Pair = a  # E: `TypedDict[Coord]` is not assignable to `TypedDict[Pair]`
     "#,
 );
+
+testcase!(
+    test_typed_dict_readonly_subtype,
+    r#"
+from typing import ReadOnly, TypedDict
+
+class TD(TypedDict):
+    a: ReadOnly[int]
+
+class TD2(TypedDict):
+    a: ReadOnly[object]
+
+def foo(td: TD, td2: TD2) -> None:
+    td: TD = td2  # E: `TypedDict[TD2]` is not assignable to `TypedDict[TD]`
+    td2: TD2 = td
+    "#,
+);
+
 
 testcase!(
     test_typed_dict_not_required,
@@ -366,6 +384,26 @@ f(x=1, y=2)
 f(x=1, y=2, z=3)
 f(x=1, y=2, z=3, a=4)  # E: Unexpected keyword argument `a`
 f(x="", y=2)  # E: Argument `Literal['']` is not assignable to parameter `x` with type `int` in function `f`
+    "#,
+);
+
+testcase!(
+    test_typed_dict_incompatible_types,
+    r#"
+from typing import ReadOnly, TypedDict
+
+class TD(TypedDict):
+    a: int
+
+class TD2(TypedDict):
+    a: ReadOnly[int]
+
+class TD3(TypedDict):
+    a: bool
+
+def foo(td2: TD2, td3: TD3) -> None:
+    td2: TD = td2  # E: `TypedDict[TD2]` is not assignable to `TypedDict[TD]`
+    td3: TD = td3  # E: `TypedDict[TD3]` is not assignable to `TypedDict[TD]`
     "#,
 );
 
@@ -583,5 +621,5 @@ from typing import TypedDict, Required, NotRequired
 class TD(TypedDict):
     x: Required[NotRequired[int]]  # E: Cannot combine `Required` and `NotRequired` for a TypedDict field
     y: NotRequired[Required[int]]  # E: Cannot combine `Required` and `NotRequired` for a TypedDict field
-"#,
+    "#,
 );
