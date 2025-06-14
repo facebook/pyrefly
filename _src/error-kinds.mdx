@@ -158,6 +158,16 @@ However, it is best practice to use the class syntax if possible, which doesn't 
 Like `bad-class-definition`, this error kind is uncommon because other error kinds are used for more specific issues.
 For example, argument order is enforced by the parser, so `def f(x: int = 1, y: str)` is a `parse-error`.
 
+## bad-instantiation
+
+This error occurs when attempting to instantiate a class that cannot be instantiated, such as a protocol:
+
+```python
+from typing import Protocol
+class C(Protocol): ...
+C()  # bad-instantiation
+```
+
 ## bad-keyword-argument
 
 bad-keyword-argument pops up when a keyword argument is given multiple values:
@@ -274,6 +284,31 @@ This error occurs when attempting to `del` something that cannot be deleted.
 
 Besides obvious things like built-in values (you can't `del True`!), some object attributes are protected from deletion.
 For example, read-only and required `TypedDict` fields cannot be deleted.
+
+## deprecated
+
+This error occurs on usage of a deprecated class or function:
+
+```python
+from warnings import deprecated
+@deprecated("deprecated")
+def f(): ...
+f()  # deprecated!
+```
+
+## implicitly-defined-attribute
+
+An attribute was implicitly defined by assignment to `self` in a method that we
+do not recognize as always executing. (We recognize constructors and some test
+setup methods.)
+
+```python
+class C:
+    def __init__(self):
+        self.x = 0  # no error, `__init__` always executes
+    def f(self):
+        self.y = 0  # error, `y` may be undefined if `f` does not execute
+```
 
 ## import-error
 
@@ -715,6 +750,10 @@ def where() -> None:
   global spoon
 ```
 
+## unsupported
+
+This error indicates that pyrefly does not currently support a typing feature.
+
 ## unsupported-operand
 
 This error arises when attempting to perform an operation between values of two incompatible types.
@@ -726,7 +765,3 @@ An exception is the `in` operator, which fails when looking for a value in somet
 if "hello" in 1:  # int doesn't support `in`!
   ...
 ```
-
-## unsupported
-
-This error indicates that pyrefly does not currently support a typing feature.
