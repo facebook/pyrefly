@@ -373,7 +373,7 @@ fn test_hover() {
             id: RequestId::from(2),
             result: Some(serde_json::json!({"contents": {
                 "kind": "markdown",
-                "value": "```python\ntype[Bar]\n```",
+                "value": "```python\n(class) Bar: type[Bar]\n```",
             }})),
             error: None,
         })],
@@ -1245,7 +1245,7 @@ fn test_disable_type_errors_language_services_still_work() {
         Message::Response(Response {
             id: RequestId::from(2),
             result: Some(serde_json::json!({
-                "contents": {"kind":"markdown","value":"```python\ntype[Bar]\n```"}
+                "contents": {"kind":"markdown","value":"```python\n(class) Bar: type[Bar]\n```"}
             })),
             error: None,
         }),

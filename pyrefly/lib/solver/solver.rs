@@ -24,6 +24,7 @@ use vec1::vec1;
 use crate::alt::answers::LookupAnswer;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
+use crate::error::context::TypeCheckKind;
 use crate::solver::type_order::TypeOrder;
 use crate::types::callable::Callable;
 use crate::types::callable::Function;
@@ -504,7 +505,9 @@ impl Solver {
                 // is more restrictive (so the `forced` is an over-approximation).
                 if !self.is_subset_eq(&t, &forced, type_order) {
                     // Poor error message, but overall, this is a terrible experience for users.
-                    self.error(&forced, &t, errors, loc, &|| TypeCheckContext::unknown());
+                    self.error(&forced, &t, errors, loc, &|| {
+                        TypeCheckContext::of_kind(TypeCheckKind::AnnAssign)
+                    });
                 }
             }
             _ => {

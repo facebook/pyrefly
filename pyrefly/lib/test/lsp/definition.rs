@@ -48,6 +48,35 @@ Definition Result: None
 }
 
 #[test]
+fn no_crash_on_dead_branch_test() {
+    let code = r#"
+from typing import TYPE_CHECKING
+
+if not TYPE_CHECKING:
+    x = 1
+#   ^
+    y = x
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // We are just testing that gotodef won't crash on these examples
+    assert_eq!(
+        r#"
+# main.py
+5 |     x = 1
+        ^
+Definition Result: None
+
+7 |     y = x
+            ^
+Definition Result: None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn basic_test() {
     let code = r#"
 from typing import Literal

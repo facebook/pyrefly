@@ -305,8 +305,6 @@ impl<'a> BindingsBuilder<'a> {
             class_indices.variance_idx,
             BindingVariance {
                 class_key: class_indices.class_idx,
-                base_classes: bases.into_boxed_slice(),
-                fields: key_class_fields,
             },
         );
     }
@@ -530,12 +528,6 @@ impl<'a> BindingsBuilder<'a> {
             class_indices.variance_idx,
             BindingVariance {
                 class_key: class_indices.class_idx,
-                base_classes: base
-                    .clone()
-                    .into_iter()
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-                fields: key_class_fields,
             },
         );
     }

@@ -25,6 +25,7 @@ use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::common::symbol_kind::SymbolKind;
 use crate::dunder;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModuleStyle;
@@ -37,7 +38,8 @@ use crate::sys_info::SysInfo;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DefinitionStyle {
     /// Defined in this module, e.g. `x = 1` or `def x(): ...`
-    Local,
+    /// We also store what kind of symbol it is
+    Local(SymbolKind),
     /// Imported with an alias, e.g. `from x import y as z`
     ImportAs(ModuleName),
     /// Imported with an alias, where the alias is identical, e.g. `from x import y as y`
@@ -182,7 +184,7 @@ impl Definitions {
                 && (style == ModuleStyle::Executable
                     || matches!(
                         def.style,
-                        DefinitionStyle::Local | DefinitionStyle::ImportAsEq(_)
+                        DefinitionStyle::Local(_) | DefinitionStyle::ImportAsEq(_)
                     ))
             {
                 self.dunder_all
@@ -270,13 +272,21 @@ impl<'a> DefinitionsBuilder<'a> {
     }
 
     fn expr_lvalue(&mut self, x: &Expr) {
-        let mut add_name =
-            |x: &ExprName| self.add_name(&x.id, x.range, DefinitionStyle::Local, None);
+        let mut add_name = |x: &ExprName| {
+            self.add_name(
+                &x.id,
+                x.range,
+                DefinitionStyle::Local(SymbolKind::Variable),
+                None,
+            )
+        };
         Ast::expr_lvalue(x, &mut add_name)
     }
 
     fn pattern(&mut self, x: &Pattern) {
-        Ast::pattern_lvalue(x, &mut |x| self.add_identifier(x, DefinitionStyle::Local));
+        Ast::pattern_lvalue(x, &mut |x| {
+            self.add_identifier(x, DefinitionStyle::Local(SymbolKind::Variable))
+        });
     }
 
     fn stmt(&mut self, x: &Stmt) {
@@ -350,7 +360,11 @@ impl<'a> DefinitionsBuilder<'a> {
                 }
             }
             Stmt::ClassDef(x) => {
-                self.add_identifier_with_body(&x.name, DefinitionStyle::Local, Some(&x.body));
+                self.add_identifier_with_body(
+                    &x.name,
+                    DefinitionStyle::Local(SymbolKind::Class),
+                    Some(&x.body),
+                );
                 return; // These things are inside a scope
             }
             Stmt::Nonlocal(x) => {
@@ -421,7 +435,7 @@ impl<'a> DefinitionsBuilder<'a> {
                     self.add_name(
                         &x.id,
                         x.range,
-                        DefinitionStyle::Local,
+                        DefinitionStyle::Local(SymbolKind::Variable),
                         Some(ShortIdentifier::expr_name(x)),
                     );
                 }
@@ -429,7 +443,11 @@ impl<'a> DefinitionsBuilder<'a> {
             },
             Stmt::TypeAlias(x) if matches!(&*x.name, Expr::Name(_)) => self.expr_lvalue(&x.name),
             Stmt::FunctionDef(x) => {
-                self.add_identifier_with_body(&x.name, DefinitionStyle::Local, Some(&x.body));
+                self.add_identifier_with_body(
+                    &x.name,
+                    DefinitionStyle::Local(SymbolKind::Function),
+                    Some(&x.body),
+                );
                 return; // don't recurse because a separate scope
             }
             Stmt::For(x) => self.expr_lvalue(&x.target),
@@ -450,7 +468,10 @@ impl<'a> DefinitionsBuilder<'a> {
                     match x {
                         ExceptHandler::ExceptHandler(x) => {
                             if let Some(name) = &x.name {
-                                self.add_identifier(name, DefinitionStyle::Local);
+                                self.add_identifier(
+                                    name,
+                                    DefinitionStyle::Local(SymbolKind::Variable),
+                                );
                             }
                         }
                     }
@@ -613,11 +634,11 @@ def bar(x: str) -> str: ...
         assert_definition_names(&defs, &["overload", "foo", "bar"]);
 
         let foo = defs.definitions.get(&Name::new_static("foo")).unwrap();
-        assert_eq!(foo.style, DefinitionStyle::Local);
+        assert_eq!(foo.style, DefinitionStyle::Local(SymbolKind::Function));
         assert_eq!(foo.count, 3);
 
         let bar = defs.definitions.get(&Name::new_static("bar")).unwrap();
-        assert_eq!(bar.style, DefinitionStyle::Local);
+        assert_eq!(bar.style, DefinitionStyle::Local(SymbolKind::Function));
         assert_eq!(bar.count, 2);
     }
 

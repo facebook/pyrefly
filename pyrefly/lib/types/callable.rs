@@ -243,7 +243,6 @@ pub enum FunctionKind {
     ClassMethod,
     Overload,
     Override,
-    Deprecated,
     Cast,
     AssertType,
     RevealType,
@@ -522,7 +521,6 @@ impl FunctionKind {
             ("builtins", None, "classmethod") => Self::ClassMethod,
             ("dataclasses", None, "dataclass") => Self::Dataclass(Box::new(BoolKeywords::new())),
             ("dataclasses", None, "field") => Self::DataclassField,
-            ("warnings", None, "deprecated") => Self::Deprecated,
             ("typing", None, "overload") => Self::Overload,
             ("typing", None, "override") => Self::Override,
             ("typing", None, "cast") => Self::Cast,
@@ -551,11 +549,6 @@ impl FunctionKind {
                 module: ModuleName::builtins(),
                 cls: None,
                 func: Name::new_static("issubclass"),
-            },
-            Self::Deprecated => FuncId {
-                module: ModuleName::warnings(),
-                cls: None,
-                func: Name::new_static("deprecated"),
             },
             Self::ClassMethod => FuncId {
                 module: ModuleName::builtins(),

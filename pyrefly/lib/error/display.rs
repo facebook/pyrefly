@@ -221,9 +221,6 @@ impl TypeCheckKind {
                 "Expected to yield a value of type `{}`, but a bare `yield` gives `None` instead",
                 ctx.display(want),
             ),
-            Self::Unknown => {
-                format!("EXPECTED {} <: {}", ctx.display(got), ctx.display(want))
-            }
         }
     }
 }

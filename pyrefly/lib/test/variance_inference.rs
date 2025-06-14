@@ -41,7 +41,7 @@ class ClassA[T1, T2, T3](list[T1]):
         ...
 
     def method2(self) -> T3:
-        ...
+            ...
 
 def func_a(p1: ClassA[float, int, int], p2: ClassA[int, float, float]):
     v1: ClassA[int, int, int] = p1  # E:
@@ -95,5 +95,36 @@ class ShouldBeInvariant[K, V](dict[K, V]):
     pass
 
 vinv3_1: ShouldBeInvariant[float, str] = ShouldBeInvariant[int, str]()  # E:
+"#,
+);
+
+testcase!(
+    test_infer_variance,
+    r#"
+from typing import Sequence
+
+
+class ShouldBeCovariant2[T](Sequence[T]):
+    pass
+
+class ShouldBeCovariant3[U]:
+    def method(self) -> ShouldBeCovariant2[U]:
+        ...
+
+vco3_1: ShouldBeCovariant3[float] = ShouldBeCovariant3[int]()  # OK
+vco3_2: ShouldBeCovariant3[int] = ShouldBeCovariant3[float]()  # E: 
+
+"#,
+);
+
+testcase!(
+    test_attrs,
+    r#"
+class ShouldBeInvariant5[T]:
+    def __init__(self, x: T) -> None:
+        self.x = x
+
+vinv5_1: ShouldBeInvariant5[float] = ShouldBeInvariant5[int](1)  # E:
+
 "#,
 );

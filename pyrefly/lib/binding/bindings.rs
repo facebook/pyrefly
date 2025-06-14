@@ -61,6 +61,7 @@ use crate::binding::scope::ScopeKind;
 use crate::binding::scope::ScopeTrace;
 use crate::binding::scope::Scopes;
 use crate::binding::table::TableKeyed;
+use crate::common::symbol_kind::SymbolKind;
 use crate::config::base::UntypedDefBehavior;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -172,15 +173,10 @@ impl Bindings {
         }
     }
 
-    /// Within the LSP, check if a BoundName key exists.
+    /// Within the LSP, check if a key exists.
     /// It may not exist within `if False:` or `if sys.version == 0:` style code.
-    pub fn is_valid_usage(&self, k: &Identifier) -> bool {
-        self.0
-            .table
-            .get::<Key>()
-            .0
-            .key_to_idx(&Key::BoundName(ShortIdentifier::new(k)))
-            .is_some()
+    pub fn is_valid_key(&self, k: &Key) -> bool {
+        self.0.table.get::<Key>().0.key_to_idx(k).is_some()
     }
 
     pub fn key_to_idx<K: Keyed>(&self, k: &K) -> Idx<K>
@@ -1065,8 +1061,12 @@ impl<'a> BindingsBuilder<'a> {
                     QuantifiedKind::TypeVarTuple
                 }
             };
-            self.scopes
-                .add_to_current_static(name.id.clone(), name.range, None);
+            self.scopes.add_to_current_static(
+                name.id.clone(),
+                name.range,
+                SymbolKind::TypeParameter,
+                None,
+            );
             self.bind_definition(
                 &name,
                 Binding::TypeParameter(Box::new(TypeParameter {
@@ -1114,7 +1114,7 @@ impl<'a> BindingsBuilder<'a> {
             Binding::LambdaParameter(var),
         );
         self.scopes
-            .add_to_current_static(name.id.clone(), name.range, None);
+            .add_to_current_static(name.id.clone(), name.range, SymbolKind::Parameter, None);
         self.bind_key(&name.id, idx, FlowStyle::Other);
     }
 
@@ -1147,8 +1147,12 @@ impl<'a> BindingsBuilder<'a> {
             Key::Definition(ShortIdentifier::new(name)),
             Binding::FunctionParameter(def),
         );
-        self.scopes
-            .add_to_current_static(name.id.clone(), name.range, Some(annot));
+        self.scopes.add_to_current_static(
+            name.id.clone(),
+            name.range,
+            SymbolKind::Parameter,
+            Some(annot),
+        );
         self.bind_key(&name.id, key, FlowStyle::Other);
     }
 
@@ -1361,9 +1365,12 @@ impl LegacyTParamBuilder {
     pub fn add_name_definitions(&self, builder: &mut BindingsBuilder) {
         for entry in self.legacy_tparams.values() {
             if let Either::Left((name, idx)) = entry {
-                builder
-                    .scopes
-                    .add_to_current_static(name.id.clone(), name.range, None);
+                builder.scopes.add_to_current_static(
+                    name.id.clone(),
+                    name.range,
+                    SymbolKind::TypeParameter,
+                    None,
+                );
                 builder.bind_definition(
                     name,
                     // Note: we use None as the range here because the range is

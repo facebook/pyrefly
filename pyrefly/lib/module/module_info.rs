@@ -197,9 +197,11 @@ impl ModuleInfo {
         )
     }
 
-    fn content_at_line(&self, line: OneIndexed) -> &str {
-        let start = self.0.index.line_start(line, &self.0.contents);
-        let end = self.0.index.line_end(line, &self.0.contents);
+    /// Gets the content from the beginning of start_line to the end of end_line.
+    pub fn content_in_line_range(&self, start_line: OneIndexed, end_line: OneIndexed) -> &str {
+        debug_assert!(start_line <= end_line);
+        let start = self.0.index.line_start(start_line, &self.0.contents);
+        let end = self.0.index.line_end(end_line, &self.0.contents);
         &self.0.contents[start.to_usize()..end.to_usize()]
     }
 
@@ -209,7 +211,9 @@ impl ModuleInfo {
         let start_line = {
             let mut start_line = source_range.start.line;
             while let Some(earlier_line) = start_line.checked_sub(OneIndexed::MIN) {
-                let earlier_line_content = &self.content_at_line(earlier_line).trim();
+                let earlier_line_content = &self
+                    .content_in_line_range(earlier_line, earlier_line)
+                    .trim();
                 if Ignore::get_suppression_kind(earlier_line_content).is_some() {
                     break;
                 } else if earlier_line_content.starts_with('#') {

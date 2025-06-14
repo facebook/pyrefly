@@ -534,7 +534,8 @@ impl<'a> Transaction<'a> {
                 identifier: id,
                 context: IdentifierContext::Expr(_),
             }) => {
-                if self.get_bindings(handle)?.is_valid_usage(&id) {
+                let key = Key::BoundName(ShortIdentifier::new(&id));
+                if self.get_bindings(handle)?.is_valid_key(&key) {
                     if let Some(ExprCall {
                         range: _,
                         func,
@@ -547,7 +548,7 @@ impl<'a> Transaction<'a> {
                     {
                         Some(Type::Callable(Box::new(chosen_overload)))
                     } else {
-                        self.get_type(handle, &Key::BoundName(ShortIdentifier::new(&id)))
+                        self.get_type(handle, &key)
                     }
                 } else {
                     None
@@ -857,6 +858,10 @@ impl<'a> Transaction<'a> {
         TextRangeWithModuleInfo,
         Option<DocString>,
     )> {
+        let def_key = Key::Definition(ShortIdentifier::new(name));
+        if !self.get_bindings(handle)?.is_valid_key(&def_key) {
+            return None;
+        }
         let (
             handle,
             Export {
@@ -864,11 +869,7 @@ impl<'a> Transaction<'a> {
                 symbol_kind,
                 docstring,
             },
-        ) = self.key_to_export(
-            handle,
-            &Key::Definition(ShortIdentifier::new(name)),
-            INITIAL_GAS,
-        )?;
+        ) = self.key_to_export(handle, &def_key, INITIAL_GAS)?;
         let module_info = self.get_module_info(&handle)?;
         let name = Name::new(module_info.code_at(location));
         Some((
@@ -887,7 +888,8 @@ impl<'a> Transaction<'a> {
         TextRangeWithModuleInfo,
         Option<DocString>,
     )> {
-        if !self.get_bindings(handle)?.is_valid_usage(name) {
+        let use_key = Key::BoundName(ShortIdentifier::new(name));
+        if !self.get_bindings(handle)?.is_valid_key(&use_key) {
             return None;
         }
         let (
@@ -897,11 +899,7 @@ impl<'a> Transaction<'a> {
                 symbol_kind,
                 docstring,
             },
-        ) = self.key_to_export(
-            handle,
-            &Key::BoundName(ShortIdentifier::new(name)),
-            INITIAL_GAS,
-        )?;
+        ) = self.key_to_export(handle, &use_key, INITIAL_GAS)?;
         Some((
             DefinitionMetadata::Variable(symbol_kind),
             TextRangeWithModuleInfo::new(self.get_module_info(&handle)?, location),
@@ -1483,39 +1481,29 @@ impl<'a> Transaction<'a> {
             {
                 continue;
             }
-            let Some(symbol_kind) = (match intermediate_definition {
-                IntermediateDefinition::Local(definition) => {
-                    // Sanity check: the reference should have the same text as the definition.
-                    // This check helps to filter out synthetic bindings.
-                    if module_info.code_at(definition.location)
-                        == module_info.code_at(reference_range)
-                    {
-                        definition.symbol_kind
-                    } else {
-                        None
-                    }
-                }
-                IntermediateDefinition::Module(_name) => {
-                    // TODO: We still run into the risk of synthetic imports, but we cannot do
-                    // the same sanity check as above, since we don't have the location of the
-                    // module. It's safer not to return a token, as opposed to coloring a block
-                    // of code corresponding to a synthetic binding.
-                    None
-                }
-                IntermediateDefinition::NamedImport(_, _name) => {
-                    // TODO: we can try to resolve the import to figure out a better symbol kind
-                    // In addition, we should include more information so that we can decide whether
-                    // the import is a renamed import (e.g. from ... import a as b).
-                    // For now, it's safer to not generate a semantic token for a potentially
-                    // synthetic binding.
-                    None
-                }
-            }) else {
+            let (token_type, token_modifiers) = if let Some((
+                definition_handle,
+                Export {
+                    symbol_kind: Some(symbol_kind),
+                    location: definition_location,
+                    ..
+                },
+            )) =
+                self.resolve_intermediate_definition(handle, intermediate_definition, INITIAL_GAS)
+                && let Some(definition_module_info) = self.get_module_info(&definition_handle)
+                && // Sanity check: the reference should have the same text as the definition.
+                   // This check helps to filter out synthetic bindings.
+                definition_module_info.code_at(definition_location)
+                    == module_info.code_at(reference_range)
+            {
+                symbol_kind.to_lsp_semantic_token_type_with_modifiers()
+            } else {
                 continue;
             };
             tokens.push(SemanticTokenWithFullRange {
                 range: reference_range,
-                token_type: symbol_kind.to_lsp_semantic_token_type(),
+                token_type,
+                token_modifiers,
             });
         }
         fn visit_expr(
@@ -1530,6 +1518,7 @@ impl<'a> Transaction<'a> {
                     tokens.push(SemanticTokenWithFullRange {
                         range: attr.attr.range(),
                         token_type: SemanticTokenType::METHOD,
+                        token_modifiers: vec![],
                     });
                 }
             } else if let Expr::Attribute(attr) = x {
@@ -1538,6 +1527,7 @@ impl<'a> Transaction<'a> {
                     tokens.push(SemanticTokenWithFullRange {
                         range: attr.attr.range(),
                         token_type: SemanticTokenType::PROPERTY,
+                        token_modifiers: vec![],
                     });
                 }
             } else {

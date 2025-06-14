@@ -174,3 +174,54 @@ assert_type(y, Any)
 "#,
 );
 */
+
+// This pair of tests shows that fully annotating modules eliminates
+// nondeterminism from import cycles of globals defined with assignment.
+//
+// The determinism we get relies on lazy evaluation of the flow type
+// for annotated exports, so it's worth having regression tests.
+
+fn env_import_cycle_annotated() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add(
+        "xx",
+        r#"
+from yy import yyy
+def fx(arg: int) -> int: ...
+xxx: bytes = fx(yyy)
+"#,
+    );
+    env.add(
+        "yy",
+        r#"
+from xx import xxx
+def fy(arg: str) -> str: ...
+yyy: bytes = fy(xxx)
+"#,
+    );
+    env
+}
+
+testcase!(
+    import_cycle_annotated_a,
+    env_import_cycle_annotated(),
+    r#"
+from typing import assert_type, Any
+from yy import yyy
+assert_type(yyy, bytes)
+from xx import xxx
+assert_type(xxx, bytes)
+"#,
+);
+
+testcase!(
+    import_cycle_annotated_b,
+    env_import_cycle_annotated(),
+    r#"
+from typing import assert_type, Any
+from xx import xxx
+assert_type(xxx, bytes)
+from yy import yyy
+assert_type(yyy, bytes)
+"#,
+);

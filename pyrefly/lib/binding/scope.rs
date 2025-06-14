@@ -41,6 +41,7 @@ use crate::binding::binding::KeyYieldFrom;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::User;
 use crate::binding::function::SelfAssignments;
+use crate::common::symbol_kind::SymbolKind;
 use crate::dunder;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
@@ -93,6 +94,7 @@ impl Static {
         &mut self,
         name: Hashed<Name>,
         loc: TextRange,
+        symbol_kind: SymbolKind,
         annot: Option<Idx<KeyAnnotation>>,
         count: usize,
     ) -> &mut StaticInfo {
@@ -101,14 +103,20 @@ impl Static {
             loc,
             annot,
             count: 0,
-            style: DefinitionStyle::Local,
+            style: DefinitionStyle::Local(symbol_kind),
         });
         res.count += count;
         res
     }
 
-    pub fn add(&mut self, name: Name, range: TextRange, annot: Option<Idx<KeyAnnotation>>) {
-        self.add_with_count(Hashed::new(name), range, annot, 1);
+    pub fn add(
+        &mut self,
+        name: Name,
+        range: TextRange,
+        symbol_kind: SymbolKind,
+        annot: Option<Idx<KeyAnnotation>>,
+    ) {
+        self.add_with_count(Hashed::new(name), range, symbol_kind, annot, 1);
     }
 
     pub fn stmts(
@@ -144,20 +152,21 @@ impl Static {
 
         for (name, def) in d.definitions.into_iter_hashed() {
             let annot = def.annot.map(&mut get_annotation_idx);
-            let info = self.add_with_count(name, def.range, annot, def.count);
+            let info = self.add_with_count(name, def.range, SymbolKind::Variable, annot, def.count);
             info.style = def.style;
         }
         for (range, wildcard) in wildcards {
             for name in wildcard.iter_hashed() {
                 // TODO: semantics of import * and global var with same name
-                self.add_with_count(name.cloned(), range, None, 1).style =
-                    DefinitionStyle::ImportModule(module_info.name());
+                self.add_with_count(name.cloned(), range, SymbolKind::Module, None, 1)
+                    .style = DefinitionStyle::ImportModule(module_info.name());
             }
         }
     }
 
     pub fn expr_lvalue(&mut self, x: &Expr) {
-        let mut add = |name: &ExprName| self.add(name.id.clone(), name.range, None);
+        let mut add =
+            |name: &ExprName| self.add(name.id.clone(), name.range, SymbolKind::Variable, None);
         Ast::expr_lvalue(x, &mut add);
     }
 }
@@ -824,9 +833,10 @@ impl Scopes {
         &mut self,
         name: Name,
         range: TextRange,
+        symbol_kind: SymbolKind,
         ann: Option<Idx<KeyAnnotation>>,
     ) {
-        self.current_mut().stat.add(name, range, ann);
+        self.current_mut().stat.add(name, range, symbol_kind, ann);
     }
 
     pub fn add_lvalue_to_current_static(&mut self, x: &Expr) {

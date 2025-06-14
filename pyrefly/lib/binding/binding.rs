@@ -1185,7 +1185,13 @@ impl Binding {
             Binding::NameAssign(name, _, _) if name.as_str() == name.to_uppercase() => {
                 Some(SymbolKind::Constant)
             }
-            Binding::NameAssign(_, _, _) => Some(SymbolKind::Variable),
+            Binding::NameAssign(name, _, _) => {
+                if name.as_str().chars().all(|c| c.is_uppercase() || c == '_') {
+                    Some(SymbolKind::Constant)
+                } else {
+                    Some(SymbolKind::Variable)
+                }
+            }
             Binding::LambdaParameter(_) | Binding::FunctionParameter(_) => {
                 Some(SymbolKind::Parameter)
             }
@@ -1426,8 +1432,6 @@ impl DisplayWith<Bindings> for BindingClassSynthesizedFields {
 #[derive(Clone, Debug)]
 pub struct BindingVariance {
     pub class_key: Idx<KeyClass>,
-    pub base_classes: Box<[Expr]>,
-    pub fields: SmallSet<Idx<KeyClassField>>,
 }
 
 impl DisplayWith<Bindings> for BindingVariance {

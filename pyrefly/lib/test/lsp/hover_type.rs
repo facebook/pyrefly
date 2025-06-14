@@ -73,6 +73,33 @@ Hover Result: `(x: list[int], y: str, z: Literal[42]) -> list[int]`
         report.trim(),
     );
 }
+
+// TODO(kylei): redefinitions should work. they are especially common in try/except blocks
+#[test]
+fn redefinition_test() {
+    let code = r#"
+def f(): ...
+#   ^
+def f(): ...
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | def f(): ...
+        ^
+Hover Result: None
+
+4 | def f(): ...
+        ^
+Hover Result: None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
 #[test]
 fn import_test() {
     let code = r#"

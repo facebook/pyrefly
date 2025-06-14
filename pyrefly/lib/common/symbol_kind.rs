@@ -5,15 +5,18 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::vec;
+
 use dupe::Dupe;
 use lsp_types::CompletionItemKind;
+use lsp_types::SemanticTokenModifier;
 use lsp_types::SemanticTokenType;
 
 /// The kind of symbol of a binding.
 /// It will be displayed in IDEs with different icons.
 /// https://adamcoster.com/blog/vscode-workspace-symbol-provider-purpose might give you an idea of
 /// how it will look in VSCode.
-#[derive(Debug, Clone, Copy, Dupe)]
+#[derive(Debug, Clone, Copy, Dupe, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SymbolKind {
     Module,
     Attribute,
@@ -60,21 +63,25 @@ impl SymbolKind {
         }
     }
 
-    pub fn to_lsp_semantic_token_type(self) -> SemanticTokenType {
+    pub fn to_lsp_semantic_token_type_with_modifiers(
+        self,
+    ) -> (SemanticTokenType, Vec<SemanticTokenModifier>) {
         match self {
-            SymbolKind::Module => SemanticTokenType::NAMESPACE,
-            SymbolKind::Attribute => SemanticTokenType::PROPERTY,
-            SymbolKind::Variable => SemanticTokenType::VARIABLE,
-            // todo(samzhou19815): constant should likely differentiate in the modifier
-            SymbolKind::Constant => SemanticTokenType::VARIABLE,
-            SymbolKind::Parameter => SemanticTokenType::PARAMETER,
-            SymbolKind::TypeParameter => SemanticTokenType::TYPE_PARAMETER,
-            SymbolKind::TypeAlias => SemanticTokenType::INTERFACE,
+            SymbolKind::Module => (SemanticTokenType::NAMESPACE, vec![]),
+            SymbolKind::Attribute => (SemanticTokenType::PROPERTY, vec![]),
+            SymbolKind::Variable => (SemanticTokenType::VARIABLE, vec![]),
+            SymbolKind::Constant => (
+                SemanticTokenType::VARIABLE,
+                vec![SemanticTokenModifier::READONLY],
+            ),
+            SymbolKind::Parameter => (SemanticTokenType::PARAMETER, vec![]),
+            SymbolKind::TypeParameter => (SemanticTokenType::TYPE_PARAMETER, vec![]),
+            SymbolKind::TypeAlias => (SemanticTokenType::INTERFACE, vec![]),
             // todo(samzhou19815): modifier for async
-            SymbolKind::Function => SemanticTokenType::FUNCTION,
-            SymbolKind::Class => SemanticTokenType::CLASS,
-            SymbolKind::Bool => SemanticTokenType::VARIABLE,
-            SymbolKind::Str => SemanticTokenType::STRING,
+            SymbolKind::Function => (SemanticTokenType::FUNCTION, vec![]),
+            SymbolKind::Class => (SemanticTokenType::CLASS, vec![]),
+            SymbolKind::Bool => (SemanticTokenType::VARIABLE, vec![]),
+            SymbolKind::Str => (SemanticTokenType::STRING, vec![]),
         }
     }
 }

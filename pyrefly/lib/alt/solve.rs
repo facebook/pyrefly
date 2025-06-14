@@ -1327,23 +1327,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let class = self.get_idx(class_idx);
 
         if let Some(class) = &class.0 {
-            let base_classes = &variance_info.base_classes;
-            let field_keys = &variance_info.fields;
-            let mut fields = Vec::with_capacity(field_keys.len());
-            let mut base_types = Vec::with_capacity(base_classes.len());
-
-            for field_idx in field_keys {
-                let field = self.get_idx(*field_idx);
-                fields.push(field);
-            }
-
-            for base in base_classes {
-                let base_type = self.expr_infer(
-                    base,
-                    &ErrorCollector::new(self.module_info().clone(), ErrorStyle::Never),
-                );
-                base_types.push(base_type);
-            }
             self.variance_map(class)
         } else {
             Arc::new(VarianceMap(SmallMap::new()))

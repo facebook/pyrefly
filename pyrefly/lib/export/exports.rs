@@ -145,15 +145,17 @@ impl Exports {
             let mut result: SmallMap<Name, ExportLocation> = SmallMap::new();
             for (name, definition) in self.0.definitions.definitions.iter_hashed() {
                 let export = match definition.style {
-                    DefinitionStyle::Local
+                    DefinitionStyle::Local(symbol_kind) => ExportLocation::ThisModule(Export {
+                        location: definition.range,
+                        symbol_kind: Some(symbol_kind),
+                        docstring: definition.docstring.clone(),
+                    }),
                     // If the import is invalid, the final location is this module.
-                    | DefinitionStyle::ImportInvalidRelative => {
-                        ExportLocation::ThisModule(Export {
-                            location: definition.range,
-                            symbol_kind: None,
-                            docstring: definition.docstring.clone(),
-                        })
-                    }
+                    DefinitionStyle::ImportInvalidRelative => ExportLocation::ThisModule(Export {
+                        location: definition.range,
+                        symbol_kind: None,
+                        docstring: definition.docstring.clone(),
+                    }),
                     DefinitionStyle::ImportAs(from)
                     | DefinitionStyle::ImportAsEq(from)
                     | DefinitionStyle::Import(from)

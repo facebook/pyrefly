@@ -15,6 +15,9 @@ else
   TARGET="web"
 fi
 
+# Temporary hack: currently fails with our lock file
+rm ../Cargo.lock || true
+
 # Make sure Rust is on the PATH
 export PATH="$HOME/.cargo/bin:$PATH"
   # If you are running into issues with compiling zstd on your mac, you'll need to install

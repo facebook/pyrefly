@@ -550,8 +550,8 @@
     {
       "code": -2,
       "column": 26,
-      "concise_description": "`|` is not supported between `Literal['GenericTypeAlias1[T1]']` and `type[TypeVar(T1, constraints=(str, int), variance=PInvariant)]`",
-      "description": "`|` is not supported between `Literal['GenericTypeAlias1[T1]']` and `type[TypeVar(T1, constraints=(str, int), variance=PInvariant)]`\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar(T1, constraints=(str, int), variance=PInvariant)] (trying to access __ror__)",
+      "concise_description": "`|` is not supported between `Literal['GenericTypeAlias1[T1]']` and `type[TypeVar[T1]]`",
+      "description": "`|` is not supported between `Literal['GenericTypeAlias1[T1]']` and `type[TypeVar[T1]]`\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar[T1]] (trying to access __ror__)",
       "line": 58,
       "name": "internal-error",
       "stop_column": 54,
@@ -590,8 +590,8 @@
     {
       "code": -2,
       "column": 26,
-      "concise_description": "`|` is not supported between `Literal['GenericTypeAlias2[T1, T2]']` and `type[TypeVar(T1, constraints=(str, int), variance=PInvariant)]`",
-      "description": "`|` is not supported between `Literal['GenericTypeAlias2[T1, T2]']` and `type[TypeVar(T1, constraints=(str, int), variance=PInvariant)]`\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar(T1, constraints=(str, int), variance=PInvariant)] (trying to access __ror__)",
+      "concise_description": "`|` is not supported between `Literal['GenericTypeAlias2[T1, T2]']` and `type[TypeVar[T1]]`",
+      "description": "`|` is not supported between `Literal['GenericTypeAlias2[T1, T2]']` and `type[TypeVar[T1]]`\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar[T1]] (trying to access __ror__)",
       "line": 65,
       "name": "internal-error",
       "stop_column": 58,
@@ -844,8 +844,8 @@
     {
       "code": -2,
       "column": 63,
-      "concise_description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
-      "description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "concise_description": "Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "description": "Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "line": 17,
       "name": "bad-argument-type",
       "stop_column": 67,
@@ -854,8 +854,8 @@
     {
       "code": -2,
       "column": 73,
-      "concise_description": "Argument `tuple[type[TypeVar(S, variance=PInvariant)], type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
-      "description": "Argument `tuple[type[TypeVar(S, variance=PInvariant)], type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "concise_description": "Argument `tuple[type[TypeVar[S]], type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "description": "Argument `tuple[type[TypeVar[S]], type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "line": 18,
       "name": "bad-argument-type",
       "stop_column": 79,
@@ -864,8 +864,8 @@
     {
       "code": -2,
       "column": 79,
-      "concise_description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
-      "description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "concise_description": "Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "description": "Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "line": 19,
       "name": "bad-argument-type",
       "stop_column": 83,
@@ -874,8 +874,8 @@
     {
       "code": -2,
       "column": 17,
-      "concise_description": "Argument `tuple[type[TypeVar(S, variance=PInvariant)], type[TypeVar(TStr, bound=str, variance=PInvariant)], type[ParamSpec(P)], type[TypeVarTuple(Ts)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
-      "description": "Argument `tuple[type[TypeVar(S, variance=PInvariant)], type[TypeVar(TStr, bound=str, variance=PInvariant)], type[ParamSpec(P)], type[TypeVarTuple(Ts)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "concise_description": "Argument `tuple[type[TypeVar[S]], type[TypeVar[TStr]], type[ParamSpec[P]], type[TypeVarTuple[Ts]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "description": "Argument `tuple[type[TypeVar[S]], type[TypeVar[TStr]], type[ParamSpec[P]], type[TypeVarTuple[Ts]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "line": 23,
       "name": "bad-argument-type",
       "stop_column": 33,
@@ -964,8 +964,8 @@
     {
       "code": -2,
       "column": 61,
-      "concise_description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
-      "description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "concise_description": "Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "description": "Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "line": 43,
       "name": "bad-argument-type",
       "stop_column": 65,
@@ -974,8 +974,8 @@
     {
       "code": -2,
       "column": 57,
-      "concise_description": "Argument `tuple[type[TypeVar(S, variance=PInvariant)], type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
-      "description": "Argument `tuple[type[TypeVar(S, variance=PInvariant)], type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "concise_description": "Argument `tuple[type[TypeVar[S]], type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "description": "Argument `tuple[type[TypeVar[S]], type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "line": 45,
       "name": "bad-argument-type",
       "stop_column": 65,
@@ -984,8 +984,8 @@
     {
       "code": -2,
       "column": 72,
-      "concise_description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
-      "description": "Argument `tuple[type[TypeVar(T, variance=PInvariant)]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "concise_description": "Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
+      "description": "Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "line": 47,
       "name": "bad-argument-type",
       "stop_column": 76,
@@ -5204,8 +5204,8 @@
     {
       "code": -2,
       "column": 30,
-      "concise_description": "Expected default `TypeVar(X1, bound=int, variance=PInvariant)` of `Ok1` to be assignable to the upper bound of `float`",
-      "description": "Expected default `TypeVar(X1, bound=int, variance=PInvariant)` of `Ok1` to be assignable to the upper bound of `float`",
+      "concise_description": "Expected default `TypeVar[X1]` of `Ok1` to be assignable to the upper bound of `float`",
+      "description": "Expected default `TypeVar[X1]` of `Ok1` to be assignable to the upper bound of `float`",
       "line": 66,
       "name": "invalid-type-var",
       "stop_column": 32,
@@ -5214,8 +5214,8 @@
     {
       "code": -2,
       "column": 38,
-      "concise_description": "Expected default `TypeVar(X1, bound=int, variance=PInvariant)` of `AlsoOk1` to be assignable to the upper bound of `int`",
-      "description": "Expected default `TypeVar(X1, bound=int, variance=PInvariant)` of `AlsoOk1` to be assignable to the upper bound of `int`",
+      "concise_description": "Expected default `TypeVar[X1]` of `AlsoOk1` to be assignable to the upper bound of `int`",
+      "description": "Expected default `TypeVar[X1]` of `AlsoOk1` to be assignable to the upper bound of `int`",
       "line": 67,
       "name": "invalid-type-var",
       "stop_column": 40,
@@ -5224,8 +5224,8 @@
     {
       "code": -2,
       "column": 40,
-      "concise_description": "Expected default `TypeVar(X1, bound=int, variance=PInvariant)` of `Invalid1` to be assignable to the upper bound of `str`",
-      "description": "Expected default `TypeVar(X1, bound=int, variance=PInvariant)` of `Invalid1` to be assignable to the upper bound of `str`",
+      "concise_description": "Expected default `TypeVar[X1]` of `Invalid1` to be assignable to the upper bound of `str`",
+      "description": "Expected default `TypeVar[X1]` of `Invalid1` to be assignable to the upper bound of `str`",
       "line": 68,
       "name": "invalid-type-var",
       "stop_column": 42,
@@ -5234,8 +5234,8 @@
     {
       "code": -2,
       "column": 52,
-      "concise_description": "Expected default `TypeVar(Y1, bound=int, variance=PInvariant)` of `Invalid2` to be one of the following constraints: `float`, `str`",
-      "description": "Expected default `TypeVar(Y1, bound=int, variance=PInvariant)` of `Invalid2` to be one of the following constraints: `float`, `str`",
+      "concise_description": "Expected default `TypeVar[Y1]` of `Invalid2` to be one of the following constraints: `float`, `str`",
+      "description": "Expected default `TypeVar[Y1]` of `Invalid2` to be one of the following constraints: `float`, `str`",
       "line": 74,
       "name": "invalid-type-var",
       "stop_column": 54,
@@ -5244,8 +5244,8 @@
     {
       "code": -2,
       "column": 54,
-      "concise_description": "Expected default `TypeVar(Y2, constraints=(int, str), variance=PInvariant)` of `AlsoOk2` to be one of the following constraints: `int`, `str`, `bool`",
-      "description": "Expected default `TypeVar(Y2, constraints=(int, str), variance=PInvariant)` of `AlsoOk2` to be one of the following constraints: `int`, `str`, `bool`",
+      "concise_description": "Expected default `TypeVar[Y2]` of `AlsoOk2` to be one of the following constraints: `int`, `str`, `bool`",
+      "description": "Expected default `TypeVar[Y2]` of `AlsoOk2` to be one of the following constraints: `int`, `str`, `bool`",
       "line": 77,
       "name": "invalid-type-var",
       "stop_column": 56,
@@ -5254,8 +5254,8 @@
     {
       "code": -2,
       "column": 63,
-      "concise_description": "Expected default `TypeVar(Y2, constraints=(int, str), variance=PInvariant)` of `AlsoInvalid2` to be one of the following constraints: `bool`, `complex`",
-      "description": "Expected default `TypeVar(Y2, constraints=(int, str), variance=PInvariant)` of `AlsoInvalid2` to be one of the following constraints: `bool`, `complex`",
+      "concise_description": "Expected default `TypeVar[Y2]` of `AlsoInvalid2` to be one of the following constraints: `bool`, `complex`",
+      "description": "Expected default `TypeVar[Y2]` of `AlsoInvalid2` to be one of the following constraints: `bool`, `complex`",
       "line": 78,
       "name": "invalid-type-var",
       "stop_column": 65,
@@ -5298,8 +5298,8 @@
     {
       "code": -2,
       "column": 18,
-      "concise_description": "ParamSpec(P) is not allowed in this context.",
-      "description": "ParamSpec(P) is not allowed in this context.",
+      "concise_description": "ParamSpec[P] is not allowed in this context.",
+      "description": "ParamSpec[P] is not allowed in this context.",
       "line": 15,
       "name": "invalid-annotation",
       "stop_column": 19,
@@ -6131,6 +6131,16 @@
     },
     {
       "code": -2,
+      "column": 35,
+      "concise_description": "`ShouldBeCovariant3[float]` is not assignable to `ShouldBeCovariant3[int]`",
+      "description": "`ShouldBeCovariant3[float]` is not assignable to `ShouldBeCovariant3[int]`",
+      "line": 46,
+      "name": "bad-assignment",
+      "stop_column": 62,
+      "stop_line": 46
+    },
+    {
+      "code": -2,
       "column": 34,
       "concise_description": "`ShouldBeCovariant5[float]` is not assignable to `ShouldBeCovariant5[int]`",
       "description": "`ShouldBeCovariant5[float]` is not assignable to `ShouldBeCovariant5[int]`",
@@ -6228,6 +6238,26 @@
       "name": "bad-assignment",
       "stop_column": 73,
       "stop_line": 128
+    },
+    {
+      "code": -2,
+      "column": 38,
+      "concise_description": "`ShouldBeInvariant4[int]` is not assignable to `ShouldBeInvariant4[float]`",
+      "description": "`ShouldBeInvariant4[int]` is not assignable to `ShouldBeInvariant4[float]`",
+      "line": 136,
+      "name": "bad-assignment",
+      "stop_column": 64,
+      "stop_line": 136
+    },
+    {
+      "code": -2,
+      "column": 38,
+      "concise_description": "`ShouldBeInvariant5[int]` is not assignable to `ShouldBeInvariant5[float]`",
+      "description": "`ShouldBeInvariant5[int]` is not assignable to `ShouldBeInvariant5[float]`",
+      "line": 144,
+      "name": "bad-assignment",
+      "stop_column": 64,
+      "stop_line": 144
     },
     {
       "code": -2,
@@ -6874,6 +6904,16 @@
     },
     {
       "code": -2,
+      "column": 35,
+      "concise_description": "`ShouldBeCovariant3[float]` is not assignable to `ShouldBeCovariant3[int]`",
+      "description": "`ShouldBeCovariant3[float]` is not assignable to `ShouldBeCovariant3[int]`",
+      "line": 58,
+      "name": "bad-assignment",
+      "stop_column": 62,
+      "stop_line": 58
+    },
+    {
+      "code": -2,
       "column": 34,
       "concise_description": "`ShouldBeCovariant4[float]` is not assignable to `ShouldBeCovariant4[int]`",
       "description": "`ShouldBeCovariant4[float]` is not assignable to `ShouldBeCovariant4[int]`",
@@ -6971,6 +7011,26 @@
       "name": "bad-assignment",
       "stop_column": 73,
       "stop_line": 122
+    },
+    {
+      "code": -2,
+      "column": 38,
+      "concise_description": "`ShouldBeInvariant4[int]` is not assignable to `ShouldBeInvariant4[float]`",
+      "description": "`ShouldBeInvariant4[int]` is not assignable to `ShouldBeInvariant4[float]`",
+      "line": 130,
+      "name": "bad-assignment",
+      "stop_column": 64,
+      "stop_line": 130
+    },
+    {
+      "code": -2,
+      "column": 38,
+      "concise_description": "`ShouldBeInvariant5[int]` is not assignable to `ShouldBeInvariant5[float]`",
+      "description": "`ShouldBeInvariant5[int]` is not assignable to `ShouldBeInvariant5[float]`",
+      "line": 138,
+      "name": "bad-assignment",
+      "stop_column": 64,
+      "stop_line": 138
     },
     {
       "code": -2,
@@ -7282,8 +7342,8 @@
     {
       "code": -2,
       "column": 16,
-      "concise_description": "Invalid type inside literal, `TypeVar(T, variance=PInvariant)`",
-      "description": "Invalid type inside literal, `TypeVar(T, variance=PInvariant)`",
+      "concise_description": "Invalid type inside literal, `TypeVar[T]`",
+      "description": "Invalid type inside literal, `TypeVar[T]`",
       "line": 50,
       "name": "invalid-literal",
       "stop_column": 17,
@@ -9369,8 +9429,8 @@
     {
       "code": -2,
       "column": 16,
-      "concise_description": "Can't apply arguments to non-class, got TypeAlias[TA7, type[type[TypeVar(T, variance=PInvariant)]]]",
-      "description": "Can't apply arguments to non-class, got TypeAlias[TA7, type[type[TypeVar(T, variance=PInvariant)]]]",
+      "concise_description": "Can't apply arguments to non-class, got TypeAlias[TA7, type[type[TypeVar[T]]]]",
+      "description": "Can't apply arguments to non-class, got TypeAlias[TA7, type[type[TypeVar[T]]]]",
       "line": 152,
       "name": "bad-specialization",
       "stop_column": 22,
@@ -9379,8 +9439,8 @@
     {
       "code": -2,
       "column": 16,
-      "concise_description": "Can't apply arguments to non-class, got TypeAlias[TA8, type[type[TypeVar(T, variance=PInvariant)]]]",
-      "description": "Can't apply arguments to non-class, got TypeAlias[TA8, type[type[TypeVar(T, variance=PInvariant)]]]",
+      "concise_description": "Can't apply arguments to non-class, got TypeAlias[TA8, type[type[TypeVar[T]]]]",
+      "description": "Can't apply arguments to non-class, got TypeAlias[TA8, type[type[TypeVar[T]]]]",
       "line": 156,
       "name": "bad-specialization",
       "stop_column": 22,

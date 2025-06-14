@@ -1381,3 +1381,16 @@ def g(f: Callable[[Any], int], inputs: Any) -> None:
     sum(map(f, inputs))
     "#,
 );
+
+testcase!(
+    test_legacy_typevar_revealed_type,
+    r#"
+from typing import reveal_type, TypeVar
+
+T = TypeVar("T")
+TypeForm = type[T]
+
+reveal_type(T)  # E: type[TypeVar[T]]
+reveal_type(TypeForm)  # E: revealed type: type[type[TypeVar[T]]]
+    "#,
+);

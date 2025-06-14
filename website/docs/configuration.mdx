@@ -272,8 +272,8 @@ information will still be replaced with `typing.Any`.
 
 - Type: list of regex
 - Default: `[]`
-- Flag equivalent: none
-- ENV equivalent: none
+- Flag equivalent: --replace-imports-with-any
+- ENV equivalent: PYREFLY_REPLACE_IMPORTS_WITH_ANY
 - Equivalent configs: `ignore_missing_imports` or `follow_imports = skip` in mypy
 - Notes:
   - `errors = {import-error = false}` (TOML inline table for `errors`) has similar behavior in Pyrefly, but ignores
@@ -320,8 +320,8 @@ type stubs could be found. See
 
 - Type: bool
 - Default: true
-- Flag equivalent: none
-- ENV equivalent: none
+- Flag equivalent: --ignore-missing-source
+- ENV equivalent: PYREFLY_IGNORE_MISSING_SOURCE
 - Equivalent configs: `reportMissingModuleSource` in Pyright
 
 ### `untyped-def-behavior`

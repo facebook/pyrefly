@@ -21,7 +21,7 @@ Invalid --search-path: `*/does_not_exist` does not exist (glob)
 ```scrut
 $ echo "x: str = 12" > $TMPDIR/shown1.py && \
 > echo "import shown1; y: int = shown1.x" > $TMPDIR/shown2.py && \
-> $PYREFLY check --python-version 3.13.0 $TMPDIR/shown2.py --check-all
+> $PYREFLY check --python-version 3.13.0 $TMPDIR/shown2.py --check-all --output-format=min-text
 */shown*.py:1:* (glob)
 */shown*.py:1:* (glob)
 [1]
@@ -33,5 +33,55 @@ $ echo "x: str = 12" > $TMPDIR/shown1.py && \
 $ $PYREFLY check --python-version 3.13.0 "$TMPDIR/*" --project-excludes="$TMPDIR/*"
 Pattern * is matched by `project-excludes`. (glob)
 `project-excludes`: * (glob)
+[1]
+```
+
+## --output-format controls error verbosity
+
+```scrut
+$ echo "1 + '2'" > $TMPDIR/bad.py && \
+> $PYREFLY check $TMPDIR/bad.py --output-format=full-text
+ERROR `+` is not supported * (glob)
+ --> */bad.py:1:1 (glob)
+  |
+1 | 1 + '2'
+  | ^^^^^^^
+  |
+  Argument * is not assignable * (glob)
+[1]
+```
+
+```scrut
+$ echo "1 + '2'" > $TMPDIR/bad.py && \
+> $PYREFLY check $TMPDIR/bad.py --output-format=min-text
+ERROR */bad.py:1:1-8: `+` is not supported * (glob)
+[1]
+```
+
+## Source code snippet
+
+```scrut
+$ echo -e "def f(x: str): ...\nf(0.0)" > $TMPDIR/bad_call.py && \
+> $PYREFLY check $TMPDIR/bad_call.py
+ERROR Argument `float` is not assignable * (glob)
+ --> */bad_call.py:2:3 (glob)
+  |
+2 | f(0.0)
+  |   ^^^
+  |
+[1]
+```
+
+## Source code snippet with multi-byte character
+
+```scrut
+$ echo -e "def f(x: str): ...\nλ = 0\nf(λ)" > $TMPDIR/bad_call.py && \
+> $PYREFLY check $TMPDIR/bad_call.py
+ERROR Argument `Literal[0]` is not assignable * (glob)
+ --> */bad_call.py:3:3 (glob)
+  |
+3 | f(λ)
+  |   ^
+  |
 [1]
 ```

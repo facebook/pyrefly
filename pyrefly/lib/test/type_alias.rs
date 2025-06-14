@@ -488,7 +488,7 @@ from typing import *
 Ts = TypeVarTuple('Ts')
 P = ParamSpec('P')
 t1: TypeAlias = Unpack[TypedDict]  # E: Unpack is not allowed in this context
-t2: TypeAlias = P  # E: ParamSpec(P) is not allowed in this context
+t2: TypeAlias = P  # E: ParamSpec[P] is not allowed in this context
 t3: TypeAlias = Unpack[Ts]  # E: Unpack is not allowed in this context
 t4: TypeAlias = Literal  # E: Expected a type argument for `Literal`
 t5: TypeAlias = Ts  # E: TypeVarTuple must be unpacked

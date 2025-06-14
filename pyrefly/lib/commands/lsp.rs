@@ -322,21 +322,41 @@ struct Server {
     filewatcher_registered: Arc<AtomicBool>,
 }
 
-/// Temporary "configuration": this is all that is necessary to run an LSP at a given root.
+/// Information about the Python environment p
+#[derive(Debug, Clone)]
+struct PythonInfo {
+    /// The path to the interpreter used to query this `PythonInfo`'s [`PythonEnvironment`].
+    interpreter: PathBuf,
+    /// The [`PythonEnvironment`] values all [`ConfigFile`]s in a given workspace should
+    /// use if no explicit [`ConfigFile::python_interpreter`] is provided, or any
+    /// `PythonEnvironment` values in that `ConfigFile` are unfiled. If the `interpreter
+    /// provided fails to execute or is invalid, this `PythonEnvironment` might instead
+    /// be a system interpreter or [`PythonEnvironment::pyrefly_default()`].
+    env: PythonEnvironment,
+}
+
+impl PythonInfo {
+    fn new(interpreter: PathBuf) -> Self {
+        let env = PythonEnvironment::get_interpreter_env(&interpreter);
+        Self { interpreter, env }
+    }
+}
+
+/// LSP workspace settings: this is all that is necessary to run an LSP at a given root.
 #[derive(Debug, Clone)]
 struct Workspace {
     #[expect(dead_code)]
     root: PathBuf,
-    python_environment: Option<PythonEnvironment>,
+    python_info: Option<PythonInfo>,
     disable_language_services: bool,
     disable_type_errors: bool,
 }
 
 impl Workspace {
-    fn new(workspace_root: &Path, python_environment: Option<PythonEnvironment>) -> Self {
+    fn new(workspace_root: &Path, python_info: Option<PythonInfo>) -> Self {
         Self {
             root: workspace_root.to_path_buf(),
-            python_environment,
+            python_info,
             disable_language_services: false,
             disable_type_errors: false,
         }
@@ -351,7 +371,7 @@ impl Default for Workspace {
     fn default() -> Self {
         Self {
             root: PathBuf::from("/"),
-            python_environment: None,
+            python_info: None,
             disable_language_services: Default::default(),
             disable_type_errors: false,
         }
@@ -460,11 +480,12 @@ impl Workspaces {
                 && config.python_interpreter.is_none()
             {
                 workspaces.get_with(dir.to_owned(), |w| {
-                    let Some(python_environment) = w.python_environment.clone() else {
+                    let Some(PythonInfo { interpreter, env }) = w.python_info.clone() else {
                         return;
                     };
                     let site_package_path = config.python_environment.site_package_path.take();
-                    config.python_environment = python_environment;
+                    config.python_interpreter = Some(interpreter);
+                    config.python_environment = env;
                     if let Some(new) = site_package_path {
                         let mut workspace = config
                             .python_environment
@@ -1954,19 +1975,19 @@ impl Server {
     /// scope_uri = None for default workspace
     fn update_pythonpath(&self, modified: &mut bool, scope_uri: &Option<Url>, python_path: &str) {
         let mut workspaces = self.workspaces.workspaces.write();
-        // Currently uses the default interpreter if the pythonPath is invalid
-        let env = PythonEnvironment::get_interpreter_env(Path::new(python_path));
+        let interpreter = PathBuf::from(python_path);
+        let python_info = Some(PythonInfo::new(interpreter));
         match scope_uri {
             Some(scope_uri) => {
                 let workspace_path = scope_uri.to_file_path().unwrap();
                 if let Some(workspace) = workspaces.get_mut(&workspace_path) {
                     *modified = true;
-                    workspace.python_environment = Some(env);
+                    workspace.python_info = python_info;
                 }
             }
             None => {
                 *modified = true;
-                self.workspaces.default.write().python_environment = Some(env);
+                self.workspaces.default.write().python_info = python_info;
             }
         }
         self.invalidate_config();

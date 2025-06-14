@@ -69,11 +69,6 @@ impl TypeCheckContext {
             context: None,
         }
     }
-
-    /// Temporary helper to label errors as Unknown before we properly classify them.
-    pub fn unknown() -> Self {
-        Self::of_kind(TypeCheckKind::Unknown)
-    }
 }
 
 #[derive(Debug)]
@@ -125,16 +120,14 @@ pub enum TypeCheckKind {
     YieldFrom,
     /// Bare yield when the return annotation expects an actual value.
     UnexpectedBareYield,
-    // TODO: categorize all type checks and remove Unknown and Test designations
-    Unknown,
 }
 
 impl TypeCheckKind {
     pub fn from_annotation_target(target: &AnnotationTarget) -> Self {
         match target {
-            AnnotationTarget::Param(_)
-            | AnnotationTarget::ArgsParam(_)
-            | AnnotationTarget::KwargsParam(_) => Self::Unknown,
+            AnnotationTarget::Param(name)
+            | AnnotationTarget::ArgsParam(name)
+            | AnnotationTarget::KwargsParam(name) => Self::CallArgument(Some(name.clone()), None),
             AnnotationTarget::Return(_func) => Self::ExplicitFunctionReturn,
             AnnotationTarget::Assign(name, _is_initialized) => Self::AnnotatedName(name.clone()),
             AnnotationTarget::ClassMember(member) => Self::Attribute(member.clone()),
@@ -160,11 +153,10 @@ impl TypeCheckKind {
             Self::IterationVariableMismatch(..) => ErrorKind::BadAssignment,
             Self::AnnAssign => ErrorKind::BadAssignment,
             Self::UnpackedAssign => ErrorKind::BadAssignment,
-            Self::ExceptionClass => ErrorKind::Unknown,
+            Self::ExceptionClass => ErrorKind::InvalidInheritance,
             Self::YieldValue => ErrorKind::InvalidYield,
             Self::YieldFrom => ErrorKind::InvalidYield,
             Self::UnexpectedBareYield => ErrorKind::InvalidYield,
-            Self::Unknown => ErrorKind::Unknown,
         }
     }
 }

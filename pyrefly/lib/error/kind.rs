@@ -14,6 +14,8 @@ use enum_iterator::Sequence;
 use parse_display::Display;
 use serde::Deserialize;
 use serde::Serialize;
+use yansi::Paint;
+use yansi::Painted;
 
 #[derive(Debug, Clone, Dupe, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum Severity {
@@ -22,10 +24,29 @@ pub enum Severity {
     Error,
 }
 
+impl Severity {
+    pub fn label(self) -> &'static str {
+        match self {
+            // INFO and WARN are padded out to five characters to visually align with ERROR in messages
+            Severity::Info => " INFO",
+            Severity::Warn => " WARN",
+            Severity::Error => "ERROR",
+        }
+    }
+
+    pub fn painted(self) -> Painted<&'static str> {
+        (match self {
+            Severity::Info => Paint::blue,
+            Severity::Warn => Paint::yellow,
+            Severity::Error => Paint::red,
+        })(self.label())
+    }
+}
+
 /// ErrorKind categorizes an error by the part of the spec the error is related to.
 /// They are used in suppressions to identify which error should be suppressed.
 //
-// Keep ErrorKind sorted lexographically, except for Unsupported and Unknown.
+// Keep ErrorKind sorted lexicographically.
 // There are broad categories of error kinds, based on the word used in the name.
 // "Bad": Specific, straightforward type errors. Could be a disagreement with a source
 //    of truth, e.g. a function definition is how we determine a call has errors.
@@ -79,6 +100,10 @@ pub enum ErrorKind {
     DeleteError,
     /// Calling a function marked with `@deprecated`
     Deprecated,
+    /// An attribute was implicitly defined by assignment to `self` in a method that we
+    /// do not recognize as always executing (we recognize constructors and some test setup
+    /// methods).
+    ImplicitlyDefinedAttribute,
     /// An error related to the import machinery.
     /// e.g. failed to import a module.
     ImportError,
@@ -111,10 +136,6 @@ pub enum ErrorKind {
     InvalidTypeVar,
     /// An error caused by incorrect usage or definition of a TypeVarTuple.
     InvalidTypeVarTuple,
-    /// An attribute was implicitly defined by assignment to `self` in a method that we
-    /// do not recognize as always executing (we recognize constructors and some test setup
-    /// methods).
-    ImplicitlyDefinedAttribute,
     /// Attempting to use `yield` in a way that is not allowed.
     /// e.g. `yield from` with something that's not an iterable.
     InvalidYield,
@@ -150,18 +171,16 @@ pub enum ErrorKind {
     /// An error related to TypedDict keys.
     /// e.g. attempting to access a TypedDict with a key that does not exist.
     TypedDictKeyError,
-    /// An error caused by a keyword argument used in the wrong place.
-    UnexpectedKeyword,
     /// Attempting to use a name that may be unbound or uninitialized
     UnboundName,
+    /// An error caused by a keyword argument used in the wrong place.
+    UnexpectedKeyword,
     /// Attempting to use a name that is not defined.
     UnknownName,
-    /// Attempting to apply an operator to arguments that do not support it.
-    UnsupportedOperand,
     /// Attempting to use a feature that is not yet supported.
     Unsupported,
-    /// Unknown or not-yet-defined error.
-    Unknown,
+    /// Attempting to apply an operator to arguments that do not support it.
+    UnsupportedOperand,
 }
 
 /// Computing the error kinds is disturbingly expensive, so cache the results.
@@ -189,10 +208,72 @@ impl ErrorKind {
 }
 #[cfg(test)]
 mod tests {
+    use enum_iterator::all;
+    use pulldown_cmark::Event;
+    use pulldown_cmark::HeadingLevel;
+    use pulldown_cmark::Parser;
+    use pulldown_cmark::Tag;
+
     use super::*;
     #[test]
     fn test_error_kind_name() {
-        assert_eq!(ErrorKind::Unknown.to_name(), "unknown");
+        assert_eq!(ErrorKind::Unsupported.to_name(), "unsupported");
         assert_eq!(ErrorKind::ParseError.to_name(), "parse-error");
+    }
+
+    #[test]
+    fn test_doc() {
+        // Verifies that the secondary headers in error-kinds.mdx contain the same variants as the ErrorKind enum and are sorted lexicographically.
+        let mut all_error_kinds = all::<ErrorKind>();
+        let doc_path = std::env::var("ERROR_KINDS_DOC_PATH").expect(
+            "ERROR_KINDS_DOC_PATH env var not set: cargo or buck should set this automatically",
+        );
+        let doc_contents = std::fs::read_to_string(&doc_path)
+            .unwrap_or_else(|e| panic!("Failed to read {doc_path}: {e}"));
+        let mut start = false;
+        let mut in_header = false;
+        let mut last_error_kind = None;
+        for event in Parser::new(&doc_contents) {
+            match event {
+                Event::End(Tag::Heading(HeadingLevel::H1, ..)) => {
+                    // Don't start checking for error kinds until we get past the document title
+                    start = true;
+                }
+                Event::Start(Tag::Heading(HeadingLevel::H2, ..)) => {
+                    in_header = true;
+                }
+                Event::End(Tag::Heading(HeadingLevel::H2, ..)) => {
+                    in_header = false;
+                }
+                Event::Text(doc_error_kind) if start && in_header => {
+                    let expected_error_kind = all_error_kinds
+                        .next()
+                        .unwrap_or_else(|| {
+                            panic!("{doc_path} contains unexpected error kind: {doc_error_kind}")
+                        })
+                        .to_name();
+                    if *expected_error_kind != *doc_error_kind {
+                        panic!(
+                            "Found inconsistency while iterating through ErrorKind enum and documentation at {doc_path}. The next enum variant is: {expected_error_kind}. The next doc header is: {doc_error_kind}"
+                        );
+                    }
+                    if last_error_kind
+                        .is_some_and(|last_error_kind| expected_error_kind < last_error_kind)
+                    {
+                        panic!(
+                            "ErrorKind variant is out of lexicographical order: {expected_error_kind}"
+                        );
+                    }
+                    last_error_kind = Some(expected_error_kind);
+                }
+                _ => {}
+            }
+        }
+        if let Some(leftover_error_kind) = all_error_kinds.next() {
+            panic!(
+                "Documentation at {doc_path} is missing error kind: {}",
+                leftover_error_kind.to_name()
+            );
+        }
     }
 }

@@ -930,7 +930,7 @@ class A[T]:
     @overload
     def f(self, x: T | None) -> T: ...
     def f(self, x=None): ...
-assert_type(A.f(A[int]()), int) # E: assert_type(Any, int)
+assert_type(A.f(A[int]()), int)
     "#,
 );
 

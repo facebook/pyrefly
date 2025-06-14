@@ -91,6 +91,25 @@ kwarg(xs=[B()], ys=[B()])
 );
 
 testcase!(
+    test_simple_contextual_typing_against_unions,
+    r#"
+class A: ...
+class B(A): ...
+
+x: list[A] | bool = [B()]
+y: list[int] | list[A] = [B()]
+"#,
+);
+
+testcase!(
+    bug = "This should type check. We believe the problem is related to union representation (which is sorted) and only handling the first element correctly.",
+    test_complex_contextual_typing_against_unions,
+    r#"
+x: dict[int, str] | dict[str, int | str] = { "a": 42 }  # E: `dict[str, int]` is not assignable to `dict[int, str] | dict[str, int | str]`
+"#,
+);
+
+testcase!(
     bug = "Unpacked assignments do not currently use contextual typing",
     test_context_assign_unpacked_list,
     r#"

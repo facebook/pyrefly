@@ -75,7 +75,7 @@ testcase!(
 from typing import assert_type, Any, Literal
 def f(condition) -> None:
     x = 1
-    while condition():  # E: EXPECTED Literal[1] | list[int] <: int
+    while condition():  # E: `Literal[1] | list[int]` is not assignable to `int`
         assert_type(x, Literal[1] | list[int])
         x = [x]
         assert_type(x, list[int])

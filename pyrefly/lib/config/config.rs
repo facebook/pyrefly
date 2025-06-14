@@ -698,7 +698,8 @@ impl Display for ConfigFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{{project_includes: {}, project_excludes: {}, search_path: [{}], python_interpreter: {:?}, python_environment: {}, replace_imports_with_any: [{}]}}",
+            "{{source: {:?}, project_includes: {}, project_excludes: {}, search_path: [{}], python_interpreter: {:?}, python_environment: {}, replace_imports_with_any: [{}]}}",
+            self.source,
             self.project_includes,
             self.project_excludes,
             self.search_path().map(|p| p.display()).join(", "),

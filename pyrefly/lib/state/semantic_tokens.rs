@@ -17,6 +17,7 @@ use crate::module::module_info::ModuleInfo;
 
 pub struct SemanticTokensLegends {
     token_types_index: HashMap<SemanticTokenType, u32>,
+    token_modifiers_index: HashMap<SemanticTokenModifier, u32>,
 }
 
 impl SemanticTokensLegends {
@@ -65,10 +66,17 @@ impl SemanticTokensLegends {
     pub fn new() -> Self {
         let lsp_legend = Self::lsp_semantic_token_legends();
         let mut token_types_index = HashMap::new();
+        let mut token_modifiers_index = HashMap::new();
         for (i, token_type) in lsp_legend.token_types.iter().enumerate() {
             token_types_index.insert(token_type.clone(), i as u32);
         }
-        Self { token_types_index }
+        for (i, token_modifier) in lsp_legend.token_modifiers.iter().enumerate() {
+            token_modifiers_index.insert(token_modifier.clone(), i as u32);
+        }
+        Self {
+            token_types_index,
+            token_modifiers_index,
+        }
     }
 
     pub fn convert_tokens_into_lsp_semantic_tokens(
@@ -87,6 +95,9 @@ impl SemanticTokensLegends {
             let current_col = source_range.start.column.to_zero_indexed();
             let (delta_line, delta_start) = if previous_line == current_line {
                 let delta_start = current_col - previous_col;
+                if delta_start == 0 {
+                    continue;
+                }
                 previous_col = current_col;
                 (0, delta_start as u32)
             } else {
@@ -95,20 +106,38 @@ impl SemanticTokensLegends {
                 previous_col = current_col;
                 (delta_line as u32, current_col as u32)
             };
+            let token_type = *self.token_types_index.get(&token.token_type).unwrap();
+            let mut token_modifiers_bitset = 0;
+            for modifier in &token.token_modifiers {
+                let index = *self.token_modifiers_index.get(modifier).unwrap();
+                token_modifiers_bitset |= 1 << index;
+            }
             lsp_semantic_tokens.push(SemanticToken {
                 delta_line,
                 delta_start,
                 length,
-                token_type: *self.token_types_index.get(&token.token_type).unwrap(),
-                // todo(samzhou19815): add support for token modifiers
-                token_modifiers_bitset: 0,
+                token_type,
+                token_modifiers_bitset,
             });
         }
         lsp_semantic_tokens
+    }
+
+    #[cfg(test)]
+    pub fn get_modifiers(&self, token_modifiers_bitset: u32) -> Vec<SemanticTokenModifier> {
+        let mut modifiers = Vec::new();
+        for (modifier, index) in &self.token_modifiers_index {
+            let singleton_set = (1 << *index) as u32;
+            if (token_modifiers_bitset & singleton_set) == singleton_set {
+                modifiers.push(modifier.clone());
+            }
+        }
+        modifiers
     }
 }
 
 pub struct SemanticTokenWithFullRange {
     pub range: TextRange,
     pub token_type: SemanticTokenType,
+    pub token_modifiers: Vec<SemanticTokenModifier>,
 }

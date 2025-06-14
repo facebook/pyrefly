@@ -491,7 +491,7 @@ testcase!(
     r#"
 from typing import TypeVar
 T: int = 0
-T = TypeVar('T')  # E: `type[TypeVar(T, variance=PInvariant)]` is not assignable to variable `T` with type `int`
+T = TypeVar('T')  # E: `type[TypeVar[T]]` is not assignable to variable `T` with type `int`
     "#,
 );
 

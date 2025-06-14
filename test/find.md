@@ -6,7 +6,7 @@
 $ mkdir -p $TMPDIR/inner/foo && mkdir -p $TMPDIR/inner/baz && \
 > echo "x: str = 12" > $TMPDIR/inner/foo/bar.py && \
 > echo "import foo.bar; y: int = foo.bar.x" > $TMPDIR/inner/baz/quux.py && \
-> $PYREFLY check --python-version 3.13.0 $TMPDIR/inner/baz/quux.py
+> $PYREFLY check --python-version 3.13.0 $TMPDIR/inner/baz/quux.py --output-format=min-text
 */inner/baz/quux.py:1:26-35: `str` is not assignable to `int` [bad-assignment] (glob)
 [1]
 ```
@@ -16,7 +16,7 @@ $ mkdir -p $TMPDIR/inner/foo && mkdir -p $TMPDIR/inner/baz && \
 ```scrut
 $ echo "x: str = 12" > $TMPDIR/glob1.py && \
 > echo "x: str = 12" > $TMPDIR/glob2.py && \
-> $PYREFLY check --python-version 3.13.0 "$TMPDIR/glob*.py"
+> $PYREFLY check --python-version 3.13.0 "$TMPDIR/glob*.py" --output-format=min-text
 */glob*.py:1:* (glob)
 */glob*.py:1:* (glob)
 [1]
@@ -25,7 +25,7 @@ $ echo "x: str = 12" > $TMPDIR/glob1.py && \
 ## --search-path takes precedence over default typeshed
 
 ```scrut
-$ PYREFLY_STDLIB_SEARCH_PATH=$TYPESHED_ROOT/typeshed/stdlib $PYREFLY check --python-version 3.13.0 $TYPESHED_ROOT/typeshed/stdlib/builtins.pyi --search-path $TYPESHED_ROOT/typeshed/stdlib 2>&1 | grep -v "overrides"
+$ PYREFLY_STDLIB_SEARCH_PATH=$TYPESHED_ROOT/typeshed/stdlib $PYREFLY check --python-version 3.13.0 $TYPESHED_ROOT/typeshed/stdlib/builtins.pyi --search-path $TYPESHED_ROOT/typeshed/stdlib --output-format=min-text 2>&1 | grep -v "overrides"
  INFO * errors* (glob)
 [0]
 ```

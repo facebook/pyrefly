@@ -38,7 +38,6 @@ use ruff_source_file::OneIndexed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
-use tracing::info;
 
 use crate::commands::run::CommandExitStatus;
 use crate::commands::suppress;
@@ -50,6 +49,7 @@ use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
 use crate::error::error::print_error_counts;
+use crate::error::kind::Severity;
 use crate::error::legacy::LegacyErrors;
 use crate::error::summarise::print_error_summary;
 use crate::module::bundled::stdlib_search_path;
@@ -57,6 +57,7 @@ use crate::module::ignore::SuppressionKind;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
 use crate::module::module_path::ModulePathDetails;
+use crate::module::wildcard::ModuleWildcard;
 use crate::report;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
@@ -69,8 +70,12 @@ use crate::sys_info::SysInfo;
 
 #[derive(Debug, Clone, ValueEnum, Default)]
 enum OutputFormat {
+    /// Minimal text output, one line per error
+    MinText,
     #[default]
-    Text,
+    /// Full, verbose text output
+    FullText,
+    /// JSON output
     Json,
 }
 
@@ -88,25 +93,25 @@ pub struct Args {
 #[derive(Debug, Parser, Clone)]
 struct OutputArgs {
     /// Write the errors to a file, instead of printing them.
-    #[arg(long, short = 'o', env = clap_env("OUTPUT"), value_name = "FILE")]
+    #[arg(long, short = 'o', env = clap_env("OUTPUT"), value_name = "OUTPUT_FILE")]
     output: Option<PathBuf>,
     /// Set the error output format.
     #[arg(long, value_enum, default_value_t, env = clap_env("OUTPUT_FORMAT"))]
     output_format: OutputFormat,
     /// Produce debugging information about the type checking process.
-    #[arg(long, env = clap_env("DEBUG_INFO"), value_name = "FILE")]
+    #[arg(long, env = clap_env("DEBUG_INFO"), value_name = "OUTPUT_FILE")]
     debug_info: Option<PathBuf>,
     /// Report the memory usage of bindings.
-    #[arg(long, env = clap_env("REPORT_BINDING_MEMORY"), value_name = "FILE")]
+    #[arg(long, env = clap_env("REPORT_BINDING_MEMORY"), value_name = "OUTPUT_FILE")]
     report_binding_memory: Option<PathBuf>,
     /// Report type traces.
-    #[arg(long, env = clap_env("REPORT_TRACE"), value_name = "FILE")]
+    #[arg(long, env = clap_env("REPORT_TRACE"), value_name = "OUTPUT_FILE")]
     report_trace: Option<PathBuf>,
     /// Process each module individually to figure out how long each step takes.
-    #[arg(long, env = clap_env("REPORT_TIMINGS"), value_name = "FILE")]
+    #[arg(long, env = clap_env("REPORT_TIMINGS"), value_name = "OUTPUT_FILE")]
     report_timings: Option<PathBuf>,
     /// Generate a Glean-compatible JSON file for each module
-    #[arg(long, env = clap_env("REPORT_GLEAN"), value_name = "FILE")]
+    #[arg(long, env = clap_env("REPORT_GLEAN"), value_name = "OUTPUT_FILE")]
     report_glean: Option<PathBuf>,
     /// Count the number of each error kind. Prints the top N [default=5] errors, sorted by count, or all errors if N is 0.
     #[arg(
@@ -176,21 +181,31 @@ struct ConfigOverrideArgs {
     /// Whether to search imports in `site-package-path` that do not have a `py.typed` file unconditionally.
     #[arg(long, env = clap_env("USE_UNTYPED_IMPORTS"))]
     use_untyped_imports: Option<bool>,
+    /// Replace specified imports with typing.Any, suppressing related import errors even if the module is found.
+    #[arg(long, env = clap_env("REPLACE_IMPORTS_WITH_ANY"))]
+    replace_imports_with_any: Option<Vec<String>>,
+    /// Ignore missing source packages when only type stubs are available, allowing imports to proceed without source validation.
+    #[arg(long, env = clap_env("IGNORE_MISSING_SOURCE"))]
+    ignore_missing_source: Option<bool>,
 }
 
 impl OutputFormat {
-    fn write_error_text_to_file(path: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    fn write_error_text_to_file(
+        path: &Path,
+        errors: &[Error],
+        verbose: bool,
+    ) -> anyhow::Result<()> {
         let mut file = BufWriter::new(File::create(path)?);
         for e in errors {
-            e.write_line(&mut file)?;
+            e.write_line(&mut file, verbose)?;
         }
         file.flush()?;
         Ok(())
     }
 
-    fn write_error_text_to_console(errors: &[Error]) -> anyhow::Result<()> {
+    fn write_error_text_to_console(errors: &[Error], verbose: bool) -> anyhow::Result<()> {
         for error in errors {
-            error.print_colors();
+            error.print_colors(verbose);
         }
         Ok(())
     }
@@ -223,14 +238,16 @@ impl OutputFormat {
 
     fn write_errors_to_file(&self, path: &Path, errors: &[Error]) -> anyhow::Result<()> {
         match self {
-            Self::Text => Self::write_error_text_to_file(path, errors),
+            Self::MinText => Self::write_error_text_to_file(path, errors, false),
+            Self::FullText => Self::write_error_text_to_file(path, errors, true),
             Self::Json => Self::write_error_json_to_file(path, errors),
         }
     }
 
     fn write_errors_to_console(&self, errors: &[Error]) -> anyhow::Result<()> {
         match self {
-            Self::Text => Self::write_error_text_to_console(errors),
+            Self::MinText => Self::write_error_text_to_console(errors, false),
+            Self::FullText => Self::write_error_text_to_console(errors, true),
             Self::Json => Self::write_error_json_to_console(errors),
         }
     }
@@ -544,6 +561,17 @@ impl Args {
         if let Some(x) = &self.config_override.use_untyped_imports {
             config.use_untyped_imports = *x;
         }
+        if let Some(x) = &self.config_override.ignore_missing_source {
+            config.ignore_missing_source = *x;
+        }
+        if let Some(wildcards) = &self.config_override.replace_imports_with_any {
+            config.root.replace_imports_with_any = Some(
+                wildcards
+                    .iter()
+                    .filter_map(|x| ModuleWildcard::new(x).ok())
+                    .collect(),
+            );
+        }
         config.configure();
         let errors = config.validate();
         (ArcId::new(config), errors)
@@ -618,8 +646,9 @@ impl Args {
         timings.report_errors = report_errors_start.elapsed();
 
         if !self.output.no_summary {
-            info!(
-                "errors shown: {}, errors ignored: {}, modules: {}, transitive dependencies: {}, lines: {}, time: {timings}, peak memory: {}",
+            anstream::eprintln!(
+                "{} errors shown: {}, errors ignored: {}, modules: {}, transitive dependencies: {}, lines: {}, time: {timings}, peak memory: {}",
+                Severity::Info.painted(),
                 number_thousands(shown_errors_count),
                 number_thousands(errors.disabled.len() + errors.suppressed.len()),
                 number_thousands(handles.len()),
@@ -628,10 +657,10 @@ impl Args {
                 memory_trace.peak()
             );
         }
-        if let Some(timings) = &self.output.report_timings {
+        if let Some(output_path) = &self.output.report_timings {
             eprintln!("Computing timing information");
             transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
-            transaction.report_timings(timings)?;
+            transaction.report_timings(output_path)?;
             transaction.set_subscriber(None);
         }
         if let Some(debug_info) = &self.output.debug_info {

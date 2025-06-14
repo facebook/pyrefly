@@ -24,7 +24,6 @@ use crate::types::callable::Function;
 use crate::types::class::TArgs;
 use crate::types::qname::QName;
 use crate::types::tuple::Tuple;
-use crate::types::type_var::Restriction;
 use crate::types::types::AnyStyle;
 use crate::types::types::BoundMethod;
 use crate::types::types::Forall;
@@ -211,38 +210,19 @@ impl<'a> TypeDisplayContext<'a> {
                 write!(f, "]")
             }
             Type::TypeVar(t) => {
-                write!(f, "TypeVar(")?;
+                write!(f, "TypeVar[")?;
                 self.fmt_qname(t.qname(), f)?;
-                if let Some(default) = t.default() {
-                    write!(f, ", default={default}")?;
-                }
-                match t.restriction() {
-                    Restriction::Unrestricted => {}
-                    Restriction::Bound(bound) => {
-                        write!(f, ", bound={bound}")?;
-                    }
-                    Restriction::Constraints(constraints) => {
-                        write!(f, ", constraints=({})", commas_iter(|| constraints.iter()))?;
-                    }
-                }
-                write!(f, ", variance={}", t.variance())?;
-                write!(f, ")")
+                write!(f, "]")
             }
             Type::TypeVarTuple(t) => {
-                write!(f, "TypeVarTuple(")?;
+                write!(f, "TypeVarTuple[")?;
                 self.fmt_qname(t.qname(), f)?;
-                if let Some(default) = t.default() {
-                    write!(f, ", default={default}")?;
-                }
-                write!(f, ")")
+                write!(f, "]")
             }
             Type::ParamSpec(t) => {
-                write!(f, "ParamSpec(")?;
+                write!(f, "ParamSpec[")?;
                 self.fmt_qname(t.qname(), f)?;
-                if let Some(default) = t.default() {
-                    write!(f, ", default={default}")?;
-                }
-                write!(f, ")")
+                write!(f, "]")
             }
             Type::SelfType(cls) => {
                 write!(f, "Self@")?;
@@ -576,11 +556,11 @@ pub mod tests {
 
         assert_eq!(
             Type::Union(vec![t1.to_type(), t2.to_type()]).to_string(),
-            "TypeVar(bar.foo@1:2, variance=PInvariant) | TypeVar(bar.foo@1:3, variance=PInvariant)"
+            "TypeVar[bar.foo@1:2] | TypeVar[bar.foo@1:3]"
         );
         assert_eq!(
             Type::Union(vec![t1.to_type(), t3.to_type()]).to_string(),
-            "TypeVar(foo, variance=PInvariant) | TypeVar(qux, variance=PInvariant)"
+            "TypeVar[foo] | TypeVar[qux]"
         );
     }
 
