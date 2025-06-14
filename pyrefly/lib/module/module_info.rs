@@ -20,6 +20,7 @@ use ruff_source_file::PositionEncoding;
 use ruff_source_file::SourceLocation;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use serde::Serialize;
 use vec1::vec1;
 
 use crate::error::collector::ErrorCollector;
@@ -36,6 +37,21 @@ pub static GENERATED_TOKEN: &str = concat!("@", "generated");
 pub struct SourceRange {
     pub start: LineColumn,
     pub end: LineColumn,
+}
+
+impl Serialize for SourceRange {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("SourceRange", 4)?;
+        state.serialize_field("start_line", &self.start.line.get())?;
+        state.serialize_field("start_col", &self.start.column.get())?;
+        state.serialize_field("end_line", &self.end.line.get())?;
+        state.serialize_field("end_col", &self.end.column.get())?;
+        state.end()
+    }
 }
 
 impl Display for SourceRange {

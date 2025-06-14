@@ -1257,14 +1257,20 @@ impl<'a> Transaction<'a> {
         let mut file = BufWriter::new(File::create(path)?);
         writeln!(file, "Module,Step,Seconds")?;
         file.flush()?;
+
+        // Ensure all committed modules are in self.data, so we can iterate one list
+        for h in self.readable.modules.keys() {
+            self.get_module(h);
+        }
+
         if let Some(subscriber) = &self.data.subscriber {
             // Start everything so we have the right size progress bar.
-            for m in self.readable.modules.values() {
-                subscriber.start_work(m.handle.dupe());
+            for h in self.data.updated_modules.keys() {
+                subscriber.start_work(h.dupe());
             }
         }
         let mut timings: SmallMap<String, f32> = SmallMap::new();
-        for m in self.readable.modules.values() {
+        for m in self.data.updated_modules.values() {
             let mut write = |step: &dyn Display, start: Instant| -> anyhow::Result<()> {
                 let duration = start.elapsed().as_secs_f32();
                 let step = step.to_string();

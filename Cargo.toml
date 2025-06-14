@@ -1,16 +1,17 @@
+[patch.crates-io]
+cxx = { package = "cxx", git = "https://github.com/facebookexperimental/cxx.git", rev = "fbe91091fd26aea4a30fd08b8f0230078f4db2ce" }
+cxx-build = { package = "cxx-build", git = "https://github.com/facebookexperimental/cxx.git", rev = "fbe91091fd26aea4a30fd08b8f0230078f4db2ce" }
+displaydoc = { git = "https://github.com/yaahc/displaydoc", rev = "7dc6e324b1788a6b7fb9f3a1953c512923a3e9f0" }
+quickcheck = { git = "https://github.com/jakoschiko/quickcheck", rev = "6ecdf5bb4b0132ce66670b4d46453aa022ea892c" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+
 [workspace]
-members = [
-    "pyrefly",
-    "pyrefly_derive",
-    "pyrefly_wasm",
-    "pyrefly_util",
-]
+members = ["pyrefly", "pyrefly_derive", "pyrefly_util", "pyrefly_wasm"]
 resolver = "2"
 
 [workspace.package]
 license = "MIT"
 repository = "https://github.com/facebook/pyrefly"
-
-[profile.release]
-lto = true
-codegen-units = 1

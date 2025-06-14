@@ -10,7 +10,7 @@
 #   * Increase the major number by 1 and set the minor and patch numbers to 0 to indicate a
 #     significant shift in the project. This should almost never happen.
 # * Do not include leading zeroes or anything else extra.
-# * After updating the version, run `arc autocargo pyrefly` in this directory to regenerate `Cargo.toml`
+# * After updating the version, run `arc autocargo -p pyrefly` to regenerate `Cargo.toml`
 #   and put the resulting diff up for review. Once the diff lands, the new version should be
 #   available on PyPI within a few hours.
-VERSION = "0.19.1"
+VERSION = "0.19.2"
