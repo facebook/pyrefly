@@ -238,7 +238,7 @@ def foo(a: Coord, b: Coord3D, c: Pair):
     coord: Coord = b
     coord2: Coord3D = a  # E: `TypedDict[Coord]` is not assignable to `TypedDict[Coord3D]`
     coord3: Coord = c  # E: `TypedDict[Pair]` is not assignable to `TypedDict[Coord]`
-    coord4: Pair = a
+    coord4: Pair = a  # E: `TypedDict[Coord]` is not assignable to `TypedDict[Pair]`
     "#,
 );
 
@@ -366,6 +366,31 @@ f(x=1, y=2)
 f(x=1, y=2, z=3)
 f(x=1, y=2, z=3, a=4)  # E: Unexpected keyword argument `a`
 f(x="", y=2)  # E: Argument `Literal['']` is not assignable to parameter `x` with type `int` in function `f`
+    "#,
+);
+
+testcase!(
+    test_typed_dict_incompatible_types,
+    r#"
+from typing import Any, Dict, ReadOnly, TypedDict
+
+class TD(TypedDict):
+    a: int
+
+class TD2(TypedDict):
+    a: ReadOnly[int]
+
+class TD3(TypedDict):
+    a: bool
+
+def want_td(td: TD) -> None:
+    pass
+
+def capybara(
+    td: TD, td2: TD2, td3: TD3
+) -> None:
+    want_td(td2)  # E: Argument `TypedDict[TD2]` is not assignable to parameter `td` with type `TypedDict[TD]` in function `want_td`
+    want_td(td3)  # E: Argument `TypedDict[TD3]` is not assignable to parameter `td` with type `TypedDict[TD]` in function `want_td`
     "#,
 );
 
@@ -583,5 +608,6 @@ from typing import TypedDict, Required, NotRequired
 class TD(TypedDict):
     x: Required[NotRequired[int]]  # E: Cannot combine `Required` and `NotRequired` for a TypedDict field
     y: NotRequired[Required[int]]  # E: Cannot combine `Required` and `NotRequired` for a TypedDict field
-"#,
+    "#,
 );
+
