@@ -42,6 +42,7 @@ use tracing::debug;
 use crate::commands::run::CommandExitStatus;
 use crate::commands::suppress;
 use crate::commands::util::module_from_path;
+use crate::config::base::UntypedDefBehavior;
 use crate::config::config::ConfigFile;
 use crate::config::config::validate_path;
 use crate::config::environment::environment::SitePackagePathSource;
@@ -187,6 +188,9 @@ struct ConfigOverrideArgs {
     /// Ignore missing source packages when only type stubs are available, allowing imports to proceed without source validation.
     #[arg(long, env = clap_env("IGNORE_MISSING_SOURCE"))]
     ignore_missing_source: Option<bool>,
+    /// Controls how Pyrefly analyzes function definitions that lack type annotations on parameters and return values.
+    #[arg(long, env = clap_env("UNTYPED_DEF_BEHAVIOR"))]
+    untyped_def_behavior: Option<UntypedDefBehavior>,
 }
 
 impl OutputFormat {
@@ -563,6 +567,9 @@ impl Args {
         }
         if let Some(x) = &self.config_override.ignore_missing_source {
             config.ignore_missing_source = *x;
+        }
+        if let Some(x) = &self.config_override.untyped_def_behavior {
+            config.root.untyped_def_behavior = Some(*x);
         }
         if let Some(wildcards) = &self.config_override.replace_imports_with_any {
             config.root.replace_imports_with_any = Some(
