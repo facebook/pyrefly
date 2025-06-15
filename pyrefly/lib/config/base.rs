@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use clap::ValueEnum;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -13,6 +14,7 @@ use crate::config::util::ExtraConfigs;
 use crate::module::wildcard::ModuleWildcard;
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Copy, Default)]
+#[derive(ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum UntypedDefBehavior {
     #[default]
