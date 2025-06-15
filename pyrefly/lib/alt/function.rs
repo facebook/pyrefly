@@ -110,7 +110,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         } else {
             let mut acc = Vec::new();
+            let implementation_range = def.id_range;
             let mut first = def;
+            let mut has_overload_successor = false;
+            
+            let binding = self.bindings().get(idx);
+            let mut current_successor = binding.successor;
+            while let Some(succ_key_idx) = current_successor {
+                let succ_def = self.get_idx(succ_key_idx);
+                if succ_def.metadata.flags.is_overload {
+                    has_overload_successor = true;
+                    break;
+                }
+                current_successor = self.bindings().get(succ_key_idx).successor;
+            }
+            if has_overload_successor && !skip_implementation {
+                self.error(
+                    errors,
+                    implementation_range,
+                    ErrorKind::InvalidOverload,
+                    None,
+                    "Function implementation must come after all @overload declarations. ".to_owned(),
+                );
+            }  
             while let Some(def) = self.step_overload_pred(predecessor) {
                 acc.push((def.id_range, def.ty.clone()));
                 first = def;
@@ -225,6 +247,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self_type = self_type.map(Type::type_form);
         }
 
+        if is_overload && stub_or_impl == FunctionStubOrImpl::Impl {
+            self.error(
+                errors,
+                def.name.range,
+                ErrorKind::InvalidOverload,
+                None,
+                "@overload decorator should not be used on function implementations.".to_owned(),
+            );
+        }
+        
         // Determine the type of the parameter based on its binding. Left is annotated parameter, right is unannotated
         let mut get_param_ty = |name: &Identifier, default: Option<&Expr>| {
             let ty = match self.bindings().get_function_param(name) {
