@@ -10596,6 +10596,16 @@
       "name": "typed-dict-key-error",
       "stop_column": 25,
       "stop_line": 28
+    },
+    {
+      "code": -2,
+      "column": 22,
+      "concise_description": "TypedDict `Movie` not allowed as second argument to isinstance()",
+      "description": "TypedDict `Movie` not allowed as second argument to isinstance()",
+      "line": 35,
+      "name": "invalid-argument",
+      "stop_column": 27,
+      "stop_line": 35
     }
   ]
 }

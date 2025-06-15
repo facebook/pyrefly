@@ -595,7 +595,6 @@
     "Line 151: Unexpected errors [\"`dict[str, int]` is not assignable to TypedDict key `z` with type `Literal[''] | TypedDict[Inner3]`\"]"
   ],
   "typeddicts_usage.py": [
-    "Line 35: Expected 1 errors",
     "Line 40: Expected 1 errors"
   ]
 }
