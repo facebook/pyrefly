@@ -174,6 +174,9 @@ struct ConfigOverrideArgs {
     /// after first checking `search_path` and `typeshed`.
     #[arg(long, env = clap_env("SITE_PACKAGE_PATH"))]
     site_package_path: Option<Vec<PathBuf>>,
+    /// Override the bundled typeshed with a custom path.
+    #[arg(long = "typeshed-path", env = clap_env("TYPESHED_PATH"))]
+    typeshed_path: Option<PathBuf>,
     /// The Python executable that will be queried for `python_version`
     /// `python_platform`, or `site_package_path` if any of the values are missing.
     #[arg(long, env = clap_env("PYTHON_INTERPRETER"), value_name = "EXE_PATH")]
@@ -554,6 +557,9 @@ impl Args {
         if let Some(x) = &self.config_override.site_package_path {
             config.python_environment.site_package_path = Some(x.clone());
             config.python_environment.site_package_path_source = SitePackagePathSource::CommandLine;
+        }
+        if let Some(x) = &self.config_override.typeshed_path {
+            config.typeshed_path = Some(x.clone());
         }
         if let Some(x) = &self.config_override.python_interpreter {
             config.python_interpreter = Some(x.clone());
