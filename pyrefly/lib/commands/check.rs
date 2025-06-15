@@ -187,6 +187,9 @@ struct ConfigOverrideArgs {
     /// Ignore missing source packages when only type stubs are available, allowing imports to proceed without source validation.
     #[arg(long, env = clap_env("IGNORE_MISSING_SOURCE"))]
     ignore_missing_source: Option<bool>,
+    // Whether to ignore type errors in generated code.
+    #[arg(long, env = clap_env("IGNORE_ERRORS_IN_GENERATED_CODE"))]
+    ignore_errors_in_generated_code: Option<bool>,
 }
 
 impl OutputFormat {
@@ -571,6 +574,9 @@ impl Args {
                     .filter_map(|x| ModuleWildcard::new(x).ok())
                     .collect(),
             );
+        }
+        if let Some(x) = &self.config_override.ignore_errors_in_generated_code {
+            config.root.ignore_errors_in_generated_code = Some(*x);
         }
         config.configure();
         let errors = config.validate();
