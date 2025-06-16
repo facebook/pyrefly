@@ -259,7 +259,6 @@ def foo(td: TD, td2: TD2) -> None:
     "#,
 );
 
-
 testcase!(
     test_typed_dict_not_required,
     r#"
@@ -402,8 +401,8 @@ class TD3(TypedDict):
     a: bool
 
 def foo(td2: TD2, td3: TD3) -> None:
-    td2: TD = td2  # E: `TypedDict[TD2]` is not assignable to `TypedDict[TD]`
-    td3: TD = td3  # E: `TypedDict[TD3]` is not assignable to `TypedDict[TD]`
+    bar: TD = td2  # E: `TypedDict[TD2]` is not assignable to `TypedDict[TD]`
+    baz: TD = td3  # E: `TypedDict[TD3]` is not assignable to `TypedDict[TD]`
     "#,
 );
 
