@@ -115,6 +115,15 @@ impl<'a> TypeDisplayContext<'a> {
         })
     }
 
+    /// Force that we always display at least the module name for qualified names.
+    pub fn always_display_module_name(&mut self) {
+        // We pretend that every qname is also in a fake module, and thus requires disambiguating.
+        let fake_module = ModuleName::from_str("__pyrefly__type__display__context__");
+        for c in self.classes.values_mut() {
+            c.info.insert(fake_module, None);
+        }
+    }
+
     pub fn display(&'a self, t: &'a Type) -> impl Display + 'a {
         Fmt(|f| self.fmt(t, f))
     }
@@ -546,6 +555,17 @@ pub mod tests {
             format!("{} <: {}", ctx.display(&t1), ctx.display(&t2)),
             "mod.ule.foo@1:6 <: mod.ule.foo@1:9"
         );
+    }
+
+    #[test]
+    fn test_display_qualified() {
+        let c = fake_class("foo", "mod.ule", 5, Vec::new());
+        let t = Type::ClassType(ClassType::new(c, TArgs::default()));
+        let mut ctx = TypeDisplayContext::new(&[&t]);
+        assert_eq!(ctx.display(&t).to_string(), "foo");
+
+        ctx.always_display_module_name();
+        assert_eq!(ctx.display(&t).to_string(), "mod.ule.foo");
     }
 
     #[test]

@@ -225,3 +225,75 @@ from yy import yyy
 assert_type(yyy, bytes)
 "#,
 );
+
+// The following tests demonstrate that decorator cycles exhibit nondeterminism.
+//
+// The unit tests themselves are deterministic, because the `main` module (which
+// I need outside the cycle for my own sanity) isn't participating directly in
+// the cycle, and everything here has a concrete type once it's fully resolved.
+//
+// But if you run with `--nocapture`, you'll see that the type errors for
+// the `xx` and `yy` modules are not consistent between the two tests:
+// - In version (a) we get no type errors in xx and a type error in yy
+// - In version (b) we get no type errors in yy and a type error in xx
+//
+// The root cause of the error is that whichever of `fx` / `fy` *doesn't* break
+// the cycle winds up with type `int` prior to `@dec` being applied, but
+// whichever one *does* break it has type `Any` (until the cycle completes).
+
+fn env_import_cycle_decorators() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add(
+        "xx",
+        r#"
+from typing import Callable, Any
+from yy import fy
+def dec(
+    arg: Callable[[Callable[..., int]], Callable[..., int]]
+) -> Callable[..., int]: ...
+@dec  # Sometimes an error, depends on the cycle resolution order
+@fy
+def fx(arg: Callable[..., Any]) -> Callable[..., Any]: ...
+"#,
+    );
+    env.add(
+        "yy",
+        r#"
+from typing import Callable, Any
+from xx import fx
+def dec(
+    arg: Callable[[Callable[..., int]], Callable[..., int]]
+) -> Callable[..., int]: ...
+@dec  # Sometimes an error, depends on the cycle resolution order
+@fx
+def fy(arg: Callable[..., Any]) -> Callable[..., Any]: ...
+"#,
+    );
+    env
+}
+
+testcase!(
+    bug = "Type errors reported in xx / yy differ between versions (a) and (b) (run with --nocapture)",
+    import_cycle_decorators_a,
+    env_import_cycle_decorators(),
+    r#"
+from typing import assert_type, Callable
+from yy import fy
+assert_type(fy, Callable[..., int])
+from xx import fx
+assert_type(fx, Callable[..., int])
+"#,
+);
+
+testcase!(
+    bug = "Type errors reported in xx / yy differ between versions (a) and (b) (run with --nocapture)",
+    import_cycle_decorators_b,
+    env_import_cycle_decorators(),
+    r#"
+from typing import assert_type, Callable
+from xx import fx
+assert_type(fx, Callable[..., int])
+from yy import fy
+assert_type(fy, Callable[..., int])
+"#,
+);

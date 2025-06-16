@@ -105,7 +105,7 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         want: &Attribute,
         is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
     ) -> bool {
-        self.0.is_attr_subset(got, want, is_subset)
+        self.0.check_attr_subset(got, want, is_subset).is_ok()
     }
 
     pub fn named_tuple_element_types(self, cls: &ClassType) -> Option<Vec<Type>> {

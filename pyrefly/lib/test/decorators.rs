@@ -309,3 +309,17 @@ def g(a: A):
 g(f)
     "#,
 );
+
+testcase!(
+    bug = "This error message is confusing, I think we need to be clearer when we are printing the *type* of an argument",
+    test_decorator_error_message,
+    r#"
+from typing import Callable, Any
+def dec(arg: Callable[..., Any]) -> Callable[..., int]: ...
+@dec
+def f0(arg: Callable[..., int]) -> Callable[..., int]: ...
+@dec  # E: Argument `int` is not assignable to parameter `arg` with type `(...) -> Any` in function `dec`
+@f0
+def f0(arg: Callable[..., int]) -> Callable[..., int]: ...
+    "#,
+);

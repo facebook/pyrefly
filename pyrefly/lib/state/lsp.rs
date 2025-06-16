@@ -44,6 +44,7 @@ use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
+use crate::binding::bindings::Bindings;
 use crate::common::symbol_kind::SymbolKind;
 use crate::error::kind::ErrorKind;
 use crate::export::definitions::DocString;
@@ -96,6 +97,15 @@ impl DefinitionMetadata {
             }
         }
     }
+}
+
+/// A binding that is verified to be a binding for a name in the source code.
+/// This data structure carries the proof for the verification,
+/// which includes the definition information, and the binding itself.
+struct NamedBinding {
+    definition_handle: Handle,
+    definition_export: Export,
+    key: Key,
 }
 
 enum CalleeKind {
@@ -1258,32 +1268,51 @@ impl<'a> Transaction<'a> {
         definition: &TextRangeWithModuleInfo,
     ) -> Option<Vec<TextRange>> {
         let bindings = self.get_bindings(handle)?;
-        let reference_module_info = self.get_module_info(handle)?;
-        let definition_code = definition.module_info.code_at(definition.range);
         let mut references = Vec::new();
-        for idx in bindings.keys::<Key>() {
-            let binding = bindings.get(idx);
-            if let Some((
-                definition_handle,
-                Export {
-                    location,
-                    symbol_kind: _,
-                    docstring: _,
-                },
-            )) = self.binding_to_export(handle, binding, INITIAL_GAS)
-                && definition_handle.path() == definition.module_info.path()
-                && definition.range == location
+        for NamedBinding {
+            definition_handle,
+            definition_export,
+            key,
+        } in self.named_bindings(handle, &bindings)
+        {
+            if definition_handle.path() == definition.module_info.path()
+                && definition.range == definition_export.location
             {
-                let reference_range = bindings.idx_to_key(idx).range();
-                let reference_code = reference_module_info.code_at(reference_range);
-                // Sanity check: the reference should have the same text as the definition.
-                // This check helps to filter out from synthetic bindings.
-                if reference_code == definition_code {
-                    references.push(reference_range);
-                }
+                references.push(key.range());
             }
         }
         Some(references)
+    }
+
+    /// Bindings can contain synthetic bindings, which are not meaningful to end users.
+    /// This function helps to filter out such bindings and only leave bindings that eventually
+    /// jumps to a name in the source.
+    fn named_bindings(&self, handle: &Handle, bindings: &Bindings) -> Vec<NamedBinding> {
+        let self_module_info = self.get_module_info(handle);
+        let mut named_bindings = Vec::new();
+        for idx in bindings.keys::<Key>() {
+            let binding = bindings.get(idx);
+            let key = bindings.idx_to_key(idx);
+            if let Some((definition_handle, definition_export)) =
+                self.binding_to_export(handle, binding, INITIAL_GAS)
+                && let Some(self_module_info) = &self_module_info
+                && let Some(definition_module_info) = self.get_module_info(&definition_handle)
+                && definition_handle.path() == definition_module_info.path()
+            {
+                // Sanity check: the reference should have the same text as the definition.
+                // This check helps to filter out from synthetic bindings.
+                if self_module_info.code_at(key.range())
+                    == definition_module_info.code_at(definition_export.location)
+                {
+                    named_bindings.push(NamedBinding {
+                        definition_handle,
+                        definition_export,
+                        key: key.clone(),
+                    });
+                }
+            }
+        }
+        named_bindings
     }
 
     pub fn completion(&self, handle: &Handle, position: TextSize) -> Vec<CompletionItem> {
@@ -1468,33 +1497,22 @@ impl<'a> Transaction<'a> {
         let ast = self.get_ast(handle)?;
         let legends = SemanticTokensLegends::new();
         let mut tokens = Vec::new();
-        for idx in bindings.keys::<Key>() {
-            let binding = bindings.get(idx);
-            let Some(intermediate_definition) =
-                binding_to_intermediate_definition(&bindings, binding, &mut Gas::new(20))
-            else {
-                continue;
-            };
-            let reference_range = bindings.idx_to_key(idx).range();
+        for NamedBinding {
+            definition_handle: _,
+            definition_export,
+            key,
+        } in self.named_bindings(handle, &bindings)
+        {
+            let reference_range = key.range();
             if let Some(limit_range) = limit_range
                 && !limit_range.contains_range(reference_range)
             {
                 continue;
             }
-            let (token_type, token_modifiers) = if let Some((
-                definition_handle,
-                Export {
-                    symbol_kind: Some(symbol_kind),
-                    location: definition_location,
-                    ..
-                },
-            )) =
-                self.resolve_intermediate_definition(handle, intermediate_definition, INITIAL_GAS)
-                && let Some(definition_module_info) = self.get_module_info(&definition_handle)
-                && // Sanity check: the reference should have the same text as the definition.
-                   // This check helps to filter out synthetic bindings.
-                definition_module_info.code_at(definition_location)
-                    == module_info.code_at(reference_range)
+            let (token_type, token_modifiers) = if let Export {
+                symbol_kind: Some(symbol_kind),
+                ..
+            } = definition_export
             {
                 symbol_kind.to_lsp_semantic_token_type_with_modifiers()
             } else {

@@ -3379,7 +3379,28 @@
       "stop_line": 50
     }
   ],
-  "dataclasses_postinit.py": [],
+  "dataclasses_postinit.py": [
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Object of class `DC1` has no attribute `x`",
+      "description": "Object of class `DC1` has no attribute `x`",
+      "line": 28,
+      "name": "missing-attribute",
+      "stop_column": 12,
+      "stop_line": 28
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Object of class `DC1` has no attribute `y`",
+      "description": "Object of class `DC1` has no attribute `y`",
+      "line": 29,
+      "name": "missing-attribute",
+      "stop_column": 12,
+      "stop_line": 29
+    }
+  ],
   "dataclasses_slots.py": [
     {
       "code": -2,
@@ -10053,7 +10074,7 @@
       "code": -2,
       "column": 4,
       "concise_description": "Class member `Y1.x` overrides parent class `X1` in an inconsistent manner",
-      "description": "Class member `Y1.x` overrides parent class `X1` in an inconsistent manner",
+      "description": "Class member `Y1.x` overrides parent class `X1` in an inconsistent manner\n  `Y1.x` has type `int`, which is not consistent with `str` in `X1.x` (the type of read-write attributes cannot be changed)",
       "line": 55,
       "name": "bad-override",
       "stop_column": 5,
@@ -10258,6 +10279,16 @@
     {
       "code": -2,
       "column": 14,
+      "concise_description": "`TypedDict[C1]` is not assignable to `TypedDict[B1]`",
+      "description": "`TypedDict[C1]` is not assignable to `TypedDict[B1]`",
+      "line": 38,
+      "name": "bad-assignment",
+      "stop_column": 15,
+      "stop_line": 38
+    },
+    {
+      "code": -2,
+      "column": 14,
       "concise_description": "`TypedDict[A1]` is not assignable to `TypedDict[C1]`",
       "description": "`TypedDict[A1]` is not assignable to `TypedDict[C1]`",
       "line": 40,
@@ -10274,6 +10305,16 @@
       "name": "bad-assignment",
       "stop_column": 15,
       "stop_line": 79
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "`TypedDict[A2]` is not assignable to `TypedDict[B2]`",
+      "description": "`TypedDict[A2]` is not assignable to `TypedDict[B2]`",
+      "line": 81,
+      "name": "bad-assignment",
+      "stop_column": 15,
+      "stop_line": 81
     },
     {
       "code": -2,
@@ -10321,7 +10362,7 @@
       "code": -2,
       "column": 5,
       "concise_description": "Class member `RecordShop.albums` overrides parent class `AlbumCollection` in an inconsistent manner",
-      "description": "Class member `RecordShop.albums` overrides parent class `AlbumCollection` in an inconsistent manner",
+      "description": "Class member `RecordShop.albums` overrides parent class `AlbumCollection` in an inconsistent manner\n  `RecordShop.albums` has type `list[TypedDict[Album1]]`, which is not consistent with `Collection[TypedDict[Album1]]` in `AlbumCollection.albums` (the type of read-write attributes cannot be changed)",
       "line": 49,
       "name": "bad-override",
       "stop_column": 11,
@@ -10331,7 +10372,7 @@
       "code": -2,
       "column": 5,
       "concise_description": "Class member `RecordShop.alt` overrides parent class `AlbumCollection` in an inconsistent manner",
-      "description": "Class member `RecordShop.alt` overrides parent class `AlbumCollection` in an inconsistent manner",
+      "description": "Class member `RecordShop.alt` overrides parent class `AlbumCollection` in an inconsistent manner\n  `RecordShop.alt` has type `list[str]`, which is not consistent with `list[int | str]` in `AlbumCollection.alt` (the type of read-write attributes cannot be changed)",
       "line": 50,
       "name": "bad-override",
       "stop_column": 8,
@@ -10351,7 +10392,7 @@
       "code": -2,
       "column": 5,
       "concise_description": "Class member `User.ident` overrides parent class `OptionalIdent` in an inconsistent manner",
-      "description": "Class member `User.ident` overrides parent class `OptionalIdent` in an inconsistent manner",
+      "description": "Class member `User.ident` overrides parent class `OptionalIdent` in an inconsistent manner\n  `User.ident` has type `str`, which is not consistent with `int | str` in `OptionalIdent.ident` (the type of read-write attributes cannot be changed)",
       "line": 76,
       "name": "bad-override",
       "stop_column": 10,
@@ -10465,6 +10506,16 @@
     }
   ],
   "typeddicts_type_consistency.py": [
+    {
+      "code": -2,
+      "column": 10,
+      "concise_description": "`TypedDict[B1]` is not assignable to `TypedDict[A1]`",
+      "description": "`TypedDict[B1]` is not assignable to `TypedDict[A1]`",
+      "line": 21,
+      "name": "bad-assignment",
+      "stop_column": 12,
+      "stop_line": 21
+    },
     {
       "code": -2,
       "column": 10,
@@ -10596,6 +10647,16 @@
       "name": "typed-dict-key-error",
       "stop_column": 25,
       "stop_line": 28
+    },
+    {
+      "code": -2,
+      "column": 22,
+      "concise_description": "TypedDict `Movie` not allowed as second argument to isinstance()",
+      "description": "TypedDict `Movie` not allowed as second argument to isinstance()",
+      "line": 35,
+      "name": "invalid-argument",
+      "stop_column": 27,
+      "stop_line": 35
     }
   ]
 }

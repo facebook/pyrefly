@@ -506,7 +506,7 @@ impl Solver {
                 if !self.is_subset_eq(&t, &forced, type_order) {
                     // Poor error message, but overall, this is a terrible experience for users.
                     self.error(&forced, &t, errors, loc, &|| {
-                        TypeCheckContext::of_kind(TypeCheckKind::AnnAssign)
+                        TypeCheckContext::of_kind(TypeCheckKind::CycleBreaking)
                     });
                 }
             }

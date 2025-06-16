@@ -10,6 +10,7 @@ use itertools::Itertools;
 use pyrefly_util::display::count;
 use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::Expr;
+use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -19,6 +20,7 @@ use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
+use crate::alt::expr::TypeOrExpr;
 use crate::alt::solve::Iterable;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -38,25 +40,63 @@ use crate::types::types::Type;
 use crate::types::types::Var;
 
 #[derive(Clone, Debug)]
+pub struct CallKeyword<'a> {
+    pub range: TextRange,
+    pub arg: Option<&'a Identifier>,
+    pub value: TypeOrExpr<'a>,
+}
+
+impl Ranged for CallKeyword<'_> {
+    fn range(&self) -> TextRange {
+        self.range
+    }
+}
+
+impl<'a> CallKeyword<'a> {
+    pub fn new(x: &'a Keyword) -> Self {
+        Self {
+            range: x.range,
+            arg: x.arg.as_ref(),
+            value: TypeOrExpr::Expr(&x.value),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum CallArg<'a> {
-    /// Bundles a `Type` with a `TextRange`, allowing us to typecheck function calls
-    /// when we only know the types of the arguments but not the original expressions.
-    Type(&'a Type, TextRange),
-    Expr(&'a Expr),
-    Star(&'a Expr, TextRange),
+    Arg(TypeOrExpr<'a>),
+    Star(TypeOrExpr<'a>, TextRange),
 }
 
 impl Ranged for CallArg<'_> {
     fn range(&self) -> TextRange {
         match self {
-            Self::Type(_, r) => *r,
-            Self::Expr(e) => e.range(),
+            Self::Arg(x) => x.range(),
             Self::Star(_, r) => *r,
         }
     }
 }
 
-impl CallArg<'_> {
+impl<'a> CallArg<'a> {
+    pub fn arg(x: TypeOrExpr<'a>) -> Self {
+        Self::Arg(x)
+    }
+
+    pub fn expr(x: &'a Expr) -> Self {
+        Self::Arg(TypeOrExpr::Expr(x))
+    }
+
+    pub fn ty(ty: &'a Type, range: TextRange) -> Self {
+        Self::Arg(TypeOrExpr::Type(ty, range))
+    }
+
+    pub fn expr_maybe_starred(x: &'a Expr) -> Self {
+        match x {
+            Expr::Starred(inner) => Self::Star(TypeOrExpr::Expr(&inner.value), x.range()),
+            _ => Self::expr(x),
+        }
+    }
+
     // Splat arguments might be fixed-length tuples, which are handled precisely, or have unknown
     // length. This function evaluates splat args to determine how many params should be consumed,
     // but does not evaluate other expressions, which might be contextually typed.
@@ -66,10 +106,10 @@ impl CallArg<'_> {
         arg_errors: &ErrorCollector,
     ) -> CallArgPreEval {
         match self {
-            Self::Type(ty, _) => CallArgPreEval::Type(ty, false),
-            Self::Expr(e) => CallArgPreEval::Expr(e, false),
+            Self::Arg(TypeOrExpr::Type(ty, _)) => CallArgPreEval::Type(ty, false),
+            Self::Arg(TypeOrExpr::Expr(e)) => CallArgPreEval::Expr(e, false),
             Self::Star(e, range) => {
-                let ty = solver.expr_infer(e, arg_errors);
+                let ty = e.infer(solver, arg_errors);
                 let iterables = solver.iterate(&ty, *range, arg_errors);
                 // If we have a union of iterables, use a fixed length only if every iterable is
                 // fixed and has the same length. Otherwise, use star.
@@ -251,7 +291,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn is_param_spec_args(&self, x: &CallArg, q: Quantified, errors: &ErrorCollector) -> bool {
         match x {
             CallArg::Star(x, _) => {
-                let mut ty = self.expr_infer(x, errors);
+                let mut ty = x.infer(self, errors);
                 self.expand_type_mut(&mut ty);
                 ty == Type::Args(q)
             }
@@ -259,8 +299,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn is_param_spec_kwargs(&self, x: &Keyword, q: Quantified, errors: &ErrorCollector) -> bool {
-        let mut ty = self.expr_infer(&x.value, errors);
+    fn is_param_spec_kwargs(
+        &self,
+        x: &CallKeyword,
+        q: Quantified,
+        errors: &ErrorCollector,
+    ) -> bool {
+        let mut ty = x.value.infer(self, errors);
         self.expand_type_mut(&mut ty);
         ty == Type::Kwargs(q)
     }
@@ -275,7 +320,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         mut paramspec: Option<Var>,
         self_arg: Option<CallArg>,
         args: &[CallArg],
-        keywords: &[Keyword],
+        keywords: &[CallKeyword],
         range: TextRange,
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
@@ -561,9 +606,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let mut splat_kwargs = Vec::new();
         for kw in keywords {
-            match &kw.arg {
+            match kw.arg {
                 None => {
-                    let ty = self.expr_infer(&kw.value, arg_errors);
+                    let ty = kw.value.infer(self, arg_errors);
                     if let Type::TypedDict(typed_dict) = ty {
                         for (name, field) in self.typed_dict_fields(&typed_dict).iter() {
                             let mut hint = kwargs.as_ref().map(|(_, ty)| ty.clone());
@@ -679,11 +724,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         },
                         context: context.map(|ctx| ctx()),
                     };
-                    self.expr_with_separate_check_errors(
-                        &kw.value,
-                        hint.as_ref().map(|ty| (ty, tcc, call_errors)),
-                        arg_errors,
-                    );
+                    match kw.value {
+                        TypeOrExpr::Expr(x) => {
+                            self.expr_with_separate_check_errors(
+                                x,
+                                hint.as_ref().map(|ty| (ty, tcc, call_errors)),
+                                arg_errors,
+                            );
+                        }
+                        TypeOrExpr::Type(x, range) => {
+                            if let Some(hint) = &hint
+                                && !hint.is_any()
+                            {
+                                self.check_type(hint, x, range, call_errors, tcc);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -746,7 +802,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         callable_name: Option<FuncId>,
         self_arg: Option<CallArg>,
         args: &[CallArg],
-        keywords: &[Keyword],
+        keywords: &[CallKeyword],
         range: TextRange,
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,

@@ -112,6 +112,10 @@ pub enum TypeCheckKind {
     AnnAssign,
     /// Check one portion of an unpacked assignment (e.g. `x, y = foo()`) against the expected type.
     UnpackedAssign,
+    /// We break cycles using recursive `Var`s, which the solver might pin. When we record a final
+    /// answer, if the solver pinned the Var to an incompatible type, we record a type error with this
+    /// kind. This is hard to understand and should be avoided when possible.
+    CycleBreaking,
     /// Class used in an `except C` clause.
     ExceptionClass,
     /// Yielding a value that conflicts with the return annotation.
@@ -153,6 +157,7 @@ impl TypeCheckKind {
             Self::IterationVariableMismatch(..) => ErrorKind::BadAssignment,
             Self::AnnAssign => ErrorKind::BadAssignment,
             Self::UnpackedAssign => ErrorKind::BadAssignment,
+            Self::CycleBreaking => ErrorKind::BadAssignment,
             Self::ExceptionClass => ErrorKind::InvalidInheritance,
             Self::YieldValue => ErrorKind::InvalidYield,
             Self::YieldFrom => ErrorKind::InvalidYield,

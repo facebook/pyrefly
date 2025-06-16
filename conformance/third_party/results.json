@@ -3,7 +3,7 @@
   "pass": 58,
   "fail": 78,
   "pass_rate": 0.43,
-  "differences": 384,
+  "differences": 378,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -81,7 +81,7 @@
     "dataclasses_descriptors.py": 1,
     "dataclasses_final.py": 3,
     "dataclasses_kwonly.py": 5,
-    "dataclasses_postinit.py": 4,
+    "dataclasses_postinit.py": 2,
     "dataclasses_slots.py": 5,
     "dataclasses_transform_class.py": 10,
     "dataclasses_transform_converter.py": 7,
@@ -137,12 +137,12 @@
     "tuples_type_compat.py": 8,
     "typeddicts_class_syntax.py": 5,
     "typeddicts_inheritance.py": 1,
-    "typeddicts_readonly_consistency.py": 3,
+    "typeddicts_readonly_consistency.py": 1,
     "typeddicts_readonly_inheritance.py": 7,
     "typeddicts_readonly_update.py": 2,
     "typeddicts_required.py": 2,
-    "typeddicts_type_consistency.py": 2,
-    "typeddicts_usage.py": 2
+    "typeddicts_type_consistency.py": 1,
+    "typeddicts_usage.py": 1
   },
   "comment": "@generated"
 }

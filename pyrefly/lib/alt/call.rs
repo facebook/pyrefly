@@ -5,9 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use append_only_vec::AppendOnlyVec;
 use dupe::Dupe;
-use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
@@ -17,6 +18,8 @@ use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::attr::DescriptorBase;
 use crate::alt::callable::CallArg;
+use crate::alt::callable::CallKeyword;
+use crate::alt::expr::TypeOrExpr;
 use crate::dunder;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -249,7 +252,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         method_name: &Name,
         range: TextRange,
         args: &[CallArg],
-        keywords: &[Keyword],
+        keywords: &[CallKeyword],
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Type {
@@ -275,7 +278,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         method_name: &Name,
         range: TextRange,
         args: &[CallArg],
-        keywords: &[Keyword],
+        keywords: &[CallKeyword],
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Option<Type> {
@@ -306,7 +309,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         method_name: &Name,
         range: TextRange,
         args: &[CallArg],
-        keywords: &[Keyword],
+        keywords: &[CallKeyword],
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Type {
@@ -330,7 +333,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &ClassType,
         range: TextRange,
         args: &[CallArg],
-        keywords: &[Keyword],
+        keywords: &[CallKeyword],
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Option<Type> {
@@ -366,7 +369,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: ClassType,
         args: &[CallArg],
-        keywords: &[Keyword],
+        keywords: &[CallKeyword],
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
@@ -385,7 +388,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let (overrides_new, dunder_new_has_errors) =
             if let Some(new_method) = self.get_dunder_new(&cls) {
                 let cls_ty = Type::type_form(instance_ty.clone());
-                let mut full_args = vec![CallArg::Type(&cls_ty, range)];
+                let mut full_args = vec![CallArg::ty(&cls_ty, range)];
                 full_args.extend_from_slice(args);
                 let dunder_new_errors = self.error_collector();
                 let ret = self.call_infer(
@@ -451,7 +454,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         typed_dict: TypedDict,
         args: &[CallArg],
-        keywords: &[Keyword],
+        keywords: &[CallKeyword],
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
@@ -479,8 +482,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn first_arg_type(&self, args: &[CallArg], errors: &ErrorCollector) -> Option<Type> {
         if let Some(first_arg) = args.first() {
             match first_arg {
-                CallArg::Expr(e) => Some(self.expr_infer(e, errors)),
-                CallArg::Type(t, _) => Some((**t).clone()),
+                CallArg::Arg(x) => Some(x.infer(self, errors)),
                 CallArg::Star(..) => None,
             }
         } else {
@@ -492,7 +494,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         call_target: CallTarget,
         args: &[CallArg],
-        keywords: &[Keyword],
+        keywords: &[CallKeyword],
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
@@ -533,7 +535,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.construct_typed_dict(td, args, keywords, range, errors, context)
             }
             Target::BoundMethod(obj, func) => {
-                let first_arg = CallArg::Type(&obj, range);
+                let first_arg = CallArg::ty(&obj, range);
                 self.callable_infer(
                     func.signature,
                     Some(func.metadata.kind.as_func_id()),
@@ -599,7 +601,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Target::BoundMethodOverload(obj, overloads, meta) => self.call_overloads(
                 overloads,
                 meta,
-                Some(CallArg::Type(&obj, range)),
+                Some(CallArg::ty(&obj, range)),
                 args,
                 keywords,
                 range,
@@ -610,14 +612,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Make sure we still catch errors in the arguments.
                 for arg in args {
                     match arg {
-                        CallArg::Expr(e) | CallArg::Star(e, _) => {
-                            self.expr_infer(e, errors);
+                        CallArg::Arg(e) | CallArg::Star(e, _) => {
+                            e.infer(self, errors);
                         }
-                        CallArg::Type(..) => {}
                     }
                 }
                 for kw in keywords {
-                    self.expr_infer(&kw.value, errors);
+                    kw.value.infer(self, errors);
                 }
                 style.propagate()
             }
@@ -626,7 +627,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if is_dataclass && let Type::Callable(c) = res {
             let mut kws = BoolKeywords::new();
             for kw in keywords {
-                kws.set_keyword(kw.arg.as_ref(), self.expr_infer(&kw.value, errors));
+                kws.set_keyword(kw.arg, kw.value.infer(self, errors));
             }
             Type::Function(Box::new(Function {
                 signature: *c,
@@ -646,11 +647,72 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         metadata: FuncMetadata,
         self_arg: Option<CallArg>,
         args: &[CallArg],
-        keywords: &[Keyword],
+        keywords: &[CallKeyword],
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Type {
+        self.call_overloads_with_store(
+            &AppendOnlyVec::new(),
+            overloads,
+            metadata,
+            self_arg,
+            args,
+            keywords,
+            range,
+            errors,
+            context,
+        )
+    }
+
+    fn call_overloads_with_store<'t>(
+        &self,
+        type_store: &'t AppendOnlyVec<Type>,
+        overloads: Vec1<Callable>,
+        metadata: FuncMetadata,
+        self_arg: Option<CallArg<'t>>,
+        args: &[CallArg<'t>],
+        keywords: &[CallKeyword<'t>],
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) -> Type {
+        let type_or_expr = |x: TypeOrExpr<'t>| -> TypeOrExpr<'t> {
+            match x {
+                TypeOrExpr::Expr(e) => {
+                    let t = self.expr_infer(e, errors);
+                    let i = type_store.push(t);
+                    TypeOrExpr::Type(&type_store[i], e.range())
+                }
+                TypeOrExpr::Type(t, r) => TypeOrExpr::Type(t, r),
+            }
+        };
+        let call_arg = |x: CallArg<'t>| -> CallArg<'t> {
+            match x {
+                CallArg::Arg(x) => CallArg::Arg(type_or_expr(x)),
+                CallArg::Star(x, r) => CallArg::Star(type_or_expr(x), r),
+            }
+        };
+        let call_keyword = |x: CallKeyword<'t>| -> CallKeyword<'t> {
+            CallKeyword {
+                range: x.range,
+                arg: x.arg,
+                value: type_or_expr(x.value),
+            }
+        };
+
+        // There may be Expr values in self_arg, args and keywords.
+        // If we infer them for each overload, we may end up infering them multiple times.
+        // If those overloads contain nested overloads, then we can easily end up with O(2^n) perf.
+        // Therefore, flatten all TypeOrExpr's into Type before we start
+        let self_arg = self_arg.map(call_arg);
+        let args = args.iter().cloned().map(&call_arg).collect::<Vec<_>>();
+        let keywords = keywords
+            .iter()
+            .cloned()
+            .map(&call_keyword)
+            .collect::<Vec<_>>();
+
         let mut closest_overload: Option<CalledOverload> = None;
         for callable in overloads.iter() {
             let arg_errors = self.error_collector();
@@ -659,8 +721,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 callable.clone(),
                 Some(metadata.kind.as_func_id()),
                 self_arg.clone(),
-                args,
-                keywords,
+                &args,
+                &keywords,
                 range,
                 &arg_errors,
                 &call_errors,
@@ -802,7 +864,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ),
             DescriptorBase::ClassDef(class) => (Type::ClassDef(class), Type::None),
         };
-        let args = [CallArg::Type(&obj, range), CallArg::Type(&objtype, range)];
+        let args = [CallArg::ty(&obj, range), CallArg::ty(&objtype, range)];
         let call_target = self.as_call_target_or_error(
             getter_method,
             CallStyle::FreeForm,
@@ -827,7 +889,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Descriptor setters cannot be called on a class (an attempt to assign will overwrite the
         // descriptor itself rather than call the setter).
         let instance = Type::ClassType(class_type);
-        let args = [CallArg::Type(&instance, range), got];
+        let args = [CallArg::ty(&instance, range), got];
         let call_target = self.as_call_target_or_error(
             setter_method,
             CallStyle::FreeForm,
@@ -851,7 +913,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let attr_name_ty = Type::Literal(Lit::Str(attr_name.as_str().into()));
         self.call_infer(
             call_target,
-            &[CallArg::Type(&attr_name_ty, range)],
+            &[CallArg::ty(&attr_name_ty, range)],
             &[],
             range,
             errors,

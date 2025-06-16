@@ -108,6 +108,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         fields: &SmallSet<Name>,
+        include_initvar: bool,
     ) -> Vec<(Name, ClassField, BoolKeywords)> {
         let mut kw_only = false;
         fields
@@ -119,6 +120,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 DataclassMember::NotAField => None,
                 DataclassMember::Field(field, keywords) => Some((name.clone(), field, keywords)),
+                DataclassMember::InitVar(field) => {
+                    if include_initvar {
+                        Some((name.clone(), field, BoolKeywords::new()))
+                    } else {
+                        None
+                    }
+                }
             })
             .collect()
     }
@@ -131,7 +139,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         kw_only: bool,
     ) -> ClassSynthesizedField {
         let mut params = vec![self.class_self_param(cls, false)];
-        for (name, field, field_flags) in self.iter_fields(cls, fields) {
+        for (name, field, field_flags) in self.iter_fields(cls, fields, true) {
             if field_flags.is_set(&DataclassKeywords::INIT) {
                 params.push(field.as_param(
                     &name,
@@ -161,7 +169,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ts = if kw_only {
             Vec::new()
         } else {
-            let filtered_fields = self.iter_fields(cls, fields);
+            let filtered_fields = self.iter_fields(cls, fields, false);
             filtered_fields
                 .iter()
                 .filter_map(|(name, _, field_flags)| {

@@ -536,7 +536,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .unwrap_iterable(iterable)
                     .or_else(|| {
                         let int_ty = self.stdlib.int().clone().to_type();
-                        let arg = CallArg::Type(&int_ty, range);
+                        let arg = CallArg::ty(&int_ty, range);
                         self.call_magic_dunder_method(
                             iterable,
                             &dunder::GETITEM,
@@ -872,9 +872,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::None,
         ]);
         let exit_arg_types = [
-            CallArg::Type(&arg1, range),
-            CallArg::Type(&arg2, range),
-            CallArg::Type(&arg3, range),
+            CallArg::ty(&arg1, range),
+            CallArg::ty(&arg2, range),
+            CallArg::ty(&arg3, range),
         ];
         match kind {
             IsAsync::Sync => self.call_method_or_error(
@@ -1155,7 +1155,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &base,
                                 &dunder::DELITEM,
                                 x.range,
-                                &[CallArg::Type(&slice_ty, x.slice.range())],
+                                &[CallArg::ty(&slice_ty, x.slice.range())],
                                 &[],
                                 errors,
                                 Some(&|| ErrorContext::DelItem(self.for_display(base.clone()))),
@@ -1738,7 +1738,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &base,
                         &dunder::SETITEM,
                         subscript.range,
-                        &[CallArg::Type(&slice_ty, subscript.slice.range()), value_arg],
+                        &[CallArg::ty(&slice_ty, subscript.slice.range()), value_arg],
                         &[],
                         errors,
                         Some(&|| ErrorContext::SetItem(self.for_display(base.clone()))),
@@ -1746,7 +1746,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 match value {
                     ExprOrBinding::Expr(e) => {
-                        call_setitem(CallArg::Expr(e));
+                        call_setitem(CallArg::expr(e));
                         // We already emit errors for `e` during `call_method_or_error`
                         self.expr_infer(
                             e,
@@ -1756,7 +1756,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ExprOrBinding::Binding(b) => {
                         let binding_ty = self.solve_binding(b, errors).arc_clone_ty();
                         // Use the subscript's location
-                        call_setitem(CallArg::Type(&binding_ty, subscript.range));
+                        call_setitem(CallArg::ty(&binding_ty, subscript.range));
                         binding_ty
                     }
                 }
@@ -1946,7 +1946,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // TODO: check against duplicate keys (optional)
                 let key_ty = self.expr_infer(mapping_key, errors);
                 let binding = self.get_idx(*binding_key);
-                let arg = CallArg::Type(&key_ty, mapping_key.range());
+                let arg = CallArg::ty(&key_ty, mapping_key.range());
                 self.call_method_or_error(
                     binding.ty(),
                     &dunder::GETITEM,

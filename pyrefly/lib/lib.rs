@@ -25,6 +25,7 @@
 #![deny(clippy::string_to_string)]
 #![deny(clippy::trivially_copy_pass_by_ref)]
 #![feature(box_patterns)]
+#![feature(closure_lifetime_binder)]
 #![feature(if_let_guard)]
 #![feature(let_chains)]
 #![feature(hash_extract_if)]
@@ -41,6 +42,7 @@ mod export;
 mod graph;
 mod module;
 pub mod playground;
+pub mod query;
 mod report;
 mod ruff;
 mod solver;

@@ -386,3 +386,22 @@ def g(x: int):
     f(C(x))
     "#,
 );
+
+testcase!(
+    test_overload_exponential,
+    r#"
+# This used to take an exponential amount of time to type check
+
+from typing import overload, Any
+class X: ...
+
+@overload
+def f(a: int) -> X: ...
+@overload
+def f(a: str) -> X: ...
+def f(a: Any) -> X: return X()
+
+def exponential() -> Any:
+    f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(X())))))))))))))))))))))))) # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E:
+"#,
+);

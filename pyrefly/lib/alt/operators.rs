@@ -52,7 +52,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         self.call_infer(
             callable,
-            &[CallArg::Type(call_arg_type, range)],
+            &[CallArg::ty(call_arg_type, range)],
             &[],
             range,
             errors,
@@ -335,7 +335,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         right,
                                         &dunder::CONTAINS,
                                         x.range,
-                                        &[CallArg::Type(left, x.left.range())],
+                                        &[CallArg::ty(left, x.left.range())],
                                         &[],
                                         errors,
                                         Some(&context),

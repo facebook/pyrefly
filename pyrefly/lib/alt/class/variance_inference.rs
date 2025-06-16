@@ -3,6 +3,7 @@ use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
 use std::sync::Arc;
 
+use dupe::Dupe;
 use pyrefly_derive::TypeEq;
 use pyrefly_util::visit::VisitMut;
 use starlark_map::small_map::SmallMap;
@@ -14,6 +15,7 @@ use crate::alt::class::variance_inference::variance_visitor::Injectivity;
 use crate::alt::class::variance_inference::variance_visitor::TParamArray;
 use crate::alt::class::variance_inference::variance_visitor::VarianceEnv;
 use crate::alt::types::class_metadata::ClassMetadata;
+use crate::binding::binding::KeyExport;
 use crate::types::class::Class;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Variance;
@@ -58,6 +60,7 @@ pub mod variance_visitor {
     use crate::alt::types::class_metadata::ClassMetadata;
     use crate::types::callable::Params;
     use crate::types::class::Class;
+    use crate::types::qname::QName;
     use crate::types::tuple::Tuple;
     use crate::types::type_var::Variance;
     use crate::types::types::Type;
@@ -66,15 +69,14 @@ pub mod variance_visitor {
     pub type TParamArray = Vec<TypeParam>;
 
     // A map from class name to tparam environment
-    pub type VarianceEnv = SmallMap<String, TParamArray>;
+    pub type VarianceEnv = SmallMap<QName, TParamArray>;
 
     pub fn on_class(
         class: &Class,
-        on_edge: &mut impl FnMut(&mut SmallMap<String, Arc<Class>>, &Class) -> TParamArray,
+        on_edge: &mut impl FnMut(&Class) -> TParamArray,
         on_var: &mut impl FnMut(&str, Variance, Injectivity),
         get_metadata: &impl Fn(&Class) -> Arc<ClassMetadata>,
         get_fields: &impl Fn(&Class) -> SmallMap<String, Arc<ClassField>>,
-        class_lookup_map: &mut SmallMap<String, Arc<Class>>,
     ) {
         fn is_private_field(name: &str) -> bool {
             let starts_with_underscore = name.starts_with('_');
@@ -87,34 +89,26 @@ pub mod variance_visitor {
             tuple: &Tuple,
             variance: Variance,
             inj: Injectivity,
-            on_edge: &mut impl FnMut(&mut SmallMap<String, Arc<Class>>, &Class) -> TParamArray,
+            on_edge: &mut impl FnMut(&Class) -> TParamArray,
             on_var: &mut impl FnMut(&str, Variance, Injectivity),
-            class_lookup_map: &mut SmallMap<String, Arc<Class>>,
         ) {
             match tuple {
                 Tuple::Concrete(concrete_types) => {
                     for ty in concrete_types {
-                        on_type(variance, inj, ty, on_edge, on_var, class_lookup_map);
+                        on_type(variance, inj, ty, on_edge, on_var);
                     }
                 }
                 Tuple::Unbounded(unbounded_ty) => {
-                    on_type(
-                        variance,
-                        inj,
-                        unbounded_ty,
-                        on_edge,
-                        on_var,
-                        class_lookup_map,
-                    );
+                    on_type(variance, inj, unbounded_ty, on_edge, on_var);
                 }
                 Tuple::Unpacked(boxed_parts) => {
                     let (before, middle, after) = &**boxed_parts;
                     for ty in before {
-                        on_type(variance, inj, ty, on_edge, on_var, class_lookup_map);
+                        on_type(variance, inj, ty, on_edge, on_var);
                     }
-                    on_type(variance, inj, middle, on_edge, on_var, class_lookup_map);
+                    on_type(variance, inj, middle, on_edge, on_var);
                     for ty in after {
-                        on_type(variance, inj, ty, on_edge, on_var, class_lookup_map);
+                        on_type(variance, inj, ty, on_edge, on_var);
                     }
                 }
             }
@@ -124,13 +118,12 @@ pub mod variance_visitor {
             variance: Variance,
             inj: Injectivity,
             typ: &Type,
-            on_edge: &mut impl FnMut(&mut SmallMap<String, Arc<Class>>, &Class) -> TParamArray,
+            on_edge: &mut impl FnMut(&Class) -> TParamArray,
             on_var: &mut impl FnMut(&str, Variance, Injectivity),
-            class_lookup_map: &mut SmallMap<String, Arc<Class>>,
         ) {
             match typ {
                 Type::Type(t) => {
-                    on_type(variance, inj, t, on_edge, on_var, class_lookup_map);
+                    on_type(variance, inj, t, on_edge, on_var);
                 }
 
                 Type::Function(t) => {
@@ -140,17 +133,11 @@ pub mod variance_visitor {
                         &Type::Callable(Box::new(t.signature.clone())),
                         on_edge,
                         on_var,
-                        class_lookup_map,
                     );
                 }
 
-                Type::ClassType(class) => {
-                    class_lookup_map.insert(
-                        class.name().as_str().to_owned(),
-                        Arc::new(class.class_object().clone()),
-                    );
-
-                    let params = on_edge(class_lookup_map, class.class_object());
+                Type::ClassType(class) if !class.tparams().is_empty() => {
+                    let params = on_edge(class.class_object());
 
                     let targs = class.targs().as_slice();
 
@@ -163,7 +150,6 @@ pub mod variance_visitor {
                                 ty,
                                 on_edge,
                                 on_var,
-                                class_lookup_map,
                             );
                         }
                     }
@@ -173,32 +159,25 @@ pub mod variance_visitor {
                 }
                 Type::Union(t) => {
                     for ty in t {
-                        on_type(variance, inj, ty, on_edge, on_var, class_lookup_map);
+                        on_type(variance, inj, ty, on_edge, on_var);
                     }
                 }
                 Type::Overload(t) => {
                     let sigs = &t.signatures;
                     for sig in sigs {
-                        on_type(
-                            variance,
-                            inj,
-                            &sig.as_type(),
-                            on_edge,
-                            on_var,
-                            class_lookup_map,
-                        );
+                        on_type(variance, inj, &sig.as_type(), on_edge, on_var);
                     }
                 }
                 Type::Callable(t) => {
                     // Walk return type covariantly
-                    on_type(variance, inj, &t.ret, on_edge, on_var, class_lookup_map);
+                    on_type(variance, inj, &t.ret, on_edge, on_var);
 
                     // Walk parameters contravariantly
                     match &t.params {
                         Params::List(param_list) => {
                             for param in param_list.items().iter() {
                                 let ty = param.param_to_type();
-                                on_type(variance.inv(), inj, ty, on_edge, on_var, class_lookup_map);
+                                on_type(variance.inv(), inj, ty, on_edge, on_var);
                             }
                         }
                         Params::Ellipsis => {
@@ -206,21 +185,14 @@ pub mod variance_visitor {
                         }
                         Params::ParamSpec(prefix, param_spec) => {
                             for ty in prefix.iter() {
-                                on_type(variance.inv(), inj, ty, on_edge, on_var, class_lookup_map);
+                                on_type(variance.inv(), inj, ty, on_edge, on_var);
                             }
-                            on_type(
-                                variance.inv(),
-                                inj,
-                                param_spec,
-                                on_edge,
-                                on_var,
-                                class_lookup_map,
-                            );
+                            on_type(variance.inv(), inj, param_spec, on_edge, on_var);
                         }
                     }
                 }
                 Type::Tuple(t) => {
-                    handle_tuple_type(t, variance, inj, on_edge, on_var, class_lookup_map);
+                    handle_tuple_type(t, variance, inj, on_edge, on_var);
                 }
 
                 _ => {}
@@ -237,7 +209,6 @@ pub mod variance_visitor {
                 &base_type.0.clone().to_type(),
                 on_edge,
                 on_var,
-                class_lookup_map,
             );
         }
 
@@ -258,48 +229,28 @@ pub mod variance_visitor {
                 // TODO: We need a much better way to distinguish between fields and methods than this
                 // currently, class field representation isn't good enough but we need to fix that soon
                 if descriptor_getter.is_none() && descriptor_setter.is_none() {
-                    // TODO BE: Move this to a helper function and make sure any code using the same logic uses it
-                    let is_function = matches!(
-                        ty,
-                        Type::Function { .. }
-                            | Type::Overload { .. }
-                            | Type::BoundMethod { .. }
-                            | Type::Callable { .. }
-                    );
-                    let variance =
-                        if is_function || is_private_field(name) || readonly || field.is_final() {
-                            Variance::Covariant
-                        } else {
-                            Variance::Invariant
-                        };
-
-                    on_type(variance, true, ty, on_edge, on_var, class_lookup_map);
+                    let variance = if ty.is_function_type()
+                        || is_private_field(name)
+                        || readonly
+                        || field.is_final()
+                    {
+                        Variance::Covariant
+                    } else {
+                        Variance::Invariant
+                    };
+                    on_type(variance, true, ty, on_edge, on_var);
                 } else {
                     // Case 2: Descriptor or property (has getter and/or setter)
                     // Not too sure about this yet, will need to investigate further.
 
                     // Getter: covariant on return type
                     if let Some(typ) = descriptor_getter {
-                        on_type(
-                            Variance::Covariant,
-                            true,
-                            typ,
-                            on_edge,
-                            on_var,
-                            class_lookup_map,
-                        );
+                        on_type(Variance::Covariant, true, typ, on_edge, on_var);
                     }
 
                     // Setter: contravariant on value being written
                     if let Some(typ) = descriptor_setter {
-                        on_type(
-                            Variance::Contravariant,
-                            true,
-                            typ,
-                            on_edge,
-                            on_var,
-                            class_lookup_map,
-                        );
+                        on_type(Variance::Contravariant, true, typ, on_edge, on_var);
                     }
                 }
             }
@@ -371,11 +322,10 @@ fn loop_fn<'a>(
     contains_bivariant: &mut bool,
     get_metadata: &impl Fn(&Class) -> Arc<ClassMetadata>,
     get_fields: &impl Fn(&Class) -> SmallMap<String, Arc<ClassField>>,
-    class_lookup_map: &mut SmallMap<String, Arc<Class>>,
 ) -> TParamArray {
-    let class_name = class.name().as_str().to_owned();
+    let class_name = class.qname();
 
-    if let Some(params) = environment.get(&class_name) {
+    if let Some(params) = environment.get(class_name) {
         return params.clone();
     }
 
@@ -386,25 +336,10 @@ fn loop_fn<'a>(
     let mut on_var = |_name: &str, _variance: Variance, _inj: Injectivity| {};
 
     // get the variance results of a given class c
-    let mut on_edge = |map: &mut SmallMap<String, Arc<Class>>, c: &Class| {
-        loop_fn(
-            c,
-            environment,
-            contains_bivariant,
-            get_metadata,
-            get_fields,
-            map,
-        )
-    };
+    let mut on_edge =
+        |c: &Class| loop_fn(c, environment, contains_bivariant, get_metadata, get_fields);
 
-    variance_visitor::on_class(
-        class,
-        &mut on_edge,
-        &mut on_var,
-        get_metadata,
-        get_fields,
-        class_lookup_map,
-    );
+    variance_visitor::on_class(class, &mut on_edge, &mut on_var, get_metadata, get_fields);
 
     params
 }
@@ -412,7 +347,6 @@ fn loop_fn<'a>(
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn variance_map(&self, class: &Class) -> Arc<VarianceMap> {
         let mut contains_bivariant: bool = false;
-        let mut class_lookup_map: SmallMap<String, Arc<Class>> = SmallMap::new();
 
         let post_inference_initial = convert_gp_to_map(class.tparams(), &mut contains_bivariant);
 
@@ -446,7 +380,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             solver: &AnswersSolver<'a, Ans>,
             class: &Class,
             env: &VarianceEnv,
-            class_lookup_map: &mut SmallMap<String, Arc<Class>>,
         ) -> VarianceEnv {
             let mut environment_prime: VarianceEnv = SmallMap::new();
             let mut changed = false;
@@ -457,19 +390,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let metadata = solver.get_metadata_for_class(class);
                 let ancestor_class = metadata.ancestors(solver.stdlib).find(|ancestor| {
                     let class_obj = ancestor.class_object();
-                    class_obj.name() == class_name
+                    class_obj.qname() == class_name
                 });
 
                 // TODO zeina: If our invariants are right, "continue" should be replace with a panic
                 // after we stop visiting monomorphic types
                 let my_class = if let Some(ancestor) = ancestor_class {
-                    Arc::new(ancestor.class_object().clone())
-                } else if class.name() == class_name {
-                    Arc::new(class.clone())
-                } else if let Some(class_arc) = class_lookup_map.get(class_name) {
-                    class_arc.clone()
+                    ancestor.class_object()
+                } else if class.qname() == class_name {
+                    class
                 } else {
-                    continue;
+                    let class_name_module = class_name.module_info().name();
+                    let curr_module = solver.module_info().name();
+
+                    if class_name_module != curr_module {
+                        let exports = solver.exports.get(class_name_module).ok();
+
+                        if exports.is_none_or(|export| {
+                            !export.exports(solver.exports).contains_key(class_name.id())
+                        }) {
+                            continue;
+                        }
+                    }
+
+                    let ty = solver.get_from_module(
+                        class_name.module_info().name(),
+                        Some(class_name.module_info().path()),
+                        &KeyExport(class_name.id().clone()),
+                    );
+                    if let Type::ClassDef(cls) = &*ty {
+                        &cls.dupe()
+                    } else {
+                        continue;
+                    }
                 };
 
                 let mut on_var = |name: &str, variance: Variance, inj: Injectivity| {
@@ -481,17 +434,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 };
 
-                let mut on_edge = |_map: &mut SmallMap<String, Arc<Class>>, c: &Class| {
-                    env.get(c.name().as_str()).cloned().unwrap_or_else(Vec::new)
-                };
+                let mut on_edge = |c: &Class| env.get(c.qname()).cloned().unwrap_or_else(Vec::new);
 
                 variance_visitor::on_class(
-                    &my_class,
+                    my_class,
                     &mut on_edge,
                     &mut on_var,
                     &|c| solver.get_metadata_for_class(c),
                     &|c| solver.get_class_field_map(c),
-                    class_lookup_map,
                 );
 
                 if params != &params_prime {
@@ -502,7 +452,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
 
             if changed {
-                fixpoint(solver, class, &environment_prime, class_lookup_map)
+                fixpoint(solver, class, &environment_prime)
             } else {
                 environment_prime
             }
@@ -519,12 +469,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &mut contains_bivariant,
                 &|c| self.get_metadata_for_class(c),
                 &|c| self.get_class_field_map(c),
-                &mut class_lookup_map,
             );
 
-            let environment = fixpoint(self, class, &environment, &mut class_lookup_map);
+            let environment = fixpoint(self, class, &environment);
 
-            let class_name = class.name().as_str();
+            let class_name = class.qname();
 
             let params = environment
                 .get(class_name)

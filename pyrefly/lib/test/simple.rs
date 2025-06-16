@@ -1279,6 +1279,13 @@ assert_type(__debug__, bool)
 );
 
 testcase!(
+    test_invalid_assignment_no_panic,
+    r#"
+-a=a=  # E: Parse error: Invalid assignment target  # E: Parse error: Expected an expression
+    "#,
+);
+
+testcase!(
     test_invalid_dunder_bool,
     r#"
 class NotBoolable:

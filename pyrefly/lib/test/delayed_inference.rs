@@ -9,6 +9,17 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
+    test_first_use_reads_name_twice,
+    r#"
+def f():
+    x = ["test"]
+    y = g(x, x)  # E: Argument `list[str]` is not assignable to parameter `b` with type `list[int]` in function `g`
+def g(a: list[str], b: list[int]) -> None:
+    pass
+"#,
+);
+
+testcase!(
     test_empty_list_class,
     r#"
 from typing import assert_type, Any

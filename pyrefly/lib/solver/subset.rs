@@ -729,9 +729,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 let want_fields = self.type_order.typed_dict_fields(want);
 
                 want_fields.iter().all(|(k, want_v)| {
-                    got_fields
-                        .get(k)
-                        .is_some_and(|got_v| self.is_subset_eq(&got_v.ty, &want_v.ty))
+                    got_fields.get(k).is_some_and(|got_v| {
+                        match (got_v.read_only, want_v.read_only) {
+                            // ReadOnly cannot be assigned to Non-ReadOnly
+                            (true, false) => false,
+                            // Non-ReadOnly fields are invariant
+                            (false, false) => self.is_equal(&got_v.ty, &want_v.ty),
+                            // ReadOnly `want` fields are covariant
+                            (_, true) => self.is_subset_eq(&got_v.ty, &want_v.ty),
+                        }
+                    })
                 }) && got_fields.iter().all(|(k, got_v)| {
                     want_fields
                         .get(k)

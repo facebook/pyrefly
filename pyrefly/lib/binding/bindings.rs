@@ -813,7 +813,7 @@ impl<'a> BindingsBuilder<'a> {
                     if let Some(pinned_idx) = maybe_pinned_idx {
                         return Ok((idx, Some(pinned_idx)));
                     } else {
-                        return ok_no_usage(flow.key);
+                        return ok_no_usage(idx);
                     }
                 }
             }
@@ -848,6 +848,10 @@ impl<'a> BindingsBuilder<'a> {
     ///   - Otherwise, we return `(pinned_idx, Some(pinned_idx))` which will tell
     ///     us to record that the first usage does not pin (and therefore the
     ///     `Binding::Pin` should force placeholder types to default values).
+    /// - If this is a secondary read of a `Binding::Pin` and the usage is the same
+    ///   usage as the first read, return `(pinned_idx, None)`: we don't need to
+    ///   record first use because that is done already, but we want to continue
+    ///   forwarding the raw binding throughout this first use.
     fn detect_possible_first_use(
         &self,
         flow_idx: Idx<Key>,
@@ -857,6 +861,26 @@ impl<'a> BindingsBuilder<'a> {
             Some(Binding::Pin(unpinned_idx, FirstUse::Undetermined)) => match usage {
                 Usage::StaticTypeInformation | Usage::Narrowing => (flow_idx, Some(flow_idx)),
                 Usage::User(..) => (*unpinned_idx, Some(flow_idx)),
+            },
+            Some(Binding::Pin(unpinned_idx, first_use)) => match first_use {
+                FirstUse::DoesNotPin => (flow_idx, None),
+                FirstUse::Undetermined => match usage {
+                    Usage::StaticTypeInformation | Usage::Narrowing => (flow_idx, Some(flow_idx)),
+                    Usage::User(..) => (*unpinned_idx, Some(flow_idx)),
+                },
+                FirstUse::UsedBy(usage_idx) => {
+                    // Detect secondary reads of the same name from a first use, and make
+                    // sure they all use the raw binding rather than the `Pin`.
+                    let currently_in_first_use = match usage {
+                        Usage::User(idx, ..) => idx == usage_idx,
+                        Usage::Narrowing | Usage::StaticTypeInformation => false,
+                    };
+                    if currently_in_first_use {
+                        (*unpinned_idx, None)
+                    } else {
+                        (flow_idx, None)
+                    }
+                }
             },
             _ => (flow_idx, None),
         }

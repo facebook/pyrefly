@@ -657,3 +657,26 @@ class MutableChild(MutableBase):  # OK
     y: str
     "#,
 );
+
+testcase!(
+    test_initvar_not_stored_as_attributes,
+    r#"
+from dataclasses import dataclass, field, InitVar
+@dataclass
+class InitVarTest:
+    value: int = field(init=False)
+    mode: InitVar[str]
+    count: InitVar[int]
+    def __post_init__(self, mode: str, count: int):
+        if mode == "number":
+            self.value = count * 10
+        else:
+            self.value = 0
+instance = InitVarTest("number", 5)
+# InitVar fields should not be accessible as instance attributes
+instance.mode  # E: Object of class `InitVarTest` has no attribute `mode`
+instance.count  # E: Object of class `InitVarTest` has no attribute `count`
+# Regular fields should be accessible
+instance.value  # OK
+    "#,
+);

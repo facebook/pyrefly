@@ -11,6 +11,8 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
+use std::hash::Hash;
+use std::hash::Hasher;
 
 use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
@@ -24,6 +26,7 @@ use crate::types::equality::TypeEq;
 use crate::types::equality::TypeEqCtx;
 
 /// A name, plus where it is defined.
+#[derive(Clone)]
 pub struct QName {
     name: Identifier,
     module: ModuleInfo,
@@ -45,6 +48,12 @@ impl Debug for QName {
 impl PartialEq for QName {
     fn eq(&self, other: &Self) -> bool {
         self.key() == other.key()
+    }
+}
+
+impl Hash for QName {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key().hash(state);
     }
 }
 

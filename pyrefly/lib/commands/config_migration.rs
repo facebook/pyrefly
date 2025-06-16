@@ -40,18 +40,26 @@ pub struct Args {
 }
 
 impl Args {
-    fn load_from_pyproject(raw_file: &str) -> anyhow::Result<ConfigFile> {
-        match mypy::parse_pyproject_config(raw_file) {
+    fn load_from_pyproject(original_config_path: &Path) -> anyhow::Result<ConfigFile> {
+        let raw_file = fs_anyhow::read_to_string(original_config_path)?;
+        match mypy::parse_pyproject_config(&raw_file) {
             ok @ Ok(_) => {
-                info!("Migrating [tool.mypy] config from pyproject.toml");
+                info!(
+                    "Migrating [tool.mypy] config from pyproject.toml in `{}`",
+                    original_config_path.parent().unwrap().display()
+                );
                 return ok;
             }
             Err(_) => {
                 // Try to parse [tool.pyright] instead.
             }
         }
-        pyright::parse_pyproject_toml(raw_file)
-            .inspect(|_| info!("Migrating [tool.pyright] config from pyproject.toml"))
+        pyright::parse_pyproject_toml(&raw_file).inspect(|_| {
+            info!(
+                "Migrating [tool.pyright] config from pyproject.toml in `{}`",
+                original_config_path.parent().unwrap().display()
+            )
+        })
     }
 
     fn find_config(start: &Path) -> anyhow::Result<PathBuf> {
@@ -98,15 +106,20 @@ impl Args {
         };
         let config = if original_config_path.file_name() == Some("pyrightconfig.json".as_ref()) {
             let raw_file = fs_anyhow::read_to_string(original_config_path)?;
-            info!("Migrating pyright config file");
+            info!(
+                "Migrating pyright config file from: `{}`",
+                original_config_path.display()
+            );
             let pyr = serde_jsonrc::from_str::<PyrightConfig>(&raw_file)?;
             pyr.convert()
         } else if original_config_path.file_name() == Some("mypy.ini".as_ref()) {
-            info!("Migrating mypy config file");
+            info!(
+                "Migrating mypy config file from: `{}`",
+                original_config_path.display()
+            );
             MypyConfig::parse_mypy_config(original_config_path)?
         } else if original_config_path.file_name() == Some("pyproject.toml".as_ref()) {
-            let raw_file = fs_anyhow::read_to_string(original_config_path)?;
-            Self::load_from_pyproject(&raw_file)?
+            Self::load_from_pyproject(original_config_path)?
         } else {
             error!(
                 "Currently only migration from pyrightconfig.json, mypy.ini, and pyproject.toml is supported, not `{}`",
@@ -388,13 +401,16 @@ files = 1
     fn test_run_pyproject_mypy_over_pyright() -> anyhow::Result<()> {
         // The current implementation favors mypy over pyright. This test documents that.
         // However, we may want to change this in the future, so it's OK to break this test.
-        let pyproject = r#"[tool.pyright]
+        let tmp = tempfile::tempdir()?;
+        let original_config_path = tmp.path().join("pyproject.toml");
+        let pyproject = br#"[tool.pyright]
 include = ["pyright.py"]
 
 [tool.mypy]
 files = ["mypy.py"]
 "#;
-        let cfg = Args::load_from_pyproject(pyproject)?;
+        fs_anyhow::write(&original_config_path, pyproject)?;
+        let cfg = Args::load_from_pyproject(&original_config_path)?;
         assert_eq!(cfg.project_includes, Globs::new(vec!["mypy.py".to_owned()]));
         Ok(())
     }

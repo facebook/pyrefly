@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly"
-version = "0.19.2"
+version = "0.20.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -20,8 +20,8 @@ path = "bin/main.rs"
 anstream = "0.6.11"
 anyhow = "1.0.95"
 append-only-vec = "0.1.2"
-base64 = "0.22.1"
-blake3 = { version = "=1.5.5", features = ["mmap", "rayon", "traits-preview"] }
+base64 = { version = "0.22.1", features = ["alloc"] }
+blake3 = { version = "=1.6.1", features = ["mmap", "rayon", "traits-preview"] }
 clap = { version = "4.5.38", features = ["derive", "env", "string", "unicode", "wrap_help"] }
 configparser = { version = "3.0.3", features = ["indexmap"] }
 convert_case = "0.6"
