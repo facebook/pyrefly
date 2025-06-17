@@ -1,9 +1,9 @@
 {
   "total": 136,
-  "pass": 58,
-  "fail": 78,
+  "pass": 59,
+  "fail": 77,
   "pass_rate": 0.43,
-  "differences": 378,
+  "differences": 377,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -62,7 +62,8 @@
     "typeddicts_final.py",
     "typeddicts_operations.py",
     "typeddicts_readonly.py",
-    "typeddicts_readonly_kwargs.py"
+    "typeddicts_readonly_kwargs.py",
+    "typeddicts_usage.py"
   ],
   "failing": {
     "aliases_implicit.py": 6,
@@ -141,8 +142,7 @@
     "typeddicts_readonly_inheritance.py": 7,
     "typeddicts_readonly_update.py": 2,
     "typeddicts_required.py": 2,
-    "typeddicts_type_consistency.py": 1,
-    "typeddicts_usage.py": 1
+    "typeddicts_type_consistency.py": 1
   },
   "comment": "@generated"
 }
