@@ -315,6 +315,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => Either::Right((n.clone(), self.expr_infer(x, errors))),
             });
         let typed_dict_metadata = if is_typed_dict {
+            // Validate that only 'total' keyword is allowed for TypedDict
+            for (name, _) in &keywords {
+                if name.as_str() != "total" {
+                    self.error(
+                        errors,
+                        cls.range(),
+                        ErrorKind::BadTypedDict,
+                        None,
+                        format!(
+                            "TypedDict does not support keyword argument `{}`",
+                            name.as_str()
+                        ),
+                    );
+                }
+            }
+
             let is_total = !keywords.iter().any(|(n, t)| {
                 n.as_str() == "total" && matches!(t, Type::Literal(Lit::Bool(false)))
             });

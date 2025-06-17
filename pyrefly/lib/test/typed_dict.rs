@@ -676,3 +676,19 @@ def test(x: TypedDict):  # E: `TypedDict` is not allowed in this context
 x: TypedDict  # E: `TypedDict` is not allowed in this context
     "#,
 );
+
+testcase!(
+    test_invalid_typed_dict_keywords,
+    r#"
+from typing import TypedDict
+
+class TD1(TypedDict, total=True):  # OK
+    x: int
+
+class TD2(TypedDict, foo=1):  # E: TypedDict does not support keyword argument `foo`
+    x: int
+
+class TD3(TypedDict, bar="test", baz=False):  # E: TypedDict does not support keyword argument `bar`  # E: TypedDict does not support keyword argument `baz`
+    x: int
+"#,
+);
