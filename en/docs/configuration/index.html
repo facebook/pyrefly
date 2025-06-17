@@ -26,8 +26,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.77467482.css">
-<script src="/assets/js/runtime~main.677032dc.js" defer="defer"></script>
-<script src="/assets/js/main.1491331a.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.5c8bd726.js" defer="defer"></script>
+<script src="/assets/js/main.310f8e89.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -48,14 +48,26 @@ name with the <code>--config</code>/<code>-c</code> flag, but they will not be a
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="precedence-in-options">Precedence in Options<a href="#precedence-in-options" class="hash-link" aria-label="Direct link to Precedence in Options" title="Direct link to Precedence in Options">​</a></h2>
 <p><a href="#configuration-options">Configuration options</a> are selected in the following order</p>
 <ol>
-<li>CLI flags</li>
+<li>CLI flags<!-- -->
+<ul>
 <li>Examples: <code>--project-excludes &lt;value&gt;</code>, <code>--python-version &lt;value&gt;</code></li>
-<li>Environment variable overrides -- this is the same as <code>PYREFLY_&lt;config option name&gt;</code></li>
+</ul>
+</li>
+<li>Environment variable overrides -- this is the same as <code>PYREFLY_&lt;config option name&gt;</code>
+<ul>
 <li>Examples: <code>export PROJECT_EXCLUDES=&lt;value&gt;</code>, <code>PYTHON_VERSION=&lt;value&gt; pyrefly ...</code></li>
-<li>Configuration options</li>
+</ul>
+</li>
+<li>Configuration options<!-- -->
+<ul>
 <li>Examples: (in a <code>pyrefly.toml</code>) <code>project-excludes = &lt;value&gt;</code>, <code>python-version = &lt;value&gt;</code></li>
-<li>Pyrefly defaults</li>
+</ul>
+</li>
+<li>Pyrefly defaults<!-- -->
+<ul>
 <li>See <a href="#default-pyreflytoml">Default <code>pyrefly.toml</code></a> for the default values used</li>
+</ul>
+</li>
 </ol>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="type-checking-modes">Type Checking Modes<a href="#type-checking-modes" class="hash-link" aria-label="Direct link to Type Checking Modes" title="Direct link to Type Checking Modes">​</a></h2>
 <p>Pyrefly has two different modes it can run in when type checking your project, which
@@ -284,7 +296,7 @@ information will still be replaced with <code>typing.Any</code>.</p>
 <li>Type: list of regex</li>
 <li>Default: <code>[]</code></li>
 <li>Flag equivalent: --replace-imports-with-any</li>
-<li>ENV equivalent: PYREFLY_REPLACE_IMPORTS_WITH_ANY</li>
+<li>ENV equivalent: <code>PYREFLY_REPLACE_IMPORTS_WITH_ANY</code></li>
 <li>Equivalent configs: <code>ignore_missing_imports</code> or <code>follow_imports = skip</code> in mypy</li>
 <li>Notes:<!-- -->
 <ul>
@@ -302,7 +314,7 @@ the substring &#x27;<span>@</span>generated&#x27;.</p>
 <li>Type: bool</li>
 <li>Default: false</li>
 <li>Flag equivalent: <code>--ignore-errors-in-generated-code</code></li>
-<li>ENV equivalent: <code>IGNORE_ERRORS_IN_GENERATED_CODE</code></li>
+<li>ENV equivalent: <code>PYREFLY_IGNORE_ERRORS_IN_GENERATED_CODE</code></li>
 <li>Equivalent configs: none</li>
 </ul>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="use-untyped-imports"><code>use-untyped-imports</code><a href="#use-untyped-imports" class="hash-link" aria-label="Direct link to use-untyped-imports" title="Direct link to use-untyped-imports">​</a></h3>
@@ -331,7 +343,7 @@ type stubs could be found. See
 <li>Type: bool</li>
 <li>Default: true</li>
 <li>Flag equivalent: --ignore-missing-source</li>
-<li>ENV equivalent: PYREFLY_IGNORE_MISSING_SOURCE</li>
+<li>ENV equivalent: <code>PYREFLY_IGNORE_MISSING_SOURCE</code></li>
 <li>Equivalent configs: <code>reportMissingModuleSource</code> in Pyright</li>
 </ul>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="untyped-def-behavior"><code>untyped-def-behavior</code><a href="#untyped-def-behavior" class="hash-link" aria-label="Direct link to untyped-def-behavior" title="Direct link to untyped-def-behavior">​</a></h3>

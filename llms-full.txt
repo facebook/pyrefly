@@ -274,13 +274,13 @@ Both absolute and config-relative paths are supported.
 [Configuration options](#configuration-options) are selected in the following order
 
 1. CLI flags
-  1. Examples: `--project-excludes <value>`, `--python-version <value>`
+    * Examples: `--project-excludes <value>`, `--python-version <value>`
 2. Environment variable overrides -- this is the same as `PYREFLY_<config option name>`
-  1. Examples: `export PROJECT_EXCLUDES=<value>`, `PYTHON_VERSION=<value> pyrefly ...`
+    * Examples: `export PROJECT_EXCLUDES=<value>`, `PYTHON_VERSION=<value> pyrefly ...`
 3. Configuration options
-  1. Examples: (in a `pyrefly.toml`) `project-excludes = <value>`, `python-version = <value>`
+    * Examples: (in a `pyrefly.toml`) `project-excludes = <value>`, `python-version = <value>`
 4. Pyrefly defaults
-  1. See [Default `pyrefly.toml`](#default-pyreflytoml) for the default values used
+    * See [Default `pyrefly.toml`](#default-pyreflytoml) for the default values used
 
 ## Type Checking Modes
 
@@ -518,7 +518,7 @@ information will still be replaced with `typing.Any`.
 - Type: list of regex
 - Default: `[]`
 - Flag equivalent: --replace-imports-with-any
-- ENV equivalent: PYREFLY_REPLACE_IMPORTS_WITH_ANY
+- ENV equivalent: `PYREFLY_REPLACE_IMPORTS_WITH_ANY`
 - Equivalent configs: `ignore_missing_imports` or `follow_imports = skip` in mypy
 - Notes:
   - `errors = {import-error = false}` (TOML inline table for `errors`) has similar behavior in Pyrefly, but ignores
@@ -534,7 +534,7 @@ the substring '<span>&#64;</span>generated'.
 - Type: bool
 - Default: false
 - Flag equivalent: `--ignore-errors-in-generated-code`
-- ENV equivalent: `IGNORE_ERRORS_IN_GENERATED_CODE`
+- ENV equivalent: `PYREFLY_IGNORE_ERRORS_IN_GENERATED_CODE`
 - Equivalent configs: none
 
 ### `use-untyped-imports`
@@ -566,7 +566,7 @@ type stubs could be found. See
 - Type: bool
 - Default: true
 - Flag equivalent: --ignore-missing-source
-- ENV equivalent: PYREFLY_IGNORE_MISSING_SOURCE
+- ENV equivalent: `PYREFLY_IGNORE_MISSING_SOURCE`
 - Equivalent configs: `reportMissingModuleSource` in Pyright
 
 ### `untyped-def-behavior`
