@@ -74,7 +74,9 @@ impl SpecialForm {
     /// Is this special form valid as an un-parameterized annotation anywhere?
     pub fn is_valid_unparameterized_annotation(self, type_form_context: TypeFormContext) -> bool {
         match self {
-            SpecialForm::Protocol => matches!(type_form_context, TypeFormContext::BaseClassList),
+            SpecialForm::Protocol | SpecialForm::TypedDict => {
+                matches!(type_form_context, TypeFormContext::BaseClassList)
+            }
             SpecialForm::TypeAlias => matches!(
                 type_form_context,
                 TypeFormContext::TypeAlias | TypeFormContext::VarAnnotation(Initialized::Yes)
@@ -87,7 +89,6 @@ impl SpecialForm {
             SpecialForm::LiteralString
             | SpecialForm::Never
             | SpecialForm::NoReturn
-            | SpecialForm::TypedDict
             | SpecialForm::Type
             | SpecialForm::SelfType => true,
             _ => false,

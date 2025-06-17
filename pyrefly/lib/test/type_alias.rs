@@ -487,7 +487,7 @@ testcase!(
 from typing import *
 Ts = TypeVarTuple('Ts')
 P = ParamSpec('P')
-t1: TypeAlias = Unpack[TypedDict]  # E: Unpack is not allowed in this context
+t1: TypeAlias = Unpack[TypedDict]  # E: Unpack is not allowed in this context # E: Expected a type argument for `TypedDict`
 t2: TypeAlias = P  # E: ParamSpec[P] is not allowed in this context
 t3: TypeAlias = Unpack[Ts]  # E: Unpack is not allowed in this context
 t4: TypeAlias = Literal  # E: Expected a type argument for `Literal`
@@ -508,7 +508,7 @@ testcase!(
     r#"
 from typing import Callable, Any
 def foo(x: Callable[[str], Any]) -> None:
-    pass 
+    pass
 
 foo(str)
     "#,
@@ -536,7 +536,7 @@ testcase!(
 from typing import TypeAlias
 
 class B: ...
-R: TypeAlias = B  
+R: TypeAlias = B
 class C: ...
 class F:
     T: TypeAlias = C

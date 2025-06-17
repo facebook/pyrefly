@@ -627,7 +627,7 @@ class TD(TypedDict):
 testcase!(
     test_typed_dict_isinstance_issubclass_not_allowed,
     r#"
-from typing import *
+from typing import TypedDict
 
 class D(TypedDict):
     x: int
@@ -636,4 +636,29 @@ x = int
 isinstance(x, D)  # E: TypedDict `D` not allowed as second argument to isinstance()
 issubclass(x, D)  # E: TypedDict `D` not allowed as second argument to issubclass()
 "#,
+);
+
+testcase!(
+    test_typeddict_valid_base_class,
+    r#"
+from typing import TypedDict
+
+class Person(TypedDict):
+    name: str
+    age: int
+    "#,
+);
+
+testcase!(
+    test_typeddict_invalid_annotations,
+    r#"
+from typing import TypedDict, TypeVar
+
+T = TypeVar("T", bound=TypedDict)  # E: Expected a type argument for `TypedDict`
+
+def test(x: TypedDict):  # E: Expected a type argument for `TypedDict`
+    pass
+
+x: TypedDict  # E: Expected a type argument for `TypedDict`
+    "#,
 );
