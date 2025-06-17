@@ -22,7 +22,7 @@ use crate::state::loader::FindError;
 static PY_TYPED_CACHE: LazyLock<Mutex<SmallMap<PathBuf, PyTyped>>> =
     LazyLock::new(|| Mutex::new(SmallMap::new()));
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Default, Clone, Dupe)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Default, Clone, Dupe)]
 enum PyTyped {
     #[default]
     Missing,
@@ -40,6 +40,9 @@ enum FindResult {
     /// The path component indicates where to continue search next. It may contain more than one directories as the namespace package
     /// may span across multiple search roots.
     NamespacePackage(Vec1<PathBuf>),
+    /// Found a compiled Python file (.pyc). Represents a module compiled to bytecode, lacking source and type info.
+    /// Treated as `typing.Any` to handle imports without type errors.
+    CompiledModule(PathBuf),
 }
 
 impl FindResult {
@@ -81,6 +84,7 @@ impl FindResult {
                 .map(|path| py_typed_cached(path))
                 .max()
                 .unwrap_or_default(),
+            Self::CompiledModule(_) => PyTyped::Partial,
         }
     }
 }
@@ -103,6 +107,11 @@ fn find_one_part<'a>(name: &Name, roots: impl Iterator<Item = &'a PathBuf>) -> O
                 return Some(FindResult::SingleFileModule(candidate_path));
             }
         }
+        // Check if `name` corresponds to a compiled module.
+        let candidate_pyc_path = root.join(format!("{name}.pyc"));
+        if candidate_pyc_path.exists() {
+            return Some(FindResult::CompiledModule(candidate_pyc_path));
+        }
         // Finally check if `name` corresponds to a namespace package.
         if candidate_dir.is_dir() {
             namespace_roots.push(candidate_dir);
@@ -122,7 +131,7 @@ fn continue_find_module(start_result: FindResult, components_rest: &[Name]) -> O
                 // Nothing has been found in the previous round. No point keep looking.
                 break;
             }
-            Some(FindResult::SingleFileModule(_)) => {
+            Some(FindResult::SingleFileModule(_)) | Some(FindResult::CompiledModule(_)) => {
                 // We've already reached leaf nodes. Cannot keep searching
                 current_result = None;
                 break;
@@ -136,9 +145,9 @@ fn continue_find_module(start_result: FindResult, components_rest: &[Name]) -> O
         }
     }
     current_result.map(|x| match x {
-        FindResult::SingleFileModule(path) | FindResult::RegularPackage(path, _) => {
-            ModulePath::filesystem(path)
-        }
+        FindResult::SingleFileModule(path)
+        | FindResult::RegularPackage(path, _)
+        | FindResult::CompiledModule(path) => ModulePath::filesystem(path),
         FindResult::NamespacePackage(roots) => {
             // TODO(grievejia): Preserving all info in the list instead of dropping all but the first one.
             ModulePath::namespace(roots.first().clone())
@@ -756,6 +765,62 @@ mod tests {
             .unwrap()
             .unwrap(),
             ModulePath::filesystem(root.join("baz-stubs/qux/__init__.py")),
+        );
+    }
+
+    #[test]
+    fn test_find_compiled_module() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("compiled_module.pyc")]);
+        assert_eq!(
+            find_module_in_search_path(
+                ModuleName::from_str("compiled_module"),
+                [root.to_path_buf()].iter(),
+            ),
+            Some(ModulePath::filesystem(root.join("compiled_module.pyc")))
+        );
+    }
+
+    #[test]
+    fn test_pyc_file_treated_as_partial() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("compiled_module.pyc")]);
+        if let Some(find_result) =
+            find_one_part(&Name::new("compiled_module"), [root.to_path_buf()].iter())
+        {
+            assert_eq!(find_result.py_typed(), PyTyped::Partial);
+        } else {
+            panic!("Expected to find a compiled module");
+        }
+    }
+
+    #[test]
+    fn test_find_one_part_with_pyc() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("module.pyc")]);
+        let result = find_one_part(&Name::new("module"), [root.to_path_buf()].iter());
+        match result {
+            Some(FindResult::CompiledModule(path)) => {
+                assert_eq!(path, root.join("module.pyc"));
+            }
+            _ => panic!("Expected to find a CompiledModule"),
+        }
+    }
+
+    #[test]
+    fn test_continue_find_module_with_pyc() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("module.pyc")]);
+        let start_result =
+            find_one_part(&Name::new("module"), [root.to_path_buf()].iter()).unwrap();
+        let result = continue_find_module(start_result, &[]);
+        assert_eq!(
+            result,
+            Some(ModulePath::filesystem(root.join("module.pyc")))
         );
     }
 }
