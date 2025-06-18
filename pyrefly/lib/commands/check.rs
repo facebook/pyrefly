@@ -81,11 +81,11 @@ enum OutputFormat {
 
 #[derive(Debug, Parser, Clone)]
 pub struct Args {
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Output")]
     output: OutputArgs,
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Behavior")]
     behavior: BehaviorArgs,
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Config Overrides")]
     config_override: ConfigOverrideArgs,
 }
 
