@@ -53,8 +53,12 @@ impl Errors {
     pub fn check_against_expectations(&self) -> anyhow::Result<()> {
         for (load, config) in &self.loads {
             let error_config = config.get_error_config(load.module_info.path().as_path());
-            Expectation::parse(load.module_info.dupe(), load.module_info.contents())
-                .check(&load.errors.collect(&error_config).shown)?;
+            Expectation::parse(load.module_info.dupe(), load.module_info.contents()).check(
+                &load
+                    .errors
+                    .collect(&error_config)
+                    .shown_errors_and_reveal_types(),
+            )?;
         }
         Ok(())
     }

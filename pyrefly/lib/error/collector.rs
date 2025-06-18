@@ -73,6 +73,24 @@ pub struct CollectedErrors {
     pub suppressed: Vec<Error>,
     /// Errors that are disabled with configuration options.
     pub disabled: Vec<Error>,
+    /// Calls to `reveal_type` that will be reported to the user.
+    /// These are collected here because we treat `reveal_type` calls as errors, but they are not real errors.
+    pub shown_reveal_type: Vec<Error>,
+}
+
+impl CollectedErrors {
+    /// Returns an iterator over all errors that will be shown to the user, including `reveal_type` calls.
+    fn shown_errors_and_reveal_types_iter(&self) -> impl Iterator<Item = Error> {
+        self.shown
+            .clone()
+            .into_iter()
+            .chain(self.shown_reveal_type.clone())
+    }
+
+    /// Returns a vector of all errors that will be shown to the user, including `reveal_type` calls.
+    pub fn shown_errors_and_reveal_types(&self) -> Vec<Error> {
+        self.shown_errors_and_reveal_types_iter().collect()
+    }
 }
 
 /// Collects the user errors (e.g. type errors) associated with a module.
@@ -142,6 +160,10 @@ impl ErrorCollector {
                     result.suppressed.push(err.clone());
                 } else if !error_config.display_config.is_enabled(err.error_kind()) {
                     result.disabled.push(err.clone());
+                } else if err.error_kind() == ErrorKind::RevealType {
+                    // Store `reveal_type` errors separately.
+                    // We don't want to show them as errors, but we still want to collect them.
+                    result.shown_reveal_type.push(err.clone());
                 } else {
                     result.shown.push(err.clone());
                 }

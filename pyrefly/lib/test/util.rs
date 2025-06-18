@@ -215,7 +215,7 @@ impl TestEnv {
                 .transaction()
                 .get_errors(handles.iter())
                 .collect_errors()
-                .shown,
+                .shown_errors_and_reveal_types(),
         );
         (state, move |module| {
             let name = ModuleName::from_str(module);
@@ -449,7 +449,7 @@ pub fn testcase_for_macro(
             )]);
             t.run(&[(h.dupe(), Require::Everything)]);
             let errors = t.get_errors([&h]);
-            print_errors(&errors.collect_errors().shown);
+            print_errors(&errors.collect_errors().shown_errors_and_reveal_types());
             errors.check_against_expectations()?;
         } else {
             let (state, handle) = env.clone().to_state();

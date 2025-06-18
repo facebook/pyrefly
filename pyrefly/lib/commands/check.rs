@@ -639,14 +639,15 @@ impl Args {
         }
 
         let errors = loads.collect_errors();
+        let shown_errors_and_reveal_types = errors.shown_errors_and_reveal_types();
         if let Some(path) = &self.output.output {
             self.output
                 .output_format
-                .write_errors_to_file(path, &errors.shown)?;
+                .write_errors_to_file(path, &shown_errors_and_reveal_types)?;
         } else {
             self.output
                 .output_format
-                .write_errors_to_console(&errors.shown)?;
+                .write_errors_to_console(&shown_errors_and_reveal_types)?;
         }
         memory_trace.stop();
         if let Some(limit) = self.output.count_errors {
