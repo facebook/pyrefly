@@ -26,8 +26,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.77467482.css">
-<script src="/assets/js/runtime~main.5c8bd726.js" defer="defer"></script>
-<script src="/assets/js/main.310f8e89.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.6abbe953.js" defer="defer"></script>
+<script src="/assets/js/main.f8f4f5fc.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -295,7 +295,7 @@ information will still be replaced with <code>typing.Any</code>.</p>
 <ul>
 <li>Type: list of regex</li>
 <li>Default: <code>[]</code></li>
-<li>Flag equivalent: --replace-imports-with-any</li>
+<li>Flag equivalent: <code>--replace-imports-with-any</code></li>
 <li>ENV equivalent: <code>PYREFLY_REPLACE_IMPORTS_WITH_ANY</code></li>
 <li>Equivalent configs: <code>ignore_missing_imports</code> or <code>follow_imports = skip</code> in mypy</li>
 <li>Notes:<!-- -->
@@ -342,7 +342,7 @@ type stubs could be found. See
 <ul>
 <li>Type: bool</li>
 <li>Default: true</li>
-<li>Flag equivalent: --ignore-missing-source</li>
+<li>Flag equivalent: <code>--ignore-missing-source</code></li>
 <li>ENV equivalent: <code>PYREFLY_IGNORE_MISSING_SOURCE</code></li>
 <li>Equivalent configs: <code>reportMissingModuleSource</code> in Pyright</li>
 </ul>
@@ -363,8 +363,8 @@ and finding definitions will not be available there.</p>
 <li>Type: one of <code>&quot;check-and-infer-return-type&quot;</code>, <code>&quot;check-and-infer-return-any&quot;</code>,
 <code>&quot;skip-and-infer-return-any&quot;</code></li>
 <li>Default: `&quot;check-and-infer-return-type&quot;</li>
-<li>Flag equivalent: none</li>
-<li>ENV equivalent: none</li>
+<li>Flag equivalent: <code>--untyped-def-behavior</code></li>
+<li>ENV equivalent: <code>PYREFLY_UNTYPED_DEF_BEHAVIOR</code></li>
 <li>Equivalent configs:<!-- -->
 <ul>
 <li>The <code>&quot;check-and-infer-return-type&quot;</code> behavior emulates Pyright&#x27;s default

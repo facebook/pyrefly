@@ -26,8 +26,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.77467482.css">
-<script src="/assets/js/runtime~main.5c8bd726.js" defer="defer"></script>
-<script src="/assets/js/main.310f8e89.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.6abbe953.js" defer="defer"></script>
+<script src="/assets/js/main.f8f4f5fc.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -131,6 +131,7 @@ def to_int(data: str | bytes | None) -&gt; Optional[int]:
 </div></div></div>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="generics">Generics<a href="#generics" class="hash-link" aria-label="Direct link to Generics" title="Direct link to Generics">​</a></h3>
 <p>Generics allow you to define reusable functions and classes that work with multiple types. This feature enables you to write more flexible and adaptable code.</p>
+<p><strong>Declaring Generic Classes:</strong></p>
 <div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: Generic Classes
 
 from typing import reveal_type
@@ -144,6 +145,83 @@ class C[T]:
 c = C(0)
 reveal_type(c.box())  # revealed type: list[int]
 </div></div></div>
+<p><strong>Declaring Type Statements:</strong></p>
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: Type Statements
+type ListOrSet[T:int] = list[T] | set[T]
+</div></div></div>
+<p><strong>ParamSpec and TypeVarTuple:</strong></p>
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: ParamSpec and TypeVarTuple
+class ChildClass[T, *Ts, **P]: ...
+</div></div></div>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="variance-inference-in-generics">Variance Inference in Generics<a href="#variance-inference-in-generics" class="hash-link" aria-label="Direct link to Variance Inference in Generics" title="Direct link to Variance Inference in Generics">​</a></h3>
+<p>When working with generics, a key question is: if one type is a subtype of another, does the subtyping relationship carry over to generic types?
+For example, if <code>int</code> is a subtype of <code>float</code>, is <code>A[int]</code> also a subtype of <code>A[float]</code>?</p>
+<p>This behavior is governed by variance:</p>
+<ul>
+<li>Covariant types preserve the direction of subtyping (<code>A[int]</code> is a subtype of <code>A[float]</code>).</li>
+<li>Contravariant types reverse it.</li>
+<li>Invariant types require an exact match.</li>
+</ul>
+<p>Before <a href="https://peps.python.org/pep-0695/" target="_blank" rel="noopener noreferrer">PEP 695</a>   variance had to be declared manually — a process that was often verbose and error-prone.
+PEP 695 introduced automatic variance inference as part of the new generic class syntax.
+We fully support this behavior: our type checker analyzes how each type parameter is used — in method arguments, return values, attributes, and base classes — and infers its correct variance automatically.</p>
+<p><strong>Example 1:</strong> Covariance from Immutable Attributes (<code>Final</code>)</p>
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example 1: Variance Inference
+
+from typing import Final
+
+class ShouldBeCovariant[T]:
+  x: Final[T]
+
+  def __init__(self, value: T):
+      self.x = value
+
+
+x1: ShouldBeCovariant[float] = ShouldBeCovariant[int](1)   # OK
+x2: ShouldBeCovariant[int] = ShouldBeCovariant[float](1.0)  # ERROR!
+</div></div></div>
+<p><strong>How Variance is Inferred:</strong></p>
+<ul>
+<li>The attribute <code>x</code> is annotated as <code>Final[T]</code>, making it immutable after initialization.</li>
+<li>Because <code>T</code> appears only in this read-only position, it is safe to infer <code>T</code> as covariant.</li>
+<li>This means:<!-- -->
+<ul>
+<li>You can assign <code>ShouldBeCovariant[int]</code> to a variable expecting <code>ShouldBeCovariant[float]</code> (since <code>int</code> is a subtype of <code>float</code>).</li>
+<li>But the reverse is not allowed (<code>ShouldBeCovariant[float]</code> to <code>ShouldBeCovariant[int]</code>), which triggers a type error.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Example 2:</strong> General Variance Inference from Method and Base Class Usage</p>
+<div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example 2: Variance Inference
+
+class ClassA[T1, T2, T3](list[T1]):
+  def method1(self, a: T2) -&gt; None:
+      ...
+
+  def method2(self) -&gt; T3:
+      ...
+
+def func_a(p1: ClassA[float, int, int], p2: ClassA[int, float, float]):
+  v1: ClassA[int, int, int] = p1  # Error
+  v2: ClassA[float, float, int] = p1  # Error
+  v3: ClassA[float, int, float] = p1  # OK
+
+  v4: ClassA[int, int, int] = p2  # Error
+  v5: ClassA[int, int, float] = p2  # OK
+</div></div></div>
+<p><strong>How Variance is Inferred:</strong></p>
+<ul>
+<li><code>T1</code> appears in the base class <code>list[T1]</code>. Since list is mutable, <code>T1</code> is invariant.</li>
+<li><code>T2</code> is used as the type of a method parameter (<code>a: T2</code>) so <code>T2</code> contravariant.</li>
+<li><code>T3</code> is the return type of a method (<code>def method2() -&gt; T3</code>) so <code>T3</code> is covariant.</li>
+<li>This means:<!-- -->
+<ul>
+<li><code>v1</code> fails due to mismatched <code>T1</code> (invariant).</li>
+<li><code>v2</code> fails because <code>T2</code> expects a supertype, but gets a subtype.</li>
+<li><code>v4</code> fails because <code>T3</code> expects a subtype, but gets a supertype.</li>
+</ul>
+</li>
+</ul>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="protocols">Protocols<a href="#protocols" class="hash-link" aria-label="Direct link to Protocols" title="Direct link to Protocols">​</a></h3>
 <p>Protocols enable structural typing, which allows you to define interfaces without explicit inheritance. This feature helps you write more modular and composable code.</p>
 <div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Example: Structural Typing with Protocols
@@ -221,6 +299,6 @@ reveal_type(f(&quot;&quot;)) # revealed type: str
 <li><strong>Defining Types:</strong> You can define types inline using Python&#x27;s built-in types, which aids in documentation and improves IDE support.</li>
 <li><strong>Advanced Types:</strong> The guide covers advanced concepts like composing types, using unions and optionals, generics, protocols, and structural types like dataclasses and TypedDict.</li>
 <li><strong>Practical Examples:</strong> The guide includes examples of functions, generic classes, structural typing with protocols, and more, demonstrating how to apply these concepts in real-world scenarios.</li>
-</ul></div><footer class="theme-doc-footer docusaurus-mt-lg"><div class="row margin-top--sm theme-doc-footer-edit-meta-row"><div class="col"><a href="https://github.com/facebook/pyrefly/edit/main/website/docs/typing-for-python-developers.mdx" target="_blank" rel="noopener noreferrer" class="theme-edit-this-page"><svg fill="currentColor" height="20" width="20" viewBox="0 0 40 40" class="iconEdit_Z9Sw" aria-hidden="true"><g><path d="m34.5 11.7l-3 3.1-6.3-6.3 3.1-3q0.5-0.5 1.2-0.5t1.1 0.5l3.9 3.9q0.5 0.4 0.5 1.1t-0.5 1.2z m-29.5 17.1l18.4-18.5 6.3 6.3-18.4 18.4h-6.3v-6.2z"></path></g></svg>Edit this page</a></div><div class="col lastUpdated_JAkA"></div></div></footer></article><nav class="pagination-nav docusaurus-mt-lg" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/en/docs/"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Introduction</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/en/docs/python-typing-for-beginners/"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Python Typing for New Developers</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#types-with-inference" class="table-of-contents__link toc-highlight">Types with Inference</a></li><li><a href="#where-inference-shines-" class="table-of-contents__link toc-highlight">Where Inference Shines ✨</a></li><li><a href="#when-to-add-hints" class="table-of-contents__link toc-highlight">When to Add Hints</a></li><li><a href="#define-types-inline" class="table-of-contents__link toc-highlight">Define Types Inline</a><ul><li><a href="#the-basics" class="table-of-contents__link toc-highlight">The Basics</a></li><li><a href="#functions" class="table-of-contents__link toc-highlight">Functions</a></li></ul></li><li><a href="#advanced-types" class="table-of-contents__link toc-highlight">Advanced Types</a><ul><li><a href="#composing-types" class="table-of-contents__link toc-highlight">Composing Types</a></li><li><a href="#unions--optional" class="table-of-contents__link toc-highlight">Unions &amp; Optional</a></li><li><a href="#generics" class="table-of-contents__link toc-highlight">Generics</a></li><li><a href="#protocols" class="table-of-contents__link toc-highlight">Protocols</a></li></ul></li><li><a href="#structural-types" class="table-of-contents__link toc-highlight">Structural Types</a><ul><li><a href="#dataclasses" class="table-of-contents__link toc-highlight">Dataclasses</a></li><li><a href="#typeddict" class="table-of-contents__link toc-highlight">TypedDict</a></li><li><a href="#overloads" class="table-of-contents__link toc-highlight">Overloads</a></li></ul></li><li><a href="#typing-features-and-peps-available-in-each-python-version" class="table-of-contents__link toc-highlight">Typing Features and PEPS available in each Python Version</a><ul><li><a href="#key-highlights-summary" class="table-of-contents__link toc-highlight">Key Highlights Summary:</a></li></ul></li></ul></div></div></div></div></main></div></div></div><footer class="footer"><div class="container container-fluid"><div class="row footer__links"><div class="col footer__col"><div class="footer__title">Community</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://discord.gg/Cf7mFQtW7W" target="_blank" rel="noopener noreferrer" class="footer__link-item">Discord<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a></li></ul></div><div class="col footer__col"><div class="footer__title">More</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/facebook/pyrefly" target="_blank" rel="noopener noreferrer" class="footer__link-item">Github<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a></li></ul></div><div class="col footer__col"><div class="footer__title">Legal</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://opensource.facebook.com/legal/privacy/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Privacy<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a></li><li class="footer__item"><a href="https://opensource.facebook.com/legal/terms/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Terms<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a></li><li class="footer__item"><a href="https://opensource.facebook.com/legal/data-policy/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Data Policy<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a></li><li class="footer__item"><a href="https://opensource.facebook.com/legal/cookie-policy/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Cookie Policy<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="margin-bottom--sm"><a href="https://opensource.fb.com/" rel="noopener noreferrer" class="footerLogoLink_BH7S"><img src="/img/meta_open_source_logo.svg" alt="Meta Open Source Logo" class="footer__logo themedComponent_mlkZ themedComponent--light_NVdE"><img src="/img/meta_open_source_logo.svg" alt="Meta Open Source Logo" class="footer__logo themedComponent_mlkZ themedComponent--dark_xIcU"></a></div><div class="footer__copyright">Copyright © 2025 Meta Platforms, Inc. Built with Docusaurus.</div></div></div></footer></div>
+</ul></div><footer class="theme-doc-footer docusaurus-mt-lg"><div class="row margin-top--sm theme-doc-footer-edit-meta-row"><div class="col"><a href="https://github.com/facebook/pyrefly/edit/main/website/docs/typing-for-python-developers.mdx" target="_blank" rel="noopener noreferrer" class="theme-edit-this-page"><svg fill="currentColor" height="20" width="20" viewBox="0 0 40 40" class="iconEdit_Z9Sw" aria-hidden="true"><g><path d="m34.5 11.7l-3 3.1-6.3-6.3 3.1-3q0.5-0.5 1.2-0.5t1.1 0.5l3.9 3.9q0.5 0.4 0.5 1.1t-0.5 1.2z m-29.5 17.1l18.4-18.5 6.3 6.3-18.4 18.4h-6.3v-6.2z"></path></g></svg>Edit this page</a></div><div class="col lastUpdated_JAkA"></div></div></footer></article><nav class="pagination-nav docusaurus-mt-lg" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/en/docs/"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Introduction</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/en/docs/python-typing-for-beginners/"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Python Typing for New Developers</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#types-with-inference" class="table-of-contents__link toc-highlight">Types with Inference</a></li><li><a href="#where-inference-shines-" class="table-of-contents__link toc-highlight">Where Inference Shines ✨</a></li><li><a href="#when-to-add-hints" class="table-of-contents__link toc-highlight">When to Add Hints</a></li><li><a href="#define-types-inline" class="table-of-contents__link toc-highlight">Define Types Inline</a><ul><li><a href="#the-basics" class="table-of-contents__link toc-highlight">The Basics</a></li><li><a href="#functions" class="table-of-contents__link toc-highlight">Functions</a></li></ul></li><li><a href="#advanced-types" class="table-of-contents__link toc-highlight">Advanced Types</a><ul><li><a href="#composing-types" class="table-of-contents__link toc-highlight">Composing Types</a></li><li><a href="#unions--optional" class="table-of-contents__link toc-highlight">Unions &amp; Optional</a></li><li><a href="#generics" class="table-of-contents__link toc-highlight">Generics</a></li><li><a href="#variance-inference-in-generics" class="table-of-contents__link toc-highlight">Variance Inference in Generics</a></li><li><a href="#protocols" class="table-of-contents__link toc-highlight">Protocols</a></li></ul></li><li><a href="#structural-types" class="table-of-contents__link toc-highlight">Structural Types</a><ul><li><a href="#dataclasses" class="table-of-contents__link toc-highlight">Dataclasses</a></li><li><a href="#typeddict" class="table-of-contents__link toc-highlight">TypedDict</a></li><li><a href="#overloads" class="table-of-contents__link toc-highlight">Overloads</a></li></ul></li><li><a href="#typing-features-and-peps-available-in-each-python-version" class="table-of-contents__link toc-highlight">Typing Features and PEPS available in each Python Version</a><ul><li><a href="#key-highlights-summary" class="table-of-contents__link toc-highlight">Key Highlights Summary:</a></li></ul></li></ul></div></div></div></div></main></div></div></div><footer class="footer"><div class="container container-fluid"><div class="row footer__links"><div class="col footer__col"><div class="footer__title">Community</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://discord.gg/Cf7mFQtW7W" target="_blank" rel="noopener noreferrer" class="footer__link-item">Discord<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a></li></ul></div><div class="col footer__col"><div class="footer__title">More</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/facebook/pyrefly" target="_blank" rel="noopener noreferrer" class="footer__link-item">Github<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a></li></ul></div><div class="col footer__col"><div class="footer__title">Legal</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://opensource.facebook.com/legal/privacy/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Privacy<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a></li><li class="footer__item"><a href="https://opensource.facebook.com/legal/terms/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Terms<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a></li><li class="footer__item"><a href="https://opensource.facebook.com/legal/data-policy/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Data Policy<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a></li><li class="footer__item"><a href="https://opensource.facebook.com/legal/cookie-policy/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Cookie Policy<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="margin-bottom--sm"><a href="https://opensource.fb.com/" rel="noopener noreferrer" class="footerLogoLink_BH7S"><img src="/img/meta_open_source_logo.svg" alt="Meta Open Source Logo" class="footer__logo themedComponent_mlkZ themedComponent--light_NVdE"><img src="/img/meta_open_source_logo.svg" alt="Meta Open Source Logo" class="footer__logo themedComponent_mlkZ themedComponent--dark_xIcU"></a></div><div class="footer__copyright">Copyright © 2025 Meta Platforms, Inc. Built with Docusaurus.</div></div></div></footer></div>
 </body>
 </html>
