@@ -7,7 +7,8 @@
     "Line 111: Expected 1 errors",
     "Line 112: Expected 1 errors",
     "Line 113: Expected 1 errors",
-    "Line 117: Expected 1 errors"
+    "Line 117: Expected 1 errors",
+    "Line 7: Unexpected errors ['Could not import `Iterable` from `collections.abc`']"
   ],
   "aliases_newtype.py": [],
   "aliases_recursive.py": [
@@ -105,7 +106,7 @@
   ],
   "constructors_call_init.py": [
     "Line 107: Expected 1 errors",
-    "Line 74: Unexpected errors ['assert_type(Class5[list[int]], Class5[set[str]]) failed', 'No matching overload found for function `Class5.__init__`\\n  Possible overloads:\\n  (value: int) -> None [closest match]\\n  (value: str) -> None\\n  (value: list[int]) -> None']",
+    "Line 74: Unexpected errors ['assert_type(Class5[list[int]], Class5[set[str]]) failed']",
     "Line 75: Unexpected errors ['assert_type(Class5[list[int]], Class5[float]) failed', 'No matching overload found for function `Class5.__init__`\\n  Possible overloads:\\n  (value: int) -> None [closest match]\\n  (value: str) -> None\\n  (value: list[int]) -> None']"
   ],
   "constructors_call_metaclass.py": [],
@@ -139,17 +140,41 @@
     "Line 35: Expected 1 errors",
     "Line 38: Expected 1 errors"
   ],
-  "dataclasses_frozen.py": [],
-  "dataclasses_hash.py": [],
+  "dataclasses_frozen.py": [
+    "Line 16: Expected 1 errors",
+    "Line 17: Expected 1 errors",
+    "Lines 22, 23: Expected error (tag 'DC2')",
+    "Lines 32, 33: Expected error (tag 'DC4')",
+    "Line 14: Unexpected errors ['Expected 0 positional arguments, got 2 in function `object.__init__`']",
+    "Line 41: Unexpected errors ['Class member `DC1Child.a` overrides parent class `DC1` in an inconsistent manner\\n  `DC1Child.a` has type `int`, which is not consistent with `float` in `DC1.a` (the type of read-write attributes cannot be changed)']"
+  ],
+  "dataclasses_hash.py": [
+    "Line 23: Unexpected errors ['Expected 0 positional arguments, got 1 in function `object.__init__`']",
+    "Line 40: Unexpected errors ['Expected 0 positional arguments, got 1 in function `object.__init__`']",
+    "Line 48: Unexpected errors ['Expected 0 positional arguments, got 1 in function `object.__init__`']",
+    "Line 59: Unexpected errors ['Expected 0 positional arguments, got 1 in function `object.__init__`']",
+    "Line 70: Unexpected errors ['Expected 0 positional arguments, got 1 in function `object.__init__`']"
+  ],
   "dataclasses_inheritance.py": [],
   "dataclasses_kwonly.py": [
     "Line 32: Unexpected errors ['Missing argument `a` in function `DC2.__init__`', 'Expected 0 positional arguments, got 1 in function `DC2.__init__`']",
     "Line 35: Unexpected errors ['Missing argument `a` in function `DC2.__init__`', 'Expected 0 positional arguments, got 1 in function `DC2.__init__`']",
-    "Line 47: Unexpected errors ['Missing argument `a` in function `DC3.__init__`', 'Expected 0 positional arguments, got 1 in function `DC3.__init__`']",
-    "Line 50: Unexpected errors ['Missing argument `a` in function `DC3.__init__`', 'Expected 0 positional arguments, got 1 in function `DC3.__init__`']",
-    "Line 61: Unexpected errors ['Missing argument `c` in function `DC4.__init__`', 'Argument `float` is not assignable to parameter `b` with type `int` in function `DC4.__init__`', 'Multiple values for argument `b` in function `DC4.__init__`']"
+    "Line 47: Unexpected errors ['Expected 0 positional arguments, got 1 in function `object.__init__`']",
+    "Line 48: Unexpected errors ['Unexpected keyword argument `a` in function `object.__init__`']",
+    "Line 49: Unexpected errors ['Unexpected keyword argument `a` in function `object.__init__`', 'Unexpected keyword argument `b` in function `object.__init__`']",
+    "Line 50: Unexpected errors ['Expected 0 positional arguments, got 1 in function `object.__init__`', 'Unexpected keyword argument `b` in function `object.__init__`']",
+    "Line 61: Unexpected errors [\"Argument `Literal['']` is not assignable to parameter `c` with type `float` in function `DC4.__init__`\", 'Expected 1 positional argument, got 2 in function `DC4.__init__`', 'Unexpected keyword argument `b` in function `DC4.__init__`']",
+    "Line 62: Unexpected errors ['Unexpected keyword argument `a` in function `DC4.__init__`', 'Unexpected keyword argument `b` in function `DC4.__init__`']"
   ],
-  "dataclasses_order.py": [],
+  "dataclasses_order.py": [
+    "Line 19: Unexpected errors ['Expected 0 positional arguments, got 2 in function `object.__init__`']",
+    "Line 20: Unexpected errors ['Expected 0 positional arguments, got 2 in function `object.__init__`']",
+    "Line 22: Unexpected errors ['`<` is not supported between `DC1` and `DC1`\\n  Cannot find `__lt__` or `__gt__`']",
+    "Line 25: Unexpected errors ['`<=` is not supported between `DC1` and `DC1`\\n  Cannot find `__le__` or `__ge__`']",
+    "Line 28: Unexpected errors ['`>` is not supported between `DC1` and `DC1`\\n  Cannot find `__gt__` or `__lt__`']",
+    "Line 31: Unexpected errors ['`>=` is not supported between `DC1` and `DC1`\\n  Cannot find `__ge__` or `__le__`']",
+    "Line 46: Unexpected errors ['Expected 0 positional arguments, got 2 in function `object.__init__`']"
+  ],
   "dataclasses_postinit.py": [
     "Line 19: Expected 1 errors",
     "Line 36: Expected 1 errors"
@@ -159,7 +184,7 @@
     "Line 38: Expected 1 errors",
     "Lines 10, 11: Expected error (tag 'DC1')",
     "Line 56: Unexpected errors ['Class `DC5` has no class attribute `__slots__`']",
-    "Line 57: Unexpected errors ['Object of class `DC5` has no attribute `__slots__`']"
+    "Line 57: Unexpected errors ['Object of class `DC5` has no attribute `__slots__`', 'Expected 0 positional arguments, got 1 in function `object.__init__`']"
   ],
   "dataclasses_transform_class.py": [
     "Line 51: Expected 1 errors",
@@ -207,9 +232,16 @@
     "Line 100: Unexpected errors ['Unexpected keyword argument `id` in function `object.__init__`', 'Unexpected keyword argument `name` in function `object.__init__`']"
   ],
   "dataclasses_usage.py": [
+    "Line 88: Expected 1 errors",
     "Lines 58, 61: Expected error (tag 'DC1')",
     "Lines 64, 67: Expected error (tag 'DC2')",
-    "Lines 70, 73: Expected error (tag 'DC3')"
+    "Lines 70, 73: Expected error (tag 'DC3')",
+    "Line 25: Unexpected errors ['Expected 0 positional arguments, got 2 in function `object.__init__`']",
+    "Line 35: Unexpected errors ['`BoundMethod[InventoryItem, (self: Self@object) -> None]` is not assignable to `InventoryItemInitProto`']",
+    "Line 41: Unexpected errors ['Object of class `InventoryItem` has no attribute `__lt__`']",
+    "Line 42: Unexpected errors ['Object of class `InventoryItem` has no attribute `__le__`']",
+    "Line 43: Unexpected errors ['Object of class `InventoryItem` has no attribute `__gt__`']",
+    "Line 44: Unexpected errors ['Object of class `InventoryItem` has no attribute `__ge__`']"
   ],
   "directives_assert_type.py": [],
   "directives_cast.py": [],
@@ -254,14 +286,31 @@
   ],
   "generics_base_class.py": [
     "Line 68: Expected 1 errors",
-    "Line 98: Expected 1 errors"
+    "Line 98: Expected 1 errors",
+    "Line 38: Unexpected errors ['Could not import `Iterable` from `collections.abc`', 'Could not import `Container` from `collections.abc`', 'Could not import `Iterator` from `collections.abc`']",
+    "Line 46: Unexpected errors ['assert_type(Any, bool) failed']",
+    "Line 51: Unexpected errors ['Could not import `Mapping` from `collections.abc`']",
+    "Line 58: Unexpected errors ['assert_type(Any, int) failed']"
   ],
   "generics_basic.py": [
     "Line 49: Expected 1 errors",
     "Line 121: Expected 1 errors",
+    "Line 157: Expected 1 errors",
+    "Line 158: Expected 1 errors",
+    "Line 9: Unexpected errors ['Could not import `Sequence` from `collections.abc`']",
+    "Line 23: Unexpected errors ['assert_type(Any, int) failed']",
+    "Line 24: Unexpected errors ['assert_type(Any, str) failed']",
     "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  TODO: Expr::binop_infer attribute base undefined for type: AnyStr (trying to access __add__)']",
     "Line 67: Unexpected errors ['assert_type(MyStr, str) failed']",
-    "Line 68: Unexpected errors ['assert_type(MyStr, str) failed', 'Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`']"
+    "Line 68: Unexpected errors ['assert_type(MyStr, str) failed', 'Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`']",
+    "Line 82: Unexpected errors ['Could not import `Iterable` from `collections.abc`']",
+    "Line 106: Unexpected errors ['assert_type(Any, int) failed']",
+    "Line 129: Unexpected errors ['Could not import `Iterator` from `collections.abc`', 'Could not import `Mapping` from `collections.abc`']",
+    "Line 139: Unexpected errors ['assert_type(Any, int) failed']",
+    "Line 140: Unexpected errors ['assert_type(Any, int) failed']",
+    "Line 154: Unexpected errors ['assert_type(Any, int) failed']",
+    "Line 155: Unexpected errors ['assert_type(Any, int) failed']",
+    "Line 180: Unexpected errors ['Could not import `Sized` from `collections.abc`', 'Could not import `Container` from `collections.abc`']"
   ],
   "generics_defaults.py": [
     "Line 127: Unexpected errors ['assert_type(Any, int) failed']",
@@ -341,7 +390,7 @@
   ],
   "generics_typevartuple_callable.py": [],
   "generics_typevartuple_concat.py": [
-    "Line 56: Unexpected errors ['Returned type `tuple[*tuple[Unknown, ...], Unknown]` is not assignable to declared return type `tuple[*Ts, T]`']"
+    "Line 56: Unexpected errors ['Returned type `tuple[*tuple[@_, ...], Unknown]` is not assignable to declared return type `tuple[*Ts, T]`']"
   ],
   "generics_typevartuple_overloads.py": [],
   "generics_typevartuple_specialization.py": [
@@ -352,7 +401,8 @@
   ],
   "generics_typevartuple_unpack.py": [],
   "generics_upper_bound.py": [
-    "Line 51: Expected 1 errors"
+    "Line 51: Expected 1 errors",
+    "Line 38: Unexpected errors ['assert_type(set[Any], set[int]) failed']"
   ],
   "generics_variance.py": [
     "Line 77: Expected 1 errors",
@@ -366,9 +416,12 @@
     "Lines 125, 126: Expected error (tag 'CoContra_Child2')",
     "Lines 131, 132: Expected error (tag 'CoContra_Child3')",
     "Lines 141, 142: Expected error (tag 'CoContra_Child5')",
-    "Lines 195, 196: Expected error (tag 'ContraToContraToContra_WithTA')"
+    "Lines 195, 196: Expected error (tag 'ContraToContraToContra_WithTA')",
+    "Line 8: Unexpected errors ['Could not import `Iterable` from `collections.abc`', 'Could not import `Iterator` from `collections.abc`']"
   ],
-  "generics_variance_inference.py": [],
+  "generics_variance_inference.py": [
+    "Line 66: Unexpected errors ['`ShouldBeCovariant4[int]` is not assignable to `ShouldBeCovariant4[float]`', 'Expected 0 positional arguments, got 1 in function `object.__init__`']"
+  ],
   "historical_positional.py": [
     "Line 18: Expected 1 errors",
     "Line 26: Expected 1 errors",
@@ -401,7 +454,9 @@
     "Line 105: Expected 1 errors",
     "Line 110: Expected 1 errors",
     "Line 195: Expected 1 errors",
-    "Line 199: Expected 1 errors"
+    "Line 199: Expected 1 errors",
+    "Line 7: Unexpected errors ['Could not import `Awaitable` from `collections.abc`']",
+    "Line 38: Unexpected errors ['assert_type(Any, int) failed']"
   ],
   "overloads_basic.py": [],
   "overloads_consistency.py": [
@@ -446,6 +501,7 @@
   "protocols_definition.py": [
     "Line 116: Expected 1 errors",
     "Line 117: Expected 1 errors",
+    "Line 341: Expected 1 errors",
     "Line 79: Unexpected errors ['`Concrete` is not assignable to `Template`']",
     "Line 281: Unexpected errors ['`Concrete5_Good2` is not assignable to `Template5`']"
   ],
@@ -461,7 +517,11 @@
     "Line 144: Unexpected errors ['`ConcreteHasProperty1` is not assignable to `HasPropertyProto`']"
   ],
   "protocols_merging.py": [
-    "Line 82: Expected 1 errors"
+    "Line 52: Expected 1 errors",
+    "Line 54: Expected 1 errors",
+    "Line 82: Expected 1 errors",
+    "Line 83: Expected 1 errors",
+    "Line 9: Unexpected errors ['Could not import `Sized` from `collections.abc`']"
   ],
   "protocols_modules.py": [
     "Line 25: Unexpected errors ['`Module[_protocols_modules1]` is not assignable to `Options1`']"
@@ -551,7 +611,6 @@
   "typeddicts_class_syntax.py": [
     "Line 33: Expected 1 errors",
     "Line 38: Expected 1 errors",
-    "Line 49: Expected 1 errors",
     "Line 34: Unexpected errors ['TypedDict item `method2` may not be initialized']",
     "Line 39: Unexpected errors ['TypedDict item `method3` may not be initialized']"
   ],
