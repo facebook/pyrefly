@@ -14,13 +14,14 @@ use crate::types::class::Class;
 use crate::types::qname::QName;
 use crate::types::types::Substitution;
 use crate::types::types::TArgs;
+use crate::types::readonly::ReadOnlyReason;
 use crate::types::types::Type;
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq, Hash)]
 pub struct TypedDictField {
     pub ty: Type,
     pub required: bool,
-    pub read_only: bool,
+    pub read_only: Option<ReadOnlyReason>,
 }
 
 impl TypedDictField {
@@ -30,6 +31,11 @@ impl TypedDictField {
             required: self.required,
             read_only: self.read_only,
         }
+    }
+
+    /// Check if this field is read-only
+    pub fn is_read_only(&self) -> bool {
+        self.read_only.is_some()
     }
 }
 

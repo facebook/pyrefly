@@ -41,6 +41,7 @@ use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
+use crate::types::readonly::ReadOnlyReason;
 use crate::types::callable::BoolKeywords;
 use crate::types::callable::DataclassKeywords;
 use crate::types::callable::FuncMetadata;
@@ -109,7 +110,7 @@ enum ClassFieldInner {
         ty: Type,
         annotation: Option<Annotation>,
         initialization: ClassFieldInitialization,
-        readonly: bool,
+        readonly: Option<ReadOnlyReason>,
         // Descriptor getter method, if there is one. `None` indicates no getter.
         descriptor_getter: Option<Type>,
         // Descriptor setter method, if there is one. `None` indicates no setter.
@@ -133,7 +134,7 @@ impl ClassField {
         ty: Type,
         annotation: Option<Annotation>,
         initialization: ClassFieldInitialization,
-        readonly: bool,
+        readonly: Option<ReadOnlyReason>,
         descriptor_getter: Option<Type>,
         descriptor_setter: Option<Type>,
         is_function_without_return_annotation: bool,
@@ -169,7 +170,7 @@ impl ClassField {
             } => Some((
                 ty,
                 annotation.as_ref(),
-                *readonly,
+                readonly.is_some(),
                 descriptor_getter,
                 descriptor_setter,
             )),
@@ -189,7 +190,7 @@ impl ClassField {
             ty,
             annotation: None,
             initialization: ClassFieldInitialization::Class(None),
-            readonly: false,
+            readonly: None,
             descriptor_getter: None,
             descriptor_setter: None,
             is_function_without_return_annotation: false,
@@ -201,7 +202,7 @@ impl ClassField {
             ty: Type::any_implicit(),
             annotation: None,
             initialization: ClassFieldInitialization::recursive(),
-            readonly: false,
+            readonly: None,
             descriptor_getter: None,
             descriptor_setter: None,
             is_function_without_return_annotation: false,
@@ -228,7 +229,7 @@ impl ClassField {
                 ty: instance.instantiate_member(ty.clone()),
                 annotation: annotation.clone(),
                 initialization: initialization.clone(),
-                readonly: *readonly,
+                readonly: readonly.clone(),
                 descriptor_getter: descriptor_getter
                     .as_ref()
                     .map(|ty| instance.instantiate_member(ty.clone())),
@@ -297,7 +298,10 @@ impl ClassField {
                 ..
             } => Some(TypedDictField {
                 ty: ty.clone(),
-                read_only: qualifiers.contains(&Qualifier::ReadOnly),
+                read_only: Self::determine_readonly_reason(&Some(Annotation {
+                    ty: Some(ty.clone()),
+                    qualifiers: qualifiers.clone(),
+                })),
                 required: if qualifiers.contains(&Qualifier::Required) {
                     true
                 } else if qualifiers.contains(&Qualifier::NotRequired) {
@@ -352,6 +356,35 @@ impl ClassField {
                 annotation.as_ref().is_some_and(|ann| ann.is_final()) || ty.has_final_decoration()
             }
         }
+    }
+
+    /// Check if this field is read-only
+    pub fn is_read_only(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Simple { readonly, .. } => readonly.is_some(),
+        }
+    }
+
+    /// Get the readonly reason if this field is read-only
+    pub fn readonly_reason(&self) -> Option<&ReadOnlyReason> {
+        match &self.0 {
+            ClassFieldInner::Simple { readonly, .. } => readonly.as_ref(),
+        }
+    }
+
+    /// Determine the readonly reason from annotation and other factors
+    fn determine_readonly_reason(annotation: &Option<Annotation>) -> Option<ReadOnlyReason> {
+        if let Some(ann) = annotation {
+            // Final has higher precedence than ReadOnly
+            if ann.is_final() {
+                return Some(ReadOnlyReason::Final);
+            }
+            if ann.has_qualifier(&Qualifier::ReadOnly) {
+                return Some(ReadOnlyReason::ReadOnlyAnnotation);
+            }
+        }
+        // TODO: Add logic for frozen dataclass and namedtuple detection
+        None
     }
 
     pub fn has_explicit_annotation(&self) -> bool {
