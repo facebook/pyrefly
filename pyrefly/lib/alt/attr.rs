@@ -33,6 +33,7 @@ use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::callable::Required;
+use crate::types::readonly::ReadOnlyReason;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
@@ -187,7 +188,7 @@ pub struct Attribute {
 
 #[derive(Debug)]
 enum Visibility {
-    ReadOnly,
+    ReadOnly(ReadOnlyReason),
     ReadWrite,
 }
 
@@ -289,9 +290,9 @@ impl Attribute {
         }
     }
 
-    pub fn read_only(ty: Type) -> Self {
+    pub fn read_only(ty: Type, reason: ReadOnlyReason) -> Self {
         Attribute {
-            inner: AttributeInner::Simple(ty, Visibility::ReadOnly),
+            inner: AttributeInner::Simple(ty, Visibility::ReadOnly(reason)),
         }
     }
 
