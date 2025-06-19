@@ -26,8 +26,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.77467482.css">
-<script src="/assets/js/runtime~main.6abbe953.js" defer="defer"></script>
-<script src="/assets/js/main.f8f4f5fc.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.446414b4.js" defer="defer"></script>
+<script src="/assets/js/main.d7b9cf3f.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -202,11 +202,11 @@ class ClassA[T1, T2, T3](list[T1]):
       ...
 
 def func_a(p1: ClassA[float, int, int], p2: ClassA[int, float, float]):
-  v1: ClassA[int, int, int] = p1  # Error
-  v2: ClassA[float, float, int] = p1  # Error
+  v1: ClassA[int, int, int] = p1  # ERROR!
+  v2: ClassA[float, float, int] = p1  # ERROR!
   v3: ClassA[float, int, float] = p1  # OK
 
-  v4: ClassA[int, int, int] = p2  # Error
+  v4: ClassA[int, int, int] = p2  # ERROR!
   v5: ClassA[int, int, float] = p2  # OK
 </div></div></div>
 <p><strong>How Variance is Inferred:</strong></p>

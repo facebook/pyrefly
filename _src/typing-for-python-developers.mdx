@@ -233,11 +233,11 @@ class ClassA[T1, T2, T3](list[T1]):
         ...
 
 def func_a(p1: ClassA[float, int, int], p2: ClassA[int, float, float]):
-    v1: ClassA[int, int, int] = p1  # Error
-    v2: ClassA[float, float, int] = p1  # Error
+    v1: ClassA[int, int, int] = p1  # ERROR!
+    v2: ClassA[float, float, int] = p1  # ERROR!
     v3: ClassA[float, int, float] = p1  # OK
 
-    v4: ClassA[int, int, int] = p2  # Error
+    v4: ClassA[int, int, int] = p2  # ERROR!
     v5: ClassA[int, int, float] = p2  # OK
 `}
 />
