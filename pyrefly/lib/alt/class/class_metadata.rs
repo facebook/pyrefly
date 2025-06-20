@@ -49,7 +49,7 @@ use crate::types::types::Type;
 
 /// Private helper type used to share part of the logic needed for the
 /// binding-level work of finding legacy type parameters versus the type-level
-/// work of computing inherticance information and the MRO.
+/// work of computing inheritance information and the MRO.
 #[derive(Debug, Clone)]
 pub enum BaseClass {
     TypedDict,
