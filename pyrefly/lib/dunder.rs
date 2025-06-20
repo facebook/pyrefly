@@ -48,6 +48,8 @@ pub const SETITEM: Name = Name::new_static("__setitem__");
 pub const BOOL: Name = Name::new_static("__bool__");
 
 pub const RICH_CMPS: &[Name] = &[LT, LE, EQ, NE, GT, GE];
+/// Rich comparison methods supplied by the `functools.total_ordering` decorator
+pub const RICH_CMPS_TOTAL_ORDERING: &[Name] = &[LT, LE, GT, GE];
 
 /// Returns the associated dunder if `op` corresponds to a "rich comparison method":
 /// https://docs.python.org/3/reference/datamodel.html#object.__lt__.

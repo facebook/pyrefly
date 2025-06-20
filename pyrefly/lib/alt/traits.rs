@@ -262,9 +262,9 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassSynthesizedFields {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingClassSynthesizedFields,
-        _errors: &ErrorCollector,
+        errors: &ErrorCollector,
     ) -> Arc<ClassSynthesizedFields> {
-        answers.solve_class_synthesized_fields(binding)
+        answers.solve_class_synthesized_fields(errors, binding)
     }
 
     fn create_recursive(_: &AnswersSolver<Ans>, _: &Self::Value) -> Self::Recursive {}
