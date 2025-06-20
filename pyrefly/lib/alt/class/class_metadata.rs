@@ -315,8 +315,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => Either::Right((n.clone(), self.expr_infer(x, errors))),
             });
         let typed_dict_metadata = if is_typed_dict {
-            // Validate that only 'total' keyword is allowed for TypedDict
-            for (name, _) in &keywords {
+            // Validate that only 'total' keyword is allowed for TypedDict and determine is_total
+            let mut is_total = true;
+            for (name, value) in &keywords {
                 if name.as_str() != "total" {
                     self.error(
                         errors,
@@ -328,12 +329,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             name.as_str()
                         ),
                     );
+                } else if matches!(value, Type::Literal(Lit::Bool(false))) {
+                    is_total = false;
                 }
             }
-
-            let is_total = !keywords.iter().any(|(n, t)| {
-                n.as_str() == "total" && matches!(t, Type::Literal(Lit::Bool(false)))
-            });
             let fields =
                 self.calculate_typed_dict_metadata_fields(cls, &bases_with_metadata, is_total);
             Some(TypedDictMetadata { fields })
