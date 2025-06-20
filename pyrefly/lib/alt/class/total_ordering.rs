@@ -1,5 +1,3 @@
-use core::panic;
-
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 
@@ -8,6 +6,8 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::dunder;
+use crate::error::collector::ErrorCollector;
+use crate::error::kind::ErrorKind;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
@@ -61,11 +61,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })));
             }
         }
-        unreachable!("Rich comparison method not found in conversion order");
+        unreachable!("No rich comparison method found for {}", cmp);
     }
 
     pub fn get_total_ordering_synthesized_fields(
         &self,
+        errors: &ErrorCollector,
         cls: &Class,
     ) -> Option<ClassSynthesizedFields> {
         let metadata = self.get_metadata_for_class(cls);
@@ -77,8 +78,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .fields()
             .any(|f| *f == dunder::LT || *f == dunder::LE || *f == dunder::GT || *f == dunder::GE)
         {
-            // TODO: raise an error properly.
-            panic!("Class does not define any rich comparison methods");
+            self.error(
+                errors,
+                // FIXME: Should use the range for @total_ordering decorator
+                cls.range(),
+                ErrorKind::MissingAttribute,
+                None,
+                format!(
+                    "Class `{}` must define at least one of the rich comparison methods.",
+                    cls.name()
+                ),
+            );
+            return None;
         }
         let rich_cmps_to_synthesize: Vec<_> = dunder::RICH_CMPS_TOTAL_ORDERING
             .iter()

@@ -350,3 +350,15 @@ reveal_type(A.__gt__)  # E: revealed type: (self: A, other: A) -> bool
 a <= b
 "#,
 );
+
+testcase!(
+    test_total_ordering_no_rich_cmp,
+    r#"
+from functools import total_ordering
+
+@total_ordering
+class A:  # E: Class `A` must define at least one of the rich comparison methods.
+    def __init__(self, x: int) -> None:
+        self.x = x
+"#,
+);

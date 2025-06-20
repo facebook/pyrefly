@@ -1326,6 +1326,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn solve_class_synthesized_fields(
         &self,
+        errors: &ErrorCollector,
         fields: &BindingClassSynthesizedFields,
     ) -> Arc<ClassSynthesizedFields> {
         let fields = match &self.get_idx(fields.0).0 {
@@ -1340,7 +1341,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .or_else(|| self.get_dataclass_synthesized_fields(cls))
                 .or_else(|| self.get_named_tuple_synthesized_fields(cls))
                 .or_else(|| self.get_new_type_synthesized_fields(cls))
-                .or_else(|| self.get_total_ordering_synthesized_fields(cls))
+                .or_else(|| self.get_total_ordering_synthesized_fields(errors, cls))
                 .unwrap_or_default(),
         };
         Arc::new(fields)
