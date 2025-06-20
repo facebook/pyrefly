@@ -323,3 +323,30 @@ def f0(arg: Callable[..., int]) -> Callable[..., int]: ...
 def f0(arg: Callable[..., int]) -> Callable[..., int]: ...
     "#,
 );
+
+// Reported in https://github.com/facebook/pyrefly/issues/491
+testcase!(
+    test_total_ordering,
+    r#"
+from functools import total_ordering
+from typing import reveal_type
+
+@total_ordering
+class A:
+    def __init__(self, x: int) -> None:
+        self.x = x
+    def __eq__(self, other: "A") -> bool:
+        return self.x == other.x
+    def __lt__(self, other: "A") -> bool:
+        return self.x < other.x
+
+a = A(x=1)
+b = A(x=2)
+
+# This should give the correct type for the method `__lt__`
+reveal_type(A.__lt__)  # E: revealed type: (self: Self@A, other: A) -> bool
+# This should give be synthesized via `functools.total_ordering`
+reveal_type(A.__gt__)  # E: revealed type: (self: A, other: A) -> bool
+a <= b
+"#,
+);

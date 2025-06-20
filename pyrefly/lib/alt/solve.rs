@@ -1331,10 +1331,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let fields = match &self.get_idx(fields.0).0 {
             None => ClassSynthesizedFields::default(),
             Some(cls) => self
+                // FIXME: This approach is not compositional, since total
+                // ordering fields need to be generated independently and then
+                // merged with the other synthesized fields.
+                // For example, a dataclass with total ordering fields will not have the
+                // total ordering fields synthesized right now.
                 .get_typed_dict_synthesized_fields(cls)
                 .or_else(|| self.get_dataclass_synthesized_fields(cls))
                 .or_else(|| self.get_named_tuple_synthesized_fields(cls))
                 .or_else(|| self.get_new_type_synthesized_fields(cls))
+                .or_else(|| self.get_total_ordering_synthesized_fields(cls))
                 .unwrap_or_default(),
         };
         Arc::new(fields)
