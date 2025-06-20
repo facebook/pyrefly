@@ -253,6 +253,7 @@ pub enum FunctionKind {
     AbstractMethod,
     /// Instance of a protocol with a `__call__` method. The function has the `__call__` signature.
     CallbackProtocol(Box<ClassType>),
+    TotalOrdering,
 }
 
 /// A map from keywords to boolean values. Useful for storing sets of keyword arguments for various
@@ -530,6 +531,7 @@ impl FunctionKind {
             ("typing", None, "runtime_checkable") => Self::RuntimeCheckable,
             ("typing_extensions", None, "runtime_checkable") => Self::RuntimeCheckable,
             ("abc", None, "abstractmethod") => Self::AbstractMethod,
+            ("functools", None, "total_ordering") => Self::TotalOrdering,
             _ => Self::Def(Box::new(FuncId {
                 module,
                 cls: cls.cloned(),
@@ -611,6 +613,11 @@ impl FunctionKind {
                 func: Name::new_static("abstractmethod"),
             },
             Self::PropertySetter(func_id) | Self::Def(func_id) => (**func_id).clone(),
+            Self::TotalOrdering => FuncId {
+                module: ModuleName::functools(),
+                cls: None,
+                func: Name::new_static("total_ordering"),
+            },
         }
     }
 }

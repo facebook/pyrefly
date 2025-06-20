@@ -49,6 +49,7 @@ pub struct ClassMetadata {
     /// Is it possible for this class to have type parameters that we don't know about?
     /// This can happen if, e.g., a class inherits from Any.
     has_unknown_tparams: bool,
+    is_total_ordering: bool,
 }
 
 impl VisitMut<Type> for ClassMetadata {
@@ -80,6 +81,7 @@ impl ClassMetadata {
         is_new_type: bool,
         is_final: bool,
         has_unknown_tparams: bool,
+        is_total_ordering: bool,
         errors: &ErrorCollector,
     ) -> ClassMetadata {
         let mro = Mro::new(cls, &bases_with_metadata, errors);
@@ -103,6 +105,7 @@ impl ClassMetadata {
             is_new_type,
             is_final,
             has_unknown_tparams,
+            is_total_ordering,
         }
     }
 
@@ -166,6 +169,7 @@ impl ClassMetadata {
             is_new_type: false,
             is_final: false,
             has_unknown_tparams: false,
+            is_total_ordering: false,
         }
     }
 
@@ -226,6 +230,10 @@ impl ClassMetadata {
 
     pub fn is_enum(&self) -> bool {
         self.enum_metadata.is_some()
+    }
+
+    pub fn is_total_ordering(&self) -> bool {
+        self.is_total_ordering
     }
 
     pub fn protocol_metadata(&self) -> Option<&ProtocolMetadata> {

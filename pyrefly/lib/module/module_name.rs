@@ -134,6 +134,10 @@ impl ModuleName {
         Self::from_str("dataclasses")
     }
 
+    pub fn functools() -> Self {
+        Self::from_str("functools")
+    }
+
     pub fn type_checker_internals() -> Self {
         Self::from_str("_typeshed._type_checker_internals")
     }

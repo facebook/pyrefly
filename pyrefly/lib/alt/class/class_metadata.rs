@@ -405,6 +405,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         let mut is_final = false;
+        let mut is_total_ordering = false;
         for decorator in decorators {
             let decorator = self.get_idx(*decorator);
             match decorator.ty().callee_kind() {
@@ -430,6 +431,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             "@runtime_checkable can only be applied to Protocol classes".to_owned(),
                         );
                     }
+                }
+                Some(CalleeKind::Function(FunctionKind::TotalOrdering)) => {
+                    is_total_ordering = true;
                 }
                 _ => {}
             }
@@ -477,6 +481,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_new_type,
             is_final,
             has_unknown_tparams,
+            is_total_ordering,
             errors,
         )
     }
