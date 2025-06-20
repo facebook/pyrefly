@@ -381,19 +381,6 @@ fn test_hover() {
     });
 }
 
-/*
-// TODO: debug inconsistent results from this test.
-//
-// stroxler disabled this after observing that the results are not reliably the same.
-// It currently appears that it might depend what system we run on, but it also might
-// just be nondeterminism.
-//
-// A couple datapoints for anyone debugging this:
-// - I observed local and internal CI results diverging on D77031603
-// - I noticed that the exact same issue from D77031603 (where an unexpected
-//    `from ast import MatchSequence` popped up) also failed external CI
-//    on https://github.com/facebook/pyrefly/actions/runs/15783803313/job/44495614983
-//
 #[test]
 fn test_completion() {
     let root = get_test_files_root();
@@ -453,19 +440,6 @@ fn test_completion() {
                     }],
                 }),
             }),
-            Message::from(Request {
-                id: RequestId::from(4),
-                method: "textDocument/completion".to_owned(),
-                params: serde_json::json!({
-                    "textDocument": {
-                        "uri": Url::from_file_path(root.path().join("foo.py")).unwrap().to_string()
-                    },
-                    "position": {
-                        "line": 11,
-                        "character": 7
-                    }
-                }),
-            }),
         ],
         expected_messages_from_language_server: vec![
             Message::Response(Response {
@@ -482,41 +456,72 @@ fn test_completion() {
                 ),
                 error: None,
             }),
-            Message::Response(Response {
-                id: RequestId::from(4),
-                result: Some(serde_json::json!({
-                    "isIncomplete":false,
-                    "items":[
-                        {"detail":"type[Bar]","kind":6,"label":"Bar","sortText":"0"},
-                        {
-                            "additionalTextEdits":[{
-                                "newText":"from typing import Sequence\n",
-                                "range":{"end":{"character":0,"line":5},"start":{"character":0,"line":5}}
-                            }],
-                            "detail":"from typing import Sequence\n",
-                            "kind":7,
-                            "label":"Sequence",
-                            "sortText":"0"
-                        },
-                        {
-                            "additionalTextEdits":[{
-                                "newText":"from typing import MutableSequence\n",
-                                "range":{"end":{"character":0,"line":5},"start":{"character":0,"line":5}}
-                            }],
-                            "detail":"from typing import MutableSequence\n",
-                            "kind":7,
-                            "label":"MutableSequence",
-                            "sortText":"0"
-                        }
-                    ]
-                })),
-                error: None,
-            }),
         ],
         ..Default::default()
     });
 }
-*/
+
+#[test]
+fn test_completion_with_autoimport() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("tests_requiring_config");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+
+    run_test_lsp(TestCase {
+        messages_from_language_client: vec![
+            Message::from(build_did_open_notification(root_path.join("foo.py"))),
+            Message::from(Notification {
+                method: "textDocument/didChange".to_owned(),
+                params: serde_json::json!({
+                    "textDocument": {
+                        "uri": Url::from_file_path(root_path.join("foo.py")).unwrap().to_string(),
+                        "languageId": "python",
+                        "version": 2
+                    },
+                    "contentChanges": [{
+                        "text": format!("{}\n{}", std::fs::read_to_string(root_path.join("foo.py")).unwrap(), "this_is_a_very_long_function_name_so_we_can")
+                    }],
+                }),
+            }),
+            Message::from(Request {
+                id: RequestId::from(2),
+                method: "textDocument/completion".to_owned(),
+                params: serde_json::json!({
+                    "textDocument": {
+                        "uri": Url::from_file_path(root_path.join("foo.py")).unwrap().to_string()
+                    },
+                    "position": {
+                        "line": 11,
+                        "character": 43
+                    }
+                }),
+            }),
+        ],
+        expected_messages_from_language_server: vec![Message::Response(Response {
+            id: RequestId::from(2),
+            result: Some(serde_json::json!({
+                "isIncomplete":false,
+                "items":[
+                    {"detail":"type[Bar]","kind":6,"label":"Bar","sortText":"0"},
+                    {
+                        "additionalTextEdits":[{
+                            "newText":"from autoimport_provider import this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search\n",
+                            "range":{"end":{"character":0,"line":5},"start":{"character":0,"line":5}}
+                        }],
+                        "detail":"from autoimport_provider import this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search\n",
+                        "kind":3,
+                        "label":"this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search",
+                        "sortText":"0"
+                    },
+                ]
+            })),
+            error: None,
+        })],
+        indexing_mode: IndexingMode::LazyBlocking,
+        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+        ..Default::default()
+    });
+}
 
 #[test]
 fn test_module_completion() {
