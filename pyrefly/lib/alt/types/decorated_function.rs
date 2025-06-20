@@ -21,6 +21,7 @@ use crate::types::callable::FuncId;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::FunctionKind;
 use crate::types::types::Type;
+use crate::binding::binding::FunctionStubOrImpl;
 
 /// The type of a function definition after decorators are applied. Metadata arising from the
 /// decorators can be stored here. Note that the type might not be a function at all, since
@@ -30,6 +31,7 @@ pub struct DecoratedFunction {
     pub id_range: TextRange,
     pub ty: Type,
     pub metadata: FuncMetadata,
+    pub stub_or_impl: FunctionStubOrImpl,
 }
 
 impl Display for DecoratedFunction {
@@ -51,6 +53,7 @@ impl DecoratedFunction {
                 })),
                 flags: FuncFlags::default(),
             },
+            stub_or_impl: FunctionStubOrImpl::Stub,
         }
     }
 }
