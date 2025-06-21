@@ -680,14 +680,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             e.to_error_msg(attr_name),
                         );
                     }
-                    AttributeInner::Simple(_, Visibility::ReadOnly) => {
-                        self.error(
-                            errors,
-                            range,
-                            ErrorKind::ReadOnly,
-                            context,
-                            format!("Cannot assign to read-only attribute `{attr_name}`"),
-                        );
+                    AttributeInner::Simple(_, Visibility::ReadOnly(reason)) => {
+                        // Check if this is a Final field being assigned in its own class's __init__
+                        let is_final_in_init = matches!(reason, ReadOnlyReason::Final) &&
+                            if let Type::ClassType(class_type) = base {
+                                self.is_in_init_of(class_type.class_object(), range)
+                            } else {
+                                false
+                            };
+
+                        if !is_final_in_init {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorKind::ReadOnly,
+                                context,
+                                format!("Cannot assign to read-only attribute `{attr_name}`"),
+                            );
+                        }
+                        // If is_final_in_init is true, we allow the assignment by doing nothing
                     }
                     AttributeInner::Property(_, None, cls) => {
                         let e = NoAccessReason::SettingReadOnlyProperty(cls);
@@ -804,7 +815,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             e.to_error_msg(attr_name),
                         );
                     }
-                    AttributeInner::Simple(_, Visibility::ReadOnly) => {
+                    AttributeInner::Simple(_, Visibility::ReadOnly(_)) => {
                         self.error(
                             errors,
                             range,
@@ -860,7 +871,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Err(AttrSubsetError::Property)
             }
             (
-                AttributeInner::Simple(_, Visibility::ReadOnly),
+                AttributeInner::Simple(_, Visibility::ReadOnly(_)),
                 AttributeInner::Property(_, Some(_), _)
                 | AttributeInner::Simple(_, Visibility::ReadWrite),
             ) => Err(AttrSubsetError::ReadOnly),
@@ -896,7 +907,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             (
                 AttributeInner::Simple(got, ..),
-                AttributeInner::Simple(want, Visibility::ReadOnly),
+                AttributeInner::Simple(want, Visibility::ReadOnly(_)),
             ) => {
                 if is_subset(got, want) {
                     Ok(())
@@ -910,7 +921,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             (
-                AttributeInner::Simple(got, Visibility::ReadOnly),
+                AttributeInner::Simple(got, Visibility::ReadOnly(_)),
                 AttributeInner::Property(want, _, _),
             ) => {
                 if is_subset(
@@ -1042,7 +1053,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match attr.inner {
             AttributeInner::NoAccess(reason) => Err(reason),
             AttributeInner::Simple(ty, Visibility::ReadWrite)
-            | AttributeInner::Simple(ty, Visibility::ReadOnly) => Ok(ty),
+            | AttributeInner::Simple(ty, Visibility::ReadOnly(_)) => Ok(ty),
             AttributeInner::Property(getter, ..) => {
                 Ok(self.call_property_getter(getter, range, errors, context))
             }
@@ -1086,7 +1097,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // TODO(stroxler): ReadWrite attributes are not actually methods but limiting access to
             // ReadOnly breaks unit tests; we should investigate callsites to understand this better.
             // NOTE(grievejia): We currently do not expect to use `__getattr__` for this lookup.
-            AttributeInner::Simple(ty, Visibility::ReadOnly)
+            AttributeInner::Simple(ty, Visibility::ReadOnly(_))
             | AttributeInner::Simple(ty, Visibility::ReadWrite) => Some(ty),
             AttributeInner::NoAccess(_)
             | AttributeInner::Property(..)
@@ -1100,7 +1111,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // NOTE(grievejia): We do not use `__getattr__` here because this lookup is expected to be inovked
         // on NamedTuple attributes with known names.
         match attr.inner {
-            AttributeInner::Simple(ty, Visibility::ReadOnly) => Some(ty),
+            AttributeInner::Simple(ty, Visibility::ReadOnly(_)) => Some(ty),
             AttributeInner::Simple(_, Visibility::ReadWrite)
             | AttributeInner::NoAccess(_)
             | AttributeInner::Property(..)

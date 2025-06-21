@@ -151,7 +151,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<TypedDictField> {
         self.get_class_member(class, name).and_then(|member| {
             Arc::unwrap_or_clone(member.value)
-                .as_typed_dict_field_info(is_total)
+                .as_typed_dict_field_info(name, is_total, self, class)
                 .map(|field| field.substitute(substitution))
         })
     }
@@ -191,7 +191,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         fields.iter().filter_map(|(name, is_total)| {
             self.get_class_member(cls, name).and_then(|member| {
                 Arc::unwrap_or_clone(member.value)
-                    .as_typed_dict_field_info(*is_total)
+                    .as_typed_dict_field_info(name, *is_total, self, cls)
                     .map(|field| (name, field))
             })
         })

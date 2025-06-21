@@ -1020,4 +1020,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
     }
+
+    /// Check if we are currently inside the __init__ method of the specified class
+    pub fn is_in_init_of(&self, _cls: &Class, _range: TextRange) -> bool {
+        // TODO: Implement proper scope checking once the correct API is identified.
+        // The implementation requires access to scope information to:
+        // 1. Find the enclosing function scope for the given range
+        // 2. Check if the function name is "__init__" 
+        // 3. Find the parent class scope
+        // 4. Compare with the target class
+        //
+        // For now, return false to maintain existing behavior.
+        false
+    }
 }

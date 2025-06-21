@@ -40,45 +40,4 @@ impl Display for ReadOnlyReason {
 }
 
 impl ReadOnlyReason {
-    /// Generate a specific error message for why a field cannot be assigned to.
-    pub fn to_assignment_error_msg(&self, attr_name: &str, class_name: &str) -> String {
-        match self {
-            ReadOnlyReason::Final => {
-                format!("Cannot assign to attribute `{attr_name}` of class `{class_name}`: field is marked as `Final`")
-            }
-            ReadOnlyReason::ReadOnlyAnnotation => {
-                format!("Cannot assign to attribute `{attr_name}` of class `{class_name}`: field is marked as `ReadOnly`")
-            }
-            ReadOnlyReason::FrozenDataclass => {
-                format!("Cannot assign to attribute `{attr_name}` of class `{class_name}`: field belongs to a frozen dataclass")
-            }
-            ReadOnlyReason::NamedTupleField => {
-                format!("Cannot assign to attribute `{attr_name}` of class `{class_name}`: namedtuple fields are immutable")
-            }
-            ReadOnlyReason::Inherited => {
-                format!("Cannot assign to attribute `{attr_name}` of class `{class_name}`: field is read-only")
-            }
-        }
-    }
-
-    /// Generate a specific error message for why a field cannot be deleted.
-    pub fn to_deletion_error_msg(&self, attr_name: &str, class_name: &str) -> String {
-        match self {
-            ReadOnlyReason::Final => {
-                format!("Key `{attr_name}` in TypedDict `{class_name}` may not be deleted: field is marked as `Final`")
-            }
-            ReadOnlyReason::ReadOnlyAnnotation => {
-                format!("Key `{attr_name}` in TypedDict `{class_name}` may not be deleted: field is marked as `ReadOnly`")
-            }
-            ReadOnlyReason::FrozenDataclass => {
-                format!("Key `{attr_name}` in TypedDict `{class_name}` may not be deleted: field belongs to a frozen dataclass")
-            }
-            ReadOnlyReason::NamedTupleField => {
-                format!("Key `{attr_name}` in TypedDict `{class_name}` may not be deleted: namedtuple fields are immutable")
-            }
-            ReadOnlyReason::Inherited => {
-                format!("Key `{attr_name}` in TypedDict `{class_name}` may not be deleted")
-            }
-        }
-    }
 }

@@ -33,10 +33,6 @@ impl TypedDictField {
         }
     }
 
-    /// Check if this field is read-only
-    pub fn is_read_only(&self) -> bool {
-        self.read_only.is_some()
-    }
 }
 
 #[derive(Debug, PartialOrd, Ord, Clone, Eq, PartialEq, Hash)]
