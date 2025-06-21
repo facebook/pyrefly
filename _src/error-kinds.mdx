@@ -257,6 +257,24 @@ Attempting to use specialize a generic type in a way that violates these specifi
 x: list[int, str]
 ```
 
+## bad-typed-dict
+
+This error is reported when a `TypedDict` definition includes an unsupported keyword argument.
+According to the typing specification, the only keyword argument allowed in a `TypedDict`'s
+base class list is `total`.
+
+```python
+from typing import TypedDict
+
+# This is an error because `foo` is not a valid keyword.
+class InvalidTD(TypedDict, foo=1):
+    x: int
+
+# This is valid.
+class ValidTD(TypedDict, total=False):
+    x: int
+```
+
 ## bad-unpacking
 
 An error caused by unpacking, such as attempting to unpack a list, tuple, or iterable into the wrong number of variables.
