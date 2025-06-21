@@ -51,6 +51,10 @@ use tracing::info;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), not(fbcode_build)))]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+#[global_allocator]
+#[cfg(target_os = "windows")]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Debug, Parser)]
 #[command(name = "pyrefly")]
 #[command(about = "Next generation of Pyre type checker", long_about = None)]
