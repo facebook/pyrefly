@@ -346,7 +346,7 @@ b = A(x=2)
 # This should give the correct type for the method `__lt__`
 reveal_type(A.__lt__)  # E: revealed type: (self: Self@A, other: A) -> bool
 # This should give be synthesized via `functools.total_ordering`
-reveal_type(A.__gt__)  # E: revealed type: (self: A, other: A) -> bool
+reveal_type(A.__gt__)  # E: revealed type: (self: Self@A, other: A) -> bool
 a <= b
 "#,
 );
@@ -383,7 +383,38 @@ b = A(x=2)
 # This should give the correct type for the method `__lt__`
 reveal_type(A.__lt__)  # E: revealed type: (self: Self@A, other: A) -> bool
 # This should give be synthesized via `functools.total_ordering`
-reveal_type(A.__gt__)  # E: revealed type: (self: A, other: A) -> bool
+reveal_type(A.__gt__)  # E: revealed type: (self: Self@A, other: A) -> bool
 a <= b
+"#,
+);
+
+testcase!(
+    test_total_ordering_precedence,
+    r#"
+from functools import total_ordering
+from typing import reveal_type
+
+@total_ordering
+class A:
+    def __init__(self, x: int) -> None:
+        self.x = x
+    def __eq__(self, other: "A") -> bool:
+        return self.x == other.x
+    def __lt__(self, other: "A") -> bool:
+        return self.x < other.x
+    def __le__(self, other: object) -> bool:
+        if not isinstance(other, A):
+            return NotImplemented
+        return self.x <= other.x
+
+# This should give the correct type for the method `__lt__`
+reveal_type(A.__lt__)  # E: revealed type: (self: Self@A, other: A) -> bool
+# This should give be synthesized via `functools.total_ordering` via `__lt__`
+reveal_type(A.__gt__)  # E: revealed type: (self: Self@A, other: A) -> bool
+
+# This should give the correct type for the method `__le__`
+reveal_type(A.__le__)  # E: revealed type: (self: Self@A, other: object) -> bool
+# This should give be synthesized via `functools.total_ordering` via `__le__`
+reveal_type(A.__ge__)  # E: revealed type: (self: Self@A, other: object) -> bool
 "#,
 );

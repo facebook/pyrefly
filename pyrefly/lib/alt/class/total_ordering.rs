@@ -5,18 +5,11 @@ use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::binding::binding::KeyClassField;
 use crate::dunder;
 use crate::error::collector::ErrorCollector;
 use crate::error::kind::ErrorKind;
-use crate::types::callable::Callable;
-use crate::types::callable::FuncMetadata;
-use crate::types::callable::Function;
-use crate::types::callable::Param;
-use crate::types::callable::ParamList;
-use crate::types::callable::Params;
-use crate::types::callable::Required;
 use crate::types::class::Class;
-use crate::types::types::Type;
 
 // https://github.com/python/cpython/blob/a8ec511900d0d84cffbb4ee6419c9a790d131129/Lib/functools.py#L173
 // conversion order of rich comparison methods:
@@ -42,23 +35,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for other_cmp in conversion_order {
             let other_cmp_field = cls.fields().find(|f| **f == *other_cmp);
             if other_cmp_field.is_some() {
-                // FIXME: We should use the type from `other_cmp_field` instead of `cls_type`.
-                // However, here we use the type of the class itself, which is not always correct.
-                let cls_type = self.instantiate(cls);
-                let self_param = self.class_self_param(cls, false);
-                let other_param =
-                    Param::Pos(Name::new_static("other"), cls_type, Required::Required);
-                return ClassSynthesizedField::new(Type::Function(Box::new(Function {
-                    signature: Callable {
-                        params: Params::List(ParamList::new(vec![self_param, other_param])),
-                        ret: self.stdlib.bool().clone().to_type(),
-                    },
-                    metadata: FuncMetadata::def(
-                        self.module_info().name(),
-                        cls.name().clone(),
-                        cmp.clone(),
-                    ),
-                })));
+                let other_cmp_field =
+                    self.get_from_class(cls, &KeyClassField(cls.index(), other_cmp.clone()));
+                let ty = other_cmp_field.as_named_tuple_type();
+                return ClassSynthesizedField::new(ty);
             }
         }
         unreachable!("No rich comparison method found for {}", cmp);
