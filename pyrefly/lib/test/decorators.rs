@@ -362,3 +362,28 @@ class A:  # E: Class `A` must define at least one of the rich comparison methods
         self.x = x
 "#,
 );
+
+testcase!(
+    test_total_ordering_dataclass,
+    r#"
+from dataclasses import dataclass
+from functools import total_ordering
+from typing import reveal_type
+
+@dataclass
+@total_ordering
+class A:
+    x: int
+    def __lt__(self, other: "A") -> bool:
+        return self.x < other.x
+
+a = A(x=1)
+b = A(x=2)
+
+# This should give the correct type for the method `__lt__`
+reveal_type(A.__lt__)  # E: revealed type: (self: Self@A, other: A) -> bool
+# This should give be synthesized via `functools.total_ordering`
+reveal_type(A.__gt__)  # E: revealed type: (self: A, other: A) -> bool
+a <= b
+"#,
+);

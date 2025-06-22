@@ -304,6 +304,15 @@ impl ClassSynthesizedFields {
     pub fn get(&self, name: &Name) -> Option<&ClassSynthesizedField> {
         self.0.get(name)
     }
+
+    /// Combines two sets of synthesized fields, with the second set
+    /// overwriting any fields in the first set that have the same name.
+    pub fn combine(mut self, other: Self) -> Self {
+        for (name, field) in other.0 {
+            self.0.insert(name, field);
+        }
+        self
+    }
 }
 
 impl Display for ClassSynthesizedFields {
