@@ -1084,10 +1084,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         TParams::new(tparams)
     }
 
-    pub fn solve_binding(&self, binding: &Binding, errors: &ErrorCollector) -> Arc<TypeInfo> {
-        // Special case for forward, as we don't want to re-expand the type
+pub fn solve_binding(&self, binding: &Binding, errors: &ErrorCollector) -> Arc<TypeInfo> {
+        // Special case for forward, as we don't want to re-expand the type 
         if let Binding::Forward(fwd) = binding {
-            return self.get_idx(*fwd);
+            // Handle pandas re-exports
+            if let Some(original_binding) = self.get_idx(*fwd) {
+                use crate::alt::pandas::{infer_pandas_type, is_pandas_reexport};
+                
+                // Check if this is a pandas re-export binding
+                if let Some(module_info) = self.module_info() {
+                    if is_pandas_reexport(module_info.name().as_str()) {
+                        // Try to infer pandas type
+                        if let Some(name) = original_binding.name() {
+                            if let Some(pandas_type) = infer_pandas_type(
+                                name.as_str(),
+                                module_info.name().as_str(),
+                                module_info,
+                            ) {
+                                return Arc::new(TypeInfo::of_ty(pandas_type));
+                            }
+                        }
+                    }
+                }
+            }
+            return self.get_idx(*fwd); 
         }
         let mut type_info = self.binding_to_type_info(binding, errors);
         type_info.visit_mut(&mut |ty| {
