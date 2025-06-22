@@ -638,6 +638,15 @@ impl VisitMut for Type {
 }
 
 impl Type {
+    pub fn from_known(path: &str) -> Self {
+        match path {
+            "pandas.DataFrame" => Type::Named {
+                module: Some("pandas.core.frame".to_string()),
+                name: "DataFrame".to_string(),
+            },
+            _ => Type::Unknown, // fallback to Unknown
+        }
+    }
     pub fn arc_clone(self: Arc<Self>) -> Self {
         Arc::unwrap_or_clone(self)
     }
@@ -698,6 +707,11 @@ impl Type {
     pub fn is_unpack(&self) -> bool {
         matches!(self, Type::Unpack(_))
     }
+    
+    pub fn is_unknown(&self) -> bool {
+        matches!(self, Type::Unknown) // or whatever your unknown variant is
+    }
+
 
     pub fn callable_concatenate(args: Box<[Type]>, param_spec: Type, ret: Type) -> Self {
         Type::Callable(Box::new(Callable::concatenate(args, param_spec, ret)))
