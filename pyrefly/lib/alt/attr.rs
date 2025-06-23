@@ -432,6 +432,22 @@ enum AttributeBase {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    /// Check if a type contains Any (either directly or in a union)
+    fn type_contains_any(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Any(_) => true,
+            Type::Union(types) => types.iter().any(|t| self.type_contains_any(t)),
+            Type::Var(v) => {
+                if let Some(_guard) = self.recurser.recurse(*v) {
+                    self.type_contains_any(&self.solver().force_var(*v))
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// Gets the possible attribute bases for a type:
     /// If the type is a union, we will attempt to generate bases for each member of the union
     /// If the type is a bounded type var w/ a union upper bound, we will attempt to generate 1 base for
@@ -498,6 +514,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         todo_ctx: &str,
     ) -> Type {
+        // If the base type contains Any, we should return Any without errors
+        // This handles cases like `(A | Any).attr` where Any allows any attribute
+        if self.type_contains_any(base) {
+            return Type::Any(AnyStyle::Implicit);
+        }
+
         let bases = self.get_possible_attribute_bases(base);
         let mut results = Vec::new();
         for attr_base in bases {
@@ -637,6 +659,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         todo_ctx: &str,
     ) -> Option<Type> {
+        // If the base type contains Any, we should allow any attribute assignment
+        if self.type_contains_any(base) {
+            return match got {
+                TypeOrExpr::Expr(expr) => Some(self.expr(expr, None, errors)),
+                TypeOrExpr::Type(ty, _) => Some(ty.clone()),
+            };
+        }
+
         let mut narrowed_types = Some(Vec::new());
         let bases = self.get_possible_attribute_bases(base);
         for attr_base in bases {
@@ -781,6 +811,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         todo_ctx: &str,
     ) {
+        // If the base type contains Any, we should allow any attribute deletion
+        if self.type_contains_any(base) {
+            return;
+        }
+
         let bases = self.get_possible_attribute_bases(base);
         for attr_base in bases {
             let lookup_result = attr_base.map_or_else(
