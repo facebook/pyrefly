@@ -4,7 +4,6 @@ build-backend = "maturin"
 
 [tool.maturin]
 bindings = "bin"
-manifest-path = "pyrefly/Cargo.toml"
 strip = true
 include = ["rust-toolchain"]
 

@@ -30,10 +30,9 @@ jobs:
         with:
           command: sdist
           args: --out dist
-          working-directory: pyrefly
       - name: Test sdist
         run: |
-          pip install pyrefly/dist/"${PACKAGE_NAME}"-*.tar.gz --force-reinstall
+          pip install dist/"${PACKAGE_NAME}"-*.tar.gz --force-reinstall
           "${BINARY_NAME}" --version
           "${BINARY_NAME}" --help
           "${BINARY_NAME}" check test.py
@@ -41,7 +40,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wheels-sdist
-          path: pyrefly/dist
+          path: dist
 
   macos:
     runs-on: macos-14
@@ -66,11 +65,10 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist
-          working-directory: pyrefly
       - name: Test wheel
         if: ${{ matrix.platform.target == 'aarch64' }}
         run: |
-          pip install pyrefly/dist/"${PACKAGE_NAME}"-*.whl --force-reinstall
+          pip install dist/"${PACKAGE_NAME}"-*.whl --force-reinstall
           "${BINARY_NAME}" --version
           "${BINARY_NAME}" --help
           "${BINARY_NAME}" check test.py
@@ -78,7 +76,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wheels-macos-${{ matrix.platform.target }}
-          path: pyrefly/dist
+          path: dist
 
   windows:
     runs-on: windows-latest
@@ -109,12 +107,11 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist
-          working-directory: pyrefly
       - name: Test wheel
         if: ${{ !startsWith(matrix.platform.target, 'aarch64') }}
         shell: bash
         run: |
-          python -m pip install pyrefly/dist/"${PACKAGE_NAME}"-*.whl --force-reinstall
+          python -m pip install dist/"${PACKAGE_NAME}"-*.whl --force-reinstall
           "${BINARY_NAME}" --version
           "${BINARY_NAME}" --help
           "${BINARY_NAME}" check test.py
@@ -122,7 +119,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.platform.target }}
-          path: pyrefly/dist
+          path: dist
 
   linux:
     runs-on: ubuntu-latest
@@ -148,7 +145,6 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: auto
           args: --release --out dist
-          working-directory: pyrefly
       - name: Build wheels aarch64
         if: ${{ startsWith(matrix.target, 'aarch64') }}
         uses: PyO3/maturin-action@v1
@@ -156,7 +152,6 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: auto
           args: --release --out dist
-          working-directory: pyrefly
         env:
           # aarch64-linux builds need JEMALLOC_SYS_WITH_LG_PAGE=16, or they segfault.
           # See https://github.com/facebook/pyrefly/issues/380
@@ -164,7 +159,7 @@ jobs:
       - name: Test wheel
         if: ${{ startsWith(matrix.target, 'x86_64') }}
         run: |
-          pip install pyrefly/dist/"${PACKAGE_NAME}"-*.whl --force-reinstall
+          pip install dist/"${PACKAGE_NAME}"-*.whl --force-reinstall
           "${BINARY_NAME}" --version
           "${BINARY_NAME}" --help
           "${BINARY_NAME}" check test.py
@@ -172,7 +167,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.target }}
-          path: pyrefly/dist
+          path: dist
 
   merge:
     name: Merge artifacts

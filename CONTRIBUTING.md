@@ -36,10 +36,8 @@ From this directory, you can run:
 
 We use [maturin](https://github.com/PyO3/maturin) to build wheels and source
 distributions. This also means that you can pip install `maturin` and, from the
-inner `pyrefly` directory, use `maturin build` and `maturin develop` for local
-development. `pip install .` in the inner `pyrefly` directory works as well. You
-can also run `maturin` from the repo root by adding `-m pyrefly/Cargo.toml` to
-the command line.
+root directory, use `maturin build` and `maturin develop` for local development.
+`pip install .` works as well.
 
 ### Deploying to PyPI (Meta internal)
 
