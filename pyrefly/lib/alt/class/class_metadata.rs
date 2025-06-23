@@ -28,6 +28,7 @@ use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::types::class_metadata::EnumMetadata;
 use crate::alt::types::class_metadata::NamedTupleMetadata;
 use crate::alt::types::class_metadata::ProtocolMetadata;
+use crate::alt::types::class_metadata::TotalOrderingMetadata;
 use crate::alt::types::class_metadata::TypedDictMetadata;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyLegacyTypeParam;
@@ -153,7 +154,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         bases: &[Expr],
         keywords: &[(Name, Expr)],
-        decorators: &[Idx<Key>],
+        decorators: &[(Idx<Key>, TextRange)],
         is_new_type: bool,
         special_base: &Option<Box<BaseClass>>,
         errors: &ErrorCollector,
@@ -405,9 +406,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         let mut is_final = false;
-        let mut is_total_ordering = false;
-        for decorator in decorators {
-            let decorator = self.get_idx(*decorator);
+        let mut total_ordering_metadata = None;
+        for (decorator_key, decorator_range) in decorators {
+            let decorator = self.get_idx(*decorator_key);
             match decorator.ty().callee_kind() {
                 Some(CalleeKind::Function(FunctionKind::Dataclass(kws))) => {
                     let dataclass_fields = self.get_dataclass_fields(cls, &bases_with_metadata);
@@ -433,7 +434,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Some(CalleeKind::Function(FunctionKind::TotalOrdering)) => {
-                    is_total_ordering = true;
+                    total_ordering_metadata = Some(TotalOrderingMetadata {
+                        location: *decorator_range,
+                    });
                 }
                 _ => {}
             }
@@ -481,7 +484,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_new_type,
             is_final,
             has_unknown_tparams,
-            is_total_ordering,
+            total_ordering_metadata,
             errors,
         )
     }

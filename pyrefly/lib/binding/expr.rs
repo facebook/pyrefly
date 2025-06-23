@@ -737,4 +737,19 @@ impl<'a> BindingsBuilder<'a> {
         }
         decorator_keys
     }
+
+    pub fn ensure_and_bind_decorators_with_ranges(
+        &mut self,
+        decorators: Vec<Decorator>,
+        usage: &mut Usage,
+    ) -> Vec<(Idx<Key>, TextRange)> {
+        let mut decorator_keys_with_ranges = Vec::with_capacity(decorators.len());
+        for mut x in decorators {
+            self.ensure_expr(&mut x.expression, usage);
+            let range = x.range();
+            let k = self.insert_binding(Key::Anon(x.range), Binding::Decorator(x.expression));
+            decorator_keys_with_ranges.push((k, range));
+        }
+        decorator_keys_with_ranges
+    }
 }

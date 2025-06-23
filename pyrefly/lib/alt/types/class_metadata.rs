@@ -16,6 +16,7 @@ use pyrefly_derive::VisitMut;
 use pyrefly_util::display::commas_iter;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
@@ -49,7 +50,7 @@ pub struct ClassMetadata {
     /// Is it possible for this class to have type parameters that we don't know about?
     /// This can happen if, e.g., a class inherits from Any.
     has_unknown_tparams: bool,
-    is_total_ordering: bool,
+    total_ordering_metadata: Option<TotalOrderingMetadata>,
 }
 
 impl VisitMut<Type> for ClassMetadata {
@@ -81,7 +82,7 @@ impl ClassMetadata {
         is_new_type: bool,
         is_final: bool,
         has_unknown_tparams: bool,
-        is_total_ordering: bool,
+        total_ordering_metadata: Option<TotalOrderingMetadata>,
         errors: &ErrorCollector,
     ) -> ClassMetadata {
         let mro = Mro::new(cls, &bases_with_metadata, errors);
@@ -105,7 +106,7 @@ impl ClassMetadata {
             is_new_type,
             is_final,
             has_unknown_tparams,
-            is_total_ordering,
+            total_ordering_metadata,
         }
     }
 
@@ -169,7 +170,7 @@ impl ClassMetadata {
             is_new_type: false,
             is_final: false,
             has_unknown_tparams: false,
-            is_total_ordering: false,
+            total_ordering_metadata: None,
         }
     }
 
@@ -233,7 +234,11 @@ impl ClassMetadata {
     }
 
     pub fn is_total_ordering(&self) -> bool {
-        self.is_total_ordering
+        self.total_ordering_metadata.is_some()
+    }
+
+    pub fn total_ordering_metadata(&self) -> Option<&TotalOrderingMetadata> {
+        self.total_ordering_metadata.as_ref()
     }
 
     pub fn protocol_metadata(&self) -> Option<&ProtocolMetadata> {
@@ -406,6 +411,12 @@ pub struct ProtocolMetadata {
     pub members: SmallSet<Name>,
     /// Whether this protocol is decorated with @runtime_checkable
     pub is_runtime_checkable: bool,
+}
+
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
+pub struct TotalOrderingMetadata {
+    /// Location of the decorator for `@total_ordering`.
+    pub location: TextRange,
 }
 
 /// A struct representing a class's ancestors, in method resolution order (MRO)

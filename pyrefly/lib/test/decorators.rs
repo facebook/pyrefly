@@ -356,8 +356,8 @@ testcase!(
     r#"
 from functools import total_ordering
 
-@total_ordering
-class A:  # E: Class `A` must define at least one of the rich comparison methods.
+@total_ordering  # E: Class `A` must define at least one of the rich comparison methods.
+class A:
     def __init__(self, x: int) -> None:
         self.x = x
 "#,

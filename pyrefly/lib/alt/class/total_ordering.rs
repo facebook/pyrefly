@@ -58,10 +58,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .fields()
             .any(|f| *f == dunder::LT || *f == dunder::LE || *f == dunder::GT || *f == dunder::GE)
         {
+            let total_ordering_metadata = metadata.total_ordering_metadata().unwrap();
             self.error(
                 errors,
-                // FIXME: Should use the range for @total_ordering decorator
-                cls.range(),
+                total_ordering_metadata.location,
                 ErrorKind::MissingAttribute,
                 None,
                 format!(

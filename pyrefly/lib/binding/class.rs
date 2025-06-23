@@ -114,8 +114,10 @@ impl<'a> BindingsBuilder<'a> {
         let mut key_class_fields: SmallSet<Idx<KeyClassField>> = SmallSet::new();
 
         let body = mem::take(&mut x.body);
-        let decorators =
-            self.ensure_and_bind_decorators(mem::take(&mut x.decorator_list), class_object.usage());
+        let decorators_with_ranges = self.ensure_and_bind_decorators_with_ranges(
+            mem::take(&mut x.decorator_list),
+            class_object.usage(),
+        );
 
         self.scopes.push(Scope::annotation(x.range));
 
@@ -180,7 +182,7 @@ impl<'a> BindingsBuilder<'a> {
                 class_idx: class_indices.class_idx,
                 bases: bases.clone().into_boxed_slice(),
                 keywords: keywords.into_boxed_slice(),
-                decorators: decorators.clone().into_boxed_slice(),
+                decorators: decorators_with_ranges.clone().into_boxed_slice(),
                 is_new_type: false,
                 special_base: None,
             },
@@ -290,11 +292,14 @@ impl<'a> BindingsBuilder<'a> {
         }
 
         let legacy_tparams = legacy_tparam_builder.lookup_keys();
+        let decorator_keys = decorators_with_ranges
+            .map(|(idx, _)| *idx)
+            .into_boxed_slice();
 
         self.bind_definition_user(
             &x.name,
             class_object,
-            Binding::ClassDef(class_indices.class_idx, decorators.into_boxed_slice()),
+            Binding::ClassDef(class_indices.class_idx, decorator_keys),
             FlowStyle::Other,
         );
         fields_possibly_defined_by_this_class.reserve(0); // Attempt to shrink to capacity

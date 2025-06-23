@@ -1539,7 +1539,7 @@ pub struct BindingClassMetadata {
     pub class_idx: Idx<KeyClass>,
     pub bases: Box<[Expr]>,
     pub keywords: Box<[(Name, Expr)]>,
-    pub decorators: Box<[Idx<Key>]>,
+    pub decorators: Box<[(Idx<Key>, TextRange)]>,
     pub is_new_type: bool,
     pub special_base: Option<Box<BaseClass>>,
 }
