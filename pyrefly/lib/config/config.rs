@@ -364,11 +364,6 @@ impl ConfigFile {
             let stdlib_path = custom_typeshed_path.join("stdlib");
             if let Some(path) = find_module_in_search_path(module, std::iter::once(&stdlib_path)) {
                 Ok(path)
-            } else if let Some(path) = typeshed()
-                .map_err(|err| FindError::not_found(err, module))?
-                .find(module)
-            {
-                Ok(path)
             } else if let Some(path) = find_module_in_search_path(module, self.fallback_search_path.iter()) {
                 Ok(path)
             } else if let Some(path) = find_module_in_site_package_path(
@@ -385,7 +380,7 @@ impl ConfigFile {
                     &self.source,
                 ))
             }
-        } else if let Some(path) = typeshed()
+        } else if self.typeshed_path.is_none() && let Some(path) = typeshed()
             .map_err(|err| FindError::not_found(err, module))?
             .find(module)
         {
