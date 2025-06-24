@@ -2539,7 +2539,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &Binding::Function(idx, mut pred, class_meta) => {
                 self.solve_function_binding(idx, &mut pred, class_meta.as_ref(), errors)
             }
-            Binding::Import(m, name) => self
+            Binding::Import(m, name, _aliased) => self
                 .get_from_module(*m, None, &KeyExport(name.clone()))
                 .arc_clone(),
             Binding::ClassDef(x, decorators) => match &self.get_idx(*x).0 {

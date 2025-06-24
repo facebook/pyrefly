@@ -801,16 +801,37 @@ impl<'a> Transaction<'a> {
         None
     }
 
+    /// When `jump_through_renamed_import` is true, we will jump through renamed import like
+    /// `from foo import bar as baz`, when we try to compute definition of baz.
+    /// Otherwise, we will stop at `baz``.
     fn resolve_intermediate_definition(
         &self,
         handle: &Handle,
         intermediate_definition: IntermediateDefinition,
+        jump_through_renamed_import: bool,
         mut gas: Gas,
     ) -> Option<(Handle, Export)> {
         match intermediate_definition {
             IntermediateDefinition::Local(export) => Some((handle.dupe(), export)),
-            IntermediateDefinition::NamedImport(_import_key, module_name, name) => {
-                self.resolve_named_import(handle, module_name, name, &mut gas)
+            IntermediateDefinition::NamedImport(
+                import_key,
+                module_name,
+                name,
+                original_name_range,
+            ) => {
+                let (def_handle, export) =
+                    self.resolve_named_import(handle, module_name, name, &mut gas)?;
+                if !jump_through_renamed_import && original_name_range.is_some() {
+                    Some((
+                        handle.dupe(),
+                        Export {
+                            location: import_key,
+                            ..export
+                        },
+                    ))
+                } else {
+                    Some((def_handle, export))
+                }
             }
             IntermediateDefinition::Module(name) => {
                 let handle = self.import_handle(handle, name, None).ok()?;
@@ -851,16 +872,28 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn key_to_export(&self, handle: &Handle, key: &Key, mut gas: Gas) -> Option<(Handle, Export)> {
+    fn key_to_export(
+        &self,
+        handle: &Handle,
+        key: &Key,
+        jump_through_renamed_import: bool,
+        mut gas: Gas,
+    ) -> Option<(Handle, Export)> {
         let bindings = self.get_bindings(handle)?;
         let intermediate_definition = key_to_intermediate_definition(&bindings, key, &mut gas)?;
-        self.resolve_intermediate_definition(handle, intermediate_definition, gas)
+        self.resolve_intermediate_definition(
+            handle,
+            intermediate_definition,
+            jump_through_renamed_import,
+            gas,
+        )
     }
 
     fn find_definition_for_name_def(
         &self,
         handle: &Handle,
         name: &Identifier,
+        jump_through_renamed_import: bool,
     ) -> Option<(
         DefinitionMetadata,
         TextRangeWithModuleInfo,
@@ -877,7 +910,7 @@ impl<'a> Transaction<'a> {
                 symbol_kind,
                 docstring,
             },
-        ) = self.key_to_export(handle, &def_key, INITIAL_GAS)?;
+        ) = self.key_to_export(handle, &def_key, jump_through_renamed_import, INITIAL_GAS)?;
         let module_info = self.get_module_info(&handle)?;
         let name = Name::new(module_info.code_at(location));
         Some((
@@ -891,6 +924,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         name: &Identifier,
+        jump_through_renamed_import: bool,
     ) -> Option<(
         DefinitionMetadata,
         TextRangeWithModuleInfo,
@@ -907,7 +941,7 @@ impl<'a> Transaction<'a> {
                 symbol_kind,
                 docstring,
             },
-        ) = self.key_to_export(handle, &use_key, INITIAL_GAS)?;
+        ) = self.key_to_export(handle, &use_key, jump_through_renamed_import, INITIAL_GAS)?;
         Some((
             DefinitionMetadata::Variable(symbol_kind),
             TextRangeWithModuleInfo::new(self.get_module_info(&handle)?, location),
@@ -947,7 +981,7 @@ impl<'a> Transaction<'a> {
         callee_kind: &CalleeKind,
     ) -> Option<TextRangeWithModuleInfo> {
         let (_, location, _) = match callee_kind {
-            CalleeKind::Function(name) => self.find_definition_for_name_use(handle, name),
+            CalleeKind::Function(name) => self.find_definition_for_name_use(handle, name, true),
             CalleeKind::Method(base_range, name) => {
                 self.find_definition_for_attribute(handle, *base_range, name)
             }
@@ -961,6 +995,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         position: TextSize,
+        jump_through_renamed_import: bool,
     ) -> Option<(
         DefinitionMetadata,
         TextRangeWithModuleInfo,
@@ -974,11 +1009,11 @@ impl<'a> Transaction<'a> {
                 match expr_context {
                     ExprContext::Store => {
                         // This is a variable definition
-                        self.find_definition_for_name_def(handle, &id)
+                        self.find_definition_for_name_def(handle, &id, jump_through_renamed_import)
                     }
                     ExprContext::Load | ExprContext::Del | ExprContext::Invalid => {
                         // This is a usage of the variable
-                        self.find_definition_for_name_use(handle, &id)
+                        self.find_definition_for_name_use(handle, &id, jump_through_renamed_import)
                     }
                 }
             }
@@ -1006,7 +1041,11 @@ impl<'a> Transaction<'a> {
                     IdentifierContext::ImportedName {
                         name_after_import, ..
                     },
-            }) => self.find_definition_for_name_def(handle, &name_after_import),
+            }) => self.find_definition_for_name_def(
+                handle,
+                &name_after_import,
+                jump_through_renamed_import,
+            ),
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::FunctionDef,
@@ -1088,7 +1127,18 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
     ) -> Option<TextRangeWithModuleInfo> {
-        self.find_definition(handle, position).map(|x| x.1)
+        self.find_definition(handle, position, true).map(|x| x.1)
+    }
+
+    /// This function should not be used for user-facing go-to-definition. However, it is exposed to
+    /// tests so that we can test the behavior that's useful for find-refs.
+    #[cfg(test)]
+    pub(crate) fn goto_definition_do_not_jump_through_renamed_import(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+    ) -> Option<TextRangeWithModuleInfo> {
+        self.find_definition(handle, position, false).map(|x| x.1)
     }
 
     /// Produce code actions that makes edits local to the file.
@@ -1126,7 +1176,7 @@ impl<'a> Transaction<'a> {
 
     pub fn find_local_references(&self, handle: &Handle, position: TextSize) -> Vec<TextRange> {
         if let Some((definition_kind, definition, _docstring)) =
-            self.find_definition(handle, position)
+            self.find_definition(handle, position, false)
         {
             self.local_references_from_definition(handle, definition_kind, definition)
                 .unwrap_or_default()
@@ -1145,8 +1195,10 @@ impl<'a> Transaction<'a> {
             let index = self.get_solutions(handle)?.get_index()?;
             let index = index.lock();
             let mut references = Vec::new();
-            for ((imported_module_name, imported_name), ranges) in
-                &index.externally_defined_variable_references
+            for ((imported_module_name, imported_name), ranges) in index
+                .externally_defined_variable_references
+                .iter()
+                .chain(&index.renamed_imports)
             {
                 let mut gas = INITIAL_GAS;
                 if let Some((imported_handle, export)) = self.resolve_named_import(
@@ -1294,7 +1346,7 @@ impl<'a> Transaction<'a> {
                 continue;
             }
             if let Some((definition_handle, definition_export)) =
-                self.key_to_export(handle, key, INITIAL_GAS)
+                self.key_to_export(handle, key, false, INITIAL_GAS)
             {
                 named_bindings.push(NamedBinding {
                     definition_handle,

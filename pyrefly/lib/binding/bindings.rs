@@ -628,7 +628,7 @@ impl<'a> BindingsBuilder<'a> {
                     let key = Key::Import(name.clone(), TextRange::default());
                     let idx = self
                         .table
-                        .insert(key, Binding::Import(builtins_module, name.clone()));
+                        .insert(key, Binding::Import(builtins_module, name.clone(), None));
                     self.bind_key(name, idx, FlowStyle::Import(builtins_module, name.clone()));
                 }
             }

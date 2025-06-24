@@ -25,7 +25,7 @@ use crate::state::handle::Handle;
 
 pub enum IntermediateDefinition {
     Local(Export),
-    NamedImport(TextRange, ModuleName, Name),
+    NamedImport(TextRange, ModuleName, Name, Option<TextRange>),
     Module(ModuleName),
 }
 
@@ -40,7 +40,7 @@ pub fn key_to_intermediate_definition(
     match &res {
         Some(IntermediateDefinition::Local(_))
         | Some(IntermediateDefinition::Module(_))
-        | Some(IntermediateDefinition::NamedImport(_, _, _)) => res,
+        | Some(IntermediateDefinition::NamedImport(_, _, _, _)) => res,
         None => {
             if let Key::Definition(x) = key {
                 Some(IntermediateDefinition::Local(Export {
@@ -94,10 +94,11 @@ fn binding_to_intermediate_definition(
             bindings.idx_to_key(*ks.iter().next().unwrap()),
             gas,
         ),
-        Binding::Import(m, name) => Some(IntermediateDefinition::NamedImport(
+        Binding::Import(m, name, original_name_range) => Some(IntermediateDefinition::NamedImport(
             key.range(),
             *m,
             name.clone(),
+            *original_name_range,
         )),
         Binding::Module(name, _, _) => Some(IntermediateDefinition::Module(*name)),
         Binding::CheckLegacyTypeParam(k, _) => {

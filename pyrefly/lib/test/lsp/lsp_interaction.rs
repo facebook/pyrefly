@@ -661,6 +661,7 @@ fn test_references() {
     let mut expected_responses = Vec::new();
     let foo = root_path.join("foo.py");
     let bar = root_path.join("bar.py");
+    let various_imports = root_path.join("various_imports.py");
     let with_synthetic_bindings = root_path.join("with_synthetic_bindings.py");
     test_messages.push(Message::from(build_did_open_notification(bar.clone())));
 
@@ -696,6 +697,14 @@ fn test_references() {
             {
                 "range": {"start":{"line":9,"character":4},"end":{"line":9,"character":7}},
                 "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":5,"character":16},"end":{"line":5,"character":19}},
+                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":5,"character":26},"end":{"line":5,"character":29}},
+                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":16},"end":{"character":19,"line":5}},
@@ -751,6 +760,14 @@ fn test_references() {
                 "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
+                "range": {"start":{"line":5,"character":16},"end":{"line":5,"character":19}},
+                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":5,"character":26},"end":{"line":5,"character":29}},
+                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+            },
+            {
                 "range": {"start":{"line":5,"character":16},"end":{"character":19,"line":5}},
                 "uri": Url::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
             },
@@ -802,6 +819,14 @@ fn test_references() {
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
+                "range": {"start":{"line":5,"character":16},"end":{"line":5,"character":19}},
+                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":5,"character":26},"end":{"line":5,"character":29}},
+                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+            },
+            {
                 "range": {"start":{"line":5,"character":16},"end":{"character":19,"line":5}},
                 "uri": Url::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
             },
@@ -825,6 +850,41 @@ fn test_references() {
         error: None,
     }));
 
+    test_messages.push(Message::from(build_did_open_notification(
+        various_imports.clone(),
+    )));
+    test_messages.push(Message::from(Request {
+        id: RequestId::from(5),
+        method: "textDocument/references".to_owned(),
+        params: serde_json::json!({
+            "textDocument": {
+                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+            },
+            "position": {
+                "line": 7,
+                "character": 0
+            },
+            "context": {
+                "includeDeclaration": true
+            },
+        }),
+    }));
+
+    expected_responses.push(Message::Response(Response {
+        id: RequestId::from(5),
+        result: Some(serde_json::json!([
+            {
+                "range": {"start":{"line":5,"character":23},"end":{"line":5,"character":24}},
+                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":7,"character":0},"end":{"line":7,"character":1}},
+                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+            },
+        ])),
+        error: None,
+    }));
+
     // Change the definition file in memory.
     // However, find ref still reports the stale result based on the filesystem content.
     test_messages.push(Message::from(Notification {
@@ -841,7 +901,7 @@ fn test_references() {
         }),
     }));
     test_messages.push(Message::from(Request {
-        id: RequestId::from(5),
+        id: RequestId::from(6),
         method: "textDocument/references".to_owned(),
         params: serde_json::json!({
             "textDocument": {
@@ -857,7 +917,7 @@ fn test_references() {
         }),
     }));
     expected_responses.push(Message::Response(Response {
-        id: RequestId::from(5),
+        id: RequestId::from(6),
         result: Some(serde_json::json!([
             {
                 "range": {"start":{"line":6,"character":6},"end":{"character":9,"line":6}},
@@ -887,6 +947,14 @@ fn test_references() {
                 "range": {"start":{"line":9,"character":4},"end":{"line":9,"character":7}},
                 "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
             },
+            {
+                "range": {"start":{"line":5,"character":16},"end":{"line":5,"character":19}},
+                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":5,"character":26},"end":{"line":5,"character":29}},
+                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+            },
         ])),
         error: None,
     }));
@@ -894,7 +962,7 @@ fn test_references() {
     // When we do a find-ref in an in-memory file with changed content,
     // it will cause us to fail to find references in other files.
     test_messages.push(Message::from(Request {
-        id: RequestId::from(6),
+        id: RequestId::from(7),
         method: "textDocument/references".to_owned(),
         params: serde_json::json!({
             "textDocument": {
@@ -911,7 +979,7 @@ fn test_references() {
     }));
 
     expected_responses.push(Message::Response(Response {
-        id: RequestId::from(6),
+        id: RequestId::from(7),
         result: Some(serde_json::json!([
             {
                 "range": {"start":{"line":8,"character":6},"end":{"character":9,"line":8}},

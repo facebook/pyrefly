@@ -79,6 +79,9 @@ pub struct Index {
     /// A map from (import specifier (ModuleName), imported symbol (Name)) to all references to it
     /// in the current module.
     pub externally_defined_variable_references: SmallMap<(ModuleName, Name), Vec<TextRange>>,
+    /// A map from (import specifier (ModuleName), imported symbol (Name)) to all references to it
+    /// in the current module.
+    pub renamed_imports: SmallMap<(ModuleName, Name), Vec<TextRange>>,
     /// A map from (attribute definition module) to a list of pairs of
     /// (range of attribute definition in the definition, range of reference in the current module).
     pub externally_defined_attribute_references: SmallMap<ModulePath, Vec<(TextRange, TextRange)>>,
@@ -505,17 +508,30 @@ impl Answers {
             // Index bindings with external definitions.
             for idx in bindings.keys::<Key>() {
                 let key = bindings.idx_to_key(idx);
-                let (_import_key, imported_module_name, imported_name) =
+                let (imported_module_name, imported_name) =
                     match key_to_intermediate_definition(bindings, key, &mut Gas::new(20)) {
                         None => continue,
                         Some(IntermediateDefinition::Local(_)) => continue,
                         Some(IntermediateDefinition::Module(_)) => continue,
                         Some(IntermediateDefinition::NamedImport(
-                            import_key,
+                            _import_key,
                             module_name,
                             name,
-                        )) => (import_key, module_name, name),
+                            original_name_range,
+                        )) => {
+                            if let Some(original_name_range) = original_name_range {
+                                index
+                                    .renamed_imports
+                                    .entry((module_name, name))
+                                    .or_default()
+                                    .push(original_name_range);
+                                continue;
+                            } else {
+                                (module_name, name)
+                            }
+                        }
                     };
+
                 let reference_range = bindings.idx_to_key(idx).range();
                 // Sanity check: the reference should have the same text as the definition.
                 // This check helps to filter out synthetic bindings.

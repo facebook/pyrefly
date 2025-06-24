@@ -290,7 +290,7 @@ impl<'a> BindingsBuilder<'a> {
                 //
                 // For example, we treat `typing.List` as if it were an import of `builtins.list`.
                 self.bind_legacy_type_var_or_typing_alias(name, |_| {
-                    Binding::Import(module, forward)
+                    Binding::Import(module, forward, None)
                 })
             }
             Stmt::Assign(mut x) => {
@@ -828,7 +828,7 @@ impl<'a> BindingsBuilder<'a> {
                                     for name in module_exports.wildcard(self.lookup).iter_hashed() {
                                         let key = Key::Import(name.into_key().clone(), x.range);
                                         let val = if exported.contains_key_hashed(name) {
-                                            Binding::Import(m, name.into_key().clone())
+                                            Binding::Import(m, name.into_key().clone(), None)
                                         } else {
                                             self.error(
                                                 x.range,
@@ -846,6 +846,11 @@ impl<'a> BindingsBuilder<'a> {
                                         );
                                     }
                                 } else {
+                                    let original_name_range = if x.asname.is_some() {
+                                        Some(x.name.range)
+                                    } else {
+                                        None
+                                    };
                                     let asname = x.asname.unwrap_or_else(|| x.name.clone());
                                     // A `from x import y` statement is ambiguous; if `x` is a package with
                                     // an `__init__.py` file, then it might import the name `y` from the
@@ -858,7 +863,7 @@ impl<'a> BindingsBuilder<'a> {
                                     let val = if (self.module_info.name() != m)
                                         && exported.contains_key(&x.name.id)
                                     {
-                                        Binding::Import(m, x.name.id.clone())
+                                        Binding::Import(m, x.name.id.clone(), original_name_range)
                                     } else {
                                         let x_as_module_name = m.append(&x.name.id);
                                         if self.lookup.get(x_as_module_name).is_ok() {

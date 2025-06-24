@@ -15,7 +15,6 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use starlark_map::smallmap;
 use vec1::Vec1;
-use vec1::vec1;
 
 use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
@@ -436,31 +435,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         fields: &SmallMap<Name, bool>,
     ) -> Option<ClassSynthesizedField> {
         // Synthesizes a `(self, k: Literal["key"], default: ValueType) -> ValueType` signature for each field.
-        let mut fields_iter = self.names_to_fields(cls, fields);
-        let first_field = fields_iter.next()?;
+        let fields_iter = self.names_to_fields(cls, fields);
         let self_param = self.class_self_param(cls, true);
         let make_overload = |(name, field): (&Name, TypedDictField)| {
-            OverloadType::Callable(Callable::list(
-                ParamList::new(vec![
-                    self_param.clone(),
-                    Param::PosOnly(
-                        Some(KEY_PARAM.clone()),
-                        name_to_literal_type(name),
-                        Required::Required,
-                    ),
-                    Param::PosOnly(
-                        Some(DEFAULT_PARAM.clone()),
-                        field.ty.clone(),
-                        Required::Required,
-                    ),
-                ]),
-                field.ty.clone(),
-            ))
+            if field.read_only {
+                None
+            } else {
+                Some(OverloadType::Callable(Callable::list(
+                    ParamList::new(vec![
+                        self_param.clone(),
+                        Param::PosOnly(
+                            Some(KEY_PARAM.clone()),
+                            name_to_literal_type(name),
+                            Required::Required,
+                        ),
+                        Param::PosOnly(
+                            Some(DEFAULT_PARAM.clone()),
+                            field.ty.clone(),
+                            Required::Required,
+                        ),
+                    ]),
+                    field.ty.clone(),
+                )))
+            }
         };
-        let mut overloads = vec1![make_overload(first_field)];
-        overloads.extend(fields_iter.map(make_overload));
+        let overloads = fields_iter.filter_map(make_overload).collect::<Vec<_>>();
         Some(ClassSynthesizedField::new(Type::Overload(Overload {
-            signatures: overloads,
+            signatures: Vec1::try_from_vec(overloads).ok()?,
             metadata: Box::new(FuncMetadata::def(
                 self.module_info().name(),
                 cls.name().clone(),

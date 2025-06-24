@@ -1608,7 +1608,7 @@ impl Server {
         };
         let position = position_to_text_size(&info, params.text_document_position.position);
         let Some((definition_kind, definition, _docstring)) =
-            transaction.find_definition(&handle, position)
+            transaction.find_definition(&handle, position, false)
         else {
             ide_transaction_manager.save(transaction);
             return self.send_response(new_response::<Option<Vec<Location>>>(request_id, Ok(None)));
@@ -1681,7 +1681,7 @@ impl Server {
         let mut kind_formatted: String = "".to_owned();
         let mut docstring_formatted: String = "".to_owned();
         if let Some((definition_metadata, text_range_with_module_info, docstring)) =
-            transaction.find_definition(&handle, range)
+            transaction.find_definition(&handle, range, true)
         {
             if let Some(symbol_kind) = definition_metadata.symbol_kind() {
                 kind_formatted = format!(

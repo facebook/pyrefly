@@ -809,6 +809,22 @@ def f(c: C, s: str):
 );
 
 testcase!(
+    test_setdefault_readonly,
+    r#"
+from typing import ReadOnly, TypedDict
+class C(TypedDict):
+    x: ReadOnly[int]
+class D(TypedDict):
+    x: int
+    y: ReadOnly[str]
+def f(c: C, d: D):
+    c.setdefault("x", 0)  # E: `Literal['x']` is not assignable to parameter `k` with type `Never`
+    d.setdefault("x", 0)
+    d.setdefault("y", "oops")  # E: No matching overload
+    "#,
+);
+
+testcase!(
     test_posonly_params,
     r#"
 from typing import TypedDict

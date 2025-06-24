@@ -175,7 +175,6 @@ fn find_one_part_prefix<'a>(
                         } else if let Some((stem, ext)) = name.rsplit_once('.')
                             && ["pyi", "py"].contains(&ext)
                             && !["__init__", "__main__"].contains(&stem)
-                            && stem.starts_with(prefix.as_str())
                             && path.is_file()
                         {
                             results.push((

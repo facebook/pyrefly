@@ -28,6 +28,24 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
     }
 }
 
+fn get_test_report_do_not_jump_through_renamed_import(
+    state: &State,
+    handle: &Handle,
+    position: TextSize,
+) -> String {
+    if let Some(TextRangeWithModuleInfo { module_info, range }) = state
+        .transaction()
+        .goto_definition_do_not_jump_through_renamed_import(handle, position)
+    {
+        format!(
+            "Definition Result:\n{}",
+            code_frame_of_source_at_range(module_info.contents(), range)
+        )
+    } else {
+        "Definition Result: None".to_owned()
+    }
+}
+
 #[test]
 fn ignored_test() {
     let code = r#"
@@ -568,6 +586,47 @@ Definition Result:
 Definition Result:
 3 | class Foo: pass
           ^^^
+
+
+# import_provider.py
+"#
+        .trim(),
+        report.trim()
+    );
+
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code_test),
+            ("import_provider", code_import_provider),
+        ],
+        get_test_report_do_not_jump_through_renamed_import,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from import_provider import Foo as F
+                                       ^
+Definition Result:
+2 | from import_provider import Foo as F
+                                       ^
+
+4 | import import_provider as ip
+                              ^
+Definition Result:
+1 | 
+    ^
+
+7 | def f(x: ip.Foo, y: F):
+             ^
+Definition Result:
+1 | 
+    ^
+
+7 | def f(x: ip.Foo, y: F):
+                        ^
+Definition Result:
+2 | from import_provider import Foo as F
+                                       ^
 
 
 # import_provider.py

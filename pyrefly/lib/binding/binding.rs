@@ -974,7 +974,9 @@ pub enum Binding {
         Option<Idx<KeyClassMetadata>>,
     ),
     /// An import statement, typically with Self::Import.
-    Import(ModuleName, Name),
+    /// The option range tracks the original name's location for renamed import.
+    /// e.g. in `from foo import bar as baz`, we should track the range of `bar`.
+    Import(ModuleName, Name, Option<TextRange>),
     /// A class definition, points to a BindingClass and any decorators.
     ClassDef(Idx<KeyClass>, Box<[Idx<Key>]>),
     /// A forward reference to another binding.
@@ -1118,7 +1120,7 @@ impl DisplayWith<Bindings> for Binding {
                 )
             }
             Self::Function(x, _pred, _class) => write!(f, "Function({})", ctx.display(*x)),
-            Self::Import(m, n) => write!(f, "Import({m}, {n})"),
+            Self::Import(m, n, original_name) => write!(f, "Import({m}, {n}, {:?})", original_name),
             Self::ClassDef(x, _) => write!(f, "ClassDef({})", ctx.display(*x)),
             Self::Forward(k) => write!(f, "Forward({})", ctx.display(*k)),
             Self::AugAssign(a, s) => write!(f, "AugAssign({}, {})", ann(a), m.display(s)),
@@ -1289,7 +1291,7 @@ impl Binding {
             | Binding::CheckLegacyTypeParam(_, _) => Some(SymbolKind::TypeParameter),
             Binding::Global(_) => Some(SymbolKind::Variable),
             Binding::Function(_, _, _) => Some(SymbolKind::Function),
-            Binding::Import(_, _) => {
+            Binding::Import(_, _, _) => {
                 // TODO: maybe we can resolve it to see its symbol kind
                 Some(SymbolKind::Variable)
             }
