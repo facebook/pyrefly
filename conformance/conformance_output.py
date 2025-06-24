@@ -95,7 +95,7 @@ def get_expected_errors(test_case: str) -> ExpectedErrors:
     https://github.com/python/typing/blob/main/conformance/src/main.py
     """
     # lint-ignore: NoUnsafeFilesystemRule
-    with open(test_case, "r") as f:
+    with open(test_case, "r", encoding="utf-8") as f:
         lines = f.readlines()
     required_errors: dict[int, int] = {}
     optional_errors: dict[int, int] = {}
@@ -218,7 +218,7 @@ def get_conformance_output(
             if file.endswith(".py") and not is_excluded(file):
                 files_to_check.append(os.path.join(root, file))
     outputs = defaultdict(lambda: [])
-    with tempfile.NamedTemporaryFile() as tmp_file:
+    with tempfile.NamedTemporaryFile(delete_on_close=False) as tmp_file:
         cmd = (
             get_pyrefly_command(executable)
             + [
@@ -243,7 +243,7 @@ def get_conformance_output(
                     relative_normalized_path = os.path.relpath(os.path.normpath(path))
                     outputs[relative_normalized_path].append(error)
         except Exception:
-            logger.error("Failed to get conformance output\n{}\n".format(stderr))
+            logger.exception("Failed to get conformance output\n{}\n".format(stderr))
     return outputs
 
 
@@ -261,7 +261,7 @@ def get_conformance_output_separate(
                 files_to_check.append(os.path.join(root, file))
     outputs = defaultdict(lambda: [])
     for file in files_to_check:
-        with tempfile.NamedTemporaryFile() as tmp_file:
+        with tempfile.NamedTemporaryFile(delete_on_close=False) as tmp_file:
             cmd = (
                 get_pyrefly_command(executable)
                 + [
