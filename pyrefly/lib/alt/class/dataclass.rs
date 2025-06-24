@@ -141,11 +141,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut params = vec![self.class_self_param(cls, false)];
         for (name, field, field_flags) in self.iter_fields(cls, fields, true) {
             if field_flags.is_set(&DataclassKeywords::INIT) {
-                params.push(field.as_param(
-                    &name,
-                    field_flags.is_set(&DataclassKeywords::DEFAULT),
-                    kw_only || field_flags.is_set(&DataclassKeywords::KW_ONLY),
-                ));
+                params.push(
+                    field.as_param(
+                        &name,
+                        field_flags.is_set(&DataclassKeywords::DEFAULT),
+                        field_flags
+                            .get_explicit(&DataclassKeywords::KW_ONLY)
+                            .unwrap_or(kw_only),
+                    ),
+                );
             }
         }
         let ty = Type::Function(Box::new(Function {

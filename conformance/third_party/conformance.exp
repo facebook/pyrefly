@@ -3278,62 +3278,12 @@
     },
     {
       "code": -2,
-      "column": 4,
-      "concise_description": "Missing argument `a` in function `DC3.__init__`",
-      "description": "Missing argument `a` in function `DC3.__init__`",
-      "line": 47,
-      "name": "missing-argument",
-      "stop_column": 10,
-      "stop_line": 47
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "Expected 0 positional arguments, got 1 in function `DC3.__init__`",
-      "description": "Expected 0 positional arguments, got 1 in function `DC3.__init__`",
-      "line": 47,
-      "name": "bad-argument-type",
-      "stop_column": 9,
-      "stop_line": 47
-    },
-    {
-      "code": -2,
-      "column": 4,
-      "concise_description": "Missing argument `a` in function `DC3.__init__`",
-      "description": "Missing argument `a` in function `DC3.__init__`",
-      "line": 50,
-      "name": "missing-argument",
-      "stop_column": 15,
-      "stop_line": 50
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "Expected 0 positional arguments, got 1 in function `DC3.__init__`",
-      "description": "Expected 0 positional arguments, got 1 in function `DC3.__init__`",
-      "line": 50,
-      "name": "bad-argument-type",
-      "stop_column": 9,
-      "stop_line": 50
-    },
-    {
-      "code": -2,
-      "column": 4,
-      "concise_description": "Missing argument `a` in function `DC3.__init__`",
-      "description": "Missing argument `a` in function `DC3.__init__`",
-      "line": 53,
-      "name": "missing-argument",
-      "stop_column": 13,
-      "stop_line": 53
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "Expected 0 positional arguments, got 2 in function `DC3.__init__`",
-      "description": "Expected 0 positional arguments, got 2 in function `DC3.__init__`",
+      "column": 11,
+      "concise_description": "Expected 1 positional argument, got 2 in function `DC3.__init__`",
+      "description": "Expected 1 positional argument, got 2 in function `DC3.__init__`",
       "line": 53,
       "name": "bad-argument-type",
-      "stop_column": 9,
+      "stop_column": 12,
       "stop_line": 53
     },
     {

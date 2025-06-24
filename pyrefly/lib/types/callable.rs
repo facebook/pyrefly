@@ -296,6 +296,11 @@ impl BoolKeywords {
     pub fn set(&mut self, name: Name, value: bool) {
         self.0.insert(name, value);
     }
+
+    pub fn get_explicit(&self, name_and_default: &(Name, bool)) -> Option<bool> {
+        let (name, _) = name_and_default;
+        self.0.get(name).copied()
+    }
 }
 
 /// Namespace for keyword names and defaults.
