@@ -33,13 +33,13 @@ use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::callable::Required;
-use crate::types::readonly::ReadOnlyReason;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
 use crate::types::module::Module;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
+use crate::types::readonly::ReadOnlyReason;
 use crate::types::tuple::Tuple;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
@@ -682,8 +682,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     AttributeInner::Simple(_, Visibility::ReadOnly(reason)) => {
                         // Check if this is a Final field being assigned in its own class's __init__
-                        let is_final_in_init = matches!(reason, ReadOnlyReason::Final) &&
-                            if let Type::ClassType(class_type) = base {
+                        let is_final_in_init = matches!(reason, ReadOnlyReason::Final)
+                            && if let Type::ClassType(class_type) = base {
                                 self.is_in_init_of(class_type.class_object(), range)
                             } else {
                                 false
