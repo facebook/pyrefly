@@ -862,6 +862,135 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     };
                 }
+            let lookup_result = attr_base.map_or_else(
+                || LookupResult::InternalError(InternalError::AttributeBaseUndefined(base.clone())),
+                |attr_base| self.lookup_attr_from_base_no_union(attr_base, attr_name),
+            );
+            match lookup_result {
+                LookupResult::Found(attr) => match attr.inner {
+                    AttributeInner::Simple(want, Visibility::ReadWrite) => {
+                        let ty = match &got {
+                            TypeOrExpr::Expr(got) => self.expr(
+                                got,
+                                Some((&want, &|| TypeCheckContext {
+                                    kind: TypeCheckKind::Attribute(attr_name.clone()),
+                                    context: context.map(|ctx| ctx()),
+                                })),
+                                errors,
+                            ),
+                            TypeOrExpr::Type(got, _) => {
+                                self.check_type(&want, got, range, errors, &|| TypeCheckContext {
+                                    kind: TypeCheckKind::Attribute(attr_name.clone()),
+                                    context: context.map(|ctx| ctx()),
+                                });
+                                (*got).clone()
+                            }
+                        };
+                        if let Some(narrowed_types) = &mut narrowed_types {
+                            narrowed_types.push(ty)
+                        }
+                        // Avoid the hook where we wipe `narrowed_types` in all other cases.
+                        continue;
+                    }
+                    AttributeInner::NoAccess(e) => {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::NoAccess,
+                            context,
+                            e.to_error_msg(attr_name),
+                        );
+                    }
+                    AttributeInner::Simple(_, Visibility::ReadOnly(reason)) => {
+                        // Generate specific error messages based on ReadOnlyReason
+                        let error_message = match reason {
+                            ReadOnlyReason::Final => {
+                                format!(
+                                    "Cannot assign to field `{attr_name}`; it is marked as Final"
+                                )
+                            }
+                            ReadOnlyReason::ReadOnlyAnnotation => {
+                                format!(
+                                    "Cannot assign to field `{attr_name}`; it is marked as ReadOnly"
+                                )
+                            }
+                            ReadOnlyReason::FrozenDataclass => {
+                                format!(
+                                    "Cannot assign to field `{attr_name}`; it is part of a frozen dataclass"
+                                )
+                            }
+                            ReadOnlyReason::NamedTupleField => {
+                                format!(
+                                    "Cannot assign to field `{attr_name}`; it is part of a NamedTuple"
+                                )
+                            }
+                            ReadOnlyReason::Inherited => {
+                                format!(
+                                    "Cannot assign to field `{attr_name}`; it is read-only (inherited)"
+                                )
+                            }
+                        };
+
+                        self.error(errors, range, ErrorKind::ReadOnly, context, error_message);
+                    }
+                    AttributeInner::Property(_, None, cls) => {
+                        let e = NoAccessReason::SettingReadOnlyProperty(cls);
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::ReadOnly,
+                            context,
+                            e.to_error_msg(attr_name),
+                        );
+                    }
+                    AttributeInner::Property(_, Some(setter), _) => {
+                        let got = CallArg::arg(got);
+                        self.call_property_setter(setter, got, range, errors, context);
+                    }
+                    AttributeInner::Descriptor(d) => {
+                        match (d.base, d.setter) {
+                            (DescriptorBase::Instance(class_type), Some(setter)) => {
+                                let got = CallArg::arg(got);
+                                self.call_descriptor_setter(
+                                    setter, class_type, got, range, errors, context,
+                                );
+                            }
+                            (DescriptorBase::Instance(class_type), None) => {
+                                let e = NoAccessReason::SettingReadOnlyDescriptor(
+                                    class_type.class_object().dupe(),
+                                );
+                                self.error(
+                                    errors,
+                                    range,
+                                    ErrorKind::ReadOnly,
+                                    context,
+                                    e.to_error_msg(attr_name),
+                                );
+                            }
+                            (DescriptorBase::ClassDef(class), _) => {
+                                let e = NoAccessReason::SettingDescriptorOnClass(class.dupe());
+                                self.error(
+                                    errors,
+                                    range,
+                                    ErrorKind::NoAccess,
+                                    context,
+                                    e.to_error_msg(attr_name),
+                                );
+                            }
+                        };
+                    }
+                    AttributeInner::GetAttr(not_found, _, name) => {
+                        // Attribute setting bypasses `__getattr__` lookup and behaves the same
+                        // as if the `__getattr__` lookup did not happen.
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::MissingAttribute,
+                            context,
+                            not_found.to_error_msg(&name),
+                        );
+                    }
+                },
                 LookupResult::InternalError(e) => {
                     self.error(
                         errors,
