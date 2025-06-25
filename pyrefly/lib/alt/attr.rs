@@ -684,29 +684,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // Generate specific error messages based on ReadOnlyReason
                         let error_message = match reason {
                             ReadOnlyReason::Final => {
-                                format!("Cannot assign to field `{attr_name}`; it is marked as Final")
+                                format!(
+                                    "Cannot assign to field `{attr_name}`; it is marked as Final"
+                                )
                             }
                             ReadOnlyReason::ReadOnlyAnnotation => {
-                                format!("Cannot assign to field `{attr_name}`; it is marked as ReadOnly")
+                                format!(
+                                    "Cannot assign to field `{attr_name}`; it is marked as ReadOnly"
+                                )
                             }
                             ReadOnlyReason::FrozenDataclass => {
-                                format!("Cannot assign to field `{attr_name}`; it is part of a frozen dataclass")
+                                format!(
+                                    "Cannot assign to field `{attr_name}`; it is part of a frozen dataclass"
+                                )
                             }
                             ReadOnlyReason::NamedTupleField => {
-                                format!("Cannot assign to field `{attr_name}`; it is part of a NamedTuple")
+                                format!(
+                                    "Cannot assign to field `{attr_name}`; it is part of a NamedTuple"
+                                )
                             }
                             ReadOnlyReason::Inherited => {
-                                format!("Cannot assign to field `{attr_name}`; it is read-only (inherited)")
+                                format!(
+                                    "Cannot assign to field `{attr_name}`; it is read-only (inherited)"
+                                )
                             }
                         };
 
-                        self.error(
-                            errors,
-                            range,
-                            ErrorKind::ReadOnly,
-                            context,
-                            error_message,
-                        );
+                        self.error(errors, range, ErrorKind::ReadOnly, context, error_message);
                     }
                     AttributeInner::Property(_, None, cls) => {
                         let e = NoAccessReason::SettingReadOnlyProperty(cls);
