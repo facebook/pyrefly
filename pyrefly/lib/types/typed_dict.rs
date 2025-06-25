@@ -12,9 +12,9 @@ use ruff_python_ast::name::Name;
 
 use crate::types::class::Class;
 use crate::types::qname::QName;
+use crate::types::readonly::ReadOnlyReason;
 use crate::types::types::Substitution;
 use crate::types::types::TArgs;
-use crate::types::readonly::ReadOnlyReason;
 use crate::types::types::Type;
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq, Hash)]
@@ -32,7 +32,6 @@ impl TypedDictField {
             read_only: self.read_only,
         }
     }
-
 }
 
 #[derive(Debug, PartialOrd, Ord, Clone, Eq, PartialEq, Hash)]

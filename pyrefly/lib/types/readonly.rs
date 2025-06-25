@@ -16,6 +16,7 @@ use pyrefly_derive::VisitMut;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, TypeEq, VisitMut)]
 pub enum ReadOnlyReason {
     /// Field is marked with `Final` annotation
+    #[allow(dead_code)] // TODO: Re-enable usage when Final+__init__ is implemented
     Final,
     /// Field is marked with `ReadOnly` annotation
     ReadOnlyAnnotation,
@@ -39,5 +40,4 @@ impl Display for ReadOnlyReason {
     }
 }
 
-impl ReadOnlyReason {
-}
+impl ReadOnlyReason {}

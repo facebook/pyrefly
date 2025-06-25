@@ -957,3 +957,49 @@ A().y = [42]
 assert_type(A().y, list[Any])
     "#,
 );
+
+testcase!(
+    test_readonly_frozen_dataclass,
+    r#"
+import dataclasses
+
+@dataclasses.dataclass(frozen=True)
+class FrozenData:
+    x: int
+    y: str
+
+def f(d: FrozenData):
+    d.x = 42  # E: Cannot assign to field `x`; it is part of a frozen dataclass
+    d.y = "new"  # E: Cannot assign to field `y`; it is part of a frozen dataclass
+    "#,
+);
+
+testcase!(
+    test_readonly_namedtuple,
+    r#"
+from typing import NamedTuple
+
+class Point(NamedTuple):
+    x: int
+    y: int
+
+def f(p: Point):
+    p.x = 10  # E: Cannot assign to field `x`; it is part of a NamedTuple
+    p.y = 20  # E: Cannot assign to field `y`; it is part of a NamedTuple
+    "#,
+);
+
+testcase!(
+    test_readonly_annotation_typeddict,
+    r#"
+from typing_extensions import TypedDict, ReadOnly
+
+class Config(TypedDict):
+    name: ReadOnly[str]
+    value: int
+
+def f(c: Config):
+    c["value"] = 42  # OK
+    c["name"] = "new"  # E: Key `name` in TypedDict `Config` is read-only
+    "#,
+);
