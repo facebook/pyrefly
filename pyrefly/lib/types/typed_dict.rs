@@ -21,15 +21,21 @@ use crate::types::types::Type;
 pub struct TypedDictField {
     pub ty: Type,
     pub required: bool,
-    pub read_only: Option<ReadOnlyReason>,
+    /// The reason this field is read-only. `None` indicates it is read-write.
+    pub readonly_reason: Option<ReadOnlyReason>,
 }
 
 impl TypedDictField {
+    /// Check if this field is read-only.
+    pub fn is_read_only(&self) -> bool {
+        self.readonly_reason.is_some()
+    }
+
     pub fn substitute(self, substitution: &Substitution) -> Self {
         Self {
             ty: substitution.substitute(self.ty),
             required: self.required,
-            read_only: self.read_only,
+            readonly_reason: self.readonly_reason,
         }
     }
 }
