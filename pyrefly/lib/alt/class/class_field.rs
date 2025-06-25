@@ -110,7 +110,8 @@ enum ClassFieldInner {
         ty: Type,
         annotation: Option<Annotation>,
         initialization: ClassFieldInitialization,
-        readonly: Option<ReadOnlyReason>,
+        /// The reason this field is read-only. `None` indicates it is read-write.
+        readonly_reason: Option<ReadOnlyReason>,
         // Descriptor getter method, if there is one. `None` indicates no getter.
         descriptor_getter: Option<Type>,
         // Descriptor setter method, if there is one. `None` indicates no setter.
@@ -134,7 +135,7 @@ impl ClassField {
         ty: Type,
         annotation: Option<Annotation>,
         initialization: ClassFieldInitialization,
-        readonly: Option<ReadOnlyReason>,
+        readonly_reason: Option<ReadOnlyReason>,
         descriptor_getter: Option<Type>,
         descriptor_setter: Option<Type>,
         is_function_without_return_annotation: bool,
@@ -143,7 +144,7 @@ impl ClassField {
             ty,
             annotation,
             initialization,
-            readonly,
+            readonly_reason,
             descriptor_getter,
             descriptor_setter,
             is_function_without_return_annotation,
@@ -163,14 +164,13 @@ impl ClassField {
             ClassFieldInner::Simple {
                 ty,
                 annotation,
-                readonly,
                 descriptor_getter,
                 descriptor_setter,
                 ..
             } => Some((
                 ty,
                 annotation.as_ref(),
-                readonly.is_some(),
+                self.is_read_only(),
                 descriptor_getter,
                 descriptor_setter,
             )),
@@ -190,7 +190,7 @@ impl ClassField {
             ty,
             annotation: None,
             initialization: ClassFieldInitialization::Class(None),
-            readonly: None,
+            readonly_reason: None,
             descriptor_getter: None,
             descriptor_setter: None,
             is_function_without_return_annotation: false,
@@ -202,7 +202,7 @@ impl ClassField {
             ty: Type::any_implicit(),
             annotation: None,
             initialization: ClassFieldInitialization::recursive(),
-            readonly: None,
+            readonly_reason: None,
             descriptor_getter: None,
             descriptor_setter: None,
             is_function_without_return_annotation: false,
@@ -221,7 +221,7 @@ impl ClassField {
                 ty,
                 annotation,
                 initialization,
-                readonly,
+                readonly_reason,
                 descriptor_getter,
                 descriptor_setter,
                 is_function_without_return_annotation,
@@ -229,7 +229,7 @@ impl ClassField {
                 ty: instance.instantiate_member(ty.clone()),
                 annotation: annotation.clone(),
                 initialization: initialization.clone(),
-                readonly: readonly.clone(),
+                readonly_reason: readonly_reason.clone(),
                 descriptor_getter: descriptor_getter
                     .as_ref()
                     .map(|ty| instance.instantiate_member(ty.clone())),
@@ -301,16 +301,18 @@ impl ClassField {
                         ty: Some(ty),
                         qualifiers,
                     }),
+                initialization,
                 ..
             } => Some(TypedDictField {
                 ty: ty.clone(),
-                read_only: ClassField::determine_readonly_reason(
+                readonly_reason: ClassField::determine_readonly_reason(
                     cls,
                     name,
                     &Some(Annotation {
                         ty: Some(ty.clone()),
                         qualifiers: qualifiers.clone(),
                     }),
+                    initialization,
                     solver,
                 ),
                 required: if qualifiers.contains(&Qualifier::Required) {
@@ -369,18 +371,26 @@ impl ClassField {
         }
     }
 
+    /// Check if this field is read-only for any reason.
+    pub fn is_read_only(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Simple { readonly_reason, .. } => readonly_reason.is_some(),
+        }
+    }
+
     /// Determine the readonly reason from annotation and other factors
     fn determine_readonly_reason<Ans: LookupAnswer>(
         cls: &Class,
         name: &Name,
         annotation: &Option<Annotation>,
+        initialization: &ClassFieldInitialization,
         solver: &AnswersSolver<'_, Ans>,
     ) -> Option<ReadOnlyReason> {
         // 1. Check annotations first (highest precedence)
         if let Some(ann) = annotation {
-            // if ann.is_final() {
-            //     return Some(ReadOnlyReason::Final);
-            // }
+            if ann.is_final() && matches!(initialization, ClassFieldInitialization::Class(_)) {
+                return Some(ReadOnlyReason::Final);
+            }
             if ann.has_qualifier(&Qualifier::ReadOnly) {
                 return Some(ReadOnlyReason::ReadOnlyAnnotation);
             }
@@ -389,7 +399,7 @@ impl ClassField {
         // 2. Check class-level properties
         let metadata = solver.get_metadata_for_class(cls);
 
-        if metadata.named_tuple_metadata().is_some() {
+        if metadata.named_tuple_metadata().is_some_and(|nt| nt.elements.contains(name)) {
             return Some(ReadOnlyReason::NamedTupleField);
         }
 
@@ -832,7 +842,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Determine readonly reason
         let readonly =
-            ClassField::determine_readonly_reason(class, name, &annotation.cloned(), self);
+            ClassField::determine_readonly_reason(class, name, &annotation.cloned(), &initialization, self);
 
         // Create the resulting field and check for override inconsistencies before returning
         let class_field = ClassField::new(
@@ -1047,7 +1057,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             ClassFieldInner::Simple {
                 mut ty,
-                readonly,
+                readonly_reason,
                 annotation,
                 ..
             } => {
@@ -1055,10 +1065,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 match field.initialization() {
                     ClassFieldInitialization::Class(_) => {
                         self.expand_type_mut(&mut ty); // bind_instance matches on the type, so resolve it if we can
-                        bind_instance_attribute(instance, ty, is_class_var, readonly.clone())
+                        bind_instance_attribute(instance, ty, is_class_var, readonly_reason.clone())
                     }
-                    ClassFieldInitialization::Instance(_) if readonly.is_some() => {
-                        Attribute::read_only(ty, readonly.unwrap())
+                    ClassFieldInitialization::Instance(_) if readonly_reason.is_some() => {
+                        Attribute::read_only(ty, readonly_reason.unwrap())
                     }
                     ClassFieldInitialization::Instance(_) if is_class_var => {
                         Attribute::read_only(ty, ReadOnlyReason::Inherited)

@@ -391,24 +391,21 @@ z: Final = 1  # OK
     "#,
 );
 
-// TODO: Re-enable when Final logic is restored
-// Since Final check is commented out in determine_readonly_reason,
-// Final fields are not treated as read-only currently
-// testcase!(
-//     test_assign_final_attr,
-//     r#"
-// from typing import Final
-// class A:
-//     x: Final = 1
-// a = A()
-// a.x = 1  # E: Cannot assign to field `x`; it is marked as Final
-// del a.x  # E: Cannot delete read-only attribute `x`
-// class B:
-//     x: Final[int] = 1
-// b = B()
-// b.x += 1  # E: Cannot assign to field `x`; it is marked as Final
-//     "#,
-// );
+testcase!(
+    test_assign_final_attr,
+    r#"
+from typing import Final
+class A:
+    x: Final = 1
+a = A()
+a.x = 1  # E: Cannot assign to field `x`; it is marked as Final
+del a.x  # E: Cannot delete read-only attribute `x`
+class B:
+    x: Final[int] = 1
+b = B()
+b.x += 1  # E: Cannot assign to field `x`; it is marked as Final
+    "#,
+);
 
 testcase!(
     test_aug_assign_integer,
