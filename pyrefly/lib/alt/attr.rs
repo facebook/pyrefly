@@ -681,24 +681,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                     }
                     AttributeInner::Simple(_, Visibility::ReadOnly(reason)) => {
-                        // Check if this is a Final field being assigned in its own class's __init__
-                        let is_final_in_init = matches!(reason, ReadOnlyReason::Final)
-                            && if let Type::ClassType(class_type) = base {
-                                self.is_in_init_of(class_type.class_object(), range)
-                            } else {
-                                false
-                            };
+                        // Generate specific error messages based on ReadOnlyReason
+                        let error_message = match reason {
+                            ReadOnlyReason::Final => {
+                                format!("Cannot assign to field `{attr_name}`; it is marked as Final")
+                            }
+                            ReadOnlyReason::ReadOnlyAnnotation => {
+                                format!("Cannot assign to field `{attr_name}`; it is marked as ReadOnly")
+                            }
+                            ReadOnlyReason::FrozenDataclass => {
+                                format!("Cannot assign to field `{attr_name}`; it is part of a frozen dataclass")
+                            }
+                            ReadOnlyReason::NamedTupleField => {
+                                format!("Cannot assign to field `{attr_name}`; it is part of a NamedTuple")
+                            }
+                            ReadOnlyReason::Inherited => {
+                                format!("Cannot assign to field `{attr_name}`; it is read-only (inherited)")
+                            }
+                        };
 
-                        if !is_final_in_init {
-                            self.error(
-                                errors,
-                                range,
-                                ErrorKind::ReadOnly,
-                                context,
-                                format!("Cannot assign to read-only attribute `{attr_name}`"),
-                            );
-                        }
-                        // If is_final_in_init is true, we allow the assignment by doing nothing
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::ReadOnly,
+                            context,
+                            error_message,
+                        );
                     }
                     AttributeInner::Property(_, None, cls) => {
                         let e = NoAccessReason::SettingReadOnlyProperty(cls);
