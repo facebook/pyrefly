@@ -44,6 +44,7 @@ use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::VarianceMap;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::class_metadata::ClassMetadata;
+use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
@@ -52,11 +53,11 @@ use crate::alt::types::yields::YieldResult;
 use crate::binding::bindings::Bindings;
 use crate::binding::narrow::NarrowOp;
 use crate::common::symbol_kind::SymbolKind;
-use crate::dunder;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::module::module_name::ModuleName;
 use crate::module::short_identifier::ShortIdentifier;
+use crate::python::dunder;
 use crate::types::annotation::Annotation;
 use crate::types::class::Class;
 use crate::types::class::ClassDefIndex;
@@ -80,6 +81,7 @@ assert_words!(KeyClassField, 4);
 assert_bytes!(KeyClassSynthesizedFields, 4);
 assert_bytes!(KeyAnnotation, 12);
 assert_bytes!(KeyClassMetadata, 4);
+assert_bytes!(KeyClassMro, 4);
 assert_words!(KeyLegacyTypeParam, 1);
 assert_words!(KeyYield, 1);
 assert_words!(KeyYieldFrom, 1);
@@ -91,6 +93,7 @@ assert_words!(BindingAnnotation, 13);
 assert_words!(BindingClass, 18);
 assert_words!(BindingTParams, 9);
 assert_words!(BindingClassMetadata, 8);
+assert_bytes!(BindingClassMro, 4);
 assert_words!(BindingClassField, 26);
 assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 4);
@@ -111,6 +114,7 @@ pub enum AnyIdx {
     KeyFunction(Idx<KeyFunction>),
     KeyAnnotation(Idx<KeyAnnotation>),
     KeyClassMetadata(Idx<KeyClassMetadata>),
+    KeyClassMro(Idx<KeyClassMro>),
     KeyLegacyTypeParam(Idx<KeyLegacyTypeParam>),
     KeyYield(Idx<KeyYield>),
     KeyYieldFrom(Idx<KeyYieldFrom>),
@@ -130,6 +134,7 @@ impl AnyIdx {
             Self::KeyFunction(..) => "KeyFunction",
             Self::KeyAnnotation(..) => "KeyAnnotation",
             Self::KeyClassMetadata(..) => "KeyClassMetadata",
+            Self::KeyClassMro(..) => "KeyClassMro",
             Self::KeyLegacyTypeParam(..) => "KeyLegacyTypeParam",
             Self::KeyYield(..) => "KeyYield",
             Self::KeyYieldFrom(..) => "KeyYieldFrom",
@@ -238,6 +243,15 @@ impl Keyed for KeyClassMetadata {
     }
 }
 impl Exported for KeyClassMetadata {}
+impl Keyed for KeyClassMro {
+    const EXPORTED: bool = true;
+    type Value = BindingClassMro;
+    type Answer = ClassMro;
+    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
+        AnyIdx::KeyClassMro(idx)
+    }
+}
+impl Exported for KeyClassMro {}
 impl Keyed for KeyLegacyTypeParam {
     type Value = BindingLegacyTypeParam;
     type Answer = LegacyTypeParameterLookup;
@@ -684,6 +698,23 @@ impl Ranged for KeyClassMetadata {
 impl DisplayWith<ModuleInfo> for KeyClassMetadata {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
         write!(f, "KeyClassMetadata(class{})", self.0)
+    }
+}
+
+/// Keys that refer to a class's `Mro` (which tracks its ancestors, in method
+/// resolution order).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyClassMro(pub ClassDefIndex);
+
+impl Ranged for KeyClassMro {
+    fn range(&self) -> TextRange {
+        TextRange::default()
+    }
+}
+
+impl DisplayWith<ModuleInfo> for KeyClassMro {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
+        write!(f, "KeyClassMro(class{})", self.0)
     }
 }
 
@@ -1609,20 +1640,24 @@ impl DisplayWith<Bindings> for BindingVariance {
     }
 }
 
-/// Binding for the class's metadata (type level information derived from the class header - this
-/// includes the MRO, the class keywords, and the metaclass).
-///
-/// The `Key` points to the definition of the class.
-/// The `[Expr]` contains the base classes from the class header.
-/// The `[(Name, Expr)]` contains the class keywords from the class header.
-/// The `[Idx<Key>]` points to the class's decorators.
+/// Binding for the class's metadata (anything obtained directly from base classes,
+/// except for the MRO which is kept separate to avoid cycles.
 #[derive(Clone, Debug)]
 pub struct BindingClassMetadata {
     pub class_idx: Idx<KeyClass>,
+    /// The base class list, as expressions.
     pub bases: Box<[Expr]>,
+    /// The class keywords (these are keyword args that appear in the base class list, the
+    /// Python runtime will dispatch most of them to the metaclass, but the metaclass
+    /// itself can also potentially be one of these).
     pub keywords: Box<[(Name, Expr)]>,
+    /// The class decorators, which may determine
     pub decorators: Box<[(Idx<Key>, TextRange)]>,
+    /// Is this a new type? True only for synthesized classes created from a `NewType` call.
     pub is_new_type: bool,
+    /// May contain a base class to directly inject into the base class list. This is needed
+    /// for some synthesized classes, which have no actual class body and therefore usually have no
+    /// base class expressions, but may have a known base class for the synthesized class.
     pub special_base: Option<Box<BaseClass>>,
 }
 
@@ -1633,6 +1668,19 @@ impl DisplayWith<Bindings> for BindingClassMetadata {
             "BindingClassMetadata({}, ..)",
             ctx.display(self.class_idx)
         )
+    }
+}
+
+/// Binding for the class's MRO
+/// This rerquires base classes; these should match what `BindingClassMetadata` has.
+#[derive(Clone, Debug)]
+pub struct BindingClassMro {
+    pub class_idx: Idx<KeyClass>,
+}
+
+impl DisplayWith<Bindings> for BindingClassMro {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
+        write!(f, "BindingClassMro({}, ..)", ctx.display(self.class_idx))
     }
 }
 

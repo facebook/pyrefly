@@ -10,6 +10,7 @@
 use std::io::Cursor;
 
 use dupe::Dupe;
+use pyrefly_util::lined_buffer::SourceRange;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
@@ -19,13 +20,12 @@ use ruff_text_size::Ranged;
 use crate::alt::answers::Answers;
 use crate::config::finder::ConfigFinder;
 use crate::module::module_info::ModuleInfo;
-use crate::module::module_info::SourceRange;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
+use crate::python::sys_info::SysInfo;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
-use crate::sys_info::SysInfo;
 use crate::types::display::TypeDisplayContext;
 
 pub struct Query {

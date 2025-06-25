@@ -6,9 +6,9 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::binding::binding::KeyClassField;
-use crate::dunder;
 use crate::error::collector::ErrorCollector;
 use crate::error::kind::ErrorKind;
+use crate::python::dunder;
 use crate::types::class::Class;
 
 // https://github.com/python/cpython/blob/a8ec511900d0d84cffbb4ee6419c9a790d131129/Lib/functools.py#L173

@@ -637,6 +637,50 @@ def test(foo: Foo) -> None:
 );
 
 testcase!(
+    test_object_setattr,
+    r#"
+from typing import assert_type
+
+class Foo:
+    def __getattr__(self, name: str) -> int: ...
+    def __setattr__(self, name: str, value: int) -> None: ...
+
+def test(foo: Foo) -> None:
+    foo.x = 1
+    foo.x = ""  # E: Argument `Literal['']` is not assignable to parameter `value` with type `int`
+    "#,
+);
+
+testcase!(
+    test_object_setattr_wrong_signature,
+    r#"
+from typing import assert_type
+
+class Foo:
+    def __getattr__(self, name: int) -> int: ...
+    def __setattr__(self, name: int, value: int) -> None: ...
+
+def test(foo: Foo) -> None:
+    foo.x = 1  # E: Argument `Literal['x']` is not assignable to parameter `name` with type `int`
+    "#,
+);
+
+testcase!(
+    test_argparse_namespace_setattr,
+    r#"
+from argparse import ArgumentParser, Namespace
+
+ap: ArgumentParser = ArgumentParser()
+ap.add_argument("-b", "--bool-flag", default=False, action='store_true')
+ap.add_argument("-i", "--integer", default=1, type=int)
+ap.add_argument("-s", "--string-arg", type=str, default="")
+args: Namespace = ap.parse_args()
+if not args.string_arg:
+    args.string_arg = "string-goes-here"
+    "#,
+);
+
+testcase!(
     test_module_getattr,
     TestEnv::one("foo", "def __getattr__(name: str) -> int: ..."),
     r#"

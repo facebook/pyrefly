@@ -8,7 +8,6 @@
 use crate::testcase;
 
 testcase!(
-    bug = "Not yet supported",
     test_function_basic,
     r#"
 from typing import dataclass_transform
@@ -19,13 +18,12 @@ def create[T](cls: type[T]) -> type[T]: ...
 @create
 class C:
     x: int
-C(x=0)  # Should be ok  # E: Unexpected keyword
-C(x="oops")  # E: Unexpected keyword
+C(x=0)
+C(x="oops")  # E: `Literal['oops']` is not assignable to parameter `x` with type `int`
     "#,
 );
 
 testcase!(
-    bug = "Not yet supported",
     test_class_basic,
     r#"
 from typing import dataclass_transform
@@ -35,13 +33,29 @@ class C: ...
 
 class D(C):
     x: int
-D(x=0)  # Should be ok  # E: Unexpected keyword
-D(x="oops")  # E: Unexpected keyword
+D(x=0)
+D(x="oops")  # E: `Literal['oops']` is not assignable to parameter `x` with type `int`
     "#,
 );
 
 testcase!(
-    bug = "Not yet supported",
+    bug = "We fail to pick up dataclass field `y`",
+    test_class_inheritance,
+    r#"
+from typing import dataclass_transform
+
+@dataclass_transform()
+class C: ...
+
+class D(C):
+    x: int
+class E(D):
+    y: str
+E(x=0, y="")  # E: Unexpected keyword argument `y`
+    "#,
+);
+
+testcase!(
     test_metaclass_basic,
     r#"
 from typing import dataclass_transform
@@ -52,7 +66,7 @@ class C(metaclass=Meta): ...
 
 class D(C):
     x: int
-D(x=0)  # Should be ok  # E: Unexpected keyword
-D(x="oops")  # E: Unexpected keyword
+D(x=0)
+D(x="oops")  # E: `Literal['oops']` is not assignable to parameter `x` with type `int`
     "#,
 );

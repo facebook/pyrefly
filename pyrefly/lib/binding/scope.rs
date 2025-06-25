@@ -33,6 +33,7 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMetadata;
+use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyFunction;
 use crate::binding::binding::KeyVariance;
@@ -42,7 +43,6 @@ use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::User;
 use crate::binding::function::SelfAssignments;
 use crate::common::symbol_kind::SymbolKind;
-use crate::dunder;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
 use crate::export::exports::LookupExport;
@@ -51,8 +51,9 @@ use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::module::module_name::ModuleName;
 use crate::module::short_identifier::ShortIdentifier;
-use crate::ruff::ast::Ast;
-use crate::sys_info::SysInfo;
+use crate::python::ast::Ast;
+use crate::python::dunder;
+use crate::python::sys_info::SysInfo;
 use crate::types::class::ClassDefIndex;
 
 /// Many names may map to the same TextRange (e.g. from foo import *).
@@ -289,6 +290,7 @@ pub struct ClassIndices {
     pub def_index: ClassDefIndex,
     pub class_idx: Idx<KeyClass>,
     pub metadata_idx: Idx<KeyClassMetadata>,
+    pub mro_idx: Idx<KeyClassMro>,
     pub synthesized_fields_idx: Idx<KeyClassSynthesizedFields>,
     pub variance_idx: Idx<KeyVariance>,
 }

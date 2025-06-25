@@ -36,18 +36,16 @@ mod binding;
 mod commands;
 mod common;
 mod config;
-mod dunder;
 mod error;
 mod export;
 mod graph;
 mod module;
 pub mod playground;
+mod python;
 pub mod query;
 mod report;
-mod ruff;
 mod solver;
 mod state;
-mod sys_info;
 mod test;
 mod types;
 
@@ -74,11 +72,10 @@ pub mod library {
                 pub use crate::config::environment::environment::PythonEnvironment;
                 pub use crate::config::finder;
                 pub use crate::error::kind::Severity;
-                pub use crate::module::module_info::SourceRange;
                 pub use crate::module::module_name::ModuleName;
                 pub use crate::module::module_path::ModulePath;
-                pub use crate::sys_info::PythonPlatform;
-                pub use crate::sys_info::PythonVersion;
+                pub use crate::python::sys_info::PythonPlatform;
+                pub use crate::python::sys_info::PythonVersion;
             }
         }
     }

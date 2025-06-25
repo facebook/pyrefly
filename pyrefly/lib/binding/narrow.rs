@@ -30,7 +30,7 @@ use vec1::Vec1;
 
 use crate::binding::bindings::BindingsBuilder;
 use crate::export::special::SpecialExport;
-use crate::ruff::ast::Ast;
+use crate::python::ast::Ast;
 use crate::types::facet::FacetChain;
 use crate::types::facet::FacetKind;
 use crate::types::types::Type;
@@ -352,16 +352,11 @@ pub fn identifier_and_chain_for_expr(expr: &Expr) -> Option<(Identifier, FacetCh
                 }
                 _ => None,
             }
-        } else if let Expr::Subscript(
-            subscript @ ExprSubscript {
-                slice:
-                    box Expr::NumberLiteral(ExprNumberLiteral {
-                        value: Number::Int(idx),
-                        ..
-                    }),
+        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
+            && let Expr::NumberLiteral(ExprNumberLiteral {
+                value: Number::Int(idx),
                 ..
-            },
-        ) = expr
+            }) = &**slice
             && let Some(idx) = idx.as_usize()
         {
             match &*subscript.value {
@@ -379,12 +374,8 @@ pub fn identifier_and_chain_for_expr(expr: &Expr) -> Option<(Identifier, FacetCh
                 }
                 _ => None,
             }
-        } else if let Expr::Subscript(
-            subscript @ ExprSubscript {
-                slice: box Expr::StringLiteral(ExprStringLiteral { value: key, .. }),
-                ..
-            },
-        ) = expr
+        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
+            && let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = &**slice
         {
             match &*subscript.value {
                 Expr::Name(name) => {
@@ -427,16 +418,11 @@ pub fn identifier_and_chain_prefix_for_expr(expr: &Expr) -> Option<(Identifier, 
                 }
                 _ => None,
             }
-        } else if let Expr::Subscript(
-            subscript @ ExprSubscript {
-                slice:
-                    box Expr::NumberLiteral(ExprNumberLiteral {
-                        value: Number::Int(idx),
-                        ..
-                    }),
+        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
+            && let Expr::NumberLiteral(ExprNumberLiteral {
+                value: Number::Int(idx),
                 ..
-            },
-        ) = expr
+            }) = &**slice
             && let Some(idx) = idx.as_usize()
         {
             match &*subscript.value {
@@ -451,12 +437,8 @@ pub fn identifier_and_chain_prefix_for_expr(expr: &Expr) -> Option<(Identifier, 
                 }
                 _ => None,
             }
-        } else if let Expr::Subscript(
-            subscript @ ExprSubscript {
-                slice: box Expr::StringLiteral(ExprStringLiteral { value: key, .. }),
-                ..
-            },
-        ) = expr
+        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
+            && let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = &**slice
         {
             match &*subscript.value {
                 Expr::Name(name) => {

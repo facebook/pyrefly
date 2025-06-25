@@ -1,8 +1,8 @@
+use pyrefly_util::lined_buffer::SourceRange;
 use ruff_source_file::LineColumn;
 use ruff_text_size::TextSize;
 
 use crate::module::module_info::ModuleInfo;
-use crate::module::module_info::SourceRange;
 
 pub fn source_range_to_range(x: &SourceRange) -> lsp_types::Range {
     lsp_types::Range::new(

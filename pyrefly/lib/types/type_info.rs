@@ -269,8 +269,17 @@ impl NarrowedFacets {
                 }
             }
             [next_facet, remaining_facets @ ..] => {
-                if let Some(narrowed_facet) = self.0.get_mut(next_facet) {
-                    narrowed_facet.update_for_assignment(next_facet, remaining_facets, ty);
+                if let Some(narrowed_facet) = self.0.get_mut(facet) {
+                    match narrowed_facet {
+                        NarrowedFacet::Leaf(..) if let Some(ty) = ty => {
+                            narrowed_facet.add_narrow(more_facets, ty);
+                        }
+                        NarrowedFacet::Leaf(..) => {}
+                        NarrowedFacet::WithoutRoot(narrowed_facets)
+                        | NarrowedFacet::WithRoot(_, narrowed_facets) => {
+                            narrowed_facets.update_for_assignment(next_facet, remaining_facets, ty);
+                        }
+                    }
                 } else if let Some(ty) = ty {
                     self.insert(facet.clone(), NarrowedFacet::new(more_facets, ty));
                 }
@@ -466,20 +475,6 @@ impl NarrowedFacet {
         }
     }
 
-    fn update_for_assignment(
-        &mut self,
-        facet: &FacetKind,
-        more_facets: &[FacetKind],
-        ty: Option<Type>,
-    ) {
-        match self {
-            Self::Leaf(..) => {}
-            Self::WithoutRoot(narrowed_facets) | Self::WithRoot(_, narrowed_facets) => {
-                narrowed_facets.update_for_assignment(facet, more_facets, ty);
-            }
-        }
-    }
-
     fn join(branches: Vec<Self>, union_types: &impl Fn(Vec<Type>) -> Type) -> Option<Self> {
         fn monadic_push_option<T>(acc: &mut Option<Vec<T>>, item: Option<T>) {
             match item {
@@ -643,6 +638,7 @@ mod tests {
         let idx1 = || FacetKind::Index(1);
         let z = || FacetKind::Attribute(Name::new_static("z"));
         let mut type_info = TypeInfo::of_ty(fake_class_type("Foo"));
+        type_info.add_narrow(&Vec1::from_vec_push(vec![x()], y()), fake_class_type("Bar"));
         type_info.add_narrow(
             &Vec1::from_vec_push(vec![x(), y(), idx0()], z()),
             fake_class_type("Bar"),
@@ -653,22 +649,39 @@ mod tests {
         );
         assert_eq!(
             type_info.to_string(),
-            "Foo (_.x.y[0].z: Bar, _.x.y[1].z: Bar)"
+            "Foo (_.x.y: Bar, _.x.y[0].z: Bar, _.x.y[1].z: Bar)"
         );
         // x has no narrowed indexes, so do nothing
         type_info.invalidate_all_indexes_for_assignment(&[x()]);
         assert_eq!(
             type_info.to_string(),
-            "Foo (_.x.y[0].z: Bar, _.x.y[1].z: Bar)"
+            "Foo (_.x.y: Bar, _.x.y[0].z: Bar, _.x.y[1].z: Bar)"
         );
         // this path doesn't have any narrowing, so do nothing
         type_info.invalidate_all_indexes_for_assignment(&[x(), z()]);
         assert_eq!(
             type_info.to_string(),
-            "Foo (_.x.y[0].z: Bar, _.x.y[1].z: Bar)"
+            "Foo (_.x.y: Bar, _.x.y[0].z: Bar, _.x.y[1].z: Bar)"
         );
-        // this clears the narrowing for both x.y[0] and x.y[1]
+        // this clears the narrowing for both x.y[0] and x.y[1], but not x.y
         type_info.invalidate_all_indexes_for_assignment(&[x(), y()]);
-        assert_eq!(type_info.to_string(), "Foo ()");
+        assert_eq!(type_info.to_string(), "Foo (_.x.y: Bar, )");
+    }
+
+    #[test]
+    fn test_type_info_do_not_invalidate_parent() {
+        let x = || FacetKind::Attribute(Name::new_static("x"));
+        let y = || FacetKind::Key("y".to_owned());
+        let mut type_info = TypeInfo::of_ty(fake_class_type("Foo"));
+        type_info.add_narrow(
+            &Vec1::from_vec_push(Vec::new(), x()),
+            fake_class_type("Bar"),
+        );
+        assert_eq!(type_info.to_string(), "Foo (_.x: Bar)");
+        type_info.update_for_assignment(
+            &Vec1::from_vec_push(vec![x()], y()),
+            Some(fake_class_type("Baz")),
+        );
+        assert_eq!(type_info.to_string(), "Foo (_.x: Bar, _.x[\"y\"]: Baz)");
     }
 }

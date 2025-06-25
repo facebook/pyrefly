@@ -34,11 +34,11 @@ use crate::binding::binding::ClassFieldInitialValue;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassSynthesizedFields;
-use crate::dunder;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
+use crate::python::dunder;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
 use crate::types::callable::BoolKeywords;
@@ -682,7 +682,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let magically_initialized = {
             // We consider fields to be always-initialized if it's defined within stub files.
             // See https://github.com/python/typeshed/pull/13875 for reasoning.
-            class.module_info().path().is_interface()
+            class.module_path().is_interface()
             // We consider fields to be always-initialized if it's annotated explicitly with `ClassVar`.
             || direct_annotation
                 .as_ref()
@@ -901,7 +901,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn get_inherited_annotation(&self, class: &Class, name: &Name) -> (bool, Option<Annotation>) {
         let mut found_field = false;
         let annotation = self
-            .get_metadata_for_class(class)
+            .get_mro_for_class(class)
             .ancestors(self.stdlib)
             .find_map(|parent| {
                 let parent_field =
@@ -1353,7 +1353,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 defining_class: cls.dupe(),
             })
         } else {
-            self.get_metadata_for_class(cls)
+            self.get_mro_for_class(cls)
                 .ancestors(self.stdlib)
                 .find_map(|ancestor| {
                     self.get_field_from_current_class_only(
@@ -1417,7 +1417,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
     ) -> Option<WithDefiningClass<Arc<ClassField>>> {
         // Skip ancestors in the MRO until we find the class we want to start at
-        let metadata = self.get_metadata_for_class(cls);
+        let metadata = self.get_mro_for_class(cls);
         let ancestors = metadata
             .ancestors(self.stdlib)
             .skip_while(|ancestor| *ancestor != start_lookup_cls);

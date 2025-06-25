@@ -350,6 +350,7 @@ pub enum CalleeKind {
     Callable,
     Function(FunctionKind),
     Class(ClassKind),
+    DataclassTransformDecorator(BoolKeywords),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -650,7 +651,7 @@ pub enum Type {
     /// The result of a `typing.dataclass_transform` call. When used as a decorator, it marks
     /// whatever it is applied to as having special dataclass-like semantics. See
     /// https://typing.python.org/en/latest/spec/dataclasses.html#specification.
-    DataclassTransformDecorator(Box<BoolKeywords>),
+    DataclassTransformDecorator(Box<(BoolKeywords, Type)>),
     None,
 }
 
@@ -927,6 +928,9 @@ impl Type {
             Type::ClassDef(c) => Some(CalleeKind::Class(c.kind())),
             Type::Forall(forall) => forall.body.clone().as_type().callee_kind(),
             Type::Overload(overload) => Some(CalleeKind::Function(overload.metadata.kind.clone())),
+            Type::DataclassTransformDecorator(dec) => {
+                Some(CalleeKind::DataclassTransformDecorator((dec.0).clone()))
+            }
             _ => None,
         }
     }
@@ -1024,6 +1028,10 @@ impl Type {
         self.check_func_metadata(&|meta| meta.flags.is_property_getter)
     }
 
+    pub fn is_property_setter_decorator(&self) -> bool {
+        self.check_func_metadata(&|meta| meta.flags.is_property_setter_decorator)
+    }
+
     pub fn is_property_setter_with_getter(&self) -> Option<Type> {
         self.check_func_metadata(&|meta| meta.flags.is_property_setter_with_getter.clone())
     }
@@ -1038,6 +1046,10 @@ impl Type {
 
     pub fn has_final_decoration(&self) -> bool {
         self.check_func_metadata(&|meta| meta.flags.has_final_decoration)
+    }
+
+    pub fn dataclass_transform_metadata(&self) -> Option<BoolKeywords> {
+        self.check_func_metadata(&|meta| meta.flags.dataclass_transform_metadata.clone())
     }
 
     pub fn transform_func_metadata(&mut self, mut f: impl FnMut(&mut FuncMetadata)) {

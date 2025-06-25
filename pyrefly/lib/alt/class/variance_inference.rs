@@ -411,8 +411,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             for (class_name, params) in env.iter() {
                 let mut params_prime = params.clone();
 
-                let metadata = solver.get_metadata_for_class(class);
-                let ancestor_class = metadata.ancestors(solver.stdlib).find(|ancestor| {
+                let mro = solver.get_mro_for_class(class);
+                let ancestor_class = mro.ancestors(solver.stdlib).find(|ancestor| {
                     let class_obj = ancestor.class_object();
                     class_obj.qname() == class_name
                 });
@@ -424,7 +424,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else if class.qname() == class_name {
                     class
                 } else {
-                    let class_name_module = class_name.module_info().name();
+                    let class_name_module = class_name.module_name();
                     let curr_module = solver.module_info().name();
 
                     if class_name_module != curr_module {
@@ -438,8 +438,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
 
                     let ty = solver.get_from_module(
-                        class_name.module_info().name(),
-                        Some(class_name.module_info().path()),
+                        class_name.module_name(),
+                        Some(class_name.module_path()),
                         &KeyExport(class_name.id().clone()),
                     );
                     if let Type::ClassDef(cls) = &*ty {

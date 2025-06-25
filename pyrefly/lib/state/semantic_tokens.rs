@@ -12,6 +12,7 @@ use lsp_types::SemanticTokenModifier;
 use lsp_types::SemanticTokenType;
 use lsp_types::SemanticTokensLegend;
 use pyrefly_util::visit::Visit as _;
+use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
 use ruff_text_size::Ranged;
@@ -199,18 +200,31 @@ impl SemanticTokenBuilder {
         self.push_if_in_range(reference_range, token_type, token_modifiers);
     }
 
+    fn process_arguments(&mut self, args: &Arguments) {
+        for keyword in &args.keywords {
+            if let Some(arg) = &keyword.arg {
+                self.push_if_in_range(arg.range, SemanticTokenType::PARAMETER, Vec::new());
+            }
+        }
+    }
+
     fn process_expr(&mut self, x: &Expr) {
         match x {
             Expr::Call(call) if let Expr::Attribute(attr) = call.func.as_ref() => {
-                self.push_if_in_range(attr.attr.range(), SemanticTokenType::METHOD, vec![]);
+                self.push_if_in_range(attr.attr.range(), SemanticTokenType::METHOD, Vec::new());
                 attr.value.visit(&mut |x| self.process_expr(x));
                 for arg in call.arguments.arguments_source_order() {
                     arg.value().visit(&mut |x| self.process_expr(x));
                 }
+                self.process_arguments(&call.arguments);
+            }
+            Expr::Call(call) => {
+                self.process_arguments(&call.arguments);
+                x.recurse(&mut |x| self.process_expr(x));
             }
             Expr::Attribute(attr) => {
                 // todo(samzhou19815): if the class's base is Enum, it should be ENUM_MEMBER
-                self.push_if_in_range(attr.attr.range(), SemanticTokenType::PROPERTY, vec![]);
+                self.push_if_in_range(attr.attr.range(), SemanticTokenType::PROPERTY, Vec::new());
                 attr.value.visit(&mut |x| self.process_expr(x));
             }
             _ => {

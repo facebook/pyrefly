@@ -36,14 +36,14 @@ use crate::alt::solve::TypeFormContext;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
-use crate::dunder;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
 use crate::error::kind::ErrorKind;
 use crate::graph::index::Idx;
 use crate::module::short_identifier::ShortIdentifier;
-use crate::ruff::ast::Ast;
+use crate::python::ast::Ast;
+use crate::python::dunder;
 use crate::types::callable::Callable;
 use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
@@ -859,6 +859,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 cls.name(),
                                 key.to_str()
                             ),
+                        )
+                    }
+                }
+                Type::ClassDef(ref cls) if self.get_enum_from_class(cls).is_some() => {
+                    if self.is_subset_eq(
+                        &self.expr(slice, None, errors),
+                        &self.stdlib.str().clone().to_type(),
+                    ) {
+                        Type::ClassType(self.as_class_type_unchecked(cls))
+                    } else {
+                        self.error(
+                            errors,
+                            slice.range(),
+                            ErrorKind::IndexError,
+                            None,
+                            format!("Enum `{}` can only be indexed by strings", cls.name()),
                         )
                     }
                 }

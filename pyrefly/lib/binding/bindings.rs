@@ -75,10 +75,10 @@ use crate::graph::index_map::IndexMap;
 use crate::module::module_info::ModuleInfo;
 use crate::module::module_name::ModuleName;
 use crate::module::short_identifier::ShortIdentifier;
-use crate::ruff::ast::Ast;
+use crate::python::ast::Ast;
+use crate::python::sys_info::SysInfo;
 use crate::solver::solver::Solver;
 use crate::state::loader::FindError;
-use crate::sys_info::SysInfo;
 use crate::table;
 use crate::table_for_each;
 use crate::table_try_for_each;
@@ -654,10 +654,8 @@ impl<'a> BindingsBuilder<'a> {
                     .as_special_export(&name.id, None, self.module_info.name())
             }
             Expr::Attribute(ExprAttribute {
-                value: box Expr::Name(base_name),
-                attr: name,
-                ..
-            }) => self.scopes.as_special_export(
+                value, attr: name, ..
+            }) if let Expr::Name(base_name) = &**value => self.scopes.as_special_export(
                 &name.id,
                 Some(&base_name.id),
                 self.module_info.name(),

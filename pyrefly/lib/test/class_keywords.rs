@@ -5,14 +5,27 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::sync::Arc;
+
+use dupe::Dupe;
+
+use crate::alt::types::class_metadata::ClassMetadata;
+use crate::binding::binding::KeyClassMetadata;
 use crate::state::handle::Handle;
 use crate::state::state::State;
-use crate::test::mro::get_class_metadata;
+use crate::test::util::get_class;
 use crate::test::util::mk_state;
 use crate::testcase;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
+
+pub fn get_class_metadata(name: &str, handle: &Handle, state: &State) -> Arc<ClassMetadata> {
+    let solutions = state.transaction().get_solutions(handle).unwrap();
+
+    let cls = get_class(name, handle, state);
+    solutions.get(&KeyClassMetadata(cls.index())).dupe()
+}
 
 fn get_class_keywords(
     class_name: &str,

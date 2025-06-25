@@ -80,7 +80,9 @@ use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::NumberOrString;
 use lsp_types::OneOf;
+use lsp_types::Position;
 use lsp_types::PositionEncodingKind;
+use lsp_types::PrepareRenameResponse;
 use lsp_types::PublishDiagnosticsParams;
 use lsp_types::Range;
 use lsp_types::ReferenceParams;
@@ -88,6 +90,8 @@ use lsp_types::Registration;
 use lsp_types::RegistrationParams;
 use lsp_types::RelatedFullDocumentDiagnosticReport;
 use lsp_types::RelativePattern;
+use lsp_types::RenameOptions;
+use lsp_types::RenameParams;
 use lsp_types::SemanticTokens;
 use lsp_types::SemanticTokensFullOptions;
 use lsp_types::SemanticTokensOptions;
@@ -101,6 +105,7 @@ use lsp_types::SignatureHelp;
 use lsp_types::SignatureHelpOptions;
 use lsp_types::SignatureHelpParams;
 use lsp_types::TextDocumentContentChangeEvent;
+use lsp_types::TextDocumentPositionParams;
 use lsp_types::TextDocumentSyncCapability;
 use lsp_types::TextDocumentSyncKind;
 use lsp_types::TextEdit;
@@ -132,8 +137,10 @@ use lsp_types::request::DocumentSymbolRequest;
 use lsp_types::request::GotoDefinition;
 use lsp_types::request::HoverRequest;
 use lsp_types::request::InlayHintRequest;
+use lsp_types::request::PrepareRenameRequest;
 use lsp_types::request::References;
 use lsp_types::request::RegisterCapability;
+use lsp_types::request::Rename;
 use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::SignatureHelpRequest;
@@ -628,6 +635,15 @@ fn initialize_connection(
                 Some(OneOf::Left(true))
             }
         },
+        rename_provider: match args.indexing_mode {
+            IndexingMode::None => None,
+            IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
+                Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: Default::default(),
+                }))
+            }
+        },
         signature_help_provider: Some(SignatureHelpOptions {
             trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
             ..Default::default()
@@ -903,6 +919,16 @@ impl Server {
                     ide_transaction_manager.save(transaction);
                 } else if let Some(params) = as_request::<References>(&x) {
                     self.references(x.id, ide_transaction_manager, params);
+                } else if let Some(params) = as_request::<PrepareRenameRequest>(&x) {
+                    let transaction =
+                        ide_transaction_manager.non_commitable_transaction(&self.state);
+                    self.send_response(new_response(
+                        x.id,
+                        Ok(self.prepare_rename(&transaction, params)),
+                    ));
+                    ide_transaction_manager.save(transaction);
+                } else if let Some(params) = as_request::<Rename>(&x) {
+                    self.rename(x.id, ide_transaction_manager, params);
                 } else if let Some(params) = as_request::<SignatureHelpRequest>(&x) {
                     let transaction =
                         ide_transaction_manager.non_commitable_transaction(&self.state);
@@ -1591,27 +1617,31 @@ impl Server {
         )
     }
 
-    fn references<'a>(
+    /// Compute references of a symbol at a given position. This is a non-blocking function, the
+    /// it will send a response to the LSP client once the results are found and transformed by
+    /// `map_result`.
+    fn async_find_references_helper<'a, V: serde::Serialize>(
         &'a self,
         request_id: RequestId,
         ide_transaction_manager: &mut IDETransactionManager<'a>,
-        params: ReferenceParams,
+        uri: &Url,
+        position: Position,
+        map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + 'static,
     ) {
-        let uri = &params.text_document_position.text_document.uri;
         let Some(handle) = self.make_handle_if_enabled(uri) else {
-            return self.send_response(new_response::<Option<Vec<Location>>>(request_id, Ok(None)));
+            return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
         let transaction = ide_transaction_manager.non_commitable_transaction(&self.state);
         let Some(info) = transaction.get_module_info(&handle) else {
             ide_transaction_manager.save(transaction);
-            return self.send_response(new_response::<Option<Vec<Location>>>(request_id, Ok(None)));
+            return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
-        let position = position_to_text_size(&info, params.text_document_position.position);
+        let position = position_to_text_size(&info, position);
         let Some((definition_kind, definition, _docstring)) =
             transaction.find_definition(&handle, position, false)
         else {
             ide_transaction_manager.save(transaction);
-            return self.send_response(new_response::<Option<Vec<Location>>>(request_id, Ok(None)));
+            return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
         ide_transaction_manager.save(transaction);
         let state = self.state.dupe();
@@ -1634,18 +1664,18 @@ impl Server {
                     let mut locations = Vec::new();
                     for (info, ranges) in global_references {
                         if let Some(uri) = module_info_to_uri(&info) {
-                            for range in ranges {
-                                locations.push(Location {
-                                    uri: uri.clone(),
-                                    range: source_range_to_range(&info.source_range(range)),
-                                });
-                            }
+                            locations.push((
+                                uri,
+                                ranges.into_map(|range| {
+                                    source_range_to_range(&info.source_range(range))
+                                }),
+                            ));
                         };
                     }
                     connection.send(Message::Response(new_response(
                         request_id,
-                        Ok(Some(locations)),
-                    )))
+                        Ok(Some(map_result(locations))),
+                    )));
                 }
                 Err(Cancelled) => {
                     let message = format!("Find reference request {} is canceled", request_id);
@@ -1658,6 +1688,76 @@ impl Server {
                 }
             }
         });
+    }
+
+    fn references<'a>(
+        &'a self,
+        request_id: RequestId,
+        ide_transaction_manager: &mut IDETransactionManager<'a>,
+        params: ReferenceParams,
+    ) {
+        self.async_find_references_helper(
+            request_id,
+            ide_transaction_manager,
+            &params.text_document_position.text_document.uri,
+            params.text_document_position.position,
+            move |results| {
+                let mut locations = Vec::new();
+                for (uri, ranges) in results {
+                    for range in ranges {
+                        locations.push(Location {
+                            uri: uri.clone(),
+                            range,
+                        })
+                    }
+                }
+                locations
+            },
+        );
+    }
+
+    fn rename<'a>(
+        &'a self,
+        request_id: RequestId,
+        ide_transaction_manager: &mut IDETransactionManager<'a>,
+        params: RenameParams,
+    ) {
+        self.async_find_references_helper(
+            request_id,
+            ide_transaction_manager,
+            &params.text_document_position.text_document.uri,
+            params.text_document_position.position,
+            move |results| {
+                let mut changes = HashMap::new();
+                for (uri, ranges) in results {
+                    changes.insert(
+                        uri,
+                        ranges.into_map(|range| TextEdit {
+                            range,
+                            new_text: params.new_name.clone(),
+                        }),
+                    );
+                }
+                WorkspaceEdit {
+                    changes: Some(changes),
+                    ..Default::default()
+                }
+            },
+        );
+    }
+
+    fn prepare_rename(
+        &self,
+        transaction: &Transaction<'_>,
+        params: TextDocumentPositionParams,
+    ) -> Option<PrepareRenameResponse> {
+        let uri = &params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri)?;
+        let info = transaction.get_module_info(&handle)?;
+        let position = position_to_text_size(&info, params.position);
+        transaction.prepare_rename(&handle, position).map(|range| {
+            PrepareRenameResponse::Range(source_range_to_range(&info.source_range(range)))
+        })
     }
 
     fn signature_help(

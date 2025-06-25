@@ -1957,6 +1957,7 @@ dependencies = [
  "pyrefly_derive",
  "rayon",
  "ruff_python_ast",
+ "ruff_source_file",
  "ruff_text_size",
  "serde",
  "serde_json",

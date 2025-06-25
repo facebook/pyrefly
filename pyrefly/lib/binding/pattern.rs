@@ -27,7 +27,7 @@ use crate::binding::narrow::expr_to_subjects;
 use crate::binding::scope::FlowStyle;
 use crate::error::kind::ErrorKind;
 use crate::graph::index::Idx;
-use crate::ruff::ast::Ast;
+use crate::python::ast::Ast;
 use crate::types::facet::FacetKind;
 
 impl<'a> BindingsBuilder<'a> {

@@ -25,7 +25,7 @@ use static_interner::Intern;
 use static_interner::Interner;
 use thiserror::Error;
 
-use crate::dunder;
+use crate::python::dunder;
 
 static MODULE_NAME_INTERNER: Interner<String> = Interner::new();
 

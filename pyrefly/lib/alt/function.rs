@@ -27,7 +27,6 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyFunction;
 use crate::binding::binding::KeyLegacyTypeParam;
-use crate::dunder;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
@@ -35,6 +34,7 @@ use crate::error::kind::ErrorKind;
 use crate::graph::index::Idx;
 use crate::module::module_path::ModuleStyle;
 use crate::module::short_identifier::ShortIdentifier;
+use crate::python::dunder;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncFlags;
 use crate::types::callable::FuncMetadata;
@@ -170,12 +170,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut has_enum_member_decoration = false;
         let mut is_override = false;
         let mut has_final_decoration = false;
+        let mut dataclass_transform_metadata = None;
         let decorators = decorators
             .iter()
             .filter(|k| {
                 let decorator = self.get_idx(**k);
-                is_deprecated |= matches!(decorator.ty(), Type::ClassType(cls) if cls.has_qname("warnings", "deprecated"));
-                match decorator.ty().callee_kind() {
+                let decorator_ty = decorator.ty();
+                is_deprecated |= matches!(decorator_ty, Type::ClassType(cls) if cls.has_qname("warnings", "deprecated"));
+                match decorator_ty.callee_kind() {
                     Some(CalleeKind::Function(FunctionKind::Overload)) => {
                         is_overload = true;
                         false
@@ -192,9 +194,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         is_property_getter = true;
                         false
                     }
-                    Some(CalleeKind::Function(FunctionKind::PropertySetter(_))) => {
+                    Some(CalleeKind::Function(_)) if decorator_ty.is_property_setter_decorator() => {
                         // When the `setter` attribute is accessed on a property, we return the
-                        // getter with its kind set to FunctionKind::PropertySetter. See
+                        // getter with the is_property_setter_decorator flag set to true. See
                         // AnswersSolver::lookup_attr_from_attribute_base for details.
                         is_property_setter_with_getter = Some(decorator.arc_clone_ty());
                         false
@@ -209,6 +211,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     Some(CalleeKind::Function(FunctionKind::Final)) => {
                         has_final_decoration = true;
+                        false
+                    }
+                    Some(CalleeKind::DataclassTransformDecorator(kws)) => {
+                        dataclass_transform_metadata = Some(kws);
                         false
                     }
                     _ => true,
@@ -443,10 +449,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 is_classmethod,
                 is_deprecated,
                 is_property_getter,
+                is_property_setter_decorator: false,
                 is_property_setter_with_getter,
                 has_enum_member_decoration,
                 is_override,
                 has_final_decoration,
+                dataclass_transform_metadata,
             },
         };
         let mut ty = Forallable::Function(Function {

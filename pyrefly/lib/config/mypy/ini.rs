@@ -24,8 +24,8 @@ use crate::config::environment::environment::PythonEnvironment;
 use crate::config::error::ErrorDisplayConfig;
 use crate::config::mypy::regex_converter;
 use crate::module::wildcard::ModuleWildcard;
-use crate::sys_info::PythonPlatform;
-use crate::sys_info::PythonVersion;
+use crate::python::sys_info::PythonPlatform;
+use crate::python::sys_info::PythonVersion;
 #[derive(Clone, Debug, Deserialize)]
 pub struct MypyConfig {
     files: Option<Vec<String>>,

@@ -25,8 +25,8 @@ use crate::export::definitions::DunderAllEntry;
 use crate::graph::calculation::Calculation;
 use crate::module::module_info::ModuleInfo;
 use crate::module::module_name::ModuleName;
+use crate::python::sys_info::SysInfo;
 use crate::state::loader::FindError;
-use crate::sys_info::SysInfo;
 
 /// Find the exports of a given module.
 pub trait LookupExport {
@@ -187,7 +187,7 @@ mod tests {
     use super::*;
     use crate::module::module_path::ModulePath;
     use crate::module::module_path::ModuleStyle;
-    use crate::ruff::ast::Ast;
+    use crate::python::ast::Ast;
 
     impl LookupExport for SmallMap<ModuleName, Exports> {
         fn get(&self, module: ModuleName) -> Result<Exports, FindError> {

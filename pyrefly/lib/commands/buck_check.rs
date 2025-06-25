@@ -26,12 +26,12 @@ use crate::error::error::Error;
 use crate::error::legacy::LegacyErrors;
 use crate::module::module_path::ModulePath;
 use crate::module::source_db::BuckSourceDatabase;
+use crate::python::sys_info::PythonPlatform;
+use crate::python::sys_info::PythonVersion;
+use crate::python::sys_info::SysInfo;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
-use crate::sys_info::PythonPlatform;
-use crate::sys_info::PythonVersion;
-use crate::sys_info::SysInfo;
 
 #[derive(Debug, Clone, Parser)]
 pub struct Args {

@@ -44,12 +44,12 @@ use crate::binding::scope::Flow;
 use crate::binding::scope::Scope;
 use crate::binding::scope::ScopeClass;
 use crate::binding::scope::ScopeKind;
-use crate::dunder;
 use crate::error::kind::ErrorKind;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::module::short_identifier::ShortIdentifier;
-use crate::ruff::ast::Ast;
+use crate::python::ast::Ast;
+use crate::python::dunder;
 use crate::types::callable::unexpected_keyword;
 use crate::types::globals::Global;
 use crate::types::types::Type;
@@ -352,25 +352,26 @@ impl<'a> BindingsBuilder<'a> {
                 return None;
             }
             match func {
-                Expr::Attribute(ExprAttribute {
-                    value: box Expr::Name(base_name),
-                    attr,
-                    ..
-                }) if base_name.id.as_str() == "self" => match attr.id.as_str() {
-                    "assertTrue" => Some(TestAssertion::AssertTrue),
-                    "assertFalse" => Some(TestAssertion::AssertFalse),
-                    "assertIsNone" => Some(TestAssertion::AssertIsNone),
-                    "assertIsNotNone" => Some(TestAssertion::AssertIsNotNone),
-                    "assertIsInstance" => Some(TestAssertion::AssertIsInstance),
-                    "assertNotIsInstance" => Some(TestAssertion::AssertNotIsInstance),
-                    "assertIs" => Some(TestAssertion::AssertIs),
-                    "assertIsNot" => Some(TestAssertion::AssertIsNot),
-                    "assertEqual" => Some(TestAssertion::AssertEqual),
-                    "assertNotEqual" => Some(TestAssertion::AssertNotEqual),
-                    "assertIn" => Some(TestAssertion::AssertIn),
-                    "assertNotIn" => Some(TestAssertion::AssertNotIn),
-                    _ => None,
-                },
+                Expr::Attribute(ExprAttribute { value, attr, .. })
+                    if let Expr::Name(base_name) = &**value
+                        && base_name.id.as_str() == "self" =>
+                {
+                    match attr.id.as_str() {
+                        "assertTrue" => Some(TestAssertion::AssertTrue),
+                        "assertFalse" => Some(TestAssertion::AssertFalse),
+                        "assertIsNone" => Some(TestAssertion::AssertIsNone),
+                        "assertIsNotNone" => Some(TestAssertion::AssertIsNotNone),
+                        "assertIsInstance" => Some(TestAssertion::AssertIsInstance),
+                        "assertNotIsInstance" => Some(TestAssertion::AssertNotIsInstance),
+                        "assertIs" => Some(TestAssertion::AssertIs),
+                        "assertIsNot" => Some(TestAssertion::AssertIsNot),
+                        "assertEqual" => Some(TestAssertion::AssertEqual),
+                        "assertNotEqual" => Some(TestAssertion::AssertNotEqual),
+                        "assertIn" => Some(TestAssertion::AssertIn),
+                        "assertNotIn" => Some(TestAssertion::AssertNotIn),
+                        _ => None,
+                    }
+                }
                 _ => None,
             }
         } else {
@@ -666,15 +667,14 @@ impl<'a> BindingsBuilder<'a> {
                 // Don't go inside a literal, since you might find strings which are really strings, not string-types
                 self.ensure_expr(x, static_type_usage);
             }
-            Expr::Subscript(ExprSubscript {
-                value,
-                slice: box Expr::Tuple(tup),
-                ..
-            }) if self.as_special_export(value) == Some(SpecialExport::Annotated)
-                && !tup.is_empty() =>
+            Expr::Subscript(ExprSubscript { value, slice, .. })
+                if self.as_special_export(value) == Some(SpecialExport::Annotated)
+                    && matches!(&**slice, Expr::Tuple(tup) if !tup.is_empty()) =>
             {
                 // Only go inside the first argument to Annotated, the rest are non-type metadata.
                 self.ensure_type(&mut *value, tparams_builder);
+                // We can't bind a mut box in the guard (sadly), so force unwrapping it here
+                let tup = slice.as_tuple_expr_mut().unwrap();
                 self.ensure_type(&mut tup.elts[0], tparams_builder);
                 for e in tup.elts[1..].iter_mut() {
                     self.ensure_expr(e, static_type_usage);

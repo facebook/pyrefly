@@ -9,6 +9,7 @@ use std::fmt::Debug;
 use std::mem;
 
 use dupe::Dupe;
+use pyrefly_util::lined_buffer::SourceRange;
 use pyrefly_util::lock::Mutex;
 use ruff_text_size::TextRange;
 use vec1::Vec1;
@@ -19,7 +20,6 @@ use crate::error::error::Error;
 use crate::error::kind::ErrorKind;
 use crate::error::style::ErrorStyle;
 use crate::module::module_info::ModuleInfo;
-use crate::module::module_info::SourceRange;
 
 #[derive(Debug, Default, Clone)]
 struct ModuleErrors {

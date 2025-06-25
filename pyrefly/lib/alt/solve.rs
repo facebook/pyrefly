@@ -30,6 +30,7 @@ use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::VarianceMap;
 use crate::alt::types::class_metadata::ClassMetadata;
+use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
@@ -43,6 +44,7 @@ use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassField;
 use crate::binding::binding::BindingClassMetadata;
+use crate::binding::binding::BindingClassMro;
 use crate::binding::binding::BindingClassSynthesizedFields;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingFunction;
@@ -71,7 +73,6 @@ use crate::binding::binding::TypeParameter;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::narrow::identifier_and_chain_for_expr;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
-use crate::dunder;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
@@ -79,7 +80,8 @@ use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
 use crate::error::style::ErrorStyle;
 use crate::module::short_identifier::ShortIdentifier;
-use crate::ruff::ast::Ast;
+use crate::python::ast::Ast;
+use crate::python::dunder;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
 use crate::types::callable::Function;
@@ -198,7 +200,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn solve_mro(
+    pub fn solve_class_metadata(
         &self,
         binding: &BindingClassMetadata,
         errors: &ErrorCollector,
@@ -224,6 +226,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ),
         };
         Arc::new(metadata)
+    }
+
+    pub fn solve_class_mro(
+        &self,
+        binding: &BindingClassMro,
+        errors: &ErrorCollector,
+    ) -> Arc<ClassMro> {
+        let mro = match &self.get_idx(binding.class_idx).0 {
+            None => ClassMro::recursive(),
+            Some(cls) => self.calculate_class_mro(cls, errors),
+        };
+        Arc::new(mro)
     }
 
     pub fn solve_annotation(
@@ -1383,9 +1397,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// This is the class above `cls` in `obj`'s MRO.
     fn get_super_lookup_class(&self, cls: &Class, obj: &ClassType) -> Option<ClassType> {
         let mut lookup_cls = None;
-        let metadata = self.get_metadata_for_class(obj.class_object());
+        let mro = self.get_mro_for_class(obj.class_object());
         let mut found = false;
-        for ancestor in iter::once(obj).chain(metadata.ancestors(self.stdlib)) {
+        for ancestor in iter::once(obj).chain(mro.ancestors(self.stdlib)) {
             if ancestor.class_object() == cls {
                 found = true;
                 // Handle the corner case of `ancestor` being `object` (and

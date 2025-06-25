@@ -35,7 +35,6 @@ use crate::types::types::Type;
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct ClassMetadata {
-    mro: Mro,
     metaclass: Metaclass,
     keywords: Keywords,
     typed_dict_metadata: Option<TypedDictMetadata>,
@@ -51,19 +50,21 @@ pub struct ClassMetadata {
     /// This can happen if, e.g., a class inherits from Any.
     has_unknown_tparams: bool,
     total_ordering_metadata: Option<TotalOrderingMetadata>,
+    /// If this class is decorated with `typing.dataclass_transform(...)`, the keyword arguments
+    /// that were passed to the `dataclass_transform` call.
+    dataclass_transform_metadata: Option<BoolKeywords>,
 }
 
 impl VisitMut<Type> for ClassMetadata {
-    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {
         // TODO: This is definitely wrong. We have types in lots of these places.
         // Doesn't seem to have gone wrong yet, but it will.
-        self.mro.recurse_mut(f);
     }
 }
 
 impl Display for ClassMetadata {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "ClassMetadata({}, {})", self.mro, self.metaclass)
+        write!(f, "ClassMetadata(metaclass={})", self.metaclass)
     }
 }
 
@@ -83,9 +84,9 @@ impl ClassMetadata {
         is_final: bool,
         has_unknown_tparams: bool,
         total_ordering_metadata: Option<TotalOrderingMetadata>,
+        dataclass_transform_metadata: Option<BoolKeywords>,
         errors: &ErrorCollector,
     ) -> ClassMetadata {
-        let mro = Mro::new(cls, &bases_with_metadata, errors);
         Self::validate_frozen_dataclass_inheritance(
             cls,
             &dataclass_metadata,
@@ -93,7 +94,6 @@ impl ClassMetadata {
             errors,
         );
         ClassMetadata {
-            mro,
             metaclass: Metaclass(metaclass),
             keywords: Keywords(keywords),
             typed_dict_metadata,
@@ -107,6 +107,7 @@ impl ClassMetadata {
             is_final,
             has_unknown_tparams,
             total_ordering_metadata,
+            dataclass_transform_metadata,
         }
     }
 
@@ -157,7 +158,6 @@ impl ClassMetadata {
 
     pub fn recursive() -> Self {
         ClassMetadata {
-            mro: Mro::Cyclic,
             metaclass: Metaclass::default(),
             keywords: Keywords::default(),
             typed_dict_metadata: None,
@@ -171,6 +171,7 @@ impl ClassMetadata {
             is_final: false,
             has_unknown_tparams: false,
             total_ordering_metadata: None,
+            dataclass_transform_metadata: None,
         }
     }
 
@@ -249,16 +250,8 @@ impl ClassMetadata {
         self.dataclass_metadata.as_ref()
     }
 
-    pub fn ancestors<'a>(&'a self, stdlib: &'a Stdlib) -> impl Iterator<Item = &'a ClassType> {
-        self.ancestors_no_object()
-            .iter()
-            .chain(iter::once(stdlib.object()))
-    }
-
-    /// The MRO doesn't track `object` directly for efficiency, since it always comes last, and
-    /// some use cases (for example checking if the type is an enum) do not care about `object`.
-    pub fn ancestors_no_object(&self) -> &[ClassType] {
-        self.mro.ancestors_no_object()
+    pub fn dataclass_transform_metadata(&self) -> Option<&BoolKeywords> {
+        self.dataclass_transform_metadata.as_ref()
     }
 }
 
@@ -438,18 +431,18 @@ pub struct TotalOrderingMetadata {
 /// different type arguments. The type arguments computed here will always be
 /// those coming from the instance that was selected during lineariation.
 #[derive(Clone, Debug, VisitMut, TypeEq, PartialEq, Eq)]
-enum Mro {
+pub enum ClassMro {
     Resolved(Vec<ClassType>),
     Cyclic,
 }
 
-impl Display for Mro {
+impl Display for ClassMro {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Mro::Resolved(xs) => {
+            ClassMro::Resolved(xs) => {
                 write!(f, "[{}]", commas_iter(|| xs.iter()))
             }
-            Mro::Cyclic => write!(f, "Cyclic"),
+            ClassMro::Cyclic => write!(f, "Cyclic"),
         }
     }
 }
@@ -462,7 +455,7 @@ impl Display for ClassName<'_> {
     }
 }
 
-impl Mro {
+impl ClassMro {
     /// Compute all ancestors the method resolution order (MRO).
     ///
     /// Each ancestor is paired with `targs: TArgs` representing type
@@ -478,10 +471,10 @@ impl Mro {
     /// `Generic`, `Protocol`, and `object`.
     pub fn new(
         cls: &Class,
-        bases_with_metadata: &[(ClassType, Arc<ClassMetadata>)],
+        bases_with_mro: Vec<(&ClassType, Arc<ClassMro>)>,
         errors: &ErrorCollector,
     ) -> Self {
-        match Linearization::new(cls, bases_with_metadata, errors) {
+        match Linearization::new(cls, bases_with_mro, errors) {
             Linearization::Cyclic => Self::Cyclic,
             Linearization::Resolved(ancestor_chains) => {
                 let ancestors = Linearization::merge(cls, ancestor_chains, errors);
@@ -494,9 +487,19 @@ impl Mro {
     /// some use cases (for example checking if the type is an enum) do not care about `object`.
     pub fn ancestors_no_object(&self) -> &[ClassType] {
         match self {
-            Mro::Resolved(ancestors) => ancestors,
-            Mro::Cyclic => &[],
+            ClassMro::Resolved(ancestors) => ancestors,
+            ClassMro::Cyclic => &[],
         }
+    }
+
+    pub fn ancestors<'a>(&'a self, stdlib: &'a Stdlib) -> impl Iterator<Item = &'a ClassType> {
+        self.ancestors_no_object()
+            .iter()
+            .chain(iter::once(stdlib.object()))
+    }
+
+    pub fn recursive() -> Self {
+        Self::Cyclic
     }
 }
 
@@ -536,26 +539,23 @@ impl Linearization {
     /// - One consisting of the base classes themselves in the order defined.
     fn new(
         cls: &Class,
-        bases_with_metadata: &[(ClassType, Arc<ClassMetadata>)],
+        bases_with_mro: Vec<(&ClassType, Arc<ClassMro>)>,
         errors: &ErrorCollector,
     ) -> Linearization {
         let bases = match Vec1::try_from_vec(
-            bases_with_metadata
+            bases_with_mro
                 .iter()
                 .rev()
-                .map(|(base, _)| base.clone())
+                .map(|(base, _)| (*base).clone())
                 .collect(),
         ) {
             Ok(bases) => bases,
             Err(_) => return Linearization::empty(),
         };
         let mut ancestor_chains = Vec::new();
-        for (base, mro) in bases_with_metadata {
-            match &**mro {
-                ClassMetadata {
-                    mro: Mro::Resolved(ancestors),
-                    ..
-                } => {
+        for (base, mro) in bases_with_mro {
+            match &*mro {
+                ClassMro::Resolved(ancestors) => {
                     let ancestors_through_base = ancestors
                         .iter()
                         .map(|ancestor| ancestor.substitute(&base.substitution()))
@@ -568,9 +568,7 @@ impl Linearization {
                 }
                 // None and Cyclic both indicate a cycle, the distinction just
                 // depends on how exactly the recursion in resolving keys plays out.
-                ClassMetadata {
-                    mro: Mro::Cyclic, ..
-                } => {
+                ClassMro::Cyclic => {
                     errors.add(
                         cls.range(),
                         ErrorKind::InvalidInheritance,

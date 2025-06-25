@@ -9,23 +9,23 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 
-use crate::alt::types::class_metadata::ClassMetadata;
-use crate::binding::binding::KeyClassMetadata;
+use crate::alt::types::class_metadata::ClassMro;
+use crate::binding::binding::KeyClassMro;
 use crate::state::handle::Handle;
 use crate::state::state::State;
 use crate::test::util::get_class;
 use crate::test::util::mk_state;
 use crate::testcase;
 
-pub fn get_class_metadata(name: &str, handle: &Handle, state: &State) -> Arc<ClassMetadata> {
+pub fn get_class_mro(name: &str, handle: &Handle, state: &State) -> Arc<ClassMro> {
     let solutions = state.transaction().get_solutions(handle).unwrap();
 
     let cls = get_class(name, handle, state);
-    solutions.get(&KeyClassMetadata(cls.index())).dupe()
+    solutions.get(&KeyClassMro(cls.index())).dupe()
 }
 
 fn get_mro_names(name: &str, handle: &Handle, state: &State) -> Vec<String> {
-    get_class_metadata(name, handle, state)
+    get_class_mro(name, handle, state)
         .ancestors_no_object()
         .iter()
         .map(|cls| cls.name().as_str().to_owned())

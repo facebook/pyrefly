@@ -154,3 +154,39 @@ def test(x: dict[str, object], c1: C1, c2s: dict[str, C2], key: str, s: str):
     assert_type(c2s["key1"].x, object)
  "#,
 );
+
+testcase!(
+    test_subscript_narrow_does_not_invalidate_attribute,
+    r#"
+from typing import Optional, Dict, Any, assert_type, Literal
+
+class ErrorContext:
+    def __init__(self):
+        self.system_context: dict[str, Any] | None = None
+    
+    def update_context(self, data: dict[str, Any]) -> None:
+        # Explicit None check
+        if self.system_context is not None:
+            assert_type(self.system_context, dict[str, Any])
+
+            self.system_context["updated"] = True
+
+            assert_type(self.system_context, dict[str, Any])
+            assert_type(self.system_context["updated"], Literal[True])
+
+            value = self.system_context.get("key", "default")
+
+    def update_context_2(self, data: dict[str, Any]) -> None:
+        if self.system_context:
+            self.system_context["status"] = "active"
+        else:
+            self.system_context = {"status": "active"}
+
+        assert_type(self.system_context, dict[str, Any])
+            
+        self.system_context["timestamp"] = "2024-01-01"
+
+        assert_type(self.system_context, dict[str, Any])
+        assert_type(self.system_context["timestamp"], Literal["2024-01-01"])
+"#,
+);

@@ -31,6 +31,7 @@ use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassField;
 use crate::binding::binding::BindingClassMetadata;
+use crate::binding::binding::BindingClassMro;
 use crate::binding::binding::BindingClassSynthesizedFields;
 use crate::binding::binding::BindingTParams;
 use crate::binding::binding::BindingVariance;
@@ -42,6 +43,7 @@ use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
+use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyVariance;
@@ -58,7 +60,7 @@ use crate::error::kind::ErrorKind;
 use crate::graph::index::Idx;
 use crate::module::module_name::ModuleName;
 use crate::module::short_identifier::ShortIdentifier;
-use crate::ruff::ast::Ast;
+use crate::python::ast::Ast;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
 use crate::types::special_form::SpecialForm;
@@ -91,6 +93,7 @@ impl<'a> BindingsBuilder<'a> {
             def_index,
             class_idx: self.idx_for_promise(KeyClass(ShortIdentifier::new(class_name))),
             metadata_idx: self.idx_for_promise(KeyClassMetadata(def_index)),
+            mro_idx: self.idx_for_promise(KeyClassMro(def_index)),
             synthesized_fields_idx: self.idx_for_promise(KeyClassSynthesizedFields(def_index)),
             variance_idx: self.idx_for_promise(KeyVariance(def_index)),
         };
@@ -187,6 +190,12 @@ impl<'a> BindingsBuilder<'a> {
                 decorators: decorators_with_ranges.clone().into_boxed_slice(),
                 is_new_type: false,
                 special_base: None,
+            },
+        );
+        self.insert_binding_idx(
+            class_indices.mro_idx,
+            BindingClassMro {
+                class_idx: class_indices.class_idx,
             },
         );
         self.insert_binding_idx(
@@ -436,6 +445,12 @@ impl<'a> BindingsBuilder<'a> {
                 decorators: Box::new([]),
                 is_new_type: class_kind == SynthesizedClassKind::NewType,
                 special_base,
+            },
+        );
+        self.insert_binding_idx(
+            class_indices.mro_idx,
+            BindingClassMro {
+                class_idx: class_indices.class_idx,
             },
         );
         self.insert_binding_idx(

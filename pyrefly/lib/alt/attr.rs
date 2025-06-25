@@ -19,7 +19,6 @@ use crate::alt::expr::TypeOrExpr;
 use crate::alt::types::class_metadata::EnumMetadata;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::KeyExport;
-use crate::dunder;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
@@ -28,6 +27,7 @@ use crate::error::kind::ErrorKind;
 use crate::export::exports::Exports;
 use crate::module::module_info::TextRangeWithModuleInfo;
 use crate::module::module_name::ModuleName;
+use crate::python::dunder;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
@@ -628,6 +628,56 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
+    fn check_setattr(
+        &self,
+        attr_base: AttributeBase,
+        attr_name: &Name,
+        got: TypeOrExpr,
+        not_found: NotFound,
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) {
+        let setattr_lookup_result = self.lookup_magic_dunder_attr(attr_base, &dunder::SETATTR);
+        match setattr_lookup_result {
+            LookupResult::NotFound(_) | LookupResult::InternalError(_) => {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::MissingAttribute,
+                    context,
+                    not_found.to_error_msg(attr_name),
+                );
+            }
+            LookupResult::Found(setattr_attr) => {
+                let result = self
+                    .resolve_get_access(Attribute::new(setattr_attr.inner), range, errors, context)
+                    .map(|setattr_attr_ty| {
+                        self.call_setattr(
+                            setattr_attr_ty,
+                            CallArg::Arg(got),
+                            attr_name.clone(),
+                            range,
+                            errors,
+                            context,
+                        )
+                    });
+                match result {
+                    Ok(_) => {}
+                    Err(no_access) => {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::MissingAttribute,
+                            context,
+                            no_access.to_error_msg(attr_name),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     fn check_attr_set_and_infer_narrow(
         &self,
         base: &Type,
@@ -641,11 +691,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut narrowed_types = Some(Vec::new());
         let bases = self.get_possible_attribute_bases(base);
         for attr_base in bases {
-            let lookup_result = attr_base.map_or_else(
-                || LookupResult::InternalError(InternalError::AttributeBaseUndefined(base.clone())),
-                |attr_base| self.lookup_attr_from_base_no_union(attr_base, attr_name),
-            );
-            match lookup_result {
+            let Some(attr_base) = attr_base else {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::InternalError,
+                    context,
+                    InternalError::AttributeBaseUndefined(base.clone())
+                        .to_error_msg(attr_name, todo_ctx),
+                );
+                narrowed_types = None;
+                continue;
+            };
+            match self.lookup_attr_from_base_no_union(attr_base.clone(), attr_name) {
                 LookupResult::Found(attr) => match attr.inner {
                     AttributeInner::Simple(want, Visibility::ReadWrite) => {
                         let ty = match &got {
@@ -758,15 +816,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                         };
                     }
-                    AttributeInner::GetAttr(not_found, _, name) => {
-                        // Attribute setting bypasses `__getattr__` lookup and behaves the same
-                        // as if the `__getattr__` lookup did not happen.
-                        self.error(
-                            errors,
-                            range,
-                            ErrorKind::MissingAttribute,
-                            context,
-                            not_found.to_error_msg(&name),
+                    AttributeInner::GetAttr(not_found, _, _) => {
+                        // Attribute setting bypasses `__getattr__` lookup and checks `__setattr__`
+                        self.check_setattr(
+                            attr_base, attr_name, got, not_found, range, errors, context,
                         );
                     }
                 },
@@ -780,13 +833,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 LookupResult::NotFound(e) => {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorKind::MissingAttribute,
-                        context,
-                        e.to_error_msg(attr_name),
-                    );
+                    self.check_setattr(attr_base, attr_name, got, e, range, errors, context);
                 }
             }
             // If we hit anything other than a simple, read-write attribute then we will not infer
@@ -1120,7 +1167,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn resolve_named_tuple_element(&self, attr: Attribute) -> Option<Type> {
         // NamedTuples are immutable, so their attributes are always read-only
-        // NOTE(grievejia): We do not use `__getattr__` here because this lookup is expected to be inovked
+        // NOTE(grievejia): We do not use `__getattr__` here because this lookup is expected to be invoked
         // on NamedTuple attributes with known names.
         match attr.inner {
             AttributeInner::Simple(ty, Visibility::ReadOnly(_)) => Some(ty),
@@ -1292,7 +1339,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // TODO(stroxler): it is probably possible to synthesize a forall type here
                     // that uses a type var to propagate the setter. Investigate this option later.
                     getter.transform_func_metadata(|meta: &mut FuncMetadata| {
-                        meta.kind = FunctionKind::PropertySetter(Box::new(meta.kind.as_func_id()));
+                        meta.flags.is_property_setter_decorator = true;
                     });
                     LookupResult::found_type(
                         // TODO(samzhou19815): Support go-to-definition for @property applied symbols
@@ -1717,12 +1764,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         expected_attribute_name: Option<&Name>,
         res: &mut Vec<AttrInfo>,
     ) {
+        let mro = self.get_mro_for_class(cls);
         let mut seen = SmallSet::new();
-        for c in iter::once(cls).chain(
-            self.get_metadata_for_class(cls)
-                .ancestors(self.stdlib)
-                .map(|x| x.class_object()),
-        ) {
+        for c in iter::once(cls).chain(mro.ancestors(self.stdlib).map(|x| x.class_object())) {
             if c == self.stdlib.object().class_object() {
                 // Don't want to suggest `__hash__`
                 break;
@@ -1730,7 +1774,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match expected_attribute_name {
                 None => {
                     for fld in c.fields() {
-                        if seen.insert(fld.clone())
+                        if seen.insert(fld)
                             && let Some(range) = c.field_decl_range(fld)
                         {
                             res.push(AttrInfo {

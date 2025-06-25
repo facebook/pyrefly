@@ -26,12 +26,12 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
 use crate::common::symbol_kind::SymbolKind;
-use crate::dunder;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModuleStyle;
 use crate::module::short_identifier::ShortIdentifier;
-use crate::ruff::ast::Ast;
-use crate::sys_info::SysInfo;
+use crate::python::ast::Ast;
+use crate::python::dunder;
+use crate::python::sys_info::SysInfo;
 
 /// How a name is defined. If a name is defined outside of this
 /// module, we additionally store the module we got it from

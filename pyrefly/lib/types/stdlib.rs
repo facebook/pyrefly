@@ -11,7 +11,7 @@ use dupe::Dupe;
 use ruff_python_ast::name::Name;
 
 use crate::module::module_name::ModuleName;
-use crate::sys_info::PythonVersion;
+use crate::python::sys_info::PythonVersion;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::types::TArgs;

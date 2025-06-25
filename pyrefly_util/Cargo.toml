@@ -26,9 +26,10 @@ notify = "5"
 path-absolutize = { version = "3.0", features = ["use_unix_paths_on_wasm"] }
 rayon = "1.9.0"
 ruff_python_ast = { git = "https://github.com/astral-sh/ruff/", rev = "6e785867c3a97691972e8a49c372b3effba90032" }
+ruff_source_file = { git = "https://github.com/astral-sh/ruff/", rev = "6e785867c3a97691972e8a49c372b3effba90032" }
 ruff_text_size = { git = "https://github.com/astral-sh/ruff/", rev = "6e785867c3a97691972e8a49c372b3effba90032" }
 serde = { version = "1.0.185", features = ["derive", "rc"] }
-serde_json = { version = "1.0.140", features = ["float_roundtrip", "unbounded_depth"] }
+serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "unbounded_depth"] }
 starlark_map = "0.13.0"
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 tracing-subscriber = { version = "0.3.19", features = ["chrono", "env-filter", "json", "local-time", "parking_lot", "registry"] }

@@ -17,9 +17,11 @@ use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::types::class_metadata::ClassMetadata;
+use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::EnumMetadata;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
+use crate::binding::binding::KeyClassMro;
 use crate::error::collector::ErrorCollector;
 use crate::types::callable::Param;
 use crate::types::callable::Required;
@@ -91,6 +93,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.get_from_class(cls, &KeyClassMetadata(cls.index()))
     }
 
+    pub fn get_mro_for_class(&self, cls: &Class) -> Arc<ClassMro> {
+        self.get_from_class(cls, &KeyClassMro(cls.index()))
+    }
+
     pub fn get_class_field_map(&self, cls: &Class) -> SmallMap<String, Arc<ClassField>> {
         let mut map = SmallMap::new();
 
@@ -130,7 +136,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Get an ancestor `ClassType`, in terms of the type parameters of `class`.
     fn get_ancestor(&self, class: &Class, want: &Class) -> Option<ClassType> {
-        self.get_metadata_for_class(class)
+        self.get_mro_for_class(class)
             .ancestors(self.stdlib)
             .find(|ancestor| ancestor.class_object() == want)
             .cloned()

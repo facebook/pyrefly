@@ -373,3 +373,57 @@ token-type: function
 "#,
     );
 }
+
+#[test]
+fn kwargs() {
+    let code = r#"
+class Foo:
+    def foo(self, a: int): ...
+def foo(a: int): ...
+foo(a=1)
+Foo().foo(a=1)
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 6, length: 3, text: Foo
+token-type: class
+
+line: 2, column: 8, length: 3, text: foo
+token-type: function
+
+line: 2, column: 12, length: 4, text: self
+token-type: parameter
+
+line: 2, column: 18, length: 1, text: a
+token-type: parameter
+
+line: 2, column: 21, length: 3, text: int
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 3, column: 4, length: 3, text: foo
+token-type: function
+
+line: 3, column: 8, length: 1, text: a
+token-type: parameter
+
+line: 3, column: 11, length: 3, text: int
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 4, column: 0, length: 3, text: foo
+token-type: function
+
+line: 4, column: 4, length: 1, text: a
+token-type: parameter
+
+line: 5, column: 0, length: 3, text: Foo
+token-type: class
+
+line: 5, column: 6, length: 3, text: foo
+token-type: method
+
+line: 5, column: 10, length: 1, text: a
+token-type: parameter"#,
+    );
+}

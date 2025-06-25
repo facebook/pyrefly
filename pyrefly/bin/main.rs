@@ -139,7 +139,10 @@ async fn run_check(
             .await?;
         Ok(CommandExitStatus::Success)
     } else {
-        args.run_once(files_to_check, config_finder, allow_forget)
+        match args.run_once(files_to_check, config_finder, allow_forget) {
+            Ok((status, _)) => Ok(status),
+            Err(e) => Err(e),
+        }
     }
 }
 

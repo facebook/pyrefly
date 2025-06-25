@@ -12,6 +12,7 @@ use std::io::Write;
 
 use itertools::Itertools;
 use pyrefly_util::display::number_thousands;
+use pyrefly_util::lined_buffer::SourceRange;
 use ruff_annotate_snippets::Level;
 use ruff_annotate_snippets::Message;
 use ruff_annotate_snippets::Renderer;
@@ -23,7 +24,6 @@ use yansi::Paint;
 use crate::error::kind::ErrorKind;
 use crate::error::kind::Severity;
 use crate::module::module_info::ModuleInfo;
-use crate::module::module_info::SourceRange;
 use crate::module::module_path::ModulePath;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

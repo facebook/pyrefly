@@ -12,6 +12,7 @@ use dupe::Dupe;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::lined_buffer::SourceRange;
 use pyrefly_util::prelude::VecExt;
 use ruff_source_file::LineColumn;
 use serde::Serialize;
@@ -19,13 +20,12 @@ use serde::Serialize;
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::error::kind::Severity;
-use crate::module::module_info::SourceRange;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
+use crate::python::sys_info::SysInfo;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
-use crate::sys_info::SysInfo;
 
 #[derive(Serialize)]
 pub struct Position {

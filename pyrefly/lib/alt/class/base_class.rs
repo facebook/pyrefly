@@ -15,7 +15,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::solve::TypeFormContext;
 use crate::error::collector::ErrorCollector;
 use crate::error::kind::ErrorKind;
-use crate::ruff::ast::Ast;
+use crate::python::ast::Ast;
 use crate::types::special_form::SpecialForm;
 use crate::types::types::Type;
 

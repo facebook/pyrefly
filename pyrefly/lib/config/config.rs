@@ -40,10 +40,10 @@ use crate::module::finder::find_module_prefixes;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
 use crate::module::wildcard::ModuleWildcard;
+use crate::python::sys_info::PythonPlatform;
+use crate::python::sys_info::PythonVersion;
+use crate::python::sys_info::SysInfo;
 use crate::state::loader::FindError;
-use crate::sys_info::PythonPlatform;
-use crate::sys_info::PythonVersion;
-use crate::sys_info::SysInfo;
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
 pub struct SubConfig {

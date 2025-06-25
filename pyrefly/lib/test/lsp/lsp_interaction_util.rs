@@ -26,6 +26,7 @@ use lsp_types::CompletionOptions;
 use lsp_types::HoverProviderCapability;
 use lsp_types::OneOf;
 use lsp_types::PositionEncodingKind;
+use lsp_types::RenameOptions;
 use lsp_types::ServerCapabilities;
 use lsp_types::SignatureHelpOptions;
 use lsp_types::TextDocumentSyncCapability;
@@ -300,6 +301,14 @@ fn get_initialize_responses(find_refs: bool) -> Vec<Message> {
             // Find references won't work properly if we don't know all the files.
             references_provider: if find_refs {
                 Some(OneOf::Left(true))
+            } else {
+                None
+            },
+            rename_provider: if find_refs {
+                Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: Default::default(),
+                }))
             } else {
                 None
             },

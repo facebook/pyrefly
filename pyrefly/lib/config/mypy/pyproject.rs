@@ -21,8 +21,8 @@ use crate::config::config::SubConfig;
 use crate::config::error::ErrorDisplayConfig;
 use crate::config::mypy::regex_converter;
 use crate::module::wildcard::ModuleWildcard;
-use crate::sys_info::PythonPlatform;
-use crate::sys_info::PythonVersion;
+use crate::python::sys_info::PythonPlatform;
+use crate::python::sys_info::PythonVersion;
 
 // A pyproject.toml Mypy config differs a bit from the INI format:
 // - The [mypy] section is written as [tool.mypy]

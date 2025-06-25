@@ -26,8 +26,8 @@ use which::which;
 
 use crate::config::environment::active_environment::ActiveEnvironment;
 use crate::config::environment::venv;
-use crate::sys_info::PythonPlatform;
-use crate::sys_info::PythonVersion;
+use crate::python::sys_info::PythonPlatform;
+use crate::python::sys_info::PythonVersion;
 
 static INTERPRETER_ENV_REGISTRY: LazyLock<Mutex<SmallMap<PathBuf, Option<PythonEnvironment>>>> =
     LazyLock::new(|| Mutex::new(SmallMap::new()));

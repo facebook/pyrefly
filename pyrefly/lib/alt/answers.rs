@@ -720,7 +720,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        self.get_from_module(cls.module_name(), Some(cls.module_info().path()), k)
+        self.get_from_module(cls.module_name(), Some(cls.module_path()), k)
     }
 
     pub fn type_order(&self) -> TypeOrder<Ans> {

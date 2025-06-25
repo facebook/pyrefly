@@ -5,5 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! Functions that could be part of the Ruff API, but aren't.
 pub mod ast;
+pub mod dunder;
+pub mod sys_info;

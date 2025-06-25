@@ -55,7 +55,7 @@ mod tests {
     use crate::error::style::ErrorStyle;
     use crate::module::module_name::ModuleName;
     use crate::module::module_path::ModulePath;
-    use crate::sys_info::PythonVersion;
+    use crate::python::sys_info::PythonVersion;
 
     fn from_expr(x: &Expr) -> ShortIdentifier {
         match x {

@@ -224,6 +224,10 @@ impl Class {
         self.0.qname.module_name()
     }
 
+    pub fn module_path(&self) -> &ModulePath {
+        self.0.qname.module_path()
+    }
+
     pub fn module_info(&self) -> &ModuleInfo {
         self.0.qname.module_info()
     }
@@ -264,7 +268,7 @@ impl Class {
         (
             self.0.def_index,
             self.0.qname.module_name(),
-            self.0.qname.module_info().path(),
+            self.0.qname.module_path(),
         )
     }
 

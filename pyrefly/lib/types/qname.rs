@@ -116,6 +116,10 @@ impl QName {
         self.module.name()
     }
 
+    pub fn module_path(&self) -> &ModulePath {
+        self.module.path()
+    }
+
     pub fn fmt_name(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name)
     }

@@ -3446,93 +3446,13 @@
   "conformance\\third_party\\dataclasses_transform_class.py": [
     {
       "code": -2,
-      "column": 17,
-      "concise_description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
-      "description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
-      "line": 60,
-      "name": "missing-argument",
-      "stop_column": 55,
-      "stop_line": 60
-    },
-    {
-      "code": -2,
-      "column": 18,
-      "concise_description": "Unexpected keyword argument `id` in function `ModelBase.__init__`",
-      "description": "Unexpected keyword argument `id` in function `ModelBase.__init__`",
-      "line": 60,
-      "name": "unexpected-keyword",
-      "stop_column": 22,
-      "stop_line": 60
-    },
-    {
-      "code": -2,
-      "column": 24,
-      "concise_description": "Unexpected keyword argument `name` in function `ModelBase.__init__`",
-      "description": "Unexpected keyword argument `name` in function `ModelBase.__init__`",
-      "line": 60,
-      "name": "unexpected-keyword",
-      "stop_column": 34,
-      "stop_line": 60
-    },
-    {
-      "code": -2,
       "column": 36,
-      "concise_description": "Unexpected keyword argument `other_name` in function `ModelBase.__init__`",
-      "description": "Unexpected keyword argument `other_name` in function `ModelBase.__init__`",
+      "concise_description": "Unexpected keyword argument `other_name` in function `Customer1.__init__`",
+      "description": "Unexpected keyword argument `other_name` in function `Customer1.__init__`",
       "line": 60,
       "name": "unexpected-keyword",
       "stop_column": 54,
       "stop_line": 60
-    },
-    {
-      "code": -2,
-      "column": 18,
-      "concise_description": "Argument `Literal[3]` is not assignable to parameter `not_a_field` with type `str` in function `ModelBase.__init__`",
-      "description": "Argument `Literal[3]` is not assignable to parameter `not_a_field` with type `str` in function `ModelBase.__init__`",
-      "line": 66,
-      "name": "bad-argument-type",
-      "stop_column": 19,
-      "stop_line": 66
-    },
-    {
-      "code": -2,
-      "column": 21,
-      "concise_description": "Expected 1 positional argument, got 2 in function `ModelBase.__init__`",
-      "description": "Expected 1 positional argument, got 2 in function `ModelBase.__init__`",
-      "line": 66,
-      "name": "bad-argument-type",
-      "stop_column": 26,
-      "stop_line": 66
-    },
-    {
-      "code": -2,
-      "column": 17,
-      "concise_description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
-      "description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
-      "line": 68,
-      "name": "missing-argument",
-      "stop_column": 36,
-      "stop_line": 68
-    },
-    {
-      "code": -2,
-      "column": 18,
-      "concise_description": "Unexpected keyword argument `id` in function `ModelBase.__init__`",
-      "description": "Unexpected keyword argument `id` in function `ModelBase.__init__`",
-      "line": 68,
-      "name": "unexpected-keyword",
-      "stop_column": 22,
-      "stop_line": 68
-    },
-    {
-      "code": -2,
-      "column": 24,
-      "concise_description": "Unexpected keyword argument `name` in function `ModelBase.__init__`",
-      "description": "Unexpected keyword argument `name` in function `ModelBase.__init__`",
-      "line": 68,
-      "name": "unexpected-keyword",
-      "stop_column": 35,
-      "stop_line": 68
     },
     {
       "code": -2,
@@ -3546,56 +3466,6 @@
     },
     {
       "code": -2,
-      "column": 17,
-      "concise_description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
-      "description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
-      "line": 74,
-      "name": "missing-argument",
-      "stop_column": 36,
-      "stop_line": 74
-    },
-    {
-      "code": -2,
-      "column": 18,
-      "concise_description": "Unexpected keyword argument `id` in function `ModelBase.__init__`",
-      "description": "Unexpected keyword argument `id` in function `ModelBase.__init__`",
-      "line": 74,
-      "name": "unexpected-keyword",
-      "stop_column": 22,
-      "stop_line": 74
-    },
-    {
-      "code": -2,
-      "column": 24,
-      "concise_description": "Unexpected keyword argument `name` in function `ModelBase.__init__`",
-      "description": "Unexpected keyword argument `name` in function `ModelBase.__init__`",
-      "line": 74,
-      "name": "unexpected-keyword",
-      "stop_column": 35,
-      "stop_line": 74
-    },
-    {
-      "code": -2,
-      "column": 17,
-      "concise_description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
-      "description": "Missing argument `not_a_field` in function `ModelBase.__init__`",
-      "line": 76,
-      "name": "missing-argument",
-      "stop_column": 23,
-      "stop_line": 76
-    },
-    {
-      "code": -2,
-      "column": 18,
-      "concise_description": "Unexpected keyword argument `id` in function `ModelBase.__init__`",
-      "description": "Unexpected keyword argument `id` in function `ModelBase.__init__`",
-      "line": 76,
-      "name": "unexpected-keyword",
-      "stop_column": 22,
-      "stop_line": 76
-    },
-    {
-      "code": -2,
       "column": 6,
       "concise_description": "`<` is not supported between `Customer2` and `Customer2`",
       "description": "`<` is not supported between `Customer2` and `Customer2`\n  Cannot find `__lt__` or `__gt__`",
@@ -3603,56 +3473,6 @@
       "name": "missing-attribute",
       "stop_column": 17,
       "stop_line": 78
-    },
-    {
-      "code": -2,
-      "column": 18,
-      "concise_description": "Argument `Literal[0]` is not assignable to parameter `not_a_field` with type `str` in function `ModelBase.__init__`",
-      "description": "Argument `Literal[0]` is not assignable to parameter `not_a_field` with type `str` in function `ModelBase.__init__`",
-      "line": 82,
-      "name": "bad-argument-type",
-      "stop_column": 19,
-      "stop_line": 82
-    },
-    {
-      "code": -2,
-      "column": 21,
-      "concise_description": "Expected 1 positional argument, got 2 in function `ModelBase.__init__`",
-      "description": "Expected 1 positional argument, got 2 in function `ModelBase.__init__`",
-      "line": 82,
-      "name": "bad-argument-type",
-      "stop_column": 27,
-      "stop_line": 82
-    },
-    {
-      "code": -2,
-      "column": 24,
-      "concise_description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "line": 106,
-      "name": "unexpected-keyword",
-      "stop_column": 28,
-      "stop_line": 106
-    },
-    {
-      "code": -2,
-      "column": 18,
-      "concise_description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "line": 119,
-      "name": "unexpected-keyword",
-      "stop_column": 22,
-      "stop_line": 119
-    },
-    {
-      "code": -2,
-      "column": 24,
-      "concise_description": "Unexpected keyword argument `name` in function `object.__init__`",
-      "description": "Unexpected keyword argument `name` in function `object.__init__`",
-      "line": 119,
-      "name": "unexpected-keyword",
-      "stop_column": 33,
-      "stop_line": 119
     }
   ],
   "conformance\\third_party\\dataclasses_transform_converter.py": [
@@ -3688,19 +3508,49 @@
     },
     {
       "code": -2,
-      "column": 5,
-      "concise_description": "Expected 0 positional arguments, got 5 in function `object.__init__`",
-      "description": "Expected 0 positional arguments, got 5 in function `object.__init__`",
+      "column": 8,
+      "concise_description": "Argument `Literal['f1']` is not assignable to parameter `field1` with type `int` in function `DC2.__init__`",
+      "description": "Argument `Literal['f1']` is not assignable to parameter `field1` with type `int` in function `DC2.__init__`",
       "line": 107,
       "name": "bad-argument-type",
-      "stop_column": 6,
+      "stop_column": 12,
+      "stop_line": 107
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Argument `Literal['f2']` is not assignable to parameter `field2` with type `int` in function `DC2.__init__`",
+      "description": "Argument `Literal['f2']` is not assignable to parameter `field2` with type `int` in function `DC2.__init__`",
+      "line": 107,
+      "name": "bad-argument-type",
+      "stop_column": 18,
+      "stop_line": 107
+    },
+    {
+      "code": -2,
+      "column": 20,
+      "concise_description": "Argument `Literal[b'f3']` is not assignable to parameter `field3` with type `ConverterClass` in function `DC2.__init__`",
+      "description": "Argument `Literal[b'f3']` is not assignable to parameter `field3` with type `ConverterClass` in function `DC2.__init__`",
+      "line": 107,
+      "name": "bad-argument-type",
+      "stop_column": 25,
+      "stop_line": 107
+    },
+    {
+      "code": -2,
+      "column": 27,
+      "concise_description": "Argument `list[@_]` is not assignable to parameter `field4` with type `int` in function `DC2.__init__`",
+      "description": "Argument `list[@_]` is not assignable to parameter `field4` with type `int` in function `DC2.__init__`",
+      "line": 107,
+      "name": "bad-argument-type",
+      "stop_column": 29,
       "stop_line": 107
     },
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Expected 0 positional arguments, got 5 in function `object.__init__`",
-      "description": "Expected 0 positional arguments, got 5 in function `object.__init__`",
+      "concise_description": "Argument `Literal['f0']` is not assignable to parameter `field0` with type `int` in function `DC2.__init__`",
+      "description": "Argument `Literal['f0']` is not assignable to parameter `field0` with type `int` in function `DC2.__init__`",
       "line": 108,
       "name": "bad-argument-type",
       "stop_column": 9,
@@ -3708,9 +3558,49 @@
     },
     {
       "code": -2,
+      "column": 11,
+      "concise_description": "Argument `Literal['f1']` is not assignable to parameter `field1` with type `int` in function `DC2.__init__`",
+      "description": "Argument `Literal['f1']` is not assignable to parameter `field1` with type `int` in function `DC2.__init__`",
+      "line": 108,
+      "name": "bad-argument-type",
+      "stop_column": 15,
+      "stop_line": 108
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Argument `Literal['f2']` is not assignable to parameter `field2` with type `int` in function `DC2.__init__`",
+      "description": "Argument `Literal['f2']` is not assignable to parameter `field2` with type `int` in function `DC2.__init__`",
+      "line": 108,
+      "name": "bad-argument-type",
+      "stop_column": 21,
+      "stop_line": 108
+    },
+    {
+      "code": -2,
+      "column": 23,
+      "concise_description": "Argument `Literal[1]` is not assignable to parameter `field3` with type `ConverterClass` in function `DC2.__init__`",
+      "description": "Argument `Literal[1]` is not assignable to parameter `field3` with type `ConverterClass` in function `DC2.__init__`",
+      "line": 108,
+      "name": "bad-argument-type",
+      "stop_column": 24,
+      "stop_line": 108
+    },
+    {
+      "code": -2,
+      "column": 26,
+      "concise_description": "Argument `list[@_]` is not assignable to parameter `field4` with type `int` in function `DC2.__init__`",
+      "description": "Argument `list[@_]` is not assignable to parameter `field4` with type `int` in function `DC2.__init__`",
+      "line": 108,
+      "name": "bad-argument-type",
+      "stop_column": 28,
+      "stop_line": 108
+    },
+    {
+      "code": -2,
       "column": 5,
-      "concise_description": "Expected 0 positional arguments, got 5 in function `object.__init__`",
-      "description": "Expected 0 positional arguments, got 5 in function `object.__init__`",
+      "concise_description": "Argument `Literal['f0']` is not assignable to parameter `field0` with type `int` in function `DC2.__init__`",
+      "description": "Argument `Literal['f0']` is not assignable to parameter `field0` with type `int` in function `DC2.__init__`",
       "line": 109,
       "name": "bad-argument-type",
       "stop_column": 9,
@@ -3719,11 +3609,91 @@
     {
       "code": -2,
       "column": 11,
-      "concise_description": "Expected 0 positional arguments, got 5 in function `object.__init__`",
-      "description": "Expected 0 positional arguments, got 5 in function `object.__init__`",
+      "concise_description": "Argument `Literal['f1']` is not assignable to parameter `field1` with type `int` in function `DC2.__init__`",
+      "description": "Argument `Literal['f1']` is not assignable to parameter `field1` with type `int` in function `DC2.__init__`",
+      "line": 109,
+      "name": "bad-argument-type",
+      "stop_column": 15,
+      "stop_line": 109
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Argument `Literal['f2']` is not assignable to parameter `field2` with type `int` in function `DC2.__init__`",
+      "description": "Argument `Literal['f2']` is not assignable to parameter `field2` with type `int` in function `DC2.__init__`",
+      "line": 109,
+      "name": "bad-argument-type",
+      "stop_column": 21,
+      "stop_line": 109
+    },
+    {
+      "code": -2,
+      "column": 23,
+      "concise_description": "Argument `Literal['f3']` is not assignable to parameter `field3` with type `ConverterClass` in function `DC2.__init__`",
+      "description": "Argument `Literal['f3']` is not assignable to parameter `field3` with type `ConverterClass` in function `DC2.__init__`",
+      "line": 109,
+      "name": "bad-argument-type",
+      "stop_column": 27,
+      "stop_line": 109
+    },
+    {
+      "code": -2,
+      "column": 29,
+      "concise_description": "Argument `complex` is not assignable to parameter `field4` with type `int` in function `DC2.__init__`",
+      "description": "Argument `complex` is not assignable to parameter `field4` with type `int` in function `DC2.__init__`",
+      "line": 109,
+      "name": "bad-argument-type",
+      "stop_column": 31,
+      "stop_line": 109
+    },
+    {
+      "code": -2,
+      "column": 11,
+      "concise_description": "Argument `Literal['f0']` is not assignable to parameter `field0` with type `int` in function `DC2.__init__`",
+      "description": "Argument `Literal['f0']` is not assignable to parameter `field0` with type `int` in function `DC2.__init__`",
       "line": 112,
       "name": "bad-argument-type",
       "stop_column": 15,
+      "stop_line": 112
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Argument `Literal['f1']` is not assignable to parameter `field1` with type `int` in function `DC2.__init__`",
+      "description": "Argument `Literal['f1']` is not assignable to parameter `field1` with type `int` in function `DC2.__init__`",
+      "line": 112,
+      "name": "bad-argument-type",
+      "stop_column": 21,
+      "stop_line": 112
+    },
+    {
+      "code": -2,
+      "column": 23,
+      "concise_description": "Argument `Literal['f2']` is not assignable to parameter `field2` with type `int` in function `DC2.__init__`",
+      "description": "Argument `Literal['f2']` is not assignable to parameter `field2` with type `int` in function `DC2.__init__`",
+      "line": 112,
+      "name": "bad-argument-type",
+      "stop_column": 27,
+      "stop_line": 112
+    },
+    {
+      "code": -2,
+      "column": 29,
+      "concise_description": "Argument `Literal[b'f6']` is not assignable to parameter `field3` with type `ConverterClass` in function `DC2.__init__`",
+      "description": "Argument `Literal[b'f6']` is not assignable to parameter `field3` with type `ConverterClass` in function `DC2.__init__`",
+      "line": 112,
+      "name": "bad-argument-type",
+      "stop_column": 34,
+      "stop_line": 112
+    },
+    {
+      "code": -2,
+      "column": 36,
+      "concise_description": "Argument `list[@_]` is not assignable to parameter `field4` with type `int` in function `DC2.__init__`",
+      "description": "Argument `list[@_]` is not assignable to parameter `field4` with type `int` in function `DC2.__init__`",
+      "line": 112,
+      "name": "bad-argument-type",
+      "stop_column": 38,
       "stop_line": 112
     },
     {
@@ -3769,11 +3739,61 @@
     {
       "code": -2,
       "column": 11,
-      "concise_description": "Expected 0 positional arguments, got 6 in function `object.__init__`",
-      "description": "Expected 0 positional arguments, got 6 in function `object.__init__`",
+      "concise_description": "Argument `Literal['f0']` is not assignable to parameter `field0` with type `int` in function `DC2.__init__`",
+      "description": "Argument `Literal['f0']` is not assignable to parameter `field0` with type `int` in function `DC2.__init__`",
       "line": 121,
       "name": "bad-argument-type",
       "stop_column": 15,
+      "stop_line": 121
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Argument `Literal['f1']` is not assignable to parameter `field1` with type `int` in function `DC2.__init__`",
+      "description": "Argument `Literal['f1']` is not assignable to parameter `field1` with type `int` in function `DC2.__init__`",
+      "line": 121,
+      "name": "bad-argument-type",
+      "stop_column": 21,
+      "stop_line": 121
+    },
+    {
+      "code": -2,
+      "column": 23,
+      "concise_description": "Argument `Literal['f2']` is not assignable to parameter `field2` with type `int` in function `DC2.__init__`",
+      "description": "Argument `Literal['f2']` is not assignable to parameter `field2` with type `int` in function `DC2.__init__`",
+      "line": 121,
+      "name": "bad-argument-type",
+      "stop_column": 27,
+      "stop_line": 121
+    },
+    {
+      "code": -2,
+      "column": 29,
+      "concise_description": "Argument `Literal['f6']` is not assignable to parameter `field3` with type `ConverterClass` in function `DC2.__init__`",
+      "description": "Argument `Literal['f6']` is not assignable to parameter `field3` with type `ConverterClass` in function `DC2.__init__`",
+      "line": 121,
+      "name": "bad-argument-type",
+      "stop_column": 33,
+      "stop_line": 121
+    },
+    {
+      "code": -2,
+      "column": 35,
+      "concise_description": "Argument `Literal['1']` is not assignable to parameter `field4` with type `int` in function `DC2.__init__`",
+      "description": "Argument `Literal['1']` is not assignable to parameter `field4` with type `int` in function `DC2.__init__`",
+      "line": 121,
+      "name": "bad-argument-type",
+      "stop_column": 38,
+      "stop_line": 121
+    },
+    {
+      "code": -2,
+      "column": 40,
+      "concise_description": "Argument `tuple[tuple[Literal['a'], Literal['1']], tuple[Literal['b'], Literal['2']]]` is not assignable to parameter `field5` with type `dict[str, str]` in function `DC2.__init__`",
+      "description": "Argument `tuple[tuple[Literal['a'], Literal['1']], tuple[Literal['b'], Literal['2']]]` is not assignable to parameter `field5` with type `dict[str, str]` in function `DC2.__init__`",
+      "line": 121,
+      "name": "bad-argument-type",
+      "stop_column": 64,
       "stop_line": 121
     },
     {
@@ -3969,88 +3989,18 @@
       "name": "missing-attribute",
       "stop_column": 17,
       "stop_line": 73
-    },
-    {
-      "code": -2,
-      "column": 18,
-      "concise_description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "line": 94,
-      "name": "unexpected-keyword",
-      "stop_column": 22,
-      "stop_line": 94
-    },
-    {
-      "code": -2,
-      "column": 24,
-      "concise_description": "Unexpected keyword argument `name` in function `object.__init__`",
-      "description": "Unexpected keyword argument `name` in function `object.__init__`",
-      "line": 94,
-      "name": "unexpected-keyword",
-      "stop_column": 33,
-      "stop_line": 94
     }
   ],
   "conformance\\third_party\\dataclasses_transform_meta.py": [
     {
       "code": -2,
-      "column": 18,
-      "concise_description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "line": 60,
-      "name": "unexpected-keyword",
-      "stop_column": 22,
-      "stop_line": 60
-    },
-    {
-      "code": -2,
-      "column": 24,
-      "concise_description": "Unexpected keyword argument `name` in function `object.__init__`",
-      "description": "Unexpected keyword argument `name` in function `object.__init__`",
-      "line": 60,
-      "name": "unexpected-keyword",
-      "stop_column": 34,
-      "stop_line": 60
-    },
-    {
-      "code": -2,
       "column": 36,
-      "concise_description": "Unexpected keyword argument `other_name` in function `object.__init__`",
-      "description": "Unexpected keyword argument `other_name` in function `object.__init__`",
+      "concise_description": "Unexpected keyword argument `other_name` in function `Customer1.__init__`",
+      "description": "Unexpected keyword argument `other_name` in function `Customer1.__init__`",
       "line": 60,
       "name": "unexpected-keyword",
       "stop_column": 54,
       "stop_line": 60
-    },
-    {
-      "code": -2,
-      "column": 18,
-      "concise_description": "Expected 0 positional arguments, got 2 in function `object.__init__`",
-      "description": "Expected 0 positional arguments, got 2 in function `object.__init__`",
-      "line": 66,
-      "name": "bad-argument-type",
-      "stop_column": 19,
-      "stop_line": 66
-    },
-    {
-      "code": -2,
-      "column": 18,
-      "concise_description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "line": 69,
-      "name": "unexpected-keyword",
-      "stop_column": 22,
-      "stop_line": 69
-    },
-    {
-      "code": -2,
-      "column": 24,
-      "concise_description": "Unexpected keyword argument `name` in function `object.__init__`",
-      "description": "Unexpected keyword argument `name` in function `object.__init__`",
-      "line": 69,
-      "name": "unexpected-keyword",
-      "stop_column": 35,
-      "stop_line": 69
     },
     {
       "code": -2,
@@ -4064,36 +4014,6 @@
     },
     {
       "code": -2,
-      "column": 18,
-      "concise_description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "line": 75,
-      "name": "unexpected-keyword",
-      "stop_column": 22,
-      "stop_line": 75
-    },
-    {
-      "code": -2,
-      "column": 24,
-      "concise_description": "Unexpected keyword argument `name` in function `object.__init__`",
-      "description": "Unexpected keyword argument `name` in function `object.__init__`",
-      "line": 75,
-      "name": "unexpected-keyword",
-      "stop_column": 35,
-      "stop_line": 75
-    },
-    {
-      "code": -2,
-      "column": 18,
-      "concise_description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "line": 77,
-      "name": "unexpected-keyword",
-      "stop_column": 22,
-      "stop_line": 77
-    },
-    {
-      "code": -2,
       "column": 6,
       "concise_description": "`<` is not supported between `Customer2` and `Customer2`",
       "description": "`<` is not supported between `Customer2` and `Customer2`\n  Cannot find `__lt__` or `__gt__`",
@@ -4101,36 +4021,6 @@
       "name": "missing-attribute",
       "stop_column": 17,
       "stop_line": 79
-    },
-    {
-      "code": -2,
-      "column": 18,
-      "concise_description": "Expected 0 positional arguments, got 2 in function `object.__init__`",
-      "description": "Expected 0 positional arguments, got 2 in function `object.__init__`",
-      "line": 83,
-      "name": "bad-argument-type",
-      "stop_column": 19,
-      "stop_line": 83
-    },
-    {
-      "code": -2,
-      "column": 18,
-      "concise_description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "description": "Unexpected keyword argument `id` in function `object.__init__`",
-      "line": 100,
-      "name": "unexpected-keyword",
-      "stop_column": 22,
-      "stop_line": 100
-    },
-    {
-      "code": -2,
-      "column": 24,
-      "concise_description": "Unexpected keyword argument `name` in function `object.__init__`",
-      "description": "Unexpected keyword argument `name` in function `object.__init__`",
-      "line": 100,
-      "name": "unexpected-keyword",
-      "stop_column": 33,
-      "stop_line": 100
     }
   ],
   "conformance\\third_party\\dataclasses_usage.py": [

@@ -22,6 +22,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::class::base_class::BaseClass;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::class_metadata::ClassMetadata;
+use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::types::class_metadata::EnumMetadata;
 use crate::alt::types::class_metadata::NamedTupleMetadata;
@@ -33,6 +34,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::kind::ErrorKind;
 use crate::graph::index::Idx;
 use crate::module::module_name::ModuleName;
+use crate::types::callable::BoolKeywords;
 use crate::types::callable::FunctionKind;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
@@ -115,6 +117,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn protocol_metadata(cls: &Class, bases: &[BaseClass]) -> Option<ProtocolMetadata> {
+        if bases.iter().any(|x| matches!(x, BaseClass::Protocol(_))) {
+            Some(ProtocolMetadata {
+                members: cls.fields().cloned().collect(),
+                is_runtime_checkable: false,
+            })
+        } else {
+            None
+        }
+    }
+
     pub fn class_metadata_of(
         &self,
         cls: &Class,
@@ -133,16 +146,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(special_base) = special_base {
             bases.push((**special_base).clone());
         }
-        let mut protocol_metadata = if bases.iter().any(|x| matches!(x, BaseClass::Protocol(_))) {
-            Some(ProtocolMetadata {
-                members: cls.fields().cloned().collect(),
-                is_runtime_checkable: false,
-            })
-        } else {
-            None
-        };
+        let mut protocol_metadata = Self::protocol_metadata(cls, bases.as_slice());
+
         let mut has_base_any = false;
         let mut has_generic_base_class = false;
+        // This is set when we should apply dataclass-like transformations to the class. The class
+        // should be transformed if:
+        // - it inherits from a base class decorated with `dataclass_transform(...)`, or
+        // - it inherits from a base class whose metaclass is decorated with `dataclass_transform(...)`, or
+        // - it is decorated with a decorator that is decorated with `dataclass_transform(...)`.
+        let mut dataclass_defaults_from_dataclass_transform = None;
         let bases_with_metadata = bases
             .iter()
             .filter_map(|x| {
@@ -159,7 +172,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         has_generic_base_class = true;
                         None
                     }
-                    _ => None,
+                    // Skip over empty generic. Empty protocol is only relevant for `protocol_metadata`, defined
+                    // above so we can skip it here.
+                    BaseClass::Generic(_) | BaseClass::Protocol(_) => None
                 };
                 if is_new_type {
                     self.new_type_base(base_type_and_range, cls.range(), errors)
@@ -222,6 +237,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 // If we inherit from a dataclass, inherit its metadata. Note that if this class is
                                 // itself decorated with @dataclass, we'll compute new metadata and overwrite this.
                                 dataclass_metadata = Some(base_dataclass.inherit());
+                            }
+                            if let Some(m) = base_class_metadata.dataclass_transform_metadata() {
+                                dataclass_defaults_from_dataclass_transform = Some(m.clone());
                             }
                             Some((c, base_class_metadata))
                         }
@@ -316,6 +334,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &base_metaclasses,
             errors,
         );
+        // This is set when a class is decorated with `@typing.dataclass_transform(...)`. Note that
+        // this does not turn the class into a dataclass! Instead, it becomes a special base class
+        // (or metaclass) that turns child classes into dataclasses.
+        let mut dataclass_transform_metadata = None;
+        if let Some(c) = &metaclass
+            && let Some(m) = self
+                .get_metadata_for_class(c.class_object())
+                .dataclass_transform_metadata()
+        {
+            dataclass_transform_metadata = Some(m.clone());
+        }
         let empty_tparams = self.get_class_tparams(cls).is_empty();
         if let Some(metaclass) = &metaclass {
             self.check_base_class_metaclasses(cls, metaclass, &base_metaclasses, errors);
@@ -376,13 +405,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut total_ordering_metadata = None;
         for (decorator_key, decorator_range) in decorators {
             let decorator = self.get_idx(*decorator_key);
-            match decorator.ty().callee_kind() {
+            let decorator_ty = decorator.ty();
+            match decorator_ty.callee_kind() {
                 Some(CalleeKind::Function(FunctionKind::Dataclass(kws))) => {
                     let dataclass_fields = self.get_dataclass_fields(cls, &bases_with_metadata);
                     dataclass_metadata = Some(DataclassMetadata {
                         fields: dataclass_fields,
                         kws: *kws,
                     });
+                }
+                Some(CalleeKind::Function(_))
+                    if let Some(m) = decorator_ty.dataclass_transform_metadata() =>
+                {
+                    dataclass_defaults_from_dataclass_transform = Some(m);
                 }
                 Some(CalleeKind::Function(FunctionKind::Final)) => {
                     is_final = true;
@@ -405,8 +440,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         location: *decorator_range,
                     });
                 }
+                Some(CalleeKind::DataclassTransformDecorator(kws)) => {
+                    dataclass_transform_metadata = Some(kws);
+                }
                 _ => {}
             }
+        }
+        if dataclass_metadata.is_none()
+            && let Some(_) = dataclass_defaults_from_dataclass_transform
+        {
+            // TODO(rechen): Take keyword values to `dataclass_transform(...)` into account.
+            let dataclass_fields = self.get_dataclass_fields(cls, &bases_with_metadata);
+            dataclass_metadata = Some(DataclassMetadata {
+                fields: dataclass_fields,
+                kws: BoolKeywords::new(),
+            });
         }
         if is_typed_dict
             && let Some(bad) = bases_with_metadata.iter().find(|x| !x.1.is_typed_dict())
@@ -451,6 +499,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_final,
             has_unknown_tparams,
             total_ordering_metadata,
+            dataclass_transform_metadata,
             errors,
         )
     }
@@ -581,5 +630,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None
             }
         }
+    }
+
+    pub fn calculate_class_mro(&self, cls: &Class, errors: &ErrorCollector) -> ClassMro {
+        let metadata = self.get_metadata_for_class(cls);
+        let bases_with_mros = metadata
+            .bases_with_metadata()
+            .iter()
+            .map(|(base, _)| {
+                let mro = self.get_mro_for_class(base.class_object());
+                (base, mro)
+            })
+            .collect();
+        ClassMro::new(cls, bases_with_mros, errors)
     }
 }

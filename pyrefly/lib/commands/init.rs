@@ -17,10 +17,14 @@ use pyrefly_util::fs_anyhow;
 use tracing::error;
 use tracing::info;
 
+use crate::commands::check;
 use crate::commands::config_migration;
 use crate::commands::config_migration::write_pyproject;
+use crate::commands::globs_and_config_getter;
 use crate::commands::run::CommandExitStatus;
 use crate::config::config::ConfigFile;
+
+const MAX_ERRORS_TO_PROMPT_SUPPRESSION: usize = 100;
 
 // This should likely be moved into config.rs
 #[derive(Clone, Debug, Parser, Copy, Display)]
@@ -118,15 +122,94 @@ impl Args {
     }
 
     pub fn run(&self) -> anyhow::Result<CommandExitStatus> {
+        // 1. Create Pyrefly Config
         let create_config_result = self.create_config();
+
         match create_config_result {
-            Err(_) => create_config_result,
-            Ok(status) if status != CommandExitStatus::Success => create_config_result,
-            _ => Ok(CommandExitStatus::Success),
+            Err(e) => Err(e),
+            Ok((status, _)) if status != CommandExitStatus::Success => Ok(status),
+            Ok((_, config_path)) => {
+                // 2. Run pyrefly check
+                let check_result = self.run_check(config_path.clone());
+
+                // Check if there are errors and if there are fewer than 100
+                if let Ok((_, error_count)) = check_result {
+                    if error_count == 0 {
+                        return Ok(CommandExitStatus::Success);
+                    }
+                    // 3a. Prompt error suppression if there are less than the maximum number of errors
+                    else if error_count <= MAX_ERRORS_TO_PROMPT_SUPPRESSION {
+                        return self.prompt_error_suppression(config_path, error_count);
+                    }
+                }
+                Ok(CommandExitStatus::Success)
+            }
         }
     }
 
-    fn create_config(&self) -> anyhow::Result<CommandExitStatus> {
+    fn run_check(
+        &self,
+        config_path: Option<PathBuf>,
+    ) -> anyhow::Result<(CommandExitStatus, usize)> {
+        info!("Running pyrefly check...");
+
+        // Create check args by parsing arguments with output-format set to errors-omitted
+        let mut check_args = check::Args::parse_from(["check", "--output-format", "omit-errors"]);
+
+        // Use get to get the filtered globs and config finder
+        let (filtered_globs, config_finder) =
+            globs_and_config_getter::get(Vec::new(), None, config_path, &mut check_args)?;
+
+        // Run the check directly
+        match check_args.run_once(filtered_globs, config_finder, true) {
+            Ok((status, error_count)) => Ok((status, error_count)),
+            Err(e) => {
+                error!("Failed to run pyrefly check: {}", e);
+                Ok((CommandExitStatus::Success, 0)) // Still return success to match original behavior
+            }
+        }
+    }
+
+    fn prompt_error_suppression(
+        &self,
+        config_path: Option<PathBuf>,
+        error_count: usize,
+    ) -> anyhow::Result<CommandExitStatus> {
+        let prompt = format!(
+            "Found {} errors. Would you like to suppress them? (y/N): ",
+            error_count
+        );
+
+        if Self::prompt_user_confirmation(&prompt) {
+            info!("Running pyrefly check with suppress-errors flag...");
+
+            // Create check args with suppress-errors flag
+            let mut suppress_args = check::Args::parse_from([
+                "check",
+                "--suppress-errors",
+                "--output-format",
+                "errors-omitted",
+                "--no-summary",
+            ]);
+
+            // Use get to get the filtered globs and config finder
+            let (suppress_globs, suppress_config_finder) =
+                globs_and_config_getter::get(Vec::new(), None, config_path, &mut suppress_args)?;
+
+            // Run the check with suppress-errors flag
+            match suppress_args.run_once(suppress_globs, suppress_config_finder, true) {
+                Ok(_) => return Ok(CommandExitStatus::Success),
+                Err(e) => {
+                    error!("Failed to run pyrefly check with suppress-errors: {}", e);
+                    return Ok(CommandExitStatus::Success); // Still return success to match original behavior
+                }
+            }
+        }
+
+        Ok(CommandExitStatus::Success)
+    }
+
+    fn create_config(&self) -> anyhow::Result<(CommandExitStatus, Option<PathBuf>)> {
         let path = self.path.absolutize()?.to_path_buf();
 
         let dir: Option<&Path> = if path.is_dir() {
@@ -142,7 +225,7 @@ impl Args {
                 dir.display()
             );
             if !Self::prompt_user_confirmation(&prompt) {
-                return Ok(CommandExitStatus::UserError);
+                return Ok((CommandExitStatus::UserError, None));
             }
         }
 
@@ -154,10 +237,11 @@ impl Args {
         if found_mypy || found_pyright {
             println!("Found an existing type checking configuration - setting up pyrefly ...");
             let args = config_migration::Args {
-                original_config_path: Some(path),
+                original_config_path: Some(path.clone()),
             };
             match args.run() {
-                Ok((status, _)) => return Ok(status),
+                Ok((status, Some(config_path))) => return Ok((status, Some(config_path))),
+                Ok((status, None)) => return Ok((status, None)),
                 Err(e) => return Err(e),
             }
         }
@@ -179,7 +263,7 @@ impl Args {
             };
             write_pyproject(&config_path, cfg)?;
             info!("Config written to `{}`", config_path.display());
-            return Ok(CommandExitStatus::Success);
+            return Ok((CommandExitStatus::Success, Some(config_path)));
         }
 
         // 4. Initialize pyrefly.toml configuration in the case that there are no existing Mypy or Pyright configurations and user didn't specify a pyproject.toml
@@ -189,18 +273,18 @@ impl Args {
             path
         } else if !path.exists() {
             error!("Path `{}` does not exist", path.display());
-            return Ok(CommandExitStatus::UserError);
+            return Ok((CommandExitStatus::UserError, None));
         } else {
             error!(
                 "Pyrefly configs must reside in `pyrefly.toml` or `pyproject.toml`, not `{}`",
                 path.display()
             );
-            return Ok(CommandExitStatus::UserError);
+            return Ok((CommandExitStatus::UserError, None));
         };
         let serialized = toml::to_string_pretty(&cfg)?;
         fs_anyhow::write(&config_path, serialized.as_bytes())?;
         info!("New config written to `{}`", config_path.display());
-        Ok(CommandExitStatus::Success)
+        Ok((CommandExitStatus::Success, Some(config_path)))
     }
 }
 

@@ -22,13 +22,13 @@ use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
+use crate::python::sys_info::PythonPlatform;
+use crate::python::sys_info::PythonVersion;
+use crate::python::sys_info::SysInfo;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::subscriber::TestSubscriber;
-use crate::sys_info::PythonPlatform;
-use crate::sys_info::PythonVersion;
-use crate::sys_info::SysInfo;
 use crate::test::util::TestEnv;
 use crate::test::util::init_test;
 

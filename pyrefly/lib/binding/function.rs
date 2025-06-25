@@ -52,8 +52,8 @@ use crate::config::base::UntypedDefBehavior;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::module::short_identifier::ShortIdentifier;
-use crate::ruff::ast::Ast;
-use crate::sys_info::SysInfo;
+use crate::python::ast::Ast;
+use crate::python::sys_info::SysInfo;
 use crate::types::types::Type;
 
 struct Decorators {

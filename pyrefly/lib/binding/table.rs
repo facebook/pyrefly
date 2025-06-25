@@ -35,6 +35,7 @@ macro_rules! table {
             $($vis)* variance: $t<$crate::binding::binding::KeyVariance>,
             $($vis)* annotations: $t<$crate::binding::binding::KeyAnnotation>,
             $($vis)* class_metadata: $t<$crate::binding::binding::KeyClassMetadata>,
+            $($vis)* class_mros: $t<$crate::binding::binding::KeyClassMro>,
             $($vis)* legacy_tparams: $t<$crate::binding::binding::KeyLegacyTypeParam>,
             $($vis)* yields: $t<$crate::binding::binding::KeyYield>,
             $($vis)* yield_froms: $t<$crate::binding::binding::KeyYieldFrom>,
@@ -106,6 +107,12 @@ macro_rules! table {
             fn get_mut(&mut self) -> &mut Self::Value { &mut self.class_metadata }
         }
 
+        impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyClassMro> for $name {
+            type Value = $t<$crate::binding::binding::KeyClassMro>;
+            fn get(&self) -> &Self::Value { &self.class_mros }
+            fn get_mut(&mut self) -> &mut Self::Value { &mut self.class_mros }
+        }
+
         impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyLegacyTypeParam> for $name {
             type Value = $t<$crate::binding::binding::KeyLegacyTypeParam>;
             fn get(&self) -> &Self::Value { &self.legacy_tparams }
@@ -158,6 +165,7 @@ macro_rules! table_for_each(
         $f(&($e).variance);
         $f(&($e).annotations);
         $f(&($e).class_metadata);
+        $f(&($e).class_mros);
         $f(&($e).legacy_tparams);
         $f(&($e).yields);
         $f(&($e).yield_froms);
@@ -178,6 +186,7 @@ macro_rules! table_mut_for_each(
         $f(&mut ($e).variance);
         $f(&mut ($e).annotations);
         $f(&mut ($e).class_metadata);
+        $f(&mut ($e).class_mros);
         $f(&mut ($e).legacy_tparams);
         $f(&mut ($e).yields);
         $f(&mut ($e).yield_froms);
@@ -198,6 +207,7 @@ macro_rules! table_try_for_each(
         $f(&($e).variance)?;
         $f(&($e).annotations)?;
         $f(&($e).class_metadata)?;
+        $f(&($e).class_mros)?;
         $f(&($e).legacy_tparams)?;
         $f(&($e).yields)?;
         $f(&($e).yield_froms)?;

@@ -6,10 +6,10 @@
  */
 
 use pretty_assertions::assert_eq;
+use pyrefly_util::lined_buffer::SourceRange;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
-use crate::module::module_info::SourceRange;
 use crate::state::handle::Handle;
 use crate::state::state::State;
 use crate::state::state::Transaction;

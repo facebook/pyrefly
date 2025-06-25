@@ -12,6 +12,7 @@ use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprList;
+use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprUnaryOp;
 use ruff_python_ast::Number;
 use ruff_python_ast::UnaryOp;
@@ -172,14 +173,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match x {
             Expr::UnaryOp(ExprUnaryOp {
                 op: UnaryOp::UAdd,
-                operand: box Expr::NumberLiteral(n),
+                operand,
                 ..
-            }) if let Number::Int(i) = &n.value => literals.push(LitInt::from_ast(i).to_type()),
+            }) if let Expr::NumberLiteral(ExprNumberLiteral {
+                value: Number::Int(i),
+                ..
+            }) = &**operand =>
+            {
+                literals.push(LitInt::from_ast(i).to_type())
+            }
             Expr::UnaryOp(ExprUnaryOp {
                 op: UnaryOp::USub,
-                operand: box Expr::NumberLiteral(n),
+                operand,
                 ..
-            }) if let Number::Int(i) = &n.value => {
+            }) if let Expr::NumberLiteral(ExprNumberLiteral {
+                value: Number::Int(i),
+                ..
+            }) = &**operand =>
+            {
                 literals.push(LitInt::from_ast(i).negate().to_type())
             }
             Expr::NumberLiteral(n) if let Number::Int(i) = &n.value => {

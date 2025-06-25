@@ -17,6 +17,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::VarianceMap;
 use crate::alt::types::class_metadata::ClassMetadata;
+use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
@@ -29,6 +30,7 @@ use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassField;
 use crate::binding::binding::BindingClassMetadata;
+use crate::binding::binding::BindingClassMro;
 use crate::binding::binding::BindingClassSynthesizedFields;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingExport;
@@ -45,6 +47,7 @@ use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
+use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyExport;
@@ -96,6 +99,9 @@ impl SolveRecursive for KeyAnnotation {
     type Recursive = ();
 }
 impl SolveRecursive for KeyClassMetadata {
+    type Recursive = ();
+}
+impl SolveRecursive for KeyClassMro {
     type Recursive = ();
 }
 impl SolveRecursive for KeyLegacyTypeParam {
@@ -337,13 +343,29 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassMetadata {
         binding: &BindingClassMetadata,
         errors: &ErrorCollector,
     ) -> Arc<ClassMetadata> {
-        answers.solve_mro(binding, errors)
+        answers.solve_class_metadata(binding, errors)
     }
 
     fn create_recursive(_answers: &AnswersSolver<Ans>, _: &Self::Value) -> Self::Recursive {}
 
     fn promote_recursive(_: Self::Recursive) -> Self::Answer {
         ClassMetadata::recursive()
+    }
+}
+
+impl<Ans: LookupAnswer> Solve<Ans> for KeyClassMro {
+    fn solve(
+        answers: &AnswersSolver<Ans>,
+        binding: &BindingClassMro,
+        errors: &ErrorCollector,
+    ) -> Arc<ClassMro> {
+        answers.solve_class_mro(binding, errors)
+    }
+
+    fn create_recursive(_answers: &AnswersSolver<Ans>, _: &Self::Value) -> Self::Recursive {}
+
+    fn promote_recursive(_: Self::Recursive) -> Self::Answer {
+        ClassMro::recursive()
     }
 }
 
