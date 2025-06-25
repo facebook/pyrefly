@@ -374,7 +374,9 @@ impl ClassField {
     /// Check if this field is read-only for any reason.
     pub fn is_read_only(&self) -> bool {
         match &self.0 {
-            ClassFieldInner::Simple { readonly_reason, .. } => readonly_reason.is_some(),
+            ClassFieldInner::Simple {
+                readonly_reason, ..
+            } => readonly_reason.is_some(),
         }
     }
 
@@ -399,7 +401,10 @@ impl ClassField {
         // 2. Check class-level properties
         let metadata = solver.get_metadata_for_class(cls);
 
-        if metadata.named_tuple_metadata().is_some_and(|nt| nt.elements.contains(name)) {
+        if metadata
+            .named_tuple_metadata()
+            .is_some_and(|nt| nt.elements.contains(name))
+        {
             return Some(ReadOnlyReason::NamedTupleField);
         }
 
@@ -841,8 +846,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ty = self.solver().deep_force(ty);
 
         // Determine readonly reason
-        let readonly =
-            ClassField::determine_readonly_reason(class, name, &annotation.cloned(), &initialization, self);
+        let readonly = ClassField::determine_readonly_reason(
+            class,
+            name,
+            &annotation.cloned(),
+            &initialization,
+            self,
+        );
 
         // Create the resulting field and check for override inconsistencies before returning
         let class_field = ClassField::new(

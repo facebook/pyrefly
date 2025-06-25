@@ -3101,6 +3101,16 @@
     {
       "code": -2,
       "column": 1,
+      "concise_description": "Cannot assign to field `final_with_default`; it is marked as Final",
+      "description": "Cannot assign to field `final_with_default`; it is marked as Final",
+      "line": 36,
+      "name": "read-only",
+      "stop_column": 21,
+      "stop_line": 36
+    },
+    {
+      "code": -2,
+      "column": 1,
       "concise_description": "Instance-only attribute `final_no_default` of class `D` is not visible on the class",
       "description": "Instance-only attribute `final_no_default` of class `D` is not visible on the class",
       "line": 37,
@@ -7094,7 +7104,7 @@
       "stop_line": 194
     }
   ],
-  "historical_positional.py": [
+  "conformance\\third_party\\historical_positional.py": [
     {
       "code": -2,
       "column": 4,
@@ -7136,7 +7146,7 @@
       "stop_line": 43
     }
   ],
-  "literals_interactions.py": [
+  "conformance\\third_party\\literals_interactions.py": [
     {
       "code": -2,
       "column": 5,
@@ -8969,6 +8979,16 @@
     },
     {
       "code": -2,
+      "column": 9,
+      "concise_description": "Cannot assign to field `ID5`; it is marked as Final",
+      "description": "Cannot assign to field `ID5`; it is marked as Final",
+      "line": 54,
+      "name": "read-only",
+      "stop_column": 17,
+      "stop_line": 54
+    },
+    {
+      "code": -2,
       "column": 14,
       "concise_description": "Attribute `id3` is implicitly defined by assignment in method `method1`, which is not a constructor",
       "description": "Attribute `id3` is implicitly defined by assignment in method `method1`, which is not a constructor",
@@ -8986,6 +9006,26 @@
       "name": "implicitly-defined-attribute",
       "stop_column": 17,
       "stop_line": 63
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Cannot assign to field `ID7`; it is marked as Final",
+      "description": "Cannot assign to field `ID7`; it is marked as Final",
+      "line": 65,
+      "name": "read-only",
+      "stop_column": 17,
+      "stop_line": 65
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Cannot assign to field `ID7`; it is marked as Final",
+      "description": "Cannot assign to field `ID7`; it is marked as Final",
+      "line": 67,
+      "name": "read-only",
+      "stop_column": 17,
+      "stop_line": 67
     },
     {
       "code": -2,

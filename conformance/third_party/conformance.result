@@ -137,7 +137,6 @@
   "conformance\\third_party\\dataclasses_final.py": [
     "Line 27: Expected 1 errors",
     "Line 35: Expected 1 errors",
-    "Line 36: Expected 1 errors",
     "Line 38: Expected 1 errors"
   ],
   "conformance\\third_party\\dataclasses_frozen.py": [],
@@ -369,9 +368,9 @@
     "Lines 141, 142: Expected error (tag 'CoContra_Child5')",
     "Lines 195, 196: Expected error (tag 'ContraToContraToContra_WithTA')"
   ],
-  "generics_variance_inference.py": [],
-  "historical_positional.py": [],
-  "literals_interactions.py": [
+  "conformance\\third_party\\generics_variance_inference.py": [],
+  "conformance\\third_party\\historical_positional.py": [],
+  "conformance\\third_party\\literals_interactions.py": [
     "Line 71: Unexpected errors ['`@` is not supported between `Matrix[Literal[2], Literal[3]]` and `Matrix[Literal[3], Literal[7]]`\\n  Argument `Matrix[Literal[3], Literal[7]]` is not assignable to parameter `other` with type `Matrix[Literal[3], int]` in function `Matrix.__matmul__`']",
     "Line 72: Unexpected errors ['assert_type(Matrix[Literal[2], int], Matrix[Literal[2], Literal[7]]) failed']"
   ],
@@ -495,9 +494,6 @@
   "conformance\\third_party\\qualifiers_final_annotation.py": [
     "Line 34: Expected 1 errors",
     "Line 38: Expected 1 errors",
-    "Line 54: Expected 1 errors",
-    "Line 65: Expected 1 errors",
-    "Line 67: Expected 1 errors",
     "Line 81: Expected 1 errors",
     "Line 107: Expected 1 errors",
     "Line 149: Expected 1 errors",
