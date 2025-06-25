@@ -438,7 +438,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let fields_iter = self.names_to_fields(cls, fields);
         let self_param = self.class_self_param(cls, true);
         let make_overload = |(name, field): (&Name, TypedDictField)| {
-            if field.read_only {
+            if field.read_only.is_some() {
                 None
             } else {
                 Some(OverloadType::Callable(Callable::list(

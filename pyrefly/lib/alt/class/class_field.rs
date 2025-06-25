@@ -41,7 +41,6 @@ use crate::error::kind::ErrorKind;
 use crate::python::dunder;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
-use crate::types::readonly::ReadOnlyReason;
 use crate::types::callable::BoolKeywords;
 use crate::types::callable::DataclassKeywords;
 use crate::types::callable::FuncMetadata;
@@ -54,6 +53,7 @@ use crate::types::class::ClassType;
 use crate::types::literal::Lit;
 use crate::types::literal::LitEnum;
 use crate::types::quantified::Quantified;
+use crate::types::readonly::ReadOnlyReason;
 use crate::types::typed_dict::TypedDict;
 use crate::types::typed_dict::TypedDictField;
 use crate::types::types::BoundMethod;
@@ -304,10 +304,15 @@ impl ClassField {
                 ..
             } => Some(TypedDictField {
                 ty: ty.clone(),
-                read_only: ClassField::determine_readonly_reason(cls, name, &Some(Annotation {
-                    ty: Some(ty.clone()),
-                    qualifiers: qualifiers.clone(),
-                }), solver),
+                read_only: ClassField::determine_readonly_reason(
+                    cls,
+                    name,
+                    &Some(Annotation {
+                        ty: Some(ty.clone()),
+                        qualifiers: qualifiers.clone(),
+                    }),
+                    solver,
+                ),
                 required: if qualifiers.contains(&Qualifier::Required) {
                     true
                 } else if qualifiers.contains(&Qualifier::NotRequired) {
@@ -364,7 +369,6 @@ impl ClassField {
         }
     }
 
-
     /// Determine the readonly reason from annotation and other factors
     fn determine_readonly_reason<Ans: LookupAnswer>(
         cls: &Class,
@@ -374,9 +378,9 @@ impl ClassField {
     ) -> Option<ReadOnlyReason> {
         // 1. Check annotations first (highest precedence)
         if let Some(ann) = annotation {
-            if ann.is_final() {
-                return Some(ReadOnlyReason::Final);
-            }
+            // if ann.is_final() {
+            //     return Some(ReadOnlyReason::Final);
+            // }
             if ann.has_qualifier(&Qualifier::ReadOnly) {
                 return Some(ReadOnlyReason::ReadOnlyAnnotation);
             }
@@ -550,9 +554,10 @@ fn bind_instance_attribute(
             Some(make_bound_method(instance, attr).into_inner()),
             instance.class.dupe(),
         ),
-        attr if is_class_var => {
-            Attribute::read_only(make_bound_method(instance, attr).into_inner(), ReadOnlyReason::Inherited)
-        }
+        attr if is_class_var => Attribute::read_only(
+            make_bound_method(instance, attr).into_inner(),
+            ReadOnlyReason::Inherited,
+        ),
         attr if let Some(reason) = readonly => {
             Attribute::read_only(make_bound_method(instance, attr).into_inner(), reason)
         }
@@ -728,9 +733,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let annotation = direct_annotation.or(inherited_annotation.as_ref());
 
         // Promote literals. The check on `annotation` is an optimization, it does not (currently) affect semantics.
-        let value_ty = if (annotation.is_none_or(|a| a.ty.is_none()))
-            && value_ty.is_literal()
-        {
+        let value_ty = if (annotation.is_none_or(|a| a.ty.is_none())) && value_ty.is_literal() {
             value_ty.clone().promote_literals(self.stdlib)
         } else {
             value_ty.clone()
@@ -828,7 +831,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ty = self.solver().deep_force(ty);
 
         // Determine readonly reason
-        let readonly = ClassField::determine_readonly_reason(class, name, &annotation.cloned(), self);
+        let readonly =
+            ClassField::determine_readonly_reason(class, name, &annotation.cloned(), self);
 
         // Create the resulting field and check for override inconsistencies before returning
         let class_field = ClassField::new(
