@@ -52,6 +52,12 @@ assert_type(MyEnum.X.value, int)
 assert_type(MyEnum.X._value_, int)
 
 MyEnum["FOO"]  # E: Enum `MyEnum` does not have a member named `FOO`
+
+def foo(member: str) -> None:
+    assert_type(MyEnum[member], MyEnum)
+
+def bar(member: int) -> None:
+    MyEnum[member] # E: Enum `MyEnum` can only be indexed by strings
 "#,
 );
 

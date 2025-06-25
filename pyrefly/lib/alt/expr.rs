@@ -862,6 +862,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         )
                     }
                 }
+                Type::ClassDef(ref cls) if self.get_enum_from_class(cls).is_some() => {
+                    if self.is_subset_eq(
+                        &self.expr(slice, None, errors),
+                        &self.stdlib.str().clone().to_type(),
+                    ) {
+                        Type::ClassType(self.as_class_type_unchecked(cls))
+                    } else {
+                        self.error(
+                            errors,
+                            slice.range(),
+                            ErrorKind::IndexError,
+                            None,
+                            format!("Enum `{}` can only be indexed by strings", cls.name()),
+                        )
+                    }
+                }
                 Type::ClassDef(cls) => Type::type_form(self.specialize(
                     &cls,
                     xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors)),
