@@ -830,20 +830,56 @@ pub struct ReturnExplicit {
 }
 
 #[derive(Clone, Debug)]
+pub enum ReturnTypeKind {
+    /// We have an explicit return annotation, and we should validate it against the implicit returns
+    ShouldValidateAnnotation {
+        range: TextRange,
+        annotation: Idx<KeyAnnotation>,
+        /// Used to skip the validation for stub functions (returning `...`). This is
+        /// unsafe, but is convenient and matches Pyright's behavior.
+        stub_or_impl: FunctionStubOrImpl,
+        /// We keep this just so we can scan for `@abstractmethod` and use the info to decide
+        /// whether to skip the validation.
+        decorators: Box<[Idx<Key>]>,
+        implicit_return: Idx<Key>,
+        is_generator: bool,
+        has_explicit_return: bool,
+    },
+    /// We have an explicit return annotation, and we should blindly trust it without any validation
+    ShouldTrustAnnotation {
+        annotation: Idx<KeyAnnotation>,
+        is_generator: bool,
+    },
+    /// We don't have an explicit return annotation, and we should just act as if the return is annotated as `Any`
+    ShouldReturnAny { is_generator: bool },
+    /// We don't have an explicit return annotation, and we should do our best to infer the return type
+    ShouldInferType {
+        /// The returns from the function.
+        returns: Box<[Idx<Key>]>,
+        implicit_return: Idx<Key>,
+        /// The yeilds and yield froms. If either of these are nonempty, this is a generator function.
+        /// We don't need to store `is_generator` flag in this case, as we can deduce that info by checking
+        /// whether these two fields are empty or not.
+        yields: Box<[Idx<KeyYield>]>,
+        yield_froms: Box<[Idx<KeyYieldFrom>]>,
+    },
+}
+
+impl ReturnTypeKind {
+    pub fn has_return_annotation(&self) -> bool {
+        match self {
+            Self::ShouldValidateAnnotation { .. } => true,
+            Self::ShouldTrustAnnotation { .. } => true,
+            Self::ShouldReturnAny { .. } => false,
+            Self::ShouldInferType { .. } => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct ReturnType {
-    /// The annotation for the return type.
-    pub annot: Option<(TextRange, Idx<KeyAnnotation>)>,
-    /// The returns from the function.
-    pub returns: Box<[Idx<Key>]>,
-    pub implicit_return: Idx<Key>,
-    /// The yeilds and yield froms. If either of these are nonempty, this is a generator function.
-    pub yields: Box<[Idx<KeyYield>]>,
-    pub yield_froms: Box<[Idx<KeyYieldFrom>]>,
+    pub kind: ReturnTypeKind,
     pub is_async: bool,
-    /// Used to ignore the implicit return type for stub functions (returning `...`). This is
-    /// unsafe, but is convenient and matches Pyright's behavior.
-    pub stub_or_impl: FunctionStubOrImpl,
-    pub decorators: Box<[Idx<Key>]>,
 }
 
 #[derive(Clone, Dupe, Copy, Debug)]

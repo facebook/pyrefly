@@ -17,6 +17,8 @@ use serde::Serialize;
 use yansi::Paint;
 use yansi::Painted;
 
+use crate::types::quantified::QuantifiedKind;
+
 // IMPORTANT: these cases should be listed in order of severity
 #[derive(Debug, Clone, Dupe, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum Severity {
@@ -207,6 +209,14 @@ impl ErrorKind {
             ErrorKind::RevealType => Severity::Info,
             ErrorKind::Deprecated => Severity::Warn,
             _ => Severity::Error,
+        }
+    }
+
+    pub fn from_quantified(kind: QuantifiedKind) -> ErrorKind {
+        match kind {
+            QuantifiedKind::TypeVar => ErrorKind::InvalidTypeVar,
+            QuantifiedKind::ParamSpec => ErrorKind::InvalidParamSpec,
+            QuantifiedKind::TypeVarTuple => ErrorKind::InvalidTypeVarTuple,
         }
     }
 }

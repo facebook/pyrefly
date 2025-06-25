@@ -11,6 +11,7 @@ pub mod callable;
 pub mod class;
 pub mod display;
 pub mod equality;
+pub mod facet;
 pub mod globals;
 pub mod lit_int;
 pub mod literal;

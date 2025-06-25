@@ -1658,7 +1658,7 @@ impl<'a> Transaction<'a> {
                 key @ Key::ReturnType(id) => {
                     match bindings.get(bindings.key_to_idx(&Key::Definition(id.clone()))) {
                         Binding::Function(x, _pred, _class_meta) => {
-                            if matches!(&bindings.get(idx), Binding::ReturnType(ret) if ret.annot.is_none())
+                            if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
                                 && let Some(ty) = self.get_type(handle, key)
                                 && is_interesting_type(&ty)
                             {
@@ -1690,7 +1690,7 @@ impl<'a> Transaction<'a> {
                 key @ Key::ReturnType(id) => {
                     match bindings.get(bindings.key_to_idx(&Key::Definition(id.clone()))) {
                         Binding::Function(x, _pred, _class_meta) => {
-                            if matches!(&bindings.get(idx), Binding::ReturnType(ret) if ret.annot.is_none())
+                            if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
                                 && let Some(ty) = self.get_type(handle, key)
                                 && is_interesting_type(&ty)
                             {

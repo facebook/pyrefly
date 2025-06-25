@@ -61,7 +61,7 @@ fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
         }
         report.push('\n');
     }
-    assert_eq!(expected.trim(), report.trim());
+    assert_eq!(expected.trim(), report.trim(), "actual:\n{}", report.trim());
 }
 
 #[test]

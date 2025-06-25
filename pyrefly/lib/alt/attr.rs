@@ -1541,9 +1541,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )),
             Type::Never(_) => Some(AttributeBase::Never),
             _ if ty.is_property_getter() => Some(AttributeBase::Property(ty)),
-            Type::Callable(_) => Some(AttributeBase::ClassInstance(
-                self.stdlib.function_type().clone(),
-            )),
+            Type::Callable(_) | Type::DataclassTransformDecorator(_) => Some(
+                AttributeBase::ClassInstance(self.stdlib.function_type().clone()),
+            ),
             Type::Function(box Function {
                 signature: _,
                 metadata,

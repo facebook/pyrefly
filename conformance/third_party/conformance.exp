@@ -7054,7 +7054,48 @@
       "stop_line": 194
     }
   ],
-  "historical_positional.py": [],
+  "historical_positional.py": [
+    {
+      "code": -2,
+      "column": 4,
+      "concise_description": "Expected argument `__x` to be positional in function `f1`",
+      "description": "Expected argument `__x` to be positional in function `f1`",
+      "line": 18,
+      "name": "unexpected-keyword",
+      "stop_column": 9,
+      "stop_line": 18
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Positional-only parameter `__y` cannot appear after keyword parameters",
+      "description": "Positional-only parameter `__y` cannot appear after keyword parameters",
+      "line": 26,
+      "name": "bad-function-definition",
+      "stop_column": 19,
+      "stop_line": 26
+    },
+    {
+      "code": -2,
+      "column": 26,
+      "concise_description": "Positional-only parameter `__y` cannot appear after keyword parameters",
+      "description": "Positional-only parameter `__y` cannot appear after keyword parameters",
+      "line": 38,
+      "name": "bad-function-definition",
+      "stop_column": 29,
+      "stop_line": 38
+    },
+    {
+      "code": -2,
+      "column": 6,
+      "concise_description": "Expected argument `__x` to be positional in function `A.m1`",
+      "description": "Expected argument `__x` to be positional in function `A.m1`",
+      "line": 43,
+      "name": "unexpected-keyword",
+      "stop_column": 11,
+      "stop_line": 43
+    }
+  ],
   "literals_interactions.py": [
     {
       "code": -2,
@@ -7870,7 +7911,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "Cannot index into `Bytes`",
-      "description": "Cannot index into `Bytes`\n  No matching overload found for function `Bytes.__getitem__`\n  Possible overloads:\n  (__i: int) -> int [closest match]\n  (__s: slice[Any, Any, Any]) -> bytes",
+      "description": "Cannot index into `Bytes`\n  No matching overload found for function `Bytes.__getitem__`\n  Possible overloads:\n  (__i: int, /) -> int [closest match]\n  (__s: slice[Any, Any, Any], /) -> bytes",
       "line": 39,
       "name": "no-matching-overload",
       "stop_column": 6,

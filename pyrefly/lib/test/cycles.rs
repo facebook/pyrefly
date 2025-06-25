@@ -314,3 +314,37 @@ def iterate[T](*items: T | Iterable[T]) -> Iterator[T]:
             yield item
 "#,
 );
+
+testcase!(
+    bug = "We're seeing nondeterminism in class metadata resolution, compare to _b",
+    potential_cycle_through_generic_bases_a,
+    r#"
+from typing import assert_type
+class Node[T]:
+    @property
+    def x(self) -> T: ...
+class A(Node['B']):
+    pass
+class B(A):
+    pass
+assert_type(B().x, B)
+assert_type(A().x, B)
+"#,
+);
+
+testcase!(
+    bug = "We're seeing nondeterminism in class metadata resolution, compare to _a",
+    potential_cycle_through_generic_bases_b,
+    r#"
+from typing import assert_type
+class Node[T]:
+    @property
+    def x(self) -> T: ...
+class A(Node['B']):
+    pass
+class B(A):  # E: Class `main.B` inheriting from `main.A` creates a cycle
+    pass
+assert_type(A().x, B)
+assert_type(B().x, B)  # E: assert_type(Any, B)  # E: Object of class `B` has no attribute `x`
+"#,
+);

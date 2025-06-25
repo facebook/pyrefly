@@ -21,7 +21,6 @@ use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::AtomicNarrowOp;
-use crate::binding::narrow::FacetKind;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::narrow::NarrowingSubject;
 use crate::binding::narrow::expr_to_subjects;
@@ -29,6 +28,7 @@ use crate::binding::scope::FlowStyle;
 use crate::error::kind::ErrorKind;
 use crate::graph::index::Idx;
 use crate::ruff::ast::Ast;
+use crate::types::facet::FacetKind;
 
 impl<'a> BindingsBuilder<'a> {
     // Traverse a pattern and bind all the names; key is the reference for the value that's being matched on

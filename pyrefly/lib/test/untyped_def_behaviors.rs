@@ -38,8 +38,6 @@ assert_type(async_gen, Callable[[], AsyncGenerator[int, Any]])
 "#,
 );
 
-// TODO(stroxler): Should we do best-effort inference for awaitable and generator
-// return types here? At the moment we infer `Any` without any analysis of async or yield.
 testcase!(
     test_function_check_and_inference_with_mode_infer_return_any,
     TestEnv::new_with_untyped_def_behavior(UntypedDefBehavior::CheckAndInferReturnAny),
@@ -56,7 +54,7 @@ assert_type(f, Callable[[], Any])
 async def async_f():
     oops: int = "oops"  # E:
     return x
-assert_type(async_f, Callable[[], Any])
+assert_type(async_f, Callable[[], Coroutine[Any, Any, Any]])
 
 def gen():
     oops: int = "oops"  # E:
@@ -192,6 +190,36 @@ def annotated_return() -> None:
     x: int = "x"  # E:
 def annotated_param(_: str):
     x: int = "x"  # E:
+"#,
+);
+
+testcase!(
+    test_annotated_defs_check_and_transform_with_mode_infer_return_any,
+    TestEnv::new_with_untyped_def_behavior(UntypedDefBehavior::CheckAndInferReturnAny),
+    r#"
+from typing import assert_type, Any, Callable, Coroutine, Generator, AsyncGenerator
+
+x: int = ...  # E:
+
+def f() -> str:
+    oops: int = "oops"  # E:
+    return x  # E:
+assert_type(f, Callable[[], str])
+
+async def async_f() -> str:
+    oops: int = "oops"  # E:
+    return x  # E:
+assert_type(async_f, Callable[[], Coroutine[Any, Any, str]])
+
+def gen() -> Generator[str, Any, None]:
+    oops: int = "oops"  # E:
+    yield x  # E:
+assert_type(gen, Callable[[], Generator[str, Any, None]])
+
+async def async_gen() -> AsyncGenerator[str, Any]:
+    oops: int = "oops"  # E:
+    yield x  # E:
+assert_type(async_gen, Callable[[], AsyncGenerator[str, Any]])
 "#,
 );
 

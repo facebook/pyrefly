@@ -18,7 +18,6 @@ use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::name::Name;
 
 use crate::alt::solve::TypeFormContext;
-use crate::error::kind::ErrorKind;
 use crate::types::class::ClassType;
 use crate::types::stdlib::Stdlib;
 use crate::types::type_var::Restriction;
@@ -134,14 +133,6 @@ impl QuantifiedKind {
             QuantifiedKind::TypeVar => Type::any_implicit(),
             QuantifiedKind::ParamSpec => Type::Ellipsis,
             QuantifiedKind::TypeVarTuple => Type::any_tuple(),
-        }
-    }
-
-    pub fn error_kind(self) -> ErrorKind {
-        match self {
-            QuantifiedKind::TypeVar => ErrorKind::InvalidTypeVar,
-            QuantifiedKind::ParamSpec => ErrorKind::InvalidParamSpec,
-            QuantifiedKind::TypeVarTuple => ErrorKind::InvalidTypeVarTuple,
         }
     }
 

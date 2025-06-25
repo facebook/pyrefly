@@ -40,6 +40,7 @@ use crate::binding::binding::LastStmt;
 use crate::binding::binding::ReturnExplicit;
 use crate::binding::binding::ReturnImplicit;
 use crate::binding::binding::ReturnType;
+use crate::binding::binding::ReturnTypeKind;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamBuilder;
 use crate::binding::expr::Usage;
@@ -365,25 +366,48 @@ impl<'a> BindingsBuilder<'a> {
             })
             .into_boxed_slice();
 
-        let return_type_binding =
-            if let Some(implicit_return) = implicit_return_if_inferring_return_type {
-                Binding::ReturnType(Box::new(ReturnType {
-                    annot: return_ann_with_range,
-                    returns: return_keys,
-                    implicit_return,
-                    yields: yield_keys,
-                    yield_froms: yield_from_keys,
-                    is_async,
-                    stub_or_impl,
-                    decorators,
-                }))
-            } else {
-                let inferred_any = Binding::Type(Type::any_implicit());
-                match return_ann {
-                    Some(ann) => Binding::AnnotatedType(ann, Box::new(inferred_any)),
-                    None => inferred_any,
+        let return_type_binding = {
+            let kind = match (
+                return_ann_with_range,
+                implicit_return_if_inferring_return_type,
+            ) {
+                (Some((range, annotation)), Some(implicit_return)) => {
+                    // We have an explicit return annotation and we want to validate it.
+                    ReturnTypeKind::ShouldValidateAnnotation {
+                        range,
+                        annotation,
+                        stub_or_impl,
+                        decorators,
+                        implicit_return,
+                        is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
+                        has_explicit_return: !return_keys.is_empty(),
+                    }
+                }
+                (Some((_, annotation)), None) => {
+                    // We have an explicit return annotation and we just want to trust it.
+                    ReturnTypeKind::ShouldTrustAnnotation {
+                        annotation,
+                        is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
+                    }
+                }
+                (None, Some(implicit_return)) => {
+                    // We don't have an explicit return annotation, but we want to infer it.
+                    ReturnTypeKind::ShouldInferType {
+                        returns: return_keys,
+                        implicit_return,
+                        yields: yield_keys,
+                        yield_froms: yield_from_keys,
+                    }
+                }
+                (None, None) => {
+                    // We don't have an explicit return annotation, and we want to just treat it as returning `Any`.
+                    ReturnTypeKind::ShouldReturnAny {
+                        is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
+                    }
                 }
             };
+            Binding::ReturnType(Box::new(ReturnType { kind, is_async }))
+        };
         self.insert_binding(
             Key::ReturnType(ShortIdentifier::new(func_name)),
             return_type_binding,
@@ -393,6 +417,8 @@ impl<'a> BindingsBuilder<'a> {
     fn mark_as_returns_any(&mut self, func_name: &Identifier) {
         self.insert_binding(
             Key::ReturnType(ShortIdentifier::new(func_name)),
+            // TODO(grievejia): traverse the function body and calculate the `is_generator` flag, then
+            // use ReturnTypeKind::ShouldReturnAny to get more precision here.
             Binding::Type(Type::any_implicit()),
         );
     }

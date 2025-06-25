@@ -240,6 +240,10 @@ pub enum FunctionKind {
     IsSubclass,
     Dataclass(Box<BoolKeywords>),
     DataclassField,
+    /// `typing.dataclass_transform`. Note that this is `dataclass_transform` itself, *not* the
+    /// decorator created by a `dataclass_transform(...)` call. See
+    /// https://typing.python.org/en/latest/spec/dataclasses.html#specification.
+    DataclassTransform,
     ClassMethod,
     Overload,
     Override,
@@ -534,6 +538,7 @@ impl FunctionKind {
             ("typing", None, "reveal_type") => Self::RevealType,
             ("typing", None, "final") => Self::Final,
             ("typing", None, "runtime_checkable") => Self::RuntimeCheckable,
+            ("typing", None, "dataclass_transform") => Self::DataclassTransform,
             ("typing_extensions", None, "runtime_checkable") => Self::RuntimeCheckable,
             ("abc", None, "abstractmethod") => Self::AbstractMethod,
             ("functools", None, "total_ordering") => Self::TotalOrdering,
@@ -571,6 +576,11 @@ impl FunctionKind {
                 module: ModuleName::dataclasses(),
                 cls: None,
                 func: Name::new_static("field"),
+            },
+            Self::DataclassTransform => FuncId {
+                module: ModuleName::typing(),
+                cls: None,
+                func: Name::new_static("dataclass_transform"),
             },
             Self::Final => FuncId {
                 module: ModuleName::typing(),

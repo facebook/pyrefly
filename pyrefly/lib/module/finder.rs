@@ -29,6 +29,7 @@ enum PyTyped {
     Missing,
     Complete,
     Partial,
+    Hidden,
 }
 
 #[derive(Debug, PartialEq)]
@@ -86,7 +87,7 @@ impl FindResult {
                 .map(|path| py_typed_cached(path))
                 .max()
                 .unwrap_or_default(),
-            Self::CompiledModule(_) => PyTyped::Partial, //TODO(melvinhe): Handle specially with new PyTyped enum variant
+            Self::CompiledModule(_) => PyTyped::Hidden,
         }
     }
 }
@@ -1066,13 +1067,35 @@ mod tests {
     }
 
     #[test]
-    fn test_pyc_file_treated_differently() {
+    fn test_pyc_file_treated_as_hidden() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        TestPath::setup_test_directory(root, vec![TestPath::file("compiled_module.pyc")]);
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "subdir",
+                vec![TestPath::file("compiled_module.pyc")],
+            )],
+        );
         let find_result =
-            find_one_part(&Name::new("compiled_module"), [root.to_path_buf()].iter()).unwrap();
-        assert_eq!(find_result.py_typed(), PyTyped::Partial); // TODO(melvinhe): Update to new PyTyped enum variant
+            find_one_part(&Name::new("compiled_module"), [root.join("subdir")].iter()).unwrap();
+        assert_eq!(find_result.py_typed(), PyTyped::Hidden);
+    }
+
+    #[test]
+    fn test_non_pyc_file_not_hidden() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "subdir",
+                vec![TestPath::file("non_pyc_module.py")],
+            )],
+        );
+        let find_result =
+            find_one_part(&Name::new("non_pyc_module"), [root.join("subdir")].iter()).unwrap();
+        assert_ne!(find_result.py_typed(), PyTyped::Hidden);
     }
 
     #[test]

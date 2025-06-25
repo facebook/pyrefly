@@ -360,6 +360,10 @@ impl<'a> TypeDisplayContext<'a> {
                 }
                 write!(f, "]")
             }
+            Type::DataclassTransformDecorator(_) => {
+                // TODO(rechen): display the keyword arguments.
+                write!(f, "DataclassTransformDecorator")
+            }
             Type::None => write!(f, "None"),
         }
     }
