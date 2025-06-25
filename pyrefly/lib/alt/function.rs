@@ -284,6 +284,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             Param::PosOnly(Some(x.parameter.name.id.clone()), ty, required)
         }));
+
+        // See: https://typing.python.org/en/latest/spec/historical.html#positional-only-parameters
+        let is_historical_args_usage =
+            def.parameters.posonlyargs.is_empty() && def.parameters.kwonlyargs.is_empty();
+        let mut seen_keyword_args = false;
+
         params.extend(def.parameters.args.iter().map(|x| {
             let ty = get_param_ty(&x.parameter.name, x.default.as_deref());
             let required = if x.default.is_some() {
@@ -291,7 +297,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 Required::Required
             };
-            Param::Pos(x.parameter.name.id.clone(), ty, required)
+
+            // If the parameter begins but does not end with "__", it is a positional-only parameter.
+            // See: https://typing.python.org/en/latest/spec/historical.html#positional-only-parameters
+            if is_historical_args_usage
+                && x.parameter.name.starts_with("__")
+                && !x.parameter.name.ends_with("__")
+            {
+                if seen_keyword_args {
+                    self.error(
+                        errors,
+                        x.parameter.name.range,
+                        ErrorKind::BadFunctionDefinition,
+                        None,
+                        format!(
+                            "Positional-only parameter `{}` cannot appear after keyword parameters",
+                            x.parameter.name
+                        ),
+                    );
+                }
+
+                Param::PosOnly(Some(x.parameter.name.id.clone()), ty, required)
+            } else {
+                seen_keyword_args |=
+                    x.parameter.name.as_str() != "self" && x.parameter.name.as_str() != "cls";
+                Param::Pos(x.parameter.name.id.clone(), ty, required)
+            }
         }));
         params.extend(def.parameters.vararg.iter().map(|x| {
             let ty = get_param_ty(&x.name, None);
