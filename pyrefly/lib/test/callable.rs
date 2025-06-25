@@ -272,6 +272,38 @@ test(1, "hello", 2) # E: Expected 2 positional arguments, got 3
 );
 
 testcase!(
+    test_historical_positional_only_params,
+    r#"
+def f1(__x: str): ...
+f1("hello") # OK
+f1(__x="hello") # E: Expected argument `__x` to be positional
+
+def f2(__x: str, /, __y: str, __z__: str): ...
+f2(__x="hello", __y="my", __z__="world") # E: Expected argument `__x` to be positional
+f2("hello", __y="my", __z__="world") # OK
+
+def f3(__x: str, *, __y__: str, __z: str): ...
+f3(__x="hello", __y__="my", __z="world") # OK
+
+def f4(x: str, __y: str): ... # E: Positional-only parameter `__y` cannot appear after keyword parameters
+
+class C:
+    def f5(self, __x: str): ...
+
+    def f6(self, x: str, __y: str): ... # E: Positional-only parameter `__y` cannot appear after keyword parameters
+
+    @classmethod
+    def f7(cls, __x: str): ...
+
+c = C()
+c.f5("hello") # OK
+c.f5(__x="hello") # E: Expected argument `__x` to be positional
+C.f7("hello") # OK
+C.f7(__x="hello") # E: Expected argument `__x` to be positional
+"#,
+);
+
+testcase!(
     test_keyword_only_params,
     r#"
 def test(*, x: int, y: str): ...
