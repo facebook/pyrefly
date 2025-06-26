@@ -29,6 +29,7 @@ use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use vec1::Vec1;
 use vec1::vec1;
 
 use crate::alt::attr::AttrDefinition;
@@ -401,12 +402,11 @@ impl CalcStack {
     /// - if there is a cycle, `Some(vec![(m0, i0), (m2, i2)...])`
     ///   where the order of (module, idx) pairs is recency (so starting with current
     ///   module and idx, and ending with the oldest).
-    pub fn current_cycle(&self) -> Option<Vec<CalcId>> {
+    pub fn current_cycle(&self) -> Option<Vec1<CalcId>> {
         let stack = self.0.borrow();
         let mut rev_stack = stack.iter().rev();
         let current = rev_stack.next()?;
-        let mut cycle = Vec::with_capacity(rev_stack.len());
-        cycle.push(current.dupe());
+        let mut cycle = Vec1::with_capacity(current.dupe(), rev_stack.len());
         for c in rev_stack {
             if c == current {
                 return Some(cycle);
