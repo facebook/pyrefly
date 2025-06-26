@@ -680,3 +680,248 @@ instance.count  # E: Object of class `InitVarTest` has no attribute `count`
 instance.value  # OK
     "#,
 );
+
+// Field ordering validation tests
+testcase!(
+    test_field_ordering_basic_violation,
+    r#"
+from dataclasses import dataclass
+@dataclass
+class C:
+    x: int = 1
+    y: str  # E: DataClass field 'y' without a default may not follow DataClass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_multiple_violations,
+    r#"
+from dataclasses import dataclass
+@dataclass
+class C:
+    a: int = 1
+    b: str  # E: DataClass field 'b' without a default may not follow DataClass field with a default
+    c: int = 2
+    d: float  # E: DataClass field 'd' without a default may not follow DataClass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_valid_all_defaults,
+    r#"
+from dataclasses import dataclass
+@dataclass
+class C:
+    x: int = 1
+    y: str = "hello"
+    z: float = 3.14
+C()  # OK
+C(x=2)  # OK
+C(x=2, y="world", z=2.71)  # OK
+    "#,
+);
+
+testcase!(
+    test_field_ordering_valid_no_defaults,
+    r#"
+from dataclasses import dataclass
+@dataclass
+class C:
+    x: int
+    y: str
+    z: float
+C(1, "hello", 3.14)  # OK
+    "#,
+);
+
+testcase!(
+    test_field_ordering_valid_required_then_defaults,
+    r#"
+from dataclasses import dataclass
+@dataclass
+class C:
+    x: int
+    y: str
+    z: float = 3.14
+C(1, "hello")  # OK
+C(1, "hello", 2.71)  # OK
+    "#,
+);
+
+testcase!(
+    test_field_ordering_with_field_function,
+    r#"
+from dataclasses import dataclass, field
+@dataclass
+class C:
+    x: int = field(default=1)
+    y: str  # E: DataClass field 'y' without a default may not follow DataClass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_with_default_factory,
+    r#"
+from dataclasses import dataclass, field
+@dataclass
+class C:
+    x: list[int] = field(default_factory=list)
+    y: str  # E: DataClass field 'y' without a default may not follow DataClass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_kw_only_ignores_validation,
+    r#"
+from dataclasses import dataclass, field
+@dataclass
+class C:
+    x: int = 1
+    y: str = field(kw_only=True)  # OK - kw_only fields don't participate in ordering validation
+    z: int = field(kw_only=True)  # OK - kw_only fields don't participate in ordering validation
+C(1, y="hello", z=2)  # OK
+    "#,
+);
+
+testcase!(
+    test_field_ordering_kw_only_sentinel,
+    r#"
+from dataclasses import dataclass, KW_ONLY
+@dataclass
+class C:
+    x: int = 1
+    _: KW_ONLY
+    y: str  # OK - fields after KW_ONLY marker are keyword-only
+    z: int  # OK - fields after KW_ONLY marker are keyword-only
+C(1, y="hello", z=2)  # OK
+    "#,
+);
+
+testcase!(
+    test_field_ordering_kw_only_decorator,
+    r#"
+from dataclasses import dataclass
+@dataclass(kw_only=True)
+class C:
+    x: int = 1
+    y: str  # OK - all fields are keyword-only when kw_only=True
+C(x=1, y="hello")  # OK
+    "#,
+);
+
+testcase!(
+    test_field_ordering_init_false_ignores_validation,
+    r#"
+from dataclasses import dataclass, field
+@dataclass
+class C:
+    x: int = 1
+    y: str = field(init=False)  # OK - init=False fields don't participate in __init__
+    z: int  # E: DataClass field 'z' without a default may not follow DataClass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_mixed_init_and_kw_only,
+    r#"
+from dataclasses import dataclass, field
+@dataclass
+class C:
+    a: int
+    b: str = "default"
+    c: float = field(kw_only=True)  # OK - kw_only field
+    d: int = field(init=False)      # OK - init=False field
+    e: bool  # E: DataClass field 'e' without a default may not follow DataClass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_inheritance_base_with_defaults,
+    r#"
+from dataclasses import dataclass
+@dataclass
+class Base:
+    x: int = 1
+    
+@dataclass
+class Child(Base):
+    y: str  # E: DataClass field 'y' without a default may not follow DataClass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_inheritance_valid,
+    r#"
+from dataclasses import dataclass
+@dataclass
+class Base:
+    x: int
+    
+@dataclass
+class Child(Base):
+    y: str = "default"  # OK
+Child(1, y="hello")  # OK
+    "#,
+);
+
+testcase!(
+    test_field_ordering_multiple_inheritance,
+    r#"
+from dataclasses import dataclass
+@dataclass
+class Base1:
+    x: int = 1
+    
+@dataclass  
+class Base2:
+    y: str = "default"
+    
+@dataclass
+class Child(Base1, Base2):
+    z: float  # E: DataClass field 'z' without a default may not follow DataClass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_complex_inheritance,
+    r#"
+from dataclasses import dataclass, field
+@dataclass
+class A:
+    a: int
+    
+@dataclass
+class B:
+    b: str = "default"
+    
+@dataclass
+class C(A, B):
+    c: float = field(kw_only=True)  # OK - kw_only
+    d: bool  # E: DataClass field 'd' without a default may not follow DataClass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_initvar_mixed,
+    r#"
+from dataclasses import dataclass, InitVar
+@dataclass
+class C:
+    x: int = 1
+    init_var: InitVar[str]  # E: DataClass field 'init_var' without a default may not follow DataClass field with a default
+    y: int  # E: DataClass field 'y' without a default may not follow DataClass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_classvar_ignored,
+    r#"
+from typing import ClassVar
+from dataclasses import dataclass
+@dataclass
+class C:
+    x: int = 1
+    class_var: ClassVar[str] = "ignored"  # OK - ClassVar fields don't participate in __init__
+    y: int  # E: DataClass field 'y' without a default may not follow DataClass field with a default
+    "#,
+);
