@@ -359,20 +359,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     {
         let current = CalcId(self.bindings().dupe(), K::to_anyidx(idx));
         let calculation = self.get_calculation(idx);
-
-        let result = match calculation.propose_calculation() {
-            ProposalResult::Calculated(v) => Ok(v),
-            ProposalResult::CycleBroken(rec) => Err(rec),
-            ProposalResult::CycleDetected => {
-                self.attempt_to_unwind_cycle_from_here(idx, calculation)
-            }
+        match calculation.propose_calculation() {
+            ProposalResult::Calculated(v) => v,
+            ProposalResult::CycleBroken(r) => Arc::new(K::promote_recursive(r)),
+            ProposalResult::CycleDetected => self
+                .attempt_to_unwind_cycle_from_here(idx, calculation)
+                .unwrap_or_else(|r| Arc::new(K::promote_recursive(r))),
             ProposalResult::Calculatable => {
-                Ok(self.calculate_and_record_answer(current, idx, calculation))
+                self.calculate_and_record_answer(current, idx, calculation)
             }
-        };
-        match result {
-            Ok(v) => v,
-            Err(r) => Arc::new(K::promote_recursive(r)),
         }
     }
 
