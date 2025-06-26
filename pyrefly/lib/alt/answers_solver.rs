@@ -384,7 +384,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         current: CalcId,
         idx: Idx<K>,
-        calculation: &Calculation<Arc<K::Answer>, K::Recursive>,
+        calculation: &Calculation<Arc<K::Answer>, Var>,
     ) -> Arc<K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
@@ -399,7 +399,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // we need to record the placeholder => final answer correspondance.
         if let Some(r) = rec {
             let k = self.bindings().idx_to_key(idx).range();
-            K::record_recursive(self, k, &v, &r, self.base_errors);
+            K::record_recursive(self, k, &v, r, self.base_errors);
         }
         v
     }
@@ -417,8 +417,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn attempt_to_unwind_cycle_from_here<K: Solve<Ans>>(
         &self,
         idx: Idx<K>,
-        calculation: &Calculation<Arc<K::Answer>, K::Recursive>,
-    ) -> Result<Arc<K::Answer>, K::Recursive>
+        calculation: &Calculation<Arc<K::Answer>, Var>,
+    ) -> Result<Arc<K::Answer>, Var>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,

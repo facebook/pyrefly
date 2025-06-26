@@ -62,6 +62,7 @@ use crate::types::equality::TypeEq;
 use crate::types::equality::TypeEqCtx;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
+use crate::types::types::Var;
 
 /// The index stores all the references where the definition is external to the current module.
 /// This is useful for fast references computation.
@@ -107,8 +108,7 @@ pub struct Answers {
     trace: Option<Mutex<Traces>>,
 }
 
-pub type AnswerEntry<K> =
-    IndexMap<K, Calculation<Arc<<K as Keyed>::Answer>, <K as SolveRecursive>::Recursive>>;
+pub type AnswerEntry<K> = IndexMap<K, Calculation<Arc<<K as Keyed>::Answer>, Var>>;
 
 table!(
     #[derive(Debug, Default)]
@@ -574,10 +574,7 @@ impl Answers {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    pub fn get_calculation<K: Solve<Ans>>(
-        &self,
-        idx: Idx<K>,
-    ) -> &Calculation<Arc<K::Answer>, K::Recursive>
+    pub fn get_calculation<K: Solve<Ans>>(&self, idx: Idx<K>) -> &Calculation<Arc<K::Answer>, Var>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
