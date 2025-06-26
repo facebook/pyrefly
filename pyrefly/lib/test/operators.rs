@@ -20,6 +20,14 @@ def f(a: int, b: int) -> None:
 );
 
 testcase!(
+    test_bounded_type_var_comparison,
+    r#"
+def compare[T: int](x: T, y: T) -> bool:
+    return x > y
+"#,
+);
+
+testcase!(
     test_negative_literals,
     r#"
 from typing import Literal
