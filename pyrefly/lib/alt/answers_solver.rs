@@ -41,6 +41,7 @@ use crate::error::context::TypeCheckContext;
 use crate::error::kind::ErrorKind;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
+use crate::graph::calculation::Calculation;
 use crate::graph::calculation::ProposalResult;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
@@ -358,36 +359,82 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     {
         let current = CalcId(self.bindings().dupe(), K::to_anyidx(idx));
         let calculation = self.get_calculation(idx);
-        self.stack.push(current);
 
         let result = match calculation.propose_calculation() {
             ProposalResult::Calculated(v) => Ok((v, None)),
             ProposalResult::CycleBroken(rec) => Err(rec),
-            ProposalResult::CycleDetected => {
-                let binding = self.bindings().get(idx);
-                let rec = K::create_recursive(self, binding);
-                match calculation.record_cycle(rec) {
-                    Either::Left(v) => {
-                        // Another thread finished, treat it just like `Caluculated`
-                        Ok((v, None))
-                    }
-                    Either::Right(rec) => Err(rec),
-                }
-            }
+            ProposalResult::CycleDetected => self
+                .attempt_to_unwind_cycle_from_here(idx, calculation)
+                .map(|final_result| (final_result, None)),
             ProposalResult::Calculatable => {
-                let binding = self.bindings().get(idx);
-                let value = K::solve(self, binding, self.base_errors);
-                Ok(calculation.record_value(value))
+                Ok(self.calculate_and_record_answer(current, idx, calculation))
             }
         };
+
         if let Ok((v, Some(r))) = &result {
             let k = self.bindings().idx_to_key(idx).range();
             K::record_recursive(self, k, v, r, self.base_errors);
         }
-        self.stack.pop();
         match result {
             Ok((v, _)) => v,
             Err(r) => Arc::new(K::promote_recursive(r)),
+        }
+    }
+
+    /// Calculate the value for a `K::Value`, and record it in the `Calculation`.
+    ///
+    /// Return a pair of:
+    /// - the final result from the `Calculation`, which potentially might be
+    ///   coming from another thread because the first write wins.
+    /// - the recursive result, if there was one, which we may need to record as corresponding
+    ///   to this answer
+    fn calculate_and_record_answer<K: Solve<Ans>>(
+        &self,
+        current: CalcId,
+        idx: Idx<K>,
+        calculation: &Calculation<Arc<K::Answer>, K::Recursive>,
+    ) -> (Arc<K::Answer>, Option<K::Recursive>)
+    where
+        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+    {
+        self.stack.push(current);
+        let binding = self.bindings().get(idx);
+        let answer = K::solve(self, binding, self.base_errors);
+        self.stack.pop();
+        calculation.record_value(answer)
+    }
+
+    /// Attempt to record a cycle placeholder result to unwind a cycle from here.
+    ///
+    /// Returns a `Result` where the normal case is `Err`, because another thread
+    /// might have already finished the cycle in which case we can just use that result
+    /// (which will come in an `Ok(result)` form)
+    ///
+    /// TODO: eventually we should be recording this answer in a thread-local place rather
+    /// than in the Calculation for better isolation against data races. Once that plumbing
+    /// is in place, this code can probably be simplified to just return the recursive result;
+    /// we are doing extra work here to get partial protection against races through the mutex.
+    fn attempt_to_unwind_cycle_from_here<K: Solve<Ans>>(
+        &self,
+        idx: Idx<K>,
+        calculation: &Calculation<Arc<K::Answer>, K::Recursive>,
+    ) -> Result<Arc<K::Answer>, K::Recursive>
+    where
+        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+    {
+        let binding = self.bindings().get(idx);
+        let rec = K::create_recursive(self, binding);
+        match calculation.record_cycle(rec) {
+            Either::Right(rec) => {
+                // No final answer is available, so we'll unwind the cycle using `rec`.
+                Err(rec)
+            }
+            Either::Left(v) => {
+                // Another thread already completed a final result, we can just use it.
+                Ok(v)
+            }
         }
     }
 
