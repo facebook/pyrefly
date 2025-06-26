@@ -5,17 +5,22 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::str::FromStr;
+
 use dupe::Dupe;
 use itertools::Itertools;
 use pyrefly_util::lined_buffer::LineNumber;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::error::kind::ErrorKind;
+
 #[derive(PartialEq, Debug, Clone, Hash, Eq, Dupe, Copy)]
 pub enum SuppressionKind {
     Ignore,
     Pyre,
     Pyrefly,
+    TypedPyrefly(ErrorKind),
 }
 
 /// Record the position of `# type: ignore[valid-type]` statements.
@@ -71,20 +76,29 @@ impl Ignore {
     }
 
     pub fn get_suppression_kind(line: &str) -> Option<SuppressionKind> {
-        fn match_pyrefly_ignore(line: &str) -> bool {
+        fn match_pyrefly_ignore(line: &str) -> Option<SuppressionKind> {
             let mut words = line.split_whitespace();
             if let Some("pyrefly:") = words.next() {
-                words.next() == Some("ignore")
-            } else {
-                false
+                if let Some(word) = words.next() {
+                    if word == "ignore" {
+                        return Some(SuppressionKind::Pyrefly);
+                    }
+
+                    if word.starts_with("ignore[") && word.ends_with(']') {
+                        if let Ok(kind) = ErrorKind::from_str(&word[7..word.len() - 1]) {
+                            return Some(SuppressionKind::TypedPyrefly(kind));
+                        }
+                    }
+                }
             }
+            None
         }
 
         for l in line.split("# ").skip(1) {
             if l.starts_with("type: ignore") {
                 return Some(SuppressionKind::Ignore);
-            } else if match_pyrefly_ignore(l) {
-                return Some(SuppressionKind::Pyrefly);
+            } else if let Some(value) = match_pyrefly_ignore(l) {
+                return Some(value);
             } else if l.starts_with("pyre-ignore") || l.starts_with("pyre-fixme") {
                 return Some(SuppressionKind::Pyre);
             }
@@ -92,15 +106,31 @@ impl Ignore {
         None
     }
 
-    pub fn is_ignored(&self, start_line: LineNumber, end_line: LineNumber) -> bool {
+    pub fn is_ignored(
+        &self,
+        start_line: LineNumber,
+        end_line: LineNumber,
+        kind: ErrorKind,
+    ) -> bool {
         if self.ignore_all {
-            true
-        } else {
-            // We allow an ignore the line before the range, or on any line within the range.
-            // We convert to/from zero-indexed because OneIndexed does not implement Step.
-            (start_line.to_zero_indexed().saturating_sub(1)..=end_line.to_zero_indexed())
-                .any(|x| self.ignores.contains_key(&LineNumber::from_zero_indexed(x)))
+            return true;
         }
+
+        // We allow an ignore the line before the range, or on any line within the range.
+        // We convert to/from zero-indexed because LineNumber does not implement Step.
+        for line in start_line.to_zero_indexed().saturating_sub(1)..=end_line.to_zero_indexed() {
+            if let Some(suppressions) = self.ignores.get(&LineNumber::from_zero_indexed(line)) {
+                if suppressions.iter().any(|supp| match supp {
+                    SuppressionKind::Ignore | SuppressionKind::Pyrefly => true,
+                    SuppressionKind::TypedPyrefly(supp_kind) => supp_kind == &kind,
+                    _ => false,
+                }) {
+                    return true;
+                }
+            }
+        }
+
+        false
     }
 
     /// Get all the ignores of a given kind.

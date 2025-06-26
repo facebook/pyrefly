@@ -178,7 +178,7 @@ impl Error {
         error_kind: ErrorKind,
     ) -> Self {
         let display_range = module_info.display_range(range);
-        let is_ignored = module_info.is_ignored(&display_range);
+        let is_ignored = module_info.is_ignored(&display_range, error_kind);
         let msg_has_details = msg.len() > 1;
         let mut msg = msg.into_iter();
         let msg_header = msg.next().unwrap().into_boxed_str();
