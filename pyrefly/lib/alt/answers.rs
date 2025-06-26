@@ -549,18 +549,12 @@ impl Answers {
                 }
             }
         }
-        let answers_solver = AnswersSolver {
-            stdlib,
-            answers,
-            stack: &CalcStack::new(),
-            cycles: &Cycles::new(),
-            bindings,
-            base_errors: errors,
-            exports,
-            uniques,
-            recurser: &Recurser::new(),
-            current: self,
-        };
+        let recurser = &Recurser::new();
+        let cycles = &Cycles::new();
+        let stack = &CalcStack::new();
+        let answers_solver = AnswersSolver::new(
+            answers, self, errors, bindings, exports, uniques, recurser, stdlib, stack, cycles,
+        );
         table_mut_for_each!(&mut res, |items| pre_solve(
             items,
             &answers_solver,
@@ -640,18 +634,10 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        let solver = AnswersSolver {
-            stdlib,
-            uniques,
-            answers,
-            bindings,
-            base_errors: errors,
-            exports,
-            recurser: &Recurser::new(),
-            current: self,
-            stack,
-            cycles,
-        };
+        let recurser = &Recurser::new();
+        let solver = AnswersSolver::new(
+            answers, self, errors, bindings, exports, uniques, recurser, stdlib, stack, cycles,
+        );
         let v = solver.get_hashed(key);
         let mut vv = (*v).clone();
         vv.visit_mut(&mut |x| self.solver.deep_force_mut(x));
