@@ -101,7 +101,7 @@ assert_words!(BindingYield, 3);
 assert_words!(BindingYieldFrom, 3);
 assert_words!(BindingFunction, 21);
 
-#[derive(Clone, Dupe, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
     Key(Idx<Key>),
     KeyExpect(Idx<KeyExpect>),

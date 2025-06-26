@@ -6,6 +6,7 @@
  */
 
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -339,6 +340,27 @@ pub struct CalcId(pub Bindings, pub AnyIdx);
 impl PartialEq for CalcId {
     fn eq(&self, other: &Self) -> bool {
         (self.0.module_info(), &self.1) == (other.0.module_info(), &other.1)
+    }
+}
+
+impl Eq for CalcId {}
+
+impl Ord for CalcId {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.1.cmp(&other.1) {
+            Ordering::Equal => self
+                .0
+                .module_info()
+                .name()
+                .cmp(&other.0.module_info().name()),
+            not_equal => not_equal,
+        }
+    }
+}
+
+impl PartialOrd for CalcId {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
