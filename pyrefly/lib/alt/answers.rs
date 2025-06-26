@@ -395,10 +395,25 @@ impl CalcStack {
     }
 }
 
+/// Represent a cycle we are currently solving.
+pub struct Cycle;
+
+/// Represent the current thread's cycles, which form a stack
+/// because we can encounter a new one while solving another.
+#[expect(dead_code)]
+pub struct Cycles(RefCell<Vec<Cycle>>);
+
+impl Cycles {
+    pub fn new() -> Self {
+        Self(RefCell::new(Vec::new()))
+    }
+}
+
 pub struct AnswersSolver<'a, Ans: LookupAnswer> {
     answers: &'a Ans,
     current: &'a Answers,
     stack: &'a CalcStack,
+    cycles: &'a Cycles,
     // The base solver is only used to reset the error collector at binding
     // boundaries. Answers code should generally use the error collector passed
     // along the call stack instead.
@@ -417,6 +432,7 @@ pub trait LookupAnswer: Sized {
         path: Option<&ModulePath>,
         k: &K,
         stack: &CalcStack,
+        cycles: &Cycles,
     ) -> Arc<K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
@@ -515,6 +531,7 @@ impl Answers {
             stdlib,
             answers,
             stack: &CalcStack::new(),
+            cycles: &Cycles::new(),
             bindings,
             base_errors: errors,
             exports,
@@ -595,6 +612,7 @@ impl Answers {
         uniques: &UniqueFactory,
         key: Hashed<&K>,
         stack: &CalcStack,
+        cycles: &Cycles,
     ) -> Arc<K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
@@ -610,6 +628,7 @@ impl Answers {
             recurser: &Recurser::new(),
             current: self,
             stack,
+            cycles,
         };
         let v = solver.get_hashed(key);
         let mut vv = (*v).clone();
@@ -684,6 +703,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         recurser: &'a Recurser<Var>,
         stdlib: &'a Stdlib,
         stack: &'a CalcStack,
+        cycles: &'a Cycles,
     ) -> AnswersSolver<'a, Ans> {
         AnswersSolver {
             stdlib,
@@ -695,6 +715,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             recurser,
             current,
             stack,
+            cycles,
         }
     }
 
@@ -734,7 +755,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             self.get(k)
         } else {
-            self.answers.get(module, path, k, self.stack)
+            self.answers.get(module, path, k, self.stack, self.cycles)
         }
     }
 

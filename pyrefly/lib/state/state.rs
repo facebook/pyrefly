@@ -63,6 +63,7 @@ use crate::alt::answers::AnswerTable;
 use crate::alt::answers::Answers;
 use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::CalcStack;
+use crate::alt::answers::Cycles;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::Solutions;
 use crate::alt::answers::SolutionsEntry;
@@ -921,6 +922,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         name: &Name,
         stack: &CalcStack,
+        cycles: &Cycles,
     ) -> Option<(Class, Arc<TParams>)> {
         let module_data = self.get_module(handle);
         if !self
@@ -940,7 +942,7 @@ impl<'a> Transaction<'a> {
             return None;
         }
 
-        let t = self.lookup_answer(module_data.dupe(), &KeyExport(name.clone()), stack);
+        let t = self.lookup_answer(module_data.dupe(), &KeyExport(name.clone()), stack, cycles);
         let class = match t.arc_clone() {
             Type::ClassDef(cls) => Some(cls),
             ty => {
@@ -959,7 +961,12 @@ impl<'a> Transaction<'a> {
         class.map(|class| {
             let tparams = match class.precomputed_tparams() {
                 Some(tparams) => tparams.dupe(),
-                None => self.lookup_answer(module_data.dupe(), &KeyTParams(class.index()), stack),
+                None => self.lookup_answer(
+                    module_data.dupe(),
+                    &KeyTParams(class.index()),
+                    stack,
+                    cycles,
+                ),
             };
             (class, tparams)
         })
@@ -976,6 +983,7 @@ impl<'a> Transaction<'a> {
         module_data: ArcId<ModuleDataMut>,
         key: &K,
         stack: &CalcStack,
+        cycles: &Cycles,
     ) -> Arc<<K as Keyed>::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
@@ -1005,6 +1013,7 @@ impl<'a> Transaction<'a> {
                     &self.data.state.uniques,
                     key,
                     stack,
+                    cycles,
                 );
             }
             drop(lock);
@@ -1039,13 +1048,19 @@ impl<'a> Transaction<'a> {
     fn compute_stdlib(&mut self, sys_infos: SmallSet<SysInfo>) {
         let loader = self.get_cached_loader(&BundledTypeshed::config());
         let stack = CalcStack::new();
+        let cycles = Cycles::new();
         for k in sys_infos.into_iter_hashed() {
             self.data
                 .stdlib
                 .insert_hashed(k.to_owned(), Arc::new(Stdlib::for_bootstrapping()));
             let v = Arc::new(Stdlib::new(k.version(), &|module, name| {
                 let path = loader.find_import(module, None).ok()?;
-                self.lookup_stdlib(&Handle::new(module, path, (*k).dupe()), name, &stack)
+                self.lookup_stdlib(
+                    &Handle::new(module, path, (*k).dupe()),
+                    name,
+                    &stack,
+                    &cycles,
+                )
             }));
             self.data.stdlib.insert_hashed(k, v);
         }
@@ -1209,6 +1224,7 @@ impl<'a> Transaction<'a> {
         let stdlib = self.get_stdlib(handle);
         let recurser = Recurser::new();
         let stack = CalcStack::new();
+        let cycles = Cycles::new();
         let solver = AnswersSolver::new(
             &lookup,
             answers,
@@ -1219,6 +1235,7 @@ impl<'a> Transaction<'a> {
             &recurser,
             &stdlib,
             &stack,
+            &cycles,
         );
         let result = solve(solver);
         Some(result)
@@ -1515,6 +1532,7 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         path: Option<&ModulePath>,
         k: &K,
         stack: &CalcStack,
+        cycles: &Cycles,
     ) -> Arc<K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
@@ -1524,7 +1542,8 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         // The unwrap is safe because we must have said there were no exports,
         // so no one can be trying to get at them
         let module_data = self.get_module(module, path).unwrap();
-        self.transaction.lookup_answer(module_data, k, stack)
+        self.transaction
+            .lookup_answer(module_data, k, stack, cycles)
     }
 }
 
