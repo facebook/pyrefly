@@ -1,8 +1,8 @@
 use pyrefly_util::display::DisplayWithCtx;
 
-use crate::alt::answers::AnswersSolver;
-use crate::alt::answers::CalcId;
 use crate::alt::answers::LookupAnswer;
+use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::answers_solver::CalcId;
 use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
