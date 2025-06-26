@@ -19,6 +19,7 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
         label,
         detail,
         kind,
+        insert_text,
         ..
     } in state.transaction().completion(handle, position)
     {
@@ -29,6 +30,11 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
         if let Some(detail) = detail {
             report.push_str(": ");
             report.push_str(&detail);
+        }
+        if let Some(insert_text) = insert_text {
+            report.push_str(" inserting `");
+            report.push_str(&insert_text);
+            report.push_str("`");
         }
     }
     report
@@ -505,6 +511,37 @@ x(
 3 | x(
       ^
 Completion Results:
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn builtins_doesnt_autoimport() {
+    let code = r#"
+isins
+#    ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | isins
+         ^
+Completion Results:
+- (Function) isinstance
+- (Function) timerfd_settime_ns: from os import timerfd_settime_ns
+
+- (Function) distributions: from importlib.metadata import distributions
+
+- (Function) packages_distributions: from importlib.metadata import packages_distributions
+
+- (Class) MissingHeaderBodySeparatorDefect: from email.errors import MissingHeaderBodySeparatorDefect
+
+- (Function) fix_missing_locations: from ast import fix_missing_locations
+
+- (Class) FirstHeaderLineIsContinuationDefect: from email.errors import FirstHeaderLineIsContinuationDefect
 "#
         .trim(),
         report.trim(),

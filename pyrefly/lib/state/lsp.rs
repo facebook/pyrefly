@@ -1541,23 +1541,33 @@ impl<'a> Transaction<'a> {
                             for (handle_to_import_from, name, export) in
                                 self.search_exports_fuzzy(identifier.as_str())
                             {
-                                let (position, insert_text) =
-                                    insert_import_edit(&ast, handle_to_import_from, &name);
-                                let import_text_edit = TextEdit {
-                                    range: module_info
-                                        .lined_buffer()
-                                        .to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                                    new_text: insert_text.clone(),
-                                };
+                                let (insert_text, additional_text_edits) =
+                                    match handle_to_import_from.module().as_str() {
+                                        "builtins" => (None, None),
+                                        _ => {
+                                            let (position, insert_text) = insert_import_edit(
+                                                &ast,
+                                                handle_to_import_from,
+                                                &name,
+                                            );
+                                            let import_text_edit = TextEdit {
+                                                range: module_info.lined_buffer().to_lsp_range(
+                                                    TextRange::at(position, TextSize::new(0)),
+                                                ),
+                                                new_text: insert_text.clone(),
+                                            };
+                                            (Some(insert_text), Some(vec![import_text_edit]))
+                                        }
+                                    };
                                 result.push(CompletionItem {
                                     label: name,
-                                    detail: Some(insert_text),
+                                    detail: insert_text,
                                     kind: export
                                         .symbol_kind
                                         .map_or(Some(CompletionItemKind::VARIABLE), |k| {
                                             Some(k.to_lsp_completion_item_kind())
                                         }),
-                                    additional_text_edits: Some(vec![import_text_edit]),
+                                    additional_text_edits,
                                     ..Default::default()
                                 });
                             }
