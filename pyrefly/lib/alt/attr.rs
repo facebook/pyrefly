@@ -40,6 +40,7 @@ use crate::types::module::Module;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::readonly::ReadOnlyReason;
+use crate::types::readonly::ReadOnlyReason;
 use crate::types::tuple::Tuple;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
@@ -188,7 +189,7 @@ pub struct Attribute {
 
 #[derive(Debug)]
 enum Visibility {
-    ReadOnly(ReadOnlyReason),
+    ReadOnly(ReadOnlyReason)(ReadOnlyReason),
     ReadWrite,
 }
 
@@ -290,9 +291,9 @@ impl Attribute {
         }
     }
 
-    pub fn read_only(ty: Type, reason: ReadOnlyReason) -> Self {
+    pub fn read_only(ty: Type, reason: ReadOnlyReason, reason: ReadOnlyReason) -> Self {
         Attribute {
-            inner: AttributeInner::Simple(ty, Visibility::ReadOnly(reason)),
+            inner: AttributeInner::Simple(ty, Visibility::ReadOnly(reason)(reason)),
         }
     }
 
@@ -1059,7 +1060,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 LookupResult::Found(Attribute {
-                    inner: AttributeInner::Simple(_, Visibility::ReadOnly),
+                    inner: AttributeInner::Simple(_, Visibility::ReadOnly(_)),
                 }) => {
                     self.error(
                         errors,
@@ -1095,7 +1096,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Err(AttrSubsetError::Property)
             }
             (
-                AttributeInner::Simple(_, Visibility::ReadOnly(_)),
+                AttributeInner::Simple(_, Visibility::ReadOnly(_)(_)),
                 AttributeInner::Property(_, Some(_), _)
                 | AttributeInner::Simple(_, Visibility::ReadWrite),
             ) => Err(AttrSubsetError::ReadOnly),
@@ -1131,7 +1132,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             (
                 AttributeInner::Simple(got, ..),
-                AttributeInner::Simple(want, Visibility::ReadOnly(_)),
+                AttributeInner::Simple(want, Visibility::ReadOnly(_)(_)),
             ) => {
                 if is_subset(got, want) {
                     Ok(())
@@ -1145,7 +1146,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             (
-                AttributeInner::Simple(got, Visibility::ReadOnly(_)),
+                AttributeInner::Simple(got, Visibility::ReadOnly(_)(_)),
                 AttributeInner::Property(want, _, _),
             ) => {
                 if is_subset(
@@ -1277,7 +1278,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match attr.inner {
             AttributeInner::NoAccess(reason) => Err(reason),
             AttributeInner::Simple(ty, Visibility::ReadWrite)
-            | AttributeInner::Simple(ty, Visibility::ReadOnly(_)) => Ok(ty),
+            | AttributeInner::Simple(ty, Visibility::ReadOnly(_)(_)) => Ok(ty),
             AttributeInner::Property(getter, ..) => {
                 Ok(self.call_property_getter(getter, range, errors, context))
             }
@@ -1323,7 +1324,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // TODO(stroxler): ReadWrite attributes are not actually methods but limiting access to
             // ReadOnly breaks unit tests; we should investigate callsites to understand this better.
             // NOTE(grievejia): We currently do not expect to use `__getattr__` for this lookup.
-            AttributeInner::Simple(ty, Visibility::ReadOnly(_))
+            AttributeInner::Simple(ty, Visibility::ReadOnly(_)(_))
             | AttributeInner::Simple(ty, Visibility::ReadWrite) => Some(ty),
             AttributeInner::NoAccess(_)
             | AttributeInner::Property(..)
@@ -1337,7 +1338,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // NOTE(grievejia): We do not use `__getattr__` here because this lookup is expected to be invoked
         // on NamedTuple attributes with known names.
         match attr.inner {
-            AttributeInner::Simple(ty, Visibility::ReadOnly(_)) => Some(ty),
+            AttributeInner::Simple(ty, Visibility::ReadOnly(_)(_)) => Some(ty),
             AttributeInner::Simple(_, Visibility::ReadWrite)
             | AttributeInner::NoAccess(_)
             | AttributeInner::Property(..)

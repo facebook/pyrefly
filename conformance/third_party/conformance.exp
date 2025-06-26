@@ -3425,7 +3425,7 @@
       "stop_line": 78
     }
   ],
-  "dataclasses_transform_converter.py": [
+  "conformance\\third_party\\dataclasses_transform_converter.py": [
     {
       "code": -2,
       "column": 39,
@@ -3941,7 +3941,7 @@
       "stop_line": 73
     }
   ],
-  "dataclasses_transform_meta.py": [
+  "conformance\\third_party\\dataclasses_transform_meta.py": [
     {
       "code": -2,
       "column": 36,
@@ -3973,7 +3973,7 @@
       "stop_line": 79
     }
   ],
-  "dataclasses_usage.py": [
+  "conformance\\third_party\\dataclasses_usage.py": [
     {
       "code": -2,
       "column": 19,

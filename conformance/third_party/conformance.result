@@ -168,7 +168,7 @@
     "Line 60: Unexpected errors ['Unexpected keyword argument `other_name` in function `Customer1.__init__`']",
     "Line 78: Unexpected errors ['`<` is not supported between `Customer2` and `Customer2`\\n  Cannot find `__lt__` or `__gt__`']"
   ],
-  "dataclasses_transform_converter.py": [
+  "conformance\\third_party\\dataclasses_transform_converter.py": [
     "Line 118: Expected 1 errors",
     "Line 29: Unexpected errors ['Argument `tuple[[S, T](*, converter: (S) -> T, default: S | None, default_factory: (() -> S) | None) -> T]` is not assignable to parameter `field_specifiers` with type `tuple[((...) -> Any) | type[Any], ...]` in function `typing.dataclass_transform`']",
     "Line 112: Unexpected errors [\"Argument `Literal['f0']` is not assignable to parameter `field0` with type `int` in function `DC2.__init__`\", \"Argument `Literal['f1']` is not assignable to parameter `field1` with type `int` in function `DC2.__init__`\", \"Argument `Literal['f2']` is not assignable to parameter `field2` with type `int` in function `DC2.__init__`\", \"Argument `Literal[b'f6']` is not assignable to parameter `field3` with type `ConverterClass` in function `DC2.__init__`\", 'Argument `list[@_]` is not assignable to parameter `field4` with type `int` in function `DC2.__init__`']",
@@ -198,7 +198,7 @@
     "Line 60: Unexpected errors ['Unexpected keyword argument `other_name` in function `Customer1.__init__`']",
     "Line 79: Unexpected errors ['`<` is not supported between `Customer2` and `Customer2`\\n  Cannot find `__lt__` or `__gt__`']"
   ],
-  "dataclasses_usage.py": [
+  "conformance\\third_party\\dataclasses_usage.py": [
     "Lines 58, 61: Expected error (tag 'DC1')",
     "Lines 64, 67: Expected error (tag 'DC2')",
     "Lines 70, 73: Expected error (tag 'DC3')"
