@@ -11,6 +11,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use dupe::IterDupedExt;
 use itertools::Either;
 use pyrefly_util::recurser::Recurser;
 use pyrefly_util::uniques::UniqueFactory;
@@ -137,7 +138,49 @@ impl CalcStack {
 }
 
 /// Represent a cycle we are currently solving.
-pub struct Cycle;
+#[allow(dead_code)]
+pub struct Cycle {
+    /// Where do we want to break the cycle
+    break_at: CalcId,
+    /// The recursion stack is everything we need new stack frames for
+    /// (including the place where we'll break the cycle, which briefly requires
+    /// a frame to produce the placeholder result).
+    ///
+    /// When we first create the `Cycle` after detecting a raw cycle, we
+    /// initialize it with everything from the current idx (not inclusive) to
+    /// `break_at` (inclusive) in reverse order.
+    ///
+    /// We'll pop from it and push to the `unwind_stack` as we recurse toward `break_at`
+    recursion_stack: Vec<CalcId>,
+    /// The unwind stack is all stack frames from where we are right now to the original entrypoint for `break_at`.
+    ///
+    /// When we first create the `Cycle` after detecting a raw cycle, we initialize
+    /// it with everything from `break_at` up to the current idx (inclusive).
+    ///
+    /// We'll push to it as we recurs, and then pop as calculations complete.
+    unwind_stack: Vec<CalcId>,
+    /// The algorithm doesn't actually require knowing where we were when we detected the cycle, but it is
+    /// essentially free and could be very useful for debugging.
+    #[allow(dead_code)]
+    detected_at: CalcId,
+}
+
+impl Cycle {
+    #[expect(dead_code)]
+    fn new(raw: Vec1<CalcId>) -> Self {
+        let detected_at = raw.first().dupe();
+        let (split_at, break_at) = raw.iter().enumerate().min_by_key(|(_, c)| *c).unwrap();
+        let (before, at_and_after) = raw.split_at(split_at);
+        let unwind_stack = before.iter().duped().collect();
+        let recursion_stack = at_and_after.iter().rev().duped().collect();
+        Cycle {
+            break_at: break_at.dupe(),
+            recursion_stack,
+            unwind_stack,
+            detected_at,
+        }
+    }
+}
 
 /// Represent the current thread's cycles, which form a stack
 /// because we can encounter a new one while solving another.
