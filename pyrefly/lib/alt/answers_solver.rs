@@ -232,10 +232,15 @@ impl Cycles {
     }
 
     #[expect(dead_code)]
-    fn pre_calculate_state(&self, current: CalcId) -> CycleState {
+    fn cycle_completed(&self) {
+        self.0.borrow_mut().pop();
+    }
+
+    #[expect(dead_code)]
+    fn pre_calculate_state(&self, current: &CalcId) -> CycleState {
         if let Some(active_cycle) = self.0.borrow_mut().last_mut()
             && let Some(c) = active_cycle.recursion_stack.last()
-            && current == *c
+            && *current == *c
         {
             let c = active_cycle.recursion_stack.pop().unwrap();
             if active_cycle.recursion_stack.is_empty() {
@@ -250,10 +255,10 @@ impl Cycles {
     }
 
     #[expect(dead_code)]
-    fn post_calculate_state(&self, current: CalcId) -> CycleState {
+    fn post_calculate_state(&self, current: &CalcId) -> CycleState {
         if let Some(active_cycle) = self.0.borrow_mut().last_mut() {
             if let Some(c) = active_cycle.unwind_stack.last() {
-                if current == *c {
+                if current == c {
                     // This is a participant; remove it from the unwind stack.
                     active_cycle.unwind_stack.pop();
                     CycleState::Participant
@@ -264,7 +269,7 @@ impl Cycles {
                     // dependencies that aren't part of the active cycle.
                     CycleState::NoDetectedCycle
                 }
-            } else if current == active_cycle.break_at {
+            } else if *current == active_cycle.break_at {
                 // We just finished the cycle, time to wrap up
                 CycleState::BreakAt
             } else {
