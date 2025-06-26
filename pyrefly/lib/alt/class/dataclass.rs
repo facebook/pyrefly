@@ -144,7 +144,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 params.push(field.as_param(
                     &name,
                     field_flags.is_set(&DataclassKeywords::DEFAULT),
-                    kw_only || field_flags.is_set(&DataclassKeywords::KW_ONLY),
+                    field_flags.is_set(&(DataclassKeywords::KW_ONLY.0, kw_only)),
                 ));
             }
         }

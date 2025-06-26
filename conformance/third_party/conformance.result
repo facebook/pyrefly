@@ -145,8 +145,6 @@
   "dataclasses_kwonly.py": [
     "Line 32: Unexpected errors ['Missing argument `a` in function `DC2.__init__`', 'Expected 0 positional arguments, got 1 in function `DC2.__init__`']",
     "Line 35: Unexpected errors ['Missing argument `a` in function `DC2.__init__`', 'Expected 0 positional arguments, got 1 in function `DC2.__init__`']",
-    "Line 47: Unexpected errors ['Missing argument `a` in function `DC3.__init__`', 'Expected 0 positional arguments, got 1 in function `DC3.__init__`']",
-    "Line 50: Unexpected errors ['Missing argument `a` in function `DC3.__init__`', 'Expected 0 positional arguments, got 1 in function `DC3.__init__`']",
     "Line 61: Unexpected errors ['Missing argument `c` in function `DC4.__init__`', 'Argument `float` is not assignable to parameter `b` with type `int` in function `DC4.__init__`', 'Multiple values for argument `b` in function `DC4.__init__`']"
   ],
   "dataclasses_order.py": [],
