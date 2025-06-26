@@ -99,8 +99,8 @@ impl CalcStack {
         Self(RefCell::new(Vec::new()))
     }
 
-    fn push(&self, bindings: Bindings, idx: AnyIdx) {
-        self.0.borrow_mut().push(CalcId(bindings, idx));
+    fn push(&self, current: CalcId) {
+        self.0.borrow_mut().push(current);
     }
 
     fn pop(&self) -> Option<CalcId> {
@@ -258,14 +258,19 @@ impl Cycles {
                     CycleState::Participant
                 } else {
                     // There is an active cycle, but the current idx is not participating.
+                    //
+                    // This case is hit when any cycle participant computes solving additional
+                    // dependencies that aren't part of the active cycle.
                     CycleState::NoDetectedCycle
                 }
             } else if current == active_cycle.break_at {
                 // We just finished the cycle, time to wrap up
                 CycleState::BreakAt
             } else {
-                // This branch can be hit if `break_at` has to compute additional dependencies
-                // after the one that triggered the cycle.
+                // There is an active cycle, but the current idx is not participating.
+                //
+                // This case is hit if `break_at` computes additional dependencies that aren't
+                // part of the active cycle.
                 CycleState::NoDetectedCycle
             }
         } else {
@@ -351,8 +356,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
+        let current = CalcId(self.bindings().dupe(), K::to_anyidx(idx));
         let calculation = self.get_calculation(idx);
-        self.stack.push(self.bindings().dupe(), K::to_anyidx(idx));
+        self.stack.push(current);
 
         let result = match calculation.propose_calculation() {
             ProposalResult::Calculated(v) => Ok((v, None)),
