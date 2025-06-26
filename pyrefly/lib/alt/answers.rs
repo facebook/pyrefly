@@ -393,6 +393,28 @@ impl CalcStack {
     pub fn into_vec(&self) -> Vec<CalcId> {
         self.0.borrow().clone()
     }
+
+    /// Return the current cycle, if we are at a (module, idx) that we've already seen in this thread.
+    ///
+    /// The answer will have the form
+    /// - if there is no cycle, `None`
+    /// - if there is a cycle, `Some(vec![(m0, i0), (m2, i2)...])`
+    ///   where the order of (module, idx) pairs is recency (so starting with current
+    ///   module and idx, and ending with the oldest).
+    pub fn current_cycle(&self) -> Option<Vec<CalcId>> {
+        let stack = self.0.borrow();
+        let mut rev_stack = stack.iter().rev();
+        let current = rev_stack.next()?;
+        let mut cycle = Vec::with_capacity(rev_stack.len());
+        cycle.push(current.dupe());
+        for c in rev_stack {
+            if c == current {
+                return Some(cycle);
+            }
+            cycle.push(c.dupe());
+        }
+        None
+    }
 }
 
 /// Represent a cycle we are currently solving.

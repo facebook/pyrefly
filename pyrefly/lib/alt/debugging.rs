@@ -1,4 +1,3 @@
-use dupe::Dupe;
 use pyrefly_util::display::DisplayWithCtx;
 
 use crate::alt::answers::AnswersSolver;
@@ -163,32 +162,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
     }
 
-    /// Return the current cycle, if we are at a (module, idx) that we've already seen in this thread.
-    ///
-    /// The answer will have the form
-    /// - if there is no cycle, `None`
-    /// - if there is a cycle, `Some(vec![(m0, i0), (m2, i2)...])`
-    ///   where the order of (module, idx) pairs is recency (so starting with current
-    ///   module and idx, and ending with the oldest).
-    fn compute_current_cycle(&self) -> Option<Vec<CalcId>> {
-        let mut rev_stack = self.stack().into_vec().into_iter().rev();
-        let current = rev_stack.next()?;
-        let mut cycle = Vec::with_capacity(rev_stack.len());
-        cycle.push(current.dupe());
-        for c in rev_stack {
-            if c == current {
-                return Some(cycle);
-            }
-            cycle.push(c);
-        }
-        None
-    }
-
     // Get a printable representation of the current cycle.
     //
     // Panics if called when there is no cycle (should only be used to debug cycle breaking).
     pub fn show_current_cycle(&self) -> impl Iterator<Item = String> {
-        self.compute_current_cycle()
+        self.stack()
+            .current_cycle()
             .unwrap()
             .into_iter()
             .map(|CalcId(bindings, idx)| {
