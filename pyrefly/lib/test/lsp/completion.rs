@@ -34,7 +34,7 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
         if let Some(insert_text) = insert_text {
             report.push_str(" inserting `");
             report.push_str(&insert_text);
-            report.push_str("`");
+            report.push('`');
         }
     }
     report
