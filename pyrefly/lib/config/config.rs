@@ -224,7 +224,10 @@ pub struct ConfigFile {
     pub fallback_search_path: Vec<PathBuf>,
 
     /// Override the bundled typeshed with a custom path.
-    #[serde(skip)]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+    )]
     pub typeshed_path: Option<PathBuf>,
 
     // TODO(connernilsen): make this mutually exclusive with venv/conda env
@@ -364,28 +367,23 @@ impl ConfigFile {
             let stdlib_path = custom_typeshed_path.join("stdlib");
             if let Some(path) = find_module_in_search_path(module, std::iter::once(&stdlib_path)) {
                 Ok(path)
-            } else if let Some(path) = find_module_in_search_path(module, self.fallback_search_path.iter()) {
-                Ok(path)
-            } else if let Some(path) = find_module_in_site_package_path(
-                module,
-                self.site_package_path(),
-                self.use_untyped_imports,
-                self.ignore_missing_source,
-            )? {
-                Ok(path)
             } else {
-                Err(FindError::import_lookup_path(
-                    self.structured_import_lookup_path(),
-                    module,
-                    &self.source,
-                ))
+                // If not found in custom typeshed, continue with normal lookup
+                self.continue_import_lookup(module)
             }
         } else if self.typeshed_path.is_none() && let Some(path) = typeshed()
             .map_err(|err| FindError::not_found(err, module))?
             .find(module)
         {
             Ok(path)
-        } else if let Some(path) = find_module_in_search_path(module, self.fallback_search_path.iter()) {
+        } else {
+            // Continue with normal lookup
+            self.continue_import_lookup(module)
+        }
+    }
+
+    fn continue_import_lookup(&self, module: ModuleName) -> Result<ModulePath, FindError> {
+        if let Some(path) = find_module_in_search_path(module, self.fallback_search_path.iter()) {
             Ok(path)
         } else if let Some(path) = find_module_in_site_package_path(
             module,
