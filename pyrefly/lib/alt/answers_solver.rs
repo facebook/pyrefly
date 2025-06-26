@@ -166,7 +166,6 @@ pub struct Cycle {
 }
 
 impl Cycle {
-    #[expect(dead_code)]
     fn new(raw: Vec1<CalcId>) -> Self {
         let detected_at = raw.first().dupe();
         let (split_at, break_at) = raw.iter().enumerate().min_by_key(|(_, c)| *c).unwrap();
@@ -184,12 +183,16 @@ impl Cycle {
 
 /// Represent the current thread's cycles, which form a stack
 /// because we can encounter a new one while solving another.
-#[expect(dead_code)]
 pub struct Cycles(RefCell<Vec<Cycle>>);
 
 impl Cycles {
     pub fn new() -> Self {
         Self(RefCell::new(Vec::new()))
+    }
+
+    #[expect(dead_code)]
+    fn cycle_detected(&self, raw: Vec1<CalcId>) {
+        self.0.borrow_mut().push(Cycle::new(raw));
     }
 }
 
