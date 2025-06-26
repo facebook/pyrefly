@@ -88,7 +88,7 @@ assert_words!(KeyYieldFrom, 1);
 assert_words!(KeyFunction, 1);
 
 assert_words!(Binding, 9);
-assert_words!(BindingExpect, 8);
+assert_words!(BindingExpect, 9);
 assert_words!(BindingAnnotation, 13);
 assert_words!(BindingClass, 18);
 assert_words!(BindingTParams, 9);
@@ -432,7 +432,7 @@ impl DisplayWith<Bindings> for ExprOrBinding {
 #[derive(Clone, Debug)]
 pub enum BindingExpect {
     /// An expression where we need to check for type errors, but don't need the result type.
-    TypeCheckExpr(Box<Expr>),
+    TypeCheckExpr(Expr),
     /// The expected number of values in an unpacked iterable expression.
     UnpackedLength(Idx<Key>, TextRange, SizeExpectation),
     /// An exception and its cause from a raise statement.
@@ -445,9 +445,9 @@ pub enum BindingExpect {
         name: Name,
     },
     /// `del` statement
-    Delete(Box<Expr>),
+    Delete(Expr),
     /// Expression used in a boolean context (`bool()`, `if`, or `while`)
-    Bool(Box<Expr>, TextRange),
+    Bool(Expr, TextRange),
 }
 
 impl DisplayWith<Bindings> for BindingExpect {

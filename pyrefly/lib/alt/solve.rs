@@ -1137,7 +1137,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let ty = self.expr_infer(x, &self.error_swallower());
                 self.check_dunder_bool_is_callable(&ty, *range, errors);
             }
-            BindingExpect::Delete(x) => match &**x {
+            BindingExpect::Delete(x) => match x {
                 Expr::Name(_) => {
                     self.expr_infer(x, errors);
                 }
