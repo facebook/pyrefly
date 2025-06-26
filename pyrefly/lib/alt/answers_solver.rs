@@ -181,6 +181,41 @@ impl Cycle {
     }
 }
 
+/// Represents the current cycle state for a given calculation. We check
+/// the state at two different points in time:
+/// - Before performing calculations, because we need to know when we are in an
+///   already-detected cycle and recursing out toward the `break_at`, and we
+///   need to know to stop and unwind when we reach `break_at`.
+/// - After performing calculations, because we may need to handle results
+///   differently and we need to know to clean up the cycle when we get back
+///   to `break_at`.
+enum CycleState {
+    /// The current idx is not participating in any currently detected cycle (though it
+    /// remains possible we will detect one here).
+    ///
+    /// Note that this does not necessarily mean there is no active cycle: the
+    /// graph solve will frequently branch out from a cycle into other parts of
+    /// the dependency graph, and in those cases we are not in a currently-known
+    /// cycle.
+    NoDetectedCycle,
+    /// This idx is part of the active cycle, and we are either (if this is a pre-calculation
+    /// check) recursing out toward `break_at` or unwinding back toward `break_at`.
+    ///
+    /// If we are recursing, the current `Calculation` will need its per-thread recursion
+    /// limit bumped, since this will be a duplicate of some frame from before we first
+    /// reached `break_at`.
+    ///
+    /// If we are unwinding, we may need to handle the result with care to avoid data
+    /// races on `Var` pinning.
+    Participant,
+    /// This idx is the `break_at` for the active cycle.
+    /// - If this was a pre-calculation check, it means we have reached the end of the
+    ///   recursion and should return a placeholder to our parent frame.
+    /// - If this was a post-calculation check, it means we have completed the cycle
+    ///   and should wrap up.
+    BreakAt,
+}
+
 /// Represent the current thread's cycles, which form a stack
 /// because we can encounter a new one while solving another.
 pub struct Cycles(RefCell<Vec<Cycle>>);
@@ -193,6 +228,50 @@ impl Cycles {
     #[expect(dead_code)]
     fn cycle_detected(&self, raw: Vec1<CalcId>) {
         self.0.borrow_mut().push(Cycle::new(raw));
+    }
+
+    #[expect(dead_code)]
+    fn pre_calculate_state(&self, current: CalcId) -> CycleState {
+        if let Some(active_cycle) = self.0.borrow_mut().last_mut()
+            && let Some(c) = active_cycle.recursion_stack.last()
+            && current == *c
+        {
+            let c = active_cycle.recursion_stack.pop().unwrap();
+            if active_cycle.recursion_stack.is_empty() {
+                CycleState::BreakAt
+            } else {
+                active_cycle.unwind_stack.push(c);
+                CycleState::Participant
+            }
+        } else {
+            CycleState::NoDetectedCycle
+        }
+    }
+
+    #[expect(dead_code)]
+    fn post_calculate_state(&self, current: CalcId) -> CycleState {
+        if let Some(active_cycle) = self.0.borrow_mut().last_mut() {
+            if let Some(c) = active_cycle.unwind_stack.last() {
+                if current == *c {
+                    // This is a participant; remove it from the unwind stack.
+                    active_cycle.unwind_stack.pop();
+                    CycleState::Participant
+                } else {
+                    // There is an active cycle, but the current idx is not participating.
+                    CycleState::NoDetectedCycle
+                }
+            } else if current == active_cycle.break_at {
+                // We just finished the cycle, time to wrap up
+                CycleState::BreakAt
+            } else {
+                // This branch can be hit if `break_at` has to compute additional dependencies
+                // after the one that triggered the cycle.
+                CycleState::NoDetectedCycle
+            }
+        } else {
+            // If the cycle stack is empty, we can't be in a cycle :)
+            CycleState::NoDetectedCycle
+        }
     }
 }
 
