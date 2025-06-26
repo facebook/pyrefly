@@ -66,24 +66,7 @@ use crate::types::types::TParams;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
-pub trait SolveRecursive: Keyed {}
-impl SolveRecursive for Key {}
-impl SolveRecursive for KeyExport {}
-impl SolveRecursive for KeyExpect {}
-impl SolveRecursive for KeyFunction {}
-impl SolveRecursive for KeyClass {}
-impl SolveRecursive for KeyTParams {}
-impl SolveRecursive for KeyClassField {}
-impl SolveRecursive for KeyClassSynthesizedFields {}
-impl SolveRecursive for KeyAnnotation {}
-impl SolveRecursive for KeyClassMetadata {}
-impl SolveRecursive for KeyClassMro {}
-impl SolveRecursive for KeyLegacyTypeParam {}
-impl SolveRecursive for KeyYield {}
-impl SolveRecursive for KeyYieldFrom {}
-impl SolveRecursive for KeyVariance {}
-
-pub trait Solve<Ans: LookupAnswer>: SolveRecursive {
+pub trait Solve<Ans: LookupAnswer>: Keyed {
     /// Solve the binding.
     /// Note that the key (`Self`) is not provided, as the result of a binding should
     /// not depend on the key it was bound to.

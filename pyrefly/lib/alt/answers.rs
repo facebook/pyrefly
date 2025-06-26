@@ -32,7 +32,6 @@ use crate::alt::answers_solver::Cycles;
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::alt::traits::Solve;
-use crate::alt::traits::SolveRecursive;
 use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
 use crate::binding::binding::Keyed;
@@ -117,7 +116,7 @@ table!(
 
 impl DisplayWith<Bindings> for Answers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, bindings: &Bindings) -> fmt::Result {
-        fn go<K: SolveRecursive>(
+        fn go<K: Keyed>(
             bindings: &Bindings,
             entry: &AnswerEntry<K>,
             f: &mut fmt::Formatter<'_>,
@@ -342,7 +341,7 @@ impl Answers {
         enable_index: bool,
         enable_trace: bool,
     ) -> Self {
-        fn presize<K: SolveRecursive>(items: &mut AnswerEntry<K>, bindings: &Bindings)
+        fn presize<K: Keyed>(items: &mut AnswerEntry<K>, bindings: &Bindings)
         where
             BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
         {
@@ -517,7 +516,7 @@ impl Answers {
         Arc::new(vv)
     }
 
-    pub fn get_idx<K: SolveRecursive>(&self, k: Idx<K>) -> Option<Arc<K::Answer>>
+    pub fn get_idx<K: Keyed>(&self, k: Idx<K>) -> Option<Arc<K::Answer>>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
     {
