@@ -361,39 +361,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let calculation = self.get_calculation(idx);
 
         let result = match calculation.propose_calculation() {
-            ProposalResult::Calculated(v) => Ok((v, None)),
+            ProposalResult::Calculated(v) => Ok(v),
             ProposalResult::CycleBroken(rec) => Err(rec),
-            ProposalResult::CycleDetected => self
-                .attempt_to_unwind_cycle_from_here(idx, calculation)
-                .map(|final_result| (final_result, None)),
+            ProposalResult::CycleDetected => {
+                self.attempt_to_unwind_cycle_from_here(idx, calculation)
+            }
             ProposalResult::Calculatable => {
                 Ok(self.calculate_and_record_answer(current, idx, calculation))
             }
         };
-
-        if let Ok((v, Some(r))) = &result {
-            let k = self.bindings().idx_to_key(idx).range();
-            K::record_recursive(self, k, v, r, self.base_errors);
-        }
         match result {
-            Ok((v, _)) => v,
+            Ok(v) => v,
             Err(r) => Arc::new(K::promote_recursive(r)),
         }
     }
 
     /// Calculate the value for a `K::Value`, and record it in the `Calculation`.
     ///
-    /// Return a pair of:
-    /// - the final result from the `Calculation`, which potentially might be
-    ///   coming from another thread because the first write wins.
-    /// - the recursive result, if there was one, which we may need to record as corresponding
-    ///   to this answer
+    /// Return the final result from the `Calculation`, which potentially might
+    /// be coming from another thread because the first write wins.
     fn calculate_and_record_answer<K: Solve<Ans>>(
         &self,
         current: CalcId,
         idx: Idx<K>,
         calculation: &Calculation<Arc<K::Answer>, K::Recursive>,
-    ) -> (Arc<K::Answer>, Option<K::Recursive>)
+    ) -> Arc<K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
@@ -402,7 +394,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let binding = self.bindings().get(idx);
         let answer = K::solve(self, binding, self.base_errors);
         self.stack.pop();
-        calculation.record_value(answer)
+        let (v, rec) = calculation.record_value(answer);
+        // if this was the first write to a Calculation that had a recursive placeholder,
+        // we need to record the placeholder => final answer correspondance.
+        if let Some(r) = rec {
+            let k = self.bindings().idx_to_key(idx).range();
+            K::record_recursive(self, k, &v, &r, self.base_errors);
+        }
+        v
     }
 
     /// Attempt to record a cycle placeholder result to unwind a cycle from here.
