@@ -975,8 +975,10 @@ mod tests {
                 TestPath::dir("foo2", Vec::new()),
             ],
         );
+        let mut res = find_module_prefixes(ModuleName::from_str("fo"), [root.to_path_buf()].iter());
+        res.sort();
         assert_eq!(
-            find_module_prefixes(ModuleName::from_str("fo"), [root.to_path_buf()].iter(),),
+            res,
             vec![ModuleName::from_str("foo"), ModuleName::from_str("foo2")]
         );
     }
@@ -992,8 +994,10 @@ mod tests {
                 TestPath::dir("foo2", Vec::new()),
             ],
         );
+        let mut res = find_module_prefixes(ModuleName::from_str("fo"), [root.to_path_buf()].iter());
+        res.sort();
         assert_eq!(
-            find_module_prefixes(ModuleName::from_str("fo"), [root.to_path_buf()].iter(),),
+            res,
             vec![ModuleName::from_str("foo"), ModuleName::from_str("foo2")]
         );
     }
