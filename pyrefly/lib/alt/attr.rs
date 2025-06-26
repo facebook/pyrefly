@@ -751,102 +751,116 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 continue;
             };
             match self.lookup_attr_from_base_no_union(attr_base.clone(), attr_name) {
-                LookupResult::Found(attr) => match attr.inner {
-                    AttributeInner::Simple(want, Visibility::ReadWrite) => {
-                        let ty = match &got {
-                            TypeOrExpr::Expr(got) => self.expr(
-                                got,
-                                Some((&want, &|| TypeCheckContext {
-                                    kind: TypeCheckKind::Attribute(attr_name.clone()),
-                                    context: context.map(|ctx| ctx()),
-                                })),
-                                errors,
-                            ),
-                            TypeOrExpr::Type(got, _) => {
-                                self.check_type(&want, got, range, errors, &|| TypeCheckContext {
-                                    kind: TypeCheckKind::Attribute(attr_name.clone()),
-                                    context: context.map(|ctx| ctx()),
-                                });
-                                (*got).clone()
-                            }
-                        };
-                        if let Some(narrowed_types) = &mut narrowed_types {
-                            narrowed_types.push(ty)
+                // Attribute setting bypasses `__getattr__` lookup and checks `__setattr__`
+                // If the attribute is not found, we fall back to `__setattr__`
+                LookupResult::NotFound(not_found)
+                | LookupResult::Found(Attribute {
+                    inner: AttributeInner::GetAttr(not_found, _, _),
+                }) => {
+                    self.check_setattr(
+                        attr_base, attr_name, got, not_found, range, errors, context,
+                    );
+                }
+                LookupResult::Found(Attribute {
+                    inner: AttributeInner::Simple(want, Visibility::ReadWrite),
+                }) => {
+                    let ty = match &got {
+                        TypeOrExpr::Expr(got) => self.expr(
+                            got,
+                            Some((&want, &|| TypeCheckContext {
+                                kind: TypeCheckKind::Attribute(attr_name.clone()),
+                                context: context.map(|ctx| ctx()),
+                            })),
+                            errors,
+                        ),
+                        TypeOrExpr::Type(got, _) => {
+                            self.check_type(&want, got, range, errors, &|| TypeCheckContext {
+                                kind: TypeCheckKind::Attribute(attr_name.clone()),
+                                context: context.map(|ctx| ctx()),
+                            });
+                            (*got).clone()
                         }
-                        // Avoid the hook where we wipe `narrowed_types` in all other cases.
-                        continue;
+                    };
+                    if let Some(narrowed_types) = &mut narrowed_types {
+                        narrowed_types.push(ty)
                     }
-                    AttributeInner::NoAccess(e) => {
-                        self.error(
-                            errors,
-                            range,
-                            ErrorKind::NoAccess,
-                            context,
-                            e.to_error_msg(attr_name),
-                        );
-                    }
-                    AttributeInner::Simple(_, Visibility::ReadOnly) => {
-                        self.error(
-                            errors,
-                            range,
-                            ErrorKind::ReadOnly,
-                            context,
-                            format!("Cannot assign to read-only attribute `{attr_name}`"),
-                        );
-                    }
-                    AttributeInner::Property(_, None, cls) => {
-                        let e = NoAccessReason::SettingReadOnlyProperty(cls);
-                        self.error(
-                            errors,
-                            range,
-                            ErrorKind::ReadOnly,
-                            context,
-                            e.to_error_msg(attr_name),
-                        );
-                    }
-                    AttributeInner::Property(_, Some(setter), _) => {
-                        let got = CallArg::arg(got);
-                        self.call_property_setter(setter, got, range, errors, context);
-                    }
-                    AttributeInner::Descriptor(d) => {
-                        match (d.base, d.setter) {
-                            (DescriptorBase::Instance(class_type), Some(setter)) => {
-                                let got = CallArg::arg(got);
-                                self.call_descriptor_setter(
-                                    setter, class_type, got, range, errors, context,
-                                );
-                            }
-                            (DescriptorBase::Instance(class_type), None) => {
-                                let e = NoAccessReason::SettingReadOnlyDescriptor(
-                                    class_type.class_object().dupe(),
-                                );
-                                self.error(
-                                    errors,
-                                    range,
-                                    ErrorKind::ReadOnly,
-                                    context,
-                                    e.to_error_msg(attr_name),
-                                );
-                            }
-                            (DescriptorBase::ClassDef(class), _) => {
-                                let e = NoAccessReason::SettingDescriptorOnClass(class.dupe());
-                                self.error(
-                                    errors,
-                                    range,
-                                    ErrorKind::NoAccess,
-                                    context,
-                                    e.to_error_msg(attr_name),
-                                );
-                            }
-                        };
-                    }
-                    AttributeInner::GetAttr(not_found, _, _) => {
-                        // Attribute setting bypasses `__getattr__` lookup and checks `__setattr__`
-                        self.check_setattr(
-                            attr_base, attr_name, got, not_found, range, errors, context,
-                        );
-                    }
-                },
+                    // Avoid the hook where we wipe `narrowed_types` in all other cases.
+                    continue;
+                }
+                LookupResult::Found(Attribute {
+                    inner: AttributeInner::NoAccess(e),
+                }) => {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::NoAccess,
+                        context,
+                        e.to_error_msg(attr_name),
+                    );
+                }
+                LookupResult::Found(Attribute {
+                    inner: AttributeInner::Simple(_, Visibility::ReadOnly),
+                }) => {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::ReadOnly,
+                        context,
+                        format!("Cannot assign to read-only attribute `{attr_name}`"),
+                    );
+                }
+                LookupResult::Found(Attribute {
+                    inner: AttributeInner::Property(_, None, cls),
+                }) => {
+                    let e = NoAccessReason::SettingReadOnlyProperty(cls);
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::ReadOnly,
+                        context,
+                        e.to_error_msg(attr_name),
+                    );
+                }
+                LookupResult::Found(Attribute {
+                    inner: AttributeInner::Property(_, Some(setter), _),
+                }) => {
+                    let got = CallArg::arg(got);
+                    self.call_property_setter(setter, got, range, errors, context);
+                }
+                LookupResult::Found(Attribute {
+                    inner: AttributeInner::Descriptor(d),
+                }) => {
+                    match (d.base, d.setter) {
+                        (DescriptorBase::Instance(class_type), Some(setter)) => {
+                            let got = CallArg::arg(got);
+                            self.call_descriptor_setter(
+                                setter, class_type, got, range, errors, context,
+                            );
+                        }
+                        (DescriptorBase::Instance(class_type), None) => {
+                            let e = NoAccessReason::SettingReadOnlyDescriptor(
+                                class_type.class_object().dupe(),
+                            );
+                            self.error(
+                                errors,
+                                range,
+                                ErrorKind::ReadOnly,
+                                context,
+                                e.to_error_msg(attr_name),
+                            );
+                        }
+                        (DescriptorBase::ClassDef(class), _) => {
+                            let e = NoAccessReason::SettingDescriptorOnClass(class.dupe());
+                            self.error(
+                                errors,
+                                range,
+                                ErrorKind::NoAccess,
+                                context,
+                                e.to_error_msg(attr_name),
+                            );
+                        }
+                    };
+                }
                 LookupResult::InternalError(e) => {
                     self.error(
                         errors,
@@ -855,9 +869,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         context,
                         e.to_error_msg(attr_name, todo_ctx),
                     );
-                }
-                LookupResult::NotFound(e) => {
-                    self.check_setattr(attr_base, attr_name, got, e, range, errors, context);
                 }
             }
             // If we hit anything other than a simple, read-write attribute then we will not infer
@@ -890,35 +901,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return;
             };
             match self.lookup_attr_from_base_no_union(attr_base.clone(), attr_name) {
-                LookupResult::Found(attr) => match attr.inner {
-                    // TODO: deleting attributes is allowed at runtime, but is not type-safe
-                    // except for descriptors that implement `__delete__`
-                    AttributeInner::Simple(_, Visibility::ReadWrite)
-                    | AttributeInner::Property(_, _, _)
-                    | AttributeInner::Descriptor(_) => {}
-                    AttributeInner::NoAccess(e) => {
-                        self.error(
-                            errors,
-                            range,
-                            ErrorKind::NoAccess,
-                            context,
-                            e.to_error_msg(attr_name),
-                        );
-                    }
-                    AttributeInner::Simple(_, Visibility::ReadOnly) => {
-                        self.error(
-                            errors,
-                            range,
-                            ErrorKind::ReadOnly,
-                            context,
-                            format!("Cannot delete read-only attribute `{attr_name}`"),
-                        );
-                    }
-                    AttributeInner::GetAttr(not_found, _, _) => {
-                        // Attribute deletion bypasses `__getattr__` lookup checks `__delattr__` directly
-                        self.check_delattr(attr_base, attr_name, not_found, range, errors, context);
-                    }
-                },
+                // Attribute deletion bypasses `__getattr__` lookup and checks `__delattr__`
+                // If the attribute is not found, we fall back to `__delattr__`
+                LookupResult::NotFound(not_found)
+                | LookupResult::Found(Attribute {
+                    inner: AttributeInner::GetAttr(not_found, _, _),
+                }) => {
+                    self.check_delattr(attr_base, attr_name, not_found, range, errors, context);
+                }
+                // TODO: deleting attributes is allowed at runtime, but is not type-safe
+                // except for descriptors that implement `__delete__`
+                LookupResult::Found(Attribute {
+                    inner:
+                        AttributeInner::Simple(_, Visibility::ReadWrite)
+                        | AttributeInner::Property(_, _, _)
+                        | AttributeInner::Descriptor(_),
+                }) => {}
+                LookupResult::Found(Attribute {
+                    inner: AttributeInner::NoAccess(e),
+                }) => {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::NoAccess,
+                        context,
+                        e.to_error_msg(attr_name),
+                    );
+                }
+                LookupResult::Found(Attribute {
+                    inner: AttributeInner::Simple(_, Visibility::ReadOnly),
+                }) => {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::ReadOnly,
+                        context,
+                        format!("Cannot delete read-only attribute `{attr_name}`"),
+                    );
+                }
                 LookupResult::InternalError(e) => {
                     self.error(
                         errors,
@@ -927,9 +947,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         context,
                         e.to_error_msg(attr_name, todo_ctx),
                     );
-                }
-                LookupResult::NotFound(e) => {
-                    self.check_delattr(attr_base, attr_name, e, range, errors, context);
                 }
             }
         }
