@@ -1659,7 +1659,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.get_idx(*default);
                 self.binding_to_type_info(binding, errors)
             }
-            Binding::AssignToAttribute(box (attr, got)) => {
+            Binding::AssignToAttribute(attr, got) => {
                 let base = self.expr_infer(&attr.value, errors);
                 let narrowed = self.check_assign_to_attribute_and_infer_narrow(
                     &base,
@@ -1695,7 +1695,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     TypeInfo::of_ty(Type::never())
                 }
             }
-            Binding::AssignToSubscript(box (subscript, value)) => {
+            Binding::AssignToSubscript(subscript, value) => {
                 // If we can't assign to this subscript, then we don't narrow the type
                 let assigned_ty = self.check_assign_to_subscript(subscript, value, errors);
                 let narrowed = if assigned_ty.is_any() {

@@ -147,7 +147,7 @@ impl<'a> BindingsBuilder<'a> {
         let value = make_assigned_value(assigned.as_deref(), None);
         let idx = self.insert_binding_user(
             user,
-            Binding::AssignToAttribute(Box::new((attr, value.clone()))),
+            Binding::AssignToAttribute(attr, Box::new(value.clone())),
         );
         if let Some(identifier) = narrowing_identifier {
             let name = Hashed::new(&identifier.id);
@@ -195,10 +195,8 @@ impl<'a> BindingsBuilder<'a> {
             self.ensure_expr(assigned, user.usage());
         }
         let value = make_assigned_value(assigned.as_deref(), None);
-        let idx = self.insert_binding_user(
-            user,
-            Binding::AssignToSubscript(Box::new((subscript, value))),
-        );
+        let idx =
+            self.insert_binding_user(user, Binding::AssignToSubscript(subscript, Box::new(value)));
         if let Some(identifier) = narrowing_identifier {
             let name = Hashed::new(&identifier.id);
             if self.lookup_name(name, LookupKind::Regular).is_ok() {
