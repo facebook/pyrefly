@@ -18,6 +18,8 @@ use crate::alt::class::class_field::DataclassMember;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::error;
+use crate::error::collector::ErrorCollector;
 use crate::python::dunder;
 use crate::types::callable::BoolKeywords;
 use crate::types::callable::Callable;
@@ -55,7 +57,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         all_fields
     }
 
-    pub fn get_dataclass_synthesized_fields(&self, cls: &Class) -> Option<ClassSynthesizedFields> {
+    pub fn get_dataclass_synthesized_fields(&self, cls: &Class, errors: &ErrorCollector) -> Option<ClassSynthesizedFields> {
         let metadata = self.get_metadata_for_class(cls);
         let dataclass = metadata.dataclass_metadata()?;
         let mut fields = SmallMap::new();
@@ -66,6 +68,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     cls,
                     &dataclass.fields,
                     dataclass.kws.is_set(&DataclassKeywords::KW_ONLY),
+                    errors
                 ),
             );
         }
@@ -137,17 +140,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallSet<Name>,
         kw_only: bool,
+        errors: &ErrorCollector,
     ) -> ClassSynthesizedField {
         let mut params = vec![self.class_self_param(cls, false)];
+        let mut has_seen_default = false;
+
         for (name, field, field_flags) in self.iter_fields(cls, fields, true) {
-            if field_flags.is_set(&DataclassKeywords::INIT) {
-                params.push(field.as_param(
-                    &name,
-                    field_flags.is_set(&DataclassKeywords::DEFAULT),
-                    kw_only || field_flags.is_set(&DataclassKeywords::KW_ONLY),
-                ));
+                        if field_flags.is_set(&DataclassKeywords::INIT) {
+                let has_default = field_flags.is_set(&DataclassKeywords::DEFAULT);
+                let is_kw_only = field_flags.is_set(&DataclassKeywords::KW_ONLY);
+
+                if !is_kw_only && !kw_only {
+                    if !has_default && has_seen_default {
+                        if let Some(range) = cls.field_decl_range(&name) {
+                            self.error(
+                                errors, 
+                                range, 
+                                error::kind::ErrorKind::BadClassDefinition, 
+                                None, 
+                                format!(
+                                    "DataClass field '{}' without a default may not follow DataClass field with a default", name
+                                ),
+                            );
+                        }
+                    }
+                    if has_default {
+                        has_seen_default = true;
+                    }
+                }
+
+                params.push(field.as_param(&name, has_default, kw_only || is_kw_only));
             }
         }
+
         let ty = Type::Function(Box::new(Function {
             signature: Callable::list(ParamList::new(params), Type::None),
             metadata: FuncMetadata::def(
