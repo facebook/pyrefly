@@ -154,6 +154,15 @@ mod tests {
         assert!(Ignore::get_suppression_kind("# ignore: pyrefly").is_none());
         assert!(Ignore::get_suppression_kind(" pyrefly: ignore").is_none());
         assert!(Ignore::get_suppression_kind("normal line").is_none());
+        assert!(
+            Ignore::get_suppression_kind("# pyrefly: ignore") == Some(SuppressionKind::Pyrefly)
+        );
+        assert!(
+            Ignore::get_suppression_kind("# pyrefly: ignore[bad-return]")
+                == Some(SuppressionKind::TypedPyrefly(ErrorKind::BadReturn))
+        );
+        assert!(Ignore::get_suppression_kind("# pyrefly: ignore[]").is_none());
+        assert!(Ignore::get_suppression_kind("# pyrefly: ignore[bad-]").is_none());
     }
 
     #[test]
