@@ -18,6 +18,7 @@ use crate::alt::attr::DescriptorBase;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::callable::CallWithTypes;
+use crate::alt::expr::TypeOrExpr;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::kind::ErrorKind;
@@ -683,7 +684,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Therefore, flatten all TypeOrExpr's into Type before we start
         let call = CallWithTypes::new();
         let self_arg = call.opt_call_arg(self_arg.as_ref(), self, errors);
-        let args = call.vec_call_arg(args, self, errors);
+        let method_name = metadata.kind.as_func_id().func;
+        // If this is an TypedDict "update" method, then preserve argument expressions so we can
+        // contextually type them using the parameter types.
+        // Specifically, skipping vec_call_arg in the `update` case means we will not turn expressions into types here
+        // We will instead turn them into types as we evaluate them against the type hints that we synthesized for the update method.
+
+        let args = if let Some(CallArg::Arg(TypeOrExpr::Type(Type::TypedDict(_), _))) = &self_arg
+            && method_name == "update"
+        {
+            args
+        } else {
+            &call.vec_call_arg(args, self, errors)
+        };
         let keywords = call.vec_call_keyword(keywords, self, errors);
 
         let mut closest_overload: Option<CalledOverload> = None;
@@ -694,7 +707,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 callable.clone(),
                 Some(metadata.kind.as_func_id()),
                 self_arg.clone(),
-                &args,
+                args,
                 &keywords,
                 range,
                 &arg_errors,
