@@ -90,7 +90,7 @@ impl<T: Dupe, R: Dupe> Calculation<T, R> {
     /// - If the current thread encountered a cycle and a recursive placeholder
     ///   exists, return `CycleBroken(recursive_placeholder)`.
     /// - If the calculation has already be completed, return `Calculated(value)`.
-    fn propose_calculation(&self) -> ProposalResult<T, R> {
+    pub fn propose_calculation(&self) -> ProposalResult<T, R> {
         let mut lock = self.0.lock();
         match &mut *lock {
             Status::NotCalculated => {
@@ -116,7 +116,7 @@ impl<T: Dupe, R: Dupe> Calculation<T, R> {
     ///   we passed in, because the first thread to write a placeholder wins.
     /// - Or, if another thread has already completed the calculation, return
     ///   the final value.
-    fn record_cycle(&self, placeholder: R) -> Either<T, R> {
+    pub fn record_cycle(&self, placeholder: R) -> Either<T, R> {
         let mut lock = self.0.lock();
         match &mut *lock {
             Status::NotCalculated => {
@@ -174,35 +174,6 @@ impl<T: Dupe, R: Dupe> Calculation<T, R> {
             }
             ProposalResult::Calculated(v) => Some(v.dupe()),
             ProposalResult::CycleDetected | ProposalResult::CycleBroken(..) => None,
-        }
-    }
-
-    /// Perform a calculation using the `caluculation` callback or use the
-    /// cached result of a calculation.
-    ///
-    /// Break cycles immediately using the `recursive` callback.
-    pub fn calculate_with_recursive(
-        &self,
-        calculate: impl FnOnce() -> T,
-        recursive: impl FnOnce() -> R,
-    ) -> Result<(T, Option<R>), R> {
-        match self.propose_calculation() {
-            ProposalResult::Calculated(v) => Ok((v, None)),
-            ProposalResult::CycleBroken(rec) => Err(rec),
-            ProposalResult::CycleDetected => {
-                let rec = recursive();
-                match self.record_cycle(rec) {
-                    Either::Left(v) => {
-                        // Another thread finished, treat it just like `Caluculated`
-                        Ok((v, None))
-                    }
-                    Either::Right(rec) => Err(rec),
-                }
-            }
-            ProposalResult::Calculatable => {
-                let value = calculate();
-                Ok(self.record_value(value))
-            }
         }
     }
 }

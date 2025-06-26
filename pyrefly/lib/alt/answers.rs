@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use dupe::OptionDupedExt;
+use itertools::Either;
 use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::gas::Gas;
@@ -49,6 +50,7 @@ use crate::error::kind::ErrorKind;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
 use crate::graph::calculation::Calculation;
+use crate::graph::calculation::ProposalResult;
 use crate::graph::index::Idx;
 use crate::graph::index_map::IndexMap;
 use crate::module::module_info::ModuleInfo;
@@ -754,16 +756,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     {
         let calculation = self.get_calculation(idx);
         self.stack.push(self.bindings().dupe(), K::to_anyidx(idx));
-        let result = calculation.calculate_with_recursive(
-            || {
+
+        let result = match calculation.propose_calculation() {
+            ProposalResult::Calculated(v) => Ok((v, None)),
+            ProposalResult::CycleBroken(rec) => Err(rec),
+            ProposalResult::CycleDetected => {
                 let binding = self.bindings().get(idx);
-                K::solve(self, binding, self.base_errors)
-            },
-            || {
+                let rec = K::create_recursive(self, binding);
+                match calculation.record_cycle(rec) {
+                    Either::Left(v) => {
+                        // Another thread finished, treat it just like `Caluculated`
+                        Ok((v, None))
+                    }
+                    Either::Right(rec) => Err(rec),
+                }
+            }
+            ProposalResult::Calculatable => {
                 let binding = self.bindings().get(idx);
-                K::create_recursive(self, binding)
-            },
-        );
+                let value = K::solve(self, binding, self.base_errors);
+                Ok(calculation.record_value(value))
+            }
+        };
         if let Ok((v, Some(r))) = &result {
             let k = self.bindings().idx_to_key(idx).range();
             K::record_recursive(self, k, v, r, self.base_errors);
