@@ -1490,3 +1490,14 @@ def f(x: MyException):
     x.__init__()
 "#,
 );
+
+testcase!(
+    bug = "Mapping.get with a default gives the wrong answer",
+    test_mapping_get,
+    r#"
+from typing import assert_type
+import os
+compiler = os.environ.get("CXX", "cl")
+assert_type(compiler, str) # E: assert_type(str | Any, str) failed
+"#,
+);
