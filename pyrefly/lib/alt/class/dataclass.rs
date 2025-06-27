@@ -57,7 +57,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         all_fields
     }
 
-    pub fn get_dataclass_synthesized_fields(&self, cls: &Class, errors: &ErrorCollector) -> Option<ClassSynthesizedFields> {
+    pub fn get_dataclass_synthesized_fields(
+        &self,
+        cls: &Class,
+        errors: &ErrorCollector,
+    ) -> Option<ClassSynthesizedFields> {
         let metadata = self.get_metadata_for_class(cls);
         let dataclass = metadata.dataclass_metadata()?;
         let mut fields = SmallMap::new();
@@ -68,7 +72,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     cls,
                     &dataclass.fields,
                     dataclass.kws.is_set(&DataclassKeywords::KW_ONLY),
-                    errors
+                    errors,
                 ),
             );
         }
@@ -146,7 +150,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut has_seen_default = false;
 
         for (name, field, field_flags) in self.iter_fields(cls, fields, true) {
-                        if field_flags.is_set(&DataclassKeywords::INIT) {
+            if field_flags.is_set(&DataclassKeywords::INIT) {
                 let has_default = field_flags.is_set(&DataclassKeywords::DEFAULT);
                 let is_kw_only = field_flags.is_set(&DataclassKeywords::KW_ONLY);
 
@@ -154,10 +158,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if !has_default && has_seen_default {
                         if let Some(range) = cls.field_decl_range(&name) {
                             self.error(
-                                errors, 
-                                range, 
-                                error::kind::ErrorKind::BadClassDefinition, 
-                                None, 
+                                errors,
+                                range,
+                                error::kind::ErrorKind::BadClassDefinition,
+                                None,
                                 format!(
                                     "DataClass field '{}' without a default may not follow DataClass field with a default", name
                                 ),
