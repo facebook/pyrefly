@@ -364,7 +364,9 @@ def g(x):
 testcase!(
     test_tuple_class_type,
     r#"
-def f(x : type[tuple]):
-    x() # Ok
+from typing import Any
+
+def f(x: type[tuple[Any, ...]]):
+    return x() # Ok
     "#,
 );
