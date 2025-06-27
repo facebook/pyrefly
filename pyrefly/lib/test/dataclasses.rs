@@ -709,7 +709,6 @@ SomeClass(1) # OK
     "#,
 );
 
-// Field ordering validation tests
 testcase!(
     test_field_ordering_basic_violation,
     r#"
@@ -951,5 +950,47 @@ class C:
     x: int = 1
     class_var: ClassVar[str] = "ignored"  # OK - ClassVar fields don't participate in __init__
     y: int  # E: DataClass field 'y' without a default may not follow DataClass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_kw_only_override_with_defaults,
+    r#"
+from dataclasses import dataclass, field
+@dataclass(kw_only=True)
+class C:
+    a: int = 1                                    # kw_only (global setting), has default
+    b: str = field(kw_only=False)                 # positional override, no default
+    c: float = field(kw_only=False, default=3.14) # positional override, has default
+    d: bool = field(kw_only=False)                # E: DataClass field 'd' without a default may not follow DataClass field with a default
+C("hello", a=3, d=True)  # b is positional, c has default, a and d are keyword-only
+    "#,
+);
+
+testcase!(
+    test_field_ordering_mixed_kw_only_overrides,
+    r#"
+from dataclasses import dataclass, field
+@dataclass(kw_only=True)
+class C:
+    w: int                            # kw_only (global setting)
+    x: str = field(kw_only=False)     # positional override
+    y: float = field(kw_only=False)   # positional override
+    z: bool                           # kw_only (global setting)
+C("hello", 3.14, w=1, z=True)  # x and y are positional, w and z are keyword-only
+    "#,
+);
+
+testcase!(
+    test_field_ordering_kw_only_false_in_regular_dataclass,
+    r#"
+from dataclasses import dataclass, field
+@dataclass  # kw_only=False by default
+class C:
+    a: int
+    b: str = field(kw_only=True)      # keyword-only field
+    c: float = 3.14                   # positional field with default
+    d: bool = field(kw_only=False)    # E: DataClass field 'd' without a default may not follow DataClass field with a default
+C(1, 2.71, b="hello", d=True)  # a and c are positional, b and d are keyword-only
     "#,
 );
