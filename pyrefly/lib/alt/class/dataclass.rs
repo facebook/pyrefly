@@ -154,7 +154,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let has_default = field_flags.is_set(&DataclassKeywords::DEFAULT);
                 let is_kw_only = field_flags.is_set(&(DataclassKeywords::KW_ONLY.0, kw_only));
 
-                if !is_kw_only && !kw_only {
+                if !is_kw_only {
                     if !has_default && has_seen_default {
                         if let Some(range) = cls.field_decl_range(&name) {
                             self.error(
