@@ -373,9 +373,7 @@
   ],
   "literals_parameterizations.py": [],
   "literals_semantics.py": [],
-  "namedtuples_define_class.py": [
-    "Line 79: Expected 1 errors"
-  ],
+  "namedtuples_define_class.py": [],
   "namedtuples_define_functional.py": [],
   "namedtuples_type_compat.py": [],
   "namedtuples_usage.py": [],
