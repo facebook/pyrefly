@@ -256,3 +256,20 @@ class Foo(NamedTuple):
     y: str # E: NamedTuple field 'y' without a default may not follow NamedTuple field with a default
 "#,
 );
+
+testcase!(
+    test_named_tuple_override_error,
+    r#"
+from typing import NamedTuple
+
+class A(NamedTuple):
+    x: int
+
+class B(A):
+    x: int  # E: Cannot override named tuple element `x`
+    y: int
+
+class C(B):
+    y: int  # OK
+"#,
+);
