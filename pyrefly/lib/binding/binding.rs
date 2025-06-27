@@ -816,7 +816,7 @@ impl IsAsync {
 }
 
 /// Is the body of this function stubbed out (contains nothing but `...`)?
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, TypeEq, VisitMut)]
 pub enum FunctionStubOrImpl {
     /// The function body is `...`.
     Stub,
