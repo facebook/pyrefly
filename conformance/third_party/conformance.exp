@@ -4782,9 +4782,9 @@
       "code": -2,
       "column": 12,
       "concise_description": "`+` is not supported between `AnyStr` and `AnyStr`",
-      "description": "`+` is not supported between `AnyStr` and `AnyStr`\n  TODO: Expr::binop_infer attribute base undefined for type: AnyStr (trying to access __add__)",
+      "description": "`+` is not supported between `AnyStr` and `AnyStr`\n  Expected `__add__` to be a callable, got BoundMethod[AnyStr, (self: Self@bytes, value: Buffer, /) -> bytes] | BoundMethod[AnyStr, Overload[(self: LiteralString, value: LiteralString, /) -> LiteralString, (self: Self@str, value: str, /) -> str]]",
       "line": 34,
-      "name": "internal-error",
+      "name": "not-callable",
       "stop_column": 17,
       "stop_line": 34
     },

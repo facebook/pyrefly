@@ -251,7 +251,7 @@
   "generics_basic.py": [
     "Line 49: Expected 1 errors",
     "Line 121: Expected 1 errors",
-    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  TODO: Expr::binop_infer attribute base undefined for type: AnyStr (trying to access __add__)']",
+    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  Expected `__add__` to be a callable, got BoundMethod[AnyStr, (self: Self@bytes, value: Buffer, /) -> bytes] | BoundMethod[AnyStr, Overload[(self: LiteralString, value: LiteralString, /) -> LiteralString, (self: Self@str, value: str, /) -> str]]']",
     "Line 67: Unexpected errors ['assert_type(MyStr, str) failed']",
     "Line 68: Unexpected errors ['assert_type(MyStr, str) failed', 'Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`']"
   ],
