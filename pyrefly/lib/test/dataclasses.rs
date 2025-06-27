@@ -243,7 +243,7 @@ class D:
 
 def f(c: C, d: D):
     c.x = 0
-    d.x = 0  # E: Cannot assign to read-only attribute `x`
+    d.x = 0  # E: Cannot set field `x`
     "#,
 );
 
@@ -678,5 +678,33 @@ instance.mode  # E: Object of class `InitVarTest` has no attribute `mode`
 instance.count  # E: Object of class `InitVarTest` has no attribute `count`
 # Regular fields should be accessible
 instance.value  # OK
+    "#,
+);
+
+testcase!(
+    test_dataclass_kw_only,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(kw_only=False)
+class SomeClass:
+    x: int
+
+SomeClass(x=1) # OK
+SomeClass(1) # OK
+    "#,
+);
+
+testcase!(
+    test_dataclass_field_kw_only_override_class_true,
+    r#"
+from dataclasses import dataclass, field
+
+@dataclass(kw_only=True)
+class SomeClass:
+    x: int = field(kw_only=False)
+
+SomeClass(x=1) # OK
+SomeClass(1) # OK
     "#,
 );

@@ -134,7 +134,7 @@ impl QName {
             "{}.{}@{}",
             self.module_name(),
             self.name,
-            self.module.source_range(self.name.range)
+            self.module.display_range(self.name.range)
         )
     }
 }

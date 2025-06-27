@@ -10,8 +10,8 @@ use std::path::PathBuf;
 
 use anyhow::anyhow;
 use pyrefly_util::fs_anyhow;
+use pyrefly_util::lined_buffer::LineNumber;
 use regex::Regex;
-use ruff_source_file::OneIndexed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::error;
@@ -26,7 +26,7 @@ fn dedup_errors(errors: &[Error]) -> SmallMap<usize, String> {
     let mut deduped_errors = SmallMap::new();
     for error in errors {
         let e: &mut String = deduped_errors
-            .entry(error.source_range().start.line.to_zero_indexed())
+            .entry(error.display_range().start.line.to_zero_indexed() as usize)
             .or_default();
         let contains_error = e.contains(error.error_kind().to_name());
         if e.is_empty() {
@@ -121,21 +121,18 @@ pub fn suppress_errors(path_errors: &SmallMap<PathBuf, Vec<Error>>) {
 }
 
 pub fn find_unused_ignores<'a>(
-    all_ignores: SmallMap<&'a PathBuf, SmallSet<OneIndexed>>,
-    suppressed_errors: SmallMap<&PathBuf, SmallSet<OneIndexed>>,
-) -> SmallMap<&'a PathBuf, SmallSet<OneIndexed>> {
-    let mut all_unused_ignores: SmallMap<&PathBuf, SmallSet<OneIndexed>> = SmallMap::new();
-    let one = OneIndexed::new(1).unwrap();
-    let default_set: SmallSet<OneIndexed> = SmallSet::new();
+    all_ignores: SmallMap<&'a PathBuf, SmallSet<LineNumber>>,
+    suppressed_errors: SmallMap<&PathBuf, SmallSet<LineNumber>>,
+) -> SmallMap<&'a PathBuf, SmallSet<LineNumber>> {
+    let mut all_unused_ignores: SmallMap<&PathBuf, SmallSet<LineNumber>> = SmallMap::new();
+    let default_set: SmallSet<LineNumber> = SmallSet::new();
     // Loop over each path only save the ignores that are not in use
     for (path, ignores) in all_ignores {
         let errors = suppressed_errors.get(path).unwrap_or(&default_set);
         let mut unused_ignores = SmallSet::new();
         for ignore in ignores {
-            if let Some(location) = ignore.checked_add(one)
-                && !errors.contains(&location)
-                && !errors.contains(&ignore)
-            {
+            let location = ignore.increment();
+            if !errors.contains(&location) && !errors.contains(&ignore) {
                 unused_ignores.insert(ignore);
             }
         }
@@ -145,13 +142,15 @@ pub fn find_unused_ignores<'a>(
     all_unused_ignores
 }
 
-pub fn remove_unused_ignores(path_ignores: SmallMap<&PathBuf, SmallSet<OneIndexed>>) {
+pub fn remove_unused_ignores(path_ignores: SmallMap<&PathBuf, SmallSet<LineNumber>>) {
     let regex = Regex::new(r"# pyrefly: ignore.*$").unwrap();
     let mut removed_ignores: SmallMap<&PathBuf, usize> = SmallMap::new();
     for (path, ignores) in path_ignores {
         let mut unused_ignore_count = 0;
-        let zero_index_ignores: SmallSet<usize> =
-            ignores.iter().map(|i| i.to_zero_indexed()).collect();
+        let zero_index_ignores: SmallSet<usize> = ignores
+            .iter()
+            .map(|i| i.to_zero_indexed() as usize)
+            .collect();
         if let Ok(file) = read_and_validate_file(path) {
             let mut buf = String::with_capacity(file.len());
             let lines = file.lines();
@@ -185,12 +184,13 @@ pub fn remove_unused_ignores(path_ignores: SmallMap<&PathBuf, SmallSet<OneIndexe
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
     use std::sync::Arc;
 
     use pretty_assertions::assert_str_eq;
-    use pyrefly_util::lined_buffer::SourceRange;
-    use ruff_source_file::LineColumn;
-    use ruff_source_file::OneIndexed;
+    use pyrefly_util::lined_buffer::DisplayPos;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
     use tempfile;
     use vec1::Vec1;
 
@@ -200,30 +200,30 @@ mod tests {
     use crate::module::module_name::ModuleName;
     use crate::module::module_path::ModulePath;
 
-    fn sourcerange(row: usize, column: usize) -> SourceRange {
-        let line = OneIndexed::new(row).unwrap();
-        let column = OneIndexed::new(column).unwrap();
-        SourceRange {
-            start: LineColumn { line, column },
-            end: LineColumn { line, column },
-        }
-    }
-
     fn error(path: PathBuf, row: usize, column: usize, error_kind: ErrorKind) -> Error {
-        Error::new(
+        let contents = format!("{}{}", "\n".repeat(row - 1), " ".repeat(column - 1));
+        let pos = TextSize::new(contents.len() as u32);
+        let e = Error::new(
             ModuleInfo::new(
                 ModuleName::unknown(),
                 ModulePath::filesystem(path),
-                Arc::new("".to_owned()),
+                Arc::new(contents),
             ),
-            sourcerange(row, column),
+            TextRange::new(pos, pos),
             Vec1::new("test message".to_owned()),
-            false,
             error_kind,
-        )
+        );
+        assert_eq!(
+            e.display_range().start,
+            DisplayPos {
+                line: LineNumber::new(row as u32).unwrap(),
+                column: NonZeroU32::new(column as u32).unwrap()
+            }
+        );
+        e
     }
 
-    fn test_remove_suppressions(lines: SmallSet<OneIndexed>, input: &str, want: &str) {
+    fn test_remove_suppressions(lines: SmallSet<LineNumber>, input: &str, want: &str) {
         let tdir = tempfile::tempdir().unwrap();
         let path = tdir.path().join("test.py");
         fs_anyhow::write(&path, input.as_bytes()).unwrap();
@@ -420,7 +420,7 @@ pass
 
     #[test]
     fn test_remove_suppression_above() {
-        let lines = SmallSet::from_iter([OneIndexed::new(3).unwrap()]);
+        let lines = SmallSet::from_iter([LineNumber::new(3).unwrap()]);
         let input = r#"
 def f() -> int:
     # pyrefly: ignore # bad-return
@@ -436,7 +436,7 @@ def f() -> int:
 
     #[test]
     fn test_remove_suppression_above_two() {
-        let lines = SmallSet::from_iter([OneIndexed::new(3).unwrap()]);
+        let lines = SmallSet::from_iter([LineNumber::new(3).unwrap()]);
         let input = r#"
 def g() -> str:
     # pyrefly: ignore # bad-return
@@ -452,7 +452,7 @@ def g() -> str:
 
     #[test]
     fn test_remove_suppression_inline() {
-        let lines = SmallSet::from_iter([OneIndexed::new(3).unwrap()]);
+        let lines = SmallSet::from_iter([LineNumber::new(3).unwrap()]);
         let input = r#"
 def g() -> str:
     return "hello" # pyrefly: ignore # bad-return
@@ -466,7 +466,7 @@ def g() -> str:
 
     #[test]
     fn test_remove_suppression_multiple() {
-        let lines = SmallSet::from_iter([OneIndexed::new(3).unwrap(), OneIndexed::new(5).unwrap()]);
+        let lines = SmallSet::from_iter([LineNumber::new(3).unwrap(), LineNumber::new(5).unwrap()]);
         let input = r#"
 def g() -> str:
     return "hello" # pyrefly: ignore # bad-return
@@ -486,7 +486,7 @@ def f() -> int:
 
     #[test]
     fn test_no_remove_suppression_generated() {
-        let lines = SmallSet::from_iter([OneIndexed::new(3).unwrap(), OneIndexed::new(5).unwrap()]);
+        let lines = SmallSet::from_iter([LineNumber::new(3).unwrap(), LineNumber::new(5).unwrap()]);
         let input = format!(
             r#"
 {}

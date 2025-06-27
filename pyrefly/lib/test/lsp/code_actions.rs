@@ -6,24 +6,16 @@
  */
 
 use pretty_assertions::assert_eq;
-use pyrefly_util::lined_buffer::SourceRange;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use crate::module::module_info::ModuleInfo;
 use crate::state::handle::Handle;
 use crate::state::state::State;
-use crate::state::state::Transaction;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 
-fn apply_patch(
-    transaction: &Transaction<'_>,
-    handle: &Handle,
-    range: SourceRange,
-    patch: String,
-) -> (String, String) {
-    let module_info = transaction.get_module_info(handle).unwrap();
-    let before = module_info.contents().as_str().to_owned();
-    let range = module_info.to_text_range(&range);
+fn apply_patch(info: &ModuleInfo, range: TextRange, patch: String) -> (String, String) {
+    let before = info.contents().as_str().to_owned();
     let after = [
         &before[0..range.start().to_usize()],
         patch.as_str(),
@@ -36,11 +28,11 @@ fn apply_patch(
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     let mut report = "Code Actions Results:\n".to_owned();
     let transaction = state.transaction();
-    for (title, range, patch) in transaction
+    for (title, info, range, patch) in transaction
         .local_quickfix_code_actions(handle, TextRange::new(position, position))
         .unwrap_or_default()
     {
-        let (before, after) = apply_patch(&transaction, handle, range, patch);
+        let (before, after) = apply_patch(&info, range, patch);
         report.push_str("# Title: ");
         report.push_str(&title);
         report.push('\n');

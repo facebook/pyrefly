@@ -64,16 +64,14 @@ impl Display for Var {
 }
 
 impl Var {
+    pub const ZERO: Var = Var(Unique::ZERO);
+
     pub fn new(uniques: &UniqueFactory) -> Self {
         Self(uniques.fresh())
     }
 
     pub fn to_type(self) -> Type {
         Type::Var(self)
-    }
-
-    fn zero(&mut self) {
-        self.0 = Unique::zero();
     }
 }
 
@@ -1196,7 +1194,7 @@ impl Type {
             match ty {
                 Type::Var(v) => {
                     // TODO: Should mostly be forcing these before printing
-                    v.zero();
+                    *v = Var::ZERO;
                 }
                 _ => {}
             }

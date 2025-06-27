@@ -19,7 +19,6 @@ use lsp_types::SignatureHelp;
 use lsp_types::SignatureInformation;
 use lsp_types::TextEdit;
 use pyrefly_util::gas::Gas;
-use pyrefly_util::lined_buffer::SourceRange;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::Cancelled;
@@ -72,7 +71,6 @@ use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::callable::Params;
-use crate::types::lsp::source_range_to_range;
 use crate::types::module::Module;
 use crate::types::types::BoundMethodType;
 use crate::types::types::Type;
@@ -1150,7 +1148,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         range: TextRange,
-    ) -> Option<Vec<(String, SourceRange, String)>> {
+    ) -> Option<Vec<(String, ModuleInfo, TextRange, String)>> {
         let module_info = self.get_module_info(handle)?;
         let ast = self.get_ast(handle)?;
         let errors = self.get_errors(vec![handle]).collect_errors().shown;
@@ -1158,23 +1156,22 @@ impl<'a> Transaction<'a> {
         for error in errors {
             match error.error_kind() {
                 ErrorKind::UnknownName => {
-                    let error_range = module_info.to_text_range(error.source_range());
+                    let error_range = error.range();
                     if error_range.contains_range(range) {
                         let unknown_name = module_info.code_at(error_range);
                         for handle_to_import_from in self.search_exports_exact(unknown_name) {
                             let (position, insert_text) =
                                 insert_import_edit(&ast, handle_to_import_from, unknown_name);
                             let range = TextRange::at(position, TextSize::new(0));
-                            let source_range = module_info.source_range(range);
                             let title = format!("Insert import: `{}`", insert_text.trim());
-                            code_actions.push((title, source_range, insert_text));
+                            code_actions.push((title, module_info.dupe(), range, insert_text));
                         }
                     }
                 }
                 _ => {}
             }
         }
-        code_actions.sort_by(|(title1, _, _), (title2, _, _)| title1.cmp(title2));
+        code_actions.sort_by(|(title1, _, _, _), (title2, _, _, _)| title1.cmp(title2));
         Some(code_actions)
     }
 
@@ -1544,24 +1541,33 @@ impl<'a> Transaction<'a> {
                             for (handle_to_import_from, name, export) in
                                 self.search_exports_fuzzy(identifier.as_str())
                             {
-                                let (position, insert_text) =
-                                    insert_import_edit(&ast, handle_to_import_from, &name);
-                                let import_text_edit =
-                                    TextEdit {
-                                        range: source_range_to_range(&module_info.source_range(
-                                            TextRange::at(position, TextSize::new(0)),
-                                        )),
-                                        new_text: insert_text.clone(),
+                                let (insert_text, additional_text_edits) =
+                                    match handle_to_import_from.module().as_str() {
+                                        "builtins" => (None, None),
+                                        _ => {
+                                            let (position, insert_text) = insert_import_edit(
+                                                &ast,
+                                                handle_to_import_from,
+                                                &name,
+                                            );
+                                            let import_text_edit = TextEdit {
+                                                range: module_info.lined_buffer().to_lsp_range(
+                                                    TextRange::at(position, TextSize::new(0)),
+                                                ),
+                                                new_text: insert_text.clone(),
+                                            };
+                                            (Some(insert_text), Some(vec![import_text_edit]))
+                                        }
                                     };
                                 result.push(CompletionItem {
                                     label: name,
-                                    detail: Some(insert_text),
+                                    detail: insert_text,
                                     kind: export
                                         .symbol_kind
                                         .map_or(Some(CompletionItemKind::VARIABLE), |k| {
                                             Some(k.to_lsp_completion_item_kind())
                                         }),
-                                    additional_text_edits: Some(vec![import_text_edit]),
+                                    additional_text_edits,
                                     ..Default::default()
                                 });
                             }
@@ -1853,12 +1859,13 @@ impl<'a> Transaction<'a> {
                         kind: lsp_types::SymbolKind::FUNCTION,
                         tags: None,
                         deprecated: None,
-                        range: source_range_to_range(
-                            &module_info.source_range(stmt_function_def.range),
-                        ),
-                        selection_range: source_range_to_range(
-                            &module_info.source_range(stmt_function_def.name.range),
-                        ),
+                        range: module_info
+                            .lined_buffer()
+                            .to_lsp_range(stmt_function_def.range),
+                        selection_range: module_info
+                            .lined_buffer()
+                            .to_lsp_range(stmt_function_def.name.range),
+
                         children: Some(children),
                     });
                 }
@@ -1875,12 +1882,12 @@ impl<'a> Transaction<'a> {
                         kind: lsp_types::SymbolKind::CLASS,
                         tags: None,
                         deprecated: None,
-                        range: source_range_to_range(
-                            &module_info.source_range(stmt_class_def.range),
-                        ),
-                        selection_range: source_range_to_range(
-                            &module_info.source_range(stmt_class_def.name.range),
-                        ),
+                        range: module_info
+                            .lined_buffer()
+                            .to_lsp_range(stmt_class_def.range),
+                        selection_range: module_info
+                            .lined_buffer()
+                            .to_lsp_range(stmt_class_def.name.range),
                         children: Some(children),
                     });
                 }

@@ -24,8 +24,8 @@ use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
-use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
+use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::VarianceMap;
@@ -1137,7 +1137,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let ty = self.expr_infer(x, &self.error_swallower());
                 self.check_dunder_bool_is_callable(&ty, *range, errors);
             }
-            BindingExpect::Delete(x) => match &**x {
+            BindingExpect::Delete(x) => match x {
                 Expr::Name(_) => {
                     self.expr_infer(x, errors);
                 }
@@ -1160,7 +1160,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             if let Some(field) =
                                 self.typed_dict_field(typed_dict, &Name::new(field_name))
                             {
-                                if field.read_only || field.required {
+                                if field.is_read_only() || field.required {
                                     self.error(
                                         errors,
                                         x.slice.range(),
@@ -1659,7 +1659,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.get_idx(*default);
                 self.binding_to_type_info(binding, errors)
             }
-            Binding::AssignToAttribute(box (attr, got)) => {
+            Binding::AssignToAttribute(attr, got) => {
                 let base = self.expr_infer(&attr.value, errors);
                 let narrowed = self.check_assign_to_attribute_and_infer_narrow(
                     &base,
@@ -1695,7 +1695,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     TypeInfo::of_ty(Type::never())
                 }
             }
-            Binding::AssignToSubscript(box (subscript, value)) => {
+            Binding::AssignToSubscript(subscript, value) => {
                 // If we can't assign to this subscript, then we don't narrow the type
                 let assigned_ty = self.check_assign_to_subscript(subscript, value, errors);
                 let narrowed = if assigned_ty.is_any() {
@@ -1747,7 +1747,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (Type::TypedDict(typed_dict), Type::Literal(Lit::Str(field_name))) => {
                 let field_name = Name::new(field_name);
                 if let Some(field) = self.typed_dict_field(typed_dict, &field_name) {
-                    if field.read_only {
+                    if field.is_read_only() {
                         self.error(
                             errors,
                             subscript.slice.range(),

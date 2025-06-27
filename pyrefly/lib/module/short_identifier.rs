@@ -47,15 +47,12 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use dupe::Dupe;
     use ruff_python_ast::Expr;
 
     use super::*;
-    use crate::error::collector::ErrorCollector;
-    use crate::error::style::ErrorStyle;
     use crate::module::module_name::ModuleName;
     use crate::module::module_path::ModulePath;
-    use crate::python::sys_info::PythonVersion;
+    use crate::python::ast::Ast;
 
     fn from_expr(x: &Expr) -> ShortIdentifier {
         match x {
@@ -71,10 +68,7 @@ mod tests {
             ModulePath::filesystem(Path::new("foo.py").to_owned()),
             Arc::new("hello_world = Baz123.attribute".to_owned()),
         );
-        let module = module_info.parse(
-            PythonVersion::default(),
-            &ErrorCollector::new(module_info.dupe(), ErrorStyle::Delayed),
-        );
+        let module = Ast::parse(module_info.contents()).0;
         let show = |x: &ShortIdentifier| module_info.display(x).to_string();
 
         let assign = &module.body[0].as_assign_stmt().unwrap();

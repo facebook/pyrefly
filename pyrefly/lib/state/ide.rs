@@ -105,11 +105,11 @@ fn binding_to_intermediate_definition(
             let binding = bindings.get(*k);
             key_to_intermediate_definition(bindings, bindings.idx_to_key(binding.0), gas)
         }
-        Binding::AssignToSubscript(box (subscript, _)) => {
+        Binding::AssignToSubscript(subscript, _) => {
             let expr = Expr::Subscript(subscript.clone());
             resolve_assign_to_expr(&expr)
         }
-        Binding::AssignToAttribute(box (attribute, _)) => {
+        Binding::AssignToAttribute(attribute, _) => {
             let expr = Expr::Attribute(attribute.clone());
             resolve_assign_to_expr(&expr)
         }

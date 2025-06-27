@@ -21,8 +21,10 @@ glob = "0.3.2"
 human_bytes = "0.4.3"
 itertools = "0.14.0"
 lock_free_hashtable = "0.1.1"
+lsp-types = "0.94.1"
 memory-stats = "1.2.0"
 notify = "5"
+parse-display = "0.8.2"
 path-absolutize = { version = "3.0", features = ["use_unix_paths_on_wasm"] }
 rayon = "1.9.0"
 ruff_python_ast = { git = "https://github.com/astral-sh/ruff/", rev = "6e785867c3a97691972e8a49c372b3effba90032" }

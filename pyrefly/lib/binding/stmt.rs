@@ -272,7 +272,7 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     let delete_idx = self.insert_binding(
                         KeyExpect(target.range()),
-                        BindingExpect::Delete(Box::new(target.clone())),
+                        BindingExpect::Delete(target.clone()),
                     );
                     self.insert_binding_user(
                         user,
@@ -606,10 +606,7 @@ impl<'a> BindingsBuilder<'a> {
                 let user = self.declare_user(Key::Anon(range));
                 self.insert_binding_user(user, Binding::Expr(None, *x.test.clone()));
                 // Typecheck the test condition during solving.
-                self.insert_binding(
-                    KeyExpect(range),
-                    BindingExpect::Bool(Box::new(*x.test), range),
-                );
+                self.insert_binding(KeyExpect(range), BindingExpect::Bool(*x.test, range));
                 self.stmts(x.body);
                 self.teardown_loop(x.range, &narrow_ops, x.orelse);
             }
@@ -643,7 +640,7 @@ impl<'a> BindingsBuilder<'a> {
                         // Typecheck the test condition during solving.
                         self.insert_binding(
                             KeyExpect(test_expr.range()),
-                            BindingExpect::Bool(Box::new(test_expr.clone()), range),
+                            BindingExpect::Bool(test_expr.clone(), range),
                         );
                     } else {
                         implicit_else = false;
@@ -774,7 +771,7 @@ impl<'a> BindingsBuilder<'a> {
                     self.ensure_expr(&mut msg_expr, msg_user.usage());
                     let idx = self.insert_binding(
                         KeyExpect(msg_expr.range()),
-                        BindingExpect::TypeCheckExpr(Box::new(*msg_expr)),
+                        BindingExpect::TypeCheckExpr(*msg_expr),
                     );
                     self.insert_binding_user(msg_user, Binding::UsageLink(LinkedKey::Expect(idx)));
                 };

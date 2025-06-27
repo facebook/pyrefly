@@ -16,8 +16,8 @@ use starlark_map::small_set::SmallSet;
 use starlark_map::smallmap;
 use vec1::Vec1;
 
-use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
+use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
@@ -438,7 +438,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let fields_iter = self.names_to_fields(cls, fields);
         let self_param = self.class_self_param(cls, true);
         let make_overload = |(name, field): (&Name, TypedDictField)| {
-            if field.read_only {
+            if field.is_read_only() {
                 None
             } else {
                 Some(OverloadType::Callable(Callable::list(

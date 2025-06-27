@@ -11,8 +11,8 @@ use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
-use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
+use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::class_field::DataclassMember;
 use crate::alt::types::class_metadata::ClassMetadata;
@@ -144,7 +144,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 params.push(field.as_param(
                     &name,
                     field_flags.is_set(&DataclassKeywords::DEFAULT),
-                    kw_only || field_flags.is_set(&DataclassKeywords::KW_ONLY),
+                    field_flags.is_set(&(DataclassKeywords::KW_ONLY.0, kw_only)),
                 ));
             }
         }

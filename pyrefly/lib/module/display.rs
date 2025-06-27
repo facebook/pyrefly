@@ -74,12 +74,12 @@ impl DisplayWith<ModuleInfo> for Stmt {
 
 impl DisplayWith<ModuleInfo> for TextRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &ModuleInfo) -> fmt::Result {
-        write!(f, "{}", m.source_range(*self))
+        write!(f, "{}", m.display_range(*self))
     }
 }
 
 impl DisplayWith<ModuleInfo> for TextSize {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &ModuleInfo) -> fmt::Result {
-        write!(f, "{}", m.line_column(*self))
+        write!(f, "{}", m.display_pos(*self))
     }
 }

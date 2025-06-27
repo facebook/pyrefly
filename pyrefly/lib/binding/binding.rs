@@ -88,7 +88,7 @@ assert_words!(KeyYieldFrom, 1);
 assert_words!(KeyFunction, 1);
 
 assert_words!(Binding, 9);
-assert_words!(BindingExpect, 8);
+assert_words!(BindingExpect, 9);
 assert_words!(BindingAnnotation, 13);
 assert_words!(BindingClass, 18);
 assert_words!(BindingTParams, 9);
@@ -101,7 +101,7 @@ assert_words!(BindingYield, 3);
 assert_words!(BindingYieldFrom, 3);
 assert_words!(BindingFunction, 21);
 
-#[derive(Clone, Dupe, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
     Key(Idx<Key>),
     KeyExpect(Idx<KeyExpect>),
@@ -432,7 +432,7 @@ impl DisplayWith<Bindings> for ExprOrBinding {
 #[derive(Clone, Debug)]
 pub enum BindingExpect {
     /// An expression where we need to check for type errors, but don't need the result type.
-    TypeCheckExpr(Box<Expr>),
+    TypeCheckExpr(Expr),
     /// The expected number of values in an unpacked iterable expression.
     UnpackedLength(Idx<Key>, TextRange, SizeExpectation),
     /// An exception and its cause from a raise statement.
@@ -445,9 +445,9 @@ pub enum BindingExpect {
         name: Name,
     },
     /// `del` statement
-    Delete(Box<Expr>),
+    Delete(Expr),
     /// Expression used in a boolean context (`bool()`, `if`, or `while`)
-    Bool(Box<Expr>, TextRange),
+    Bool(Expr, TextRange),
 }
 
 impl DisplayWith<Bindings> for BindingExpect {
@@ -1095,9 +1095,9 @@ pub enum Binding {
     SuperInstance(SuperStyle, TextRange),
     /// The result of assigning to an attribute. This operation cannot change the *type* of the
     /// name to which we are assigning, but it *can* change the live attribute narrows.
-    AssignToAttribute(Box<(ExprAttribute, ExprOrBinding)>),
+    AssignToAttribute(ExprAttribute, Box<ExprOrBinding>),
     /// The result of assigning to a subscript, used for narrowing.
-    AssignToSubscript(Box<(ExprSubscript, ExprOrBinding)>),
+    AssignToSubscript(ExprSubscript, Box<ExprOrBinding>),
     /// A placeholder binding, used to force the solving of some other `K::Value` (for
     /// example, forcing a `BindingExpect` to be solved) in the context of first-usage-based
     /// type inference.
@@ -1300,7 +1300,7 @@ impl DisplayWith<Bindings> for Binding {
                 write!(f, "SuperInstance::Implicit({}, {v})", ctx.display(*k))
             }
             Self::SuperInstance(SuperStyle::Any, _range) => write!(f, "SuperInstance::Any"),
-            Self::AssignToAttribute(box (attr, x)) => {
+            Self::AssignToAttribute(attr, x) => {
                 write!(
                     f,
                     "AssignToAttribute({}, {}, {})",
@@ -1309,7 +1309,7 @@ impl DisplayWith<Bindings> for Binding {
                     x.display_with(ctx)
                 )
             }
-            Self::AssignToSubscript(box (subscript, x)) => {
+            Self::AssignToSubscript(subscript, x) => {
                 write!(
                     f,
                     "AssignToSubscript({}, {}, {})",
@@ -1399,9 +1399,9 @@ impl Binding {
             | Binding::Decorator(_)
             | Binding::ExceptionHandler(_, _)
             | Binding::SuperInstance(_, _)
-            | Binding::AssignToAttribute(_)
+            | Binding::AssignToAttribute(_, _)
             | Binding::UsageLink(_)
-            | Binding::AssignToSubscript(_)
+            | Binding::AssignToSubscript(_, _)
             | Binding::Pin(..)
             | Binding::PinUpstream(..) => None,
         }

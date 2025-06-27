@@ -96,22 +96,22 @@ impl SemanticTokensLegends {
         let mut previous_col = 0;
         let mut lsp_semantic_tokens = Vec::new();
         for token in tokens {
-            let source_range = module_info.source_range(token.range);
+            let source_range = module_info.display_range(token.range);
             let length = token.range.len().to_u32();
             let current_line = source_range.start.line.to_zero_indexed();
-            let current_col = source_range.start.column.to_zero_indexed();
+            let current_col = source_range.start.column.get() - 1;
             let (delta_line, delta_start) = if previous_line == current_line {
                 let delta_start = current_col - previous_col;
                 if delta_start == 0 {
                     continue;
                 }
                 previous_col = current_col;
-                (0, delta_start as u32)
+                (0, delta_start)
             } else {
                 let delta_line = current_line - previous_line;
                 previous_line = current_line;
                 previous_col = current_col;
-                (delta_line as u32, current_col as u32)
+                (delta_line, current_col)
             };
             let token_type = *self.token_types_index.get(&token.token_type).unwrap();
             let mut token_modifiers_bitset = 0;

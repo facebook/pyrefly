@@ -43,10 +43,7 @@ impl Display for Unique {
 }
 
 impl Unique {
-    pub fn zero() -> Self {
-        // Safe because we create every UniqueFactory with a zero.
-        Self(0)
-    }
+    pub const ZERO: Self = Self(0);
 }
 
 impl UniqueFactory {

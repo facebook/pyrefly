@@ -24,6 +24,7 @@ use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
+use crate::module::parse::module_parse;
 use crate::python::sys_info::SysInfo;
 use crate::solver::solver::Solver;
 use crate::state::load::Load;
@@ -145,7 +146,11 @@ impl Step {
 
     #[inline(never)]
     fn step_ast<Lookup>(ctx: &Context<Lookup>, load: Arc<Load>) -> Arc<ModModule> {
-        Arc::new(load.module_info.parse(ctx.sys_info.version(), &load.errors))
+        Arc::new(module_parse(
+            load.module_info.contents(),
+            ctx.sys_info.version(),
+            &load.errors,
+        ))
     }
 
     #[inline(never)]

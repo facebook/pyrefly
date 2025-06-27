@@ -97,7 +97,7 @@ m = Movie(name='Blade Runner', year=1982)
 );
 
 testcase!(
-    test_typed_dict_readonly,
+    test_typed_dict_read_only,
     r#"
 from typing import TypedDict, ReadOnly
 class Coord(TypedDict):
@@ -451,7 +451,7 @@ def foo(a: Coord, b: Coord3D, c: Pair):
 );
 
 testcase!(
-    test_typed_dict_readonly_subtype,
+    test_typed_dict_read_only_subtype,
     r#"
 from typing import ReadOnly, TypedDict
 
@@ -595,7 +595,7 @@ f(x="", y=2)  # E: Argument `Literal['']` is not assignable to parameter `x` wit
 );
 
 testcase!(
-    test_typed_dict_readonly_variance,
+    test_typed_dict_read_only_variance,
     r#"
 from typing import ReadOnly, TypedDict
 
@@ -809,7 +809,7 @@ def f(c: C, s: str):
 );
 
 testcase!(
-    test_setdefault_readonly,
+    test_setdefault_read_only,
     r#"
 from typing import ReadOnly, TypedDict
 class C(TypedDict):

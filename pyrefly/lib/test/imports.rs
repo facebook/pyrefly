@@ -555,7 +555,7 @@ fn test_import_fail_to_load() {
     assert_eq!(errs.len(), 1);
     let err = &errs[0];
     assert!(err.msg().contains("Failed to load"));
-    assert_eq!(err.source_range().to_string(), "1:1");
+    assert_eq!(err.display_range().to_string(), "1:1");
     assert_eq!(err.path().as_path().file_name(), Some("foo.py".as_ref()));
 }
 

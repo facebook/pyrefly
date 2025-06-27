@@ -12,11 +12,14 @@ use std::io::Write;
 
 use itertools::Itertools;
 use pyrefly_util::display::number_thousands;
-use pyrefly_util::lined_buffer::SourceRange;
+use pyrefly_util::lined_buffer::DisplayRange;
+use pyrefly_util::lined_buffer::LinedBuffer;
 use ruff_annotate_snippets::Level;
 use ruff_annotate_snippets::Message;
 use ruff_annotate_snippets::Renderer;
 use ruff_annotate_snippets::Snippet;
+use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 use yansi::Paint;
@@ -29,7 +32,8 @@ use crate::module::module_path::ModulePath;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Error {
     module_info: ModuleInfo,
-    range: SourceRange,
+    range: TextRange,
+    display_range: DisplayRange,
     error_kind: ErrorKind,
     /// First line of the error message
     msg_header: Box<str>,
@@ -37,6 +41,12 @@ pub struct Error {
     /// Note that this is formatted for pretty-printing, with two spaces at the beginning and after every newline.
     msg_details: Option<Box<str>>,
     is_ignored: bool,
+}
+
+impl Ranged for Error {
+    fn range(&self) -> TextRange {
+        self.range
+    }
 }
 
 impl Error {
@@ -62,7 +72,7 @@ impl Error {
                 "{} {}:{}: {} [{}]",
                 self.error_kind().severity().label(),
                 self.path(),
-                self.range,
+                self.display_range,
                 self.msg_header,
                 self.error_kind.to_name(),
             )?;
@@ -90,7 +100,7 @@ impl Error {
                 "{} {}:{}: {} {}",
                 self.error_kind().severity().painted(),
                 Paint::blue(&self.path().as_path().display()),
-                Paint::dim(self.source_range()),
+                Paint::dim(self.display_range()),
                 Paint::new(&*self.msg_header),
                 Paint::dim(format!("[{}]", self.error_kind().to_name()).as_str()),
             );
@@ -104,24 +114,26 @@ impl Error {
     fn get_source_snippet<'a>(&'a self, origin: &'a str) -> Message<'a> {
         // Warning: The SourceRange is char indexed, while the snippet is byte indexed.
         //          Be careful in the conversion.
-        let range = self.source_range();
         // Question: Should we just keep the original TextRange around?
-        let text_range = self.module_info.to_text_range(range);
         let source = self
             .module_info
-            .content_in_line_range(range.start.line, range.end.line);
-        let line_start = self.module_info.line_start(range.start.line);
+            .lined_buffer()
+            .content_in_line_range(self.display_range.start.line, self.display_range.end.line);
+        let line_start = self
+            .module_info
+            .lined_buffer()
+            .line_start(self.display_range.start.line);
 
         let level = match self.error_kind().severity() {
             Severity::Error => Level::Error,
             Severity::Warn => Level::Warning,
             Severity::Info => Level::Info,
         };
-        let span_start = (text_range.start() - line_start).to_usize();
-        let span_end = span_start + text_range.len().to_usize();
+        let span_start = (self.range.start() - line_start).to_usize();
+        let span_end = span_start + self.range.len().to_usize();
         Level::None.title("").snippet(
             Snippet::source(source)
-                .line_start(range.start.line.get())
+                .line_start(self.display_range.start.line.get() as usize)
                 .origin(origin)
                 .annotation(level.span(span_start..span_end)),
         )
@@ -161,11 +173,12 @@ pub fn print_error_counts(errors: &[Error], limit: usize) {
 impl Error {
     pub fn new(
         module_info: ModuleInfo,
-        range: SourceRange,
+        range: TextRange,
         msg: Vec1<String>,
-        is_ignored: bool,
         error_kind: ErrorKind,
     ) -> Self {
+        let display_range = module_info.display_range(range);
+        let is_ignored = module_info.is_ignored(&display_range);
         let msg_has_details = msg.len() > 1;
         let mut msg = msg.into_iter();
         let msg_header = msg.next().unwrap().into_boxed_str();
@@ -177,6 +190,7 @@ impl Error {
         Self {
             module_info,
             range,
+            display_range,
             error_kind,
             msg_header,
             msg_details,
@@ -184,8 +198,12 @@ impl Error {
         }
     }
 
-    pub fn source_range(&self) -> &SourceRange {
-        &self.range
+    pub fn display_range(&self) -> &DisplayRange {
+        &self.display_range
+    }
+
+    pub fn lined_buffer(&self) -> &LinedBuffer {
+        self.module_info.lined_buffer()
     }
 
     pub fn path(&self) -> &ModulePath {

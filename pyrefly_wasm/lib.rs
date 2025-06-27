@@ -9,6 +9,7 @@
 #![allow(clippy::new_without_default)]
 
 use pyrefly::playground::Playground;
+use pyrefly::playground::Position;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -34,7 +35,7 @@ impl State {
     #[wasm_bindgen(js_name=queryType)]
     pub fn query_type(&mut self, line: i32, column: i32) -> JsValue {
         self.0
-            .query_type(line, column)
+            .query_type(Position::new(line, column))
             .map(|result| serde_wasm_bindgen::to_value(&result).unwrap())
             .unwrap_or(JsValue::NULL)
     }
@@ -42,14 +43,14 @@ impl State {
     #[wasm_bindgen(js_name=gotoDefinition)]
     pub fn goto_definition(&mut self, line: i32, column: i32) -> JsValue {
         self.0
-            .goto_definition(line, column)
+            .goto_definition(Position::new(line, column))
             .map(|result| serde_wasm_bindgen::to_value(&result).unwrap())
             .unwrap_or(JsValue::NULL)
     }
 
     #[wasm_bindgen(js_name=autoComplete)]
     pub fn autocomplete(&mut self, line: i32, column: i32) -> JsValue {
-        serde_wasm_bindgen::to_value(&self.0.autocomplete(line, column)).unwrap()
+        serde_wasm_bindgen::to_value(&self.0.autocomplete(Position::new(line, column))).unwrap()
     }
 
     #[wasm_bindgen(js_name=inlayHint)]

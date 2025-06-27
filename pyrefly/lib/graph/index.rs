@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -42,6 +43,18 @@ impl<K> Clone for Idx<K> {
 impl<K> Copy for Idx<K> {}
 
 impl<K> Dupe for Idx<K> {}
+
+impl<K: Eq> Ord for Idx<K> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.idx.cmp(&other.idx)
+    }
+}
+
+impl<K: Eq> PartialOrd for Idx<K> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 impl<K> Idx<K> {
     /// Should be used cautiously - make sure this is really a valid index first.

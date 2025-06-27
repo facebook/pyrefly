@@ -43,14 +43,14 @@ fn trace_module(transaction: &Transaction, handle: &Handle) -> Option<ModuleOutp
             _ => return,
         };
         if let Some(ty) = transaction.get_type_at(handle, loc.start()) {
-            types.insert(info.source_range(x.range()).to_string(), ty.to_string());
+            types.insert(info.display_range(x.range()).to_string(), ty.to_string());
         }
         if let Some(def) = transaction.goto_definition(handle, loc.start()) {
             definitions.insert(
-                info.source_range(x.range()).to_string(),
+                info.display_range(x.range()).to_string(),
                 (
                     def.module_info.path().to_string(),
-                    def.module_info.source_range(def.range).to_string(),
+                    def.module_info.display_range(def.range).to_string(),
                 ),
             );
         }

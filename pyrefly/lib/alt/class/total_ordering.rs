@@ -1,8 +1,8 @@
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 
-use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
+use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::binding::binding::KeyClassField;

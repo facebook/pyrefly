@@ -18,7 +18,7 @@ use starlark_map::small_map::SmallMap;
 use crate::alt::answers::AnswerEntry;
 use crate::alt::answers::AnswerTable;
 use crate::alt::answers::Answers;
-use crate::alt::traits::SolveRecursive;
+use crate::binding::binding::Keyed;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
@@ -103,7 +103,7 @@ impl DebugInfo {
             &Answers,
         )],
     ) -> Self {
-        fn f<K: SolveRecursive>(
+        fn f<K: Keyed>(
             t: &AnswerEntry<K>,
             module_info: &ModuleInfo,
             bindings: &Bindings,
@@ -117,7 +117,7 @@ impl DebugInfo {
                 let key = bindings.idx_to_key(idx);
                 res.push(Binding {
                     key: module_info.display(key).to_string(),
-                    location: module_info.source_range(key.range()).to_string(),
+                    location: module_info.display_range(key.range()).to_string(),
                     binding: bindings.get(idx).display_with(bindings).to_string(),
                     result: match val.get() {
                         None => "None".to_owned(),
@@ -147,7 +147,7 @@ impl DebugInfo {
                         &mut res
                     ));
                     let errors = errors.collect(&error_config).shown.map(|e| Error {
-                        location: e.source_range().to_string(),
+                        location: e.display_range().to_string(),
                         message: e.msg().to_owned(),
                     });
                     (

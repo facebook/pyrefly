@@ -31,10 +31,10 @@ use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::globs::FilteredGlobs;
+use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::memory::MemoryUsageTrace;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::watcher::Watcher;
-use ruff_source_file::OneIndexed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
@@ -736,14 +736,14 @@ impl Args {
             suppress::suppress_errors(&errors_to_suppress);
         }
         if self.behavior.remove_unused_ignores {
-            let mut all_ignores: SmallMap<&PathBuf, SmallSet<OneIndexed>> = SmallMap::new();
+            let mut all_ignores: SmallMap<&PathBuf, SmallSet<LineNumber>> = SmallMap::new();
             for (module_path, ignore) in loads.collect_ignores() {
                 if let ModulePathDetails::FileSystem(path) = module_path.details() {
                     all_ignores.insert(path, ignore.get_ignores(SuppressionKind::Pyrefly));
                 }
             }
 
-            let mut suppressed_errors: SmallMap<&PathBuf, SmallSet<OneIndexed>> = SmallMap::new();
+            let mut suppressed_errors: SmallMap<&PathBuf, SmallSet<LineNumber>> = SmallMap::new();
             for e in &errors.suppressed {
                 if e.is_ignored()
                     && let ModulePathDetails::FileSystem(path) = e.path().details()
@@ -751,7 +751,7 @@ impl Args {
                     suppressed_errors
                         .entry(path)
                         .or_default()
-                        .insert(e.source_range().start.line);
+                        .insert(e.display_range().start.line);
                 }
             }
 

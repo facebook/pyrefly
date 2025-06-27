@@ -7,7 +7,7 @@
 
 use dupe::Dupe;
 use itertools::Itertools;
-use ruff_source_file::OneIndexed;
+use pyrefly_util::lined_buffer::LineNumber;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
@@ -22,17 +22,17 @@ pub enum SuppressionKind {
 /// For now we don't record the content of the ignore, but we could.
 #[derive(Debug, Clone, Default)]
 pub struct Ignore {
-    ignores: SmallMap<OneIndexed, Vec<SuppressionKind>>,
+    ignores: SmallMap<LineNumber, Vec<SuppressionKind>>,
     ignore_all: bool,
 }
 
 impl Ignore {
     pub fn new(code: &str) -> Self {
         // process line level comments
-        let mut ignores: SmallMap<OneIndexed, Vec<SuppressionKind>> = SmallMap::new();
+        let mut ignores: SmallMap<LineNumber, Vec<SuppressionKind>> = SmallMap::new();
         for (line, line_str) in code.lines().enumerate() {
             if let Some(kind) = Self::get_suppression_kind(line_str) {
-                ignores.insert(OneIndexed::from_zero_indexed(line), [kind].to_vec());
+                ignores.insert(LineNumber::from_zero_indexed(line as u32), [kind].to_vec());
             }
         }
         Self {
@@ -92,19 +92,19 @@ impl Ignore {
         None
     }
 
-    pub fn is_ignored(&self, start_line: OneIndexed, end_line: OneIndexed) -> bool {
+    pub fn is_ignored(&self, start_line: LineNumber, end_line: LineNumber) -> bool {
         if self.ignore_all {
             true
         } else {
             // We allow an ignore the line before the range, or on any line within the range.
             // We convert to/from zero-indexed because OneIndexed does not implement Step.
             (start_line.to_zero_indexed().saturating_sub(1)..=end_line.to_zero_indexed())
-                .any(|x| self.ignores.contains_key(&OneIndexed::from_zero_indexed(x)))
+                .any(|x| self.ignores.contains_key(&LineNumber::from_zero_indexed(x)))
         }
     }
 
     /// Get all the ignores of a given kind.
-    pub fn get_ignores(&self, kind: SuppressionKind) -> SmallSet<OneIndexed> {
+    pub fn get_ignores(&self, kind: SuppressionKind) -> SmallSet<LineNumber> {
         self.ignores
             .iter()
             .filter(|ignore| ignore.1.contains(&kind))

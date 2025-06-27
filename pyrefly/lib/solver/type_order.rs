@@ -13,8 +13,8 @@ use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
-use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
+use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::Attribute;
 use crate::alt::class::variance_inference::VarianceMap;
 use crate::binding::binding::KeyVariance;

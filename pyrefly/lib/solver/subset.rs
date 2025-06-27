@@ -37,29 +37,6 @@ use crate::types::types::Type;
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     /// Can a function with l_args be called as a function with u_args?
     pub fn is_subset_param_list(&mut self, l_args: &[Param], u_args: &[Param]) -> bool {
-        // We can use a HashMap here since the order does not matter
-        let mut l_keywords = HashMap::new();
-        let mut l_kwargs = None;
-        let mut u_keywords = SmallMap::new();
-        let mut u_kwargs = None;
-        for arg in l_args {
-            match arg {
-                Param::KwOnly(name, ty, required) | Param::Pos(name, ty, required) => {
-                    l_keywords.insert(name.clone(), (ty.clone(), *required));
-                }
-                Param::Kwargs(_, ty) => l_kwargs = Some(ty.clone()),
-                _ => (),
-            }
-        }
-        for arg in u_args {
-            match arg {
-                Param::KwOnly(name, ty, required) => {
-                    u_keywords.insert(name.clone(), (ty.clone(), *required));
-                }
-                Param::Kwargs(_, ty) => u_kwargs = Some(ty.clone()),
-                _ => (),
-            }
-        }
         let mut l_args = l_args.iter();
         let mut u_args = u_args.iter();
         let mut l_arg = l_args.next();
@@ -195,32 +172,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         }
                     }
                 }
-                (Some(Param::VarArg(_, l)), Some(Param::PosOnly(_, u, _))) => {
+                (Some(Param::VarArg(_, l)), Some(Param::PosOnly(_, u, Required::Required))) => {
                     if self.is_subset_eq(u, l) {
                         u_arg = u_args.next();
-                    } else {
-                        return false;
-                    }
-                }
-                (Some(Param::VarArg(_, l)), Some(Param::Pos(name, u, _))) => {
-                    // Param::Pos can be passed positionally or by name, so if it matches *args
-                    // we need to make sure it matches an optional kw-only argument or *kwargs
-                    if self.is_subset_eq(u, l) {
-                        if let Some((l_kw_ty, req)) = l_keywords.get(name) {
-                            if *req == Required::Required {
-                                return false;
-                            } else if self.is_subset_eq(u, l_kw_ty) {
-                                u_arg = u_args.next();
-                            } else {
-                                return false;
-                            }
-                        } else if let Some(l_kw_ty) = &l_kwargs {
-                            if self.is_subset_eq(u, l_kw_ty) {
-                                u_arg = u_args.next();
-                            } else {
-                                return false;
-                            }
-                        }
                     } else {
                         return false;
                     }
@@ -264,6 +218,28 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     break;
                 }
                 _ => return false,
+            }
+        }
+        let mut l_keywords = HashMap::new(); // All iterations don't matter about determinism
+        let mut l_kwargs = None;
+        for arg in Option::into_iter(l_arg).chain(l_args) {
+            match arg {
+                Param::KwOnly(name, ty, required) | Param::Pos(name, ty, required) => {
+                    l_keywords.insert(name.clone(), (ty.clone(), *required));
+                }
+                Param::Kwargs(_, ty) => l_kwargs = Some(ty.clone()),
+                _ => (),
+            }
+        }
+        let mut u_keywords = SmallMap::new();
+        let mut u_kwargs = None;
+        for arg in Option::into_iter(u_arg).chain(u_args) {
+            match arg {
+                Param::KwOnly(name, ty, required) => {
+                    u_keywords.insert(name.clone(), (ty.clone(), *required));
+                }
+                Param::Kwargs(_, ty) => u_kwargs = Some(ty.clone()),
+                _ => (),
             }
         }
         let object_type = self.type_order.stdlib().object().clone().to_type();
@@ -754,7 +730,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
                 want_fields.iter().all(|(k, want_v)| {
                     got_fields.get(k).is_some_and(|got_v| {
-                        match (got_v.read_only, want_v.read_only) {
+                        match (got_v.is_read_only(), want_v.is_read_only()) {
                             // ReadOnly cannot be assigned to Non-ReadOnly
                             (true, false) => false,
                             // Non-ReadOnly fields are invariant

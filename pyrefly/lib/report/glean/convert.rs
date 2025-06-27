@@ -31,7 +31,7 @@ impl Glean {
         let file_fact = src::File::new(module_info.path().to_string());
         let digest = digest::Digest {
             hash: hash(module_info.contents().as_bytes()),
-            size: module_info.len() as u64,
+            size: module_info.contents().len() as u64,
         };
         let digest_fact = digest::FileDigest::new(file_fact, digest);
 
