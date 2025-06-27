@@ -41,9 +41,20 @@ pub fn standard_config_finder(
     let configure3 = configure.dupe();
 
     // A cache where path `p` maps to config file with `search_path = [p]`. If we can find the root.
-    let cache_one: Mutex<SmallMap<PathBuf, ArcId<ConfigFile>>> = Mutex::new(SmallMap::new());
+    let cache_one: Arc<Mutex<SmallMap<PathBuf, ArcId<ConfigFile>>>> =
+        Arc::new(Mutex::new(SmallMap::new()));
     // A cache where path `p` maps to config file with `search_path = [p, p/.., p/../.., ...]`.
-    let cache_parents: Mutex<SmallMap<PathBuf, ArcId<ConfigFile>>> = Mutex::new(SmallMap::new());
+    let cache_parents: Arc<Mutex<SmallMap<PathBuf, ArcId<ConfigFile>>>> =
+        Arc::new(Mutex::new(SmallMap::new()));
+
+    let clear_extra_caches = {
+        let cache_one = cache_one.dupe();
+        let cache_parents = cache_parents.dupe();
+        Box::new(move || {
+            cache_one.lock().clear();
+            cache_parents.lock().clear();
+        })
+    };
 
     let empty = LazyLock::new(move || {
         let (config, errors) = configure3(None, ConfigFile::default());
@@ -119,6 +130,7 @@ pub fn standard_config_finder(
                     .dupe()
             }
         }),
+        clear_extra_caches,
     )
 }
 

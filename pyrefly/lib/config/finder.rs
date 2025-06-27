@@ -101,6 +101,8 @@ pub struct ConfigFinder<T = ArcId<ConfigFile>> {
     before: Box<dyn Fn(ModuleName, &ModulePath) -> anyhow::Result<Option<T>> + Send + Sync>,
     /// If there is no config file, or loading it fails, use this fallback.
     fallback: Box<dyn Fn(ModuleName, &ModulePath) -> T + Send + Sync>,
+
+    clear_extra_caches: Box<dyn Fn() + Send + Sync>,
 }
 
 impl<T: Dupe + Debug + Send + Sync + 'static> ConfigFinder<T> {
@@ -108,8 +110,14 @@ impl<T: Dupe + Debug + Send + Sync + 'static> ConfigFinder<T> {
     pub fn new(
         load: Box<dyn Fn(&Path) -> (T, Vec<ConfigError>) + Send + Sync>,
         fallback: Box<dyn Fn(ModuleName, &ModulePath) -> T + Send + Sync>,
+        clear_extra_caches: Box<dyn Fn() + Send + Sync>,
     ) -> Self {
-        Self::new_custom(Box::new(|_, _| Ok(None)), load, fallback)
+        Self::new_custom(
+            Box::new(|_, _| Ok(None)),
+            load,
+            fallback,
+            clear_extra_caches,
+        )
     }
 
     /// Create a new ConfigFinder that always returns the same constant.
@@ -122,6 +130,7 @@ impl<T: Dupe + Debug + Send + Sync + 'static> ConfigFinder<T> {
             Box::new(move |_, _| Ok(Some(c1.dupe()))),
             Box::new(move |_| (c2.dupe(), Vec::new())),
             Box::new(move |_, _| c3.dupe()),
+            Box::new(|| {}),
         )
     }
 
@@ -132,6 +141,7 @@ impl<T: Dupe + Debug + Send + Sync + 'static> ConfigFinder<T> {
         before: Box<dyn Fn(ModuleName, &ModulePath) -> anyhow::Result<Option<T>> + Send + Sync>,
         load: Box<dyn Fn(&Path) -> (T, Vec<ConfigError>) + Send + Sync>,
         fallback: Box<dyn Fn(ModuleName, &ModulePath) -> T + Send + Sync>,
+        clear_extra_caches: Box<dyn Fn() + Send + Sync>,
     ) -> Self {
         let errors = Arc::new(Mutex::new(Vec::new()));
         let errors2 = errors.dupe();
@@ -152,12 +162,14 @@ impl<T: Dupe + Debug + Send + Sync + 'static> ConfigFinder<T> {
             errors,
             before,
             fallback,
+            clear_extra_caches,
         }
     }
 
     /// Invalidate all data stored in the config.
     pub fn clear(&self) {
         self.search.clear();
+        (self.clear_extra_caches)();
         *self.errors.lock() = Vec::new();
     }
 
