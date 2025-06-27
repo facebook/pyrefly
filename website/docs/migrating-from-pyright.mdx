@@ -66,10 +66,17 @@ Diagnostic settings are carried over to the equivalent subconfig, using the mapp
 
 Like pyright, pyrefly has ways to silence specific error codes. Full details can be found in the [Error Suppression docs](error-suppressions.mdx).
 
-To silence an error on a specific line, add a disable comment above that line:
+To silence an error on a specific line, add a disable comment above that line. You can either suppress all errors on that line:
 
 ```
 # pyrefly: ignore
+x: str = 1
+```
+
+Or target a specific error type:
+
+```
+# pyrefly: ignore[bad-assignment]
 x: str = 1
 ```
 
