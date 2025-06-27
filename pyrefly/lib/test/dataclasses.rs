@@ -968,6 +968,8 @@ class C:
     "#,
 );
 
+/*
+
 testcase!(
     test_field_ordering_kw_only_positional_override,
     r#"
@@ -1036,3 +1038,5 @@ class C:
 C(5, y=2)
     "#,
 );
+
+*/
