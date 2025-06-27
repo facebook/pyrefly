@@ -56,7 +56,7 @@ def update_file(file_path: str, content: str) -> None:
         old_content = None
     if content != old_content:
         # lint-ignore: NoUnsafeFilesystemRule
-        with open(file_path, "w") as f:
+        with open(file_path, "w", newline="\n") as f:
             f.write(content)
 
 

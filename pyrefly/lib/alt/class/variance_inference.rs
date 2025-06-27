@@ -8,8 +8,8 @@ use pyrefly_derive::TypeEq;
 use pyrefly_util::visit::VisitMut;
 use starlark_map::small_map::SmallMap;
 
-use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
+use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::variance_visitor::Injectivity;
 use crate::alt::class::variance_inference::variance_visitor::TParamArray;

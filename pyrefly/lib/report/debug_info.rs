@@ -18,7 +18,7 @@ use starlark_map::small_map::SmallMap;
 use crate::alt::answers::AnswerEntry;
 use crate::alt::answers::AnswerTable;
 use crate::alt::answers::Answers;
-use crate::alt::traits::SolveRecursive;
+use crate::binding::binding::Keyed;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
@@ -103,7 +103,7 @@ impl DebugInfo {
             &Answers,
         )],
     ) -> Self {
-        fn f<K: SolveRecursive>(
+        fn f<K: Keyed>(
             t: &AnswerEntry<K>,
             module_info: &ModuleInfo,
             bindings: &Bindings,

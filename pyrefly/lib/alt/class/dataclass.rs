@@ -11,8 +11,8 @@ use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
-use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
+use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::class_field::DataclassMember;
 use crate::alt::types::class_metadata::ClassMetadata;
@@ -152,7 +152,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for (name, field, field_flags) in self.iter_fields(cls, fields, true) {
             if field_flags.is_set(&DataclassKeywords::INIT) {
                 let has_default = field_flags.is_set(&DataclassKeywords::DEFAULT);
-                let is_kw_only = field_flags.is_set(&DataclassKeywords::KW_ONLY);
+                let is_kw_only = field_flags.is_set(&(DataclassKeywords::KW_ONLY.0, kw_only));
 
                 if !is_kw_only && !kw_only {
                     if !has_default && has_seen_default {
@@ -173,7 +173,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
 
-                params.push(field.as_param(&name, has_default, kw_only || is_kw_only));
+                params.push(field.as_param(&name, has_default, is_kw_only));
             }
         }
 

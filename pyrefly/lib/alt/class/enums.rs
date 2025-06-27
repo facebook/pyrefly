@@ -10,8 +10,8 @@ use std::sync::Arc;
 use ruff_python_ast::name::Name;
 use starlark_map::small_set::SmallSet;
 
-use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
+use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassFieldInitialization;
 use crate::types::class::Class;
 use crate::types::literal::Lit;

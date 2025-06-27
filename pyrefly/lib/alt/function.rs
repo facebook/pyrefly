@@ -17,8 +17,8 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use vec1::Vec1;
 
-use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
+use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::Binding;
 use crate::binding::binding::FunctionStubOrImpl;

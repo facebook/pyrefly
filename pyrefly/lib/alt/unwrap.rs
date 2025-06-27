@@ -7,8 +7,8 @@
 
 use ruff_python_ast::name::Name;
 
-use crate::alt::answers::AnswersSolver;
 use crate::alt::answers::LookupAnswer;
+use crate::alt::answers_solver::AnswersSolver;
 use crate::types::callable::Param;
 use crate::types::callable::Required;
 use crate::types::types::Type;

@@ -9,6 +9,7 @@ use std::thread;
 use std::thread::ThreadId;
 
 use dupe::Dupe;
+use itertools::Either;
 use pyrefly_util::lock::Mutex;
 use starlark_map::small_set::SmallSet;
 use starlark_map::smallset;
@@ -34,6 +35,20 @@ enum Status<T, R> {
     // Use a Box so the size of the struct stays small
     Calculating(Box<(Option<R>, SmallSet<ThreadId>)>),
     /// This value has been calculated.
+    Calculated(T),
+}
+
+/// The result of proposing a calculation in the current thread. See
+/// `propose_calculation` for more details on how it is used.
+#[derive(Clone, Debug)]
+pub enum ProposalResult<T, R> {
+    /// The current thread may proceed with the calculation.
+    Calculatable,
+    /// The current thread has encountered a cycle; no recursive placeholder exists yet.
+    CycleDetected,
+    /// The current thread has encountered a cycle, this is the recursive placeholder.
+    CycleBroken(R),
+    /// A final reasult is already available.
     Calculated(T),
 }
 
@@ -64,61 +79,101 @@ impl<T: Dupe, R: Dupe> Calculation<T, R> {
         }
     }
 
-    /// Force calculation. Given a function for doing the calculation,
-    /// return the result. If the calculation is already in process, returns None.
+    /// Look up the current status of the calculation as a `LookupResult`, under
+    /// the assumption that the current thread will begin the calculation if
+    /// the result is `Status::Calculatable`.
+    /// - If the calculation can proceed (the current thread has not encountered
+    ///   a cycle and no other thread has already computed a result), we will
+    ///   mark the current thread as active and return `Calculatable`.
+    /// - If the current thread encountered a cycle and no recursive placeholder
+    ///   is yet recorded, return `CycleDetected`.
+    /// - If the current thread encountered a cycle and a recursive placeholder
+    ///   exists, return `CycleBroken(recursive_placeholder)`.
+    /// - If the calculation has already be completed, return `Calculated(value)`.
+    pub fn propose_calculation(&self) -> ProposalResult<T, R> {
+        let mut lock = self.0.lock();
+        match &mut *lock {
+            Status::NotCalculated => {
+                *lock = Status::Calculating(Box::new((None, smallset! {thread::current().id()})));
+                ProposalResult::Calculatable
+            }
+            Status::Calculating(box (rec, threads)) => {
+                if threads.insert(thread::current().id()) {
+                    ProposalResult::Calculatable
+                } else {
+                    match rec {
+                        None => ProposalResult::CycleDetected,
+                        Some(r) => ProposalResult::CycleBroken(r.dupe()),
+                    }
+                }
+            }
+            Status::Calculated(v) => ProposalResult::Calculated(v.dupe()),
+        }
+    }
+
+    /// Attempt to record a cycle we want to break. Returns:
+    /// - The recursive placeholder if there is one; it may not be the one
+    ///   we passed in, because the first thread to write a placeholder wins.
+    /// - Or, if another thread has already completed the calculation, return
+    ///   the final value.
+    pub fn record_cycle(&self, placeholder: R) -> Either<T, R> {
+        let mut lock = self.0.lock();
+        match &mut *lock {
+            Status::NotCalculated => {
+                unreachable!("Should not record a recursive result before calculating")
+            }
+            Status::Calculating(box (rec, _)) => {
+                if rec.is_none() {
+                    // The first thread to write a cycle placeholder wins
+                    *rec = Some(placeholder.dupe());
+                }
+                Either::Right(rec.dupe().unwrap())
+            }
+            Status::Calculated(v) => Either::Left(v.dupe()),
+        }
+    }
+
+    /// Attempt to record a calculated value.
+    ///
+    /// Returns the final value (which may be different from the value passed
+    /// in if another thread finished the calculation first) along with
+    /// the recursive placeholder, if this thread was the first to write and
+    /// one was recorded (the caller, in some cases, may be responsible for
+    /// recording a mapping between the placeholder and the final value).
+    pub fn record_value(&self, value: T) -> (T, Option<R>) {
+        let mut lock = self.0.lock();
+        match &mut *lock {
+            Status::NotCalculated => {
+                unreachable!("Should not record a result before calculating")
+            }
+            Status::Calculating(box (rec, _)) => {
+                let rec = rec.take();
+                *lock = Status::Calculated(value.dupe());
+                (value, rec)
+            }
+            Status::Calculated(v) => {
+                // The first thread to write a value wins
+                (v.dupe(), None)
+            }
+        }
+    }
+
+    /// Perform or use the cached result of a calculation without using the full
+    /// power of cycle-breaking plumbing.
+    ///
+    /// Returns `None` if we encounter a cycle.
     pub fn calculate(&self, calculate: impl FnOnce() -> T) -> Option<T>
     where
         R: Default,
     {
-        self.calculate_with_recursive(calculate, R::default)
-            .ok()
-            .map(|(r, _)| r)
-    }
-
-    /// Force calculation. In addition to the simple [calculate] function, it also takes a function
-    /// to generate values if it hits a recursive case. The result will be either the recursive value,
-    /// or the result. The recursive value will be returned in the `Ok` at most once.
-    pub fn calculate_with_recursive(
-        &self,
-        calculate: impl FnOnce() -> T,
-        recursive: impl FnOnce() -> R,
-    ) -> Result<(T, Option<R>), R> {
-        let mut lock = self.0.lock();
-        let thread = thread::current().id();
-        match &mut *lock {
-            Status::NotCalculated => {
-                *lock = Status::Calculating(Box::new((None, smallset! {thread})))
+        match self.propose_calculation() {
+            ProposalResult::Calculatable => {
+                let value = calculate();
+                let (value, _) = self.record_value(value);
+                Some(value)
             }
-            Status::Calculating(box (rec, threads)) => {
-                if !threads.insert(thread) {
-                    match rec {
-                        None => {
-                            let r = recursive();
-                            *rec = Some(r.dupe());
-                            return Err(r);
-                        }
-                        Some(r) => return Err(r.dupe()),
-                    }
-                }
-            }
-            Status::Calculated(v) => return Ok((v.dupe(), None)),
-        }
-        drop(lock);
-        let result = calculate();
-        let mut lock = self.0.lock();
-        match &mut *lock {
-            Status::NotCalculated => {
-                unreachable!("Should have started calculating before we finished")
-            }
-            Status::Calculated(v) => {
-                // If we raced, just return the first one, so we have consistent ArcId etc.
-                Ok((v.dupe(), None))
-            }
-            Status::Calculating(c) => {
-                let rec = c.0.take();
-                *lock = Status::Calculated(result.dupe());
-                Ok((result, rec))
-            }
+            ProposalResult::Calculated(v) => Some(v.dupe()),
+            ProposalResult::CycleDetected | ProposalResult::CycleBroken(..) => None,
         }
     }
 }
