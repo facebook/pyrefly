@@ -20,6 +20,7 @@ pub use crate::commands::check::Args as CheckArgs;
 pub use crate::commands::init::Args as InitArgs;
 pub use crate::commands::lsp::Args as LspArgs;
 
+#[deny(missing_docs)]
 #[derive(Debug, Parser, Clone)]
 pub struct CommonGlobalArgs {
     /// Number of threads to use for parallelization.

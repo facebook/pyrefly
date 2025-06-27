@@ -31,6 +31,7 @@ use crate::config::pyright;
 use crate::config::pyright::PyrightConfig;
 use crate::config::util::PyProject;
 
+#[deny(missing_docs)]
 #[derive(Clone, Debug, Parser)]
 pub struct Args {
     /// The path to the mypy or pyright config file to convert. Optional.

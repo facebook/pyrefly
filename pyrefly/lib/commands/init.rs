@@ -27,6 +27,7 @@ use crate::config::config::ConfigFile;
 const MAX_ERRORS_TO_PROMPT_SUPPRESSION: usize = 100;
 
 // This should likely be moved into config.rs
+#[deny(missing_docs)]
 #[derive(Clone, Debug, Parser, Copy, Display)]
 pub enum ConfigFileKind {
     MyPy,
@@ -55,6 +56,7 @@ impl ConfigFileKind {
 }
 
 /// Initialize a new pyrefly config in the given directory. Can also be used to run pyrefly config-migration on a given project.
+#[deny(missing_docs)]
 #[derive(Clone, Debug, Parser)]
 #[command(after_help = "Examples:
    `pyrefly init`: Create a new pyrefly.toml config in the current directory

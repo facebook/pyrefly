@@ -82,6 +82,7 @@ enum OutputFormat {
     OmitErrors,
 }
 
+#[deny(missing_docs)]
 #[derive(Debug, Parser, Clone)]
 pub struct Args {
     #[command(flatten, next_help_heading = "Output")]
@@ -93,6 +94,7 @@ pub struct Args {
 }
 
 /// how/what should Pyrefly output
+#[deny(missing_docs)]
 #[derive(Debug, Parser, Clone)]
 struct OutputArgs {
     /// Write the errors to a file, instead of printing them.
@@ -144,6 +146,7 @@ struct OutputArgs {
 }
 
 /// non-config type checker behavior
+#[deny(missing_docs)]
 #[derive(Debug, Parser, Clone)]
 struct BehaviorArgs {
     /// Check all reachable modules, not just the ones that are passed in explicitly on CLI positional arguments.
@@ -161,6 +164,7 @@ struct BehaviorArgs {
 }
 
 /// config overrides
+#[deny(missing_docs)]
 #[derive(Debug, Parser, Clone)]
 struct ConfigOverrideArgs {
     /// The list of directories where imports are imported from, including

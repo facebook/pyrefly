@@ -27,6 +27,7 @@ use crate::types::simplify::unions_with_literals;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
 
+#[deny(missing_docs)]
 #[derive(Debug, Parser, Clone)]
 pub struct Args {}
 
