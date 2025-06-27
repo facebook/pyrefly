@@ -181,6 +181,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Type(box Type::ClassType(cls)) | Type::Type(box Type::SelfType(cls)) => {
                 Some(CallTarget::new(Target::Class(cls)))
             }
+            Type::Type(box Type::Tuple(tup)) => {
+                let cls = self.stdlib.tuple(Type::Tuple(tup));
+                Some(CallTarget::new(Target::Class(cls)))
+            }
             Type::Type(box Type::Quantified(quantified)) => {
                 Some(CallTarget::new(Target::Callable(Callable {
                     // TODO: use upper bound to determine input parameters
