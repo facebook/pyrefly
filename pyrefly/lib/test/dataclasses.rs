@@ -789,6 +789,19 @@ class C:
 );
 
 testcase!(
+    test_field_ordering_with_empty_field_function,
+    r#"
+from dataclasses import dataclass, field
+@dataclass
+class C:
+    x: int = field(default=1)  # Has DEFAULT flag AND is initialized on class
+    y: int = field()           # E: DataClass field 'y' without a default may not follow DataClass field with a default
+    z: int                     # E: DataClass field 'z' without a default may not follow DataClass field with a default
+C(y=2, z=3)  # OK - y is not considered to have a default
+    "#,
+);
+
+testcase!(
     test_field_ordering_with_default_factory,
     r#"
 from dataclasses import dataclass, field
