@@ -1146,7 +1146,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         for (parent, parent_metadata) in parents {
             parent_has_any = parent_has_any || parent_metadata.has_base_any();
-            //don't allow overriding a namedtuple element
+            // Don't allow overriding a namedtuple element
             if let Some(named_tuple_metadata) = parent_metadata.named_tuple_metadata() {
                 if named_tuple_metadata.elements.contains(name) {
                     self.error(
@@ -1156,7 +1156,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None,
                         format!("Cannot override named tuple element `{}`", name),
                     );
-                    return;
                 }
             }
             let Some(want_member) = self.get_class_member(parent.class_object(), name) else {
