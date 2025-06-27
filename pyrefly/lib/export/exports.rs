@@ -11,6 +11,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_python::sys_info::SysInfo;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -25,7 +26,6 @@ use crate::export::definitions::DunderAllEntry;
 use crate::graph::calculation::Calculation;
 use crate::module::module_info::ModuleInfo;
 use crate::module::module_name::ModuleName;
-use crate::python::sys_info::SysInfo;
 use crate::state::loader::FindError;
 
 /// Find the exports of a given module.
@@ -181,13 +181,13 @@ mod tests {
     use std::path::PathBuf;
 
     use anyhow::anyhow;
+    use pyrefly_python::ast::Ast;
     use starlark_map::small_map::SmallMap;
     use starlark_map::smallmap;
 
     use super::*;
     use crate::module::module_path::ModulePath;
     use crate::module::module_path::ModuleStyle;
-    use crate::python::ast::Ast;
 
     impl LookupExport for SmallMap<ModuleName, Exports> {
         fn get(&self, module: ModuleName) -> Result<Exports, FindError> {

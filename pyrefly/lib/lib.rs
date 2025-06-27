@@ -41,7 +41,6 @@ mod export;
 mod graph;
 mod module;
 pub mod playground;
-mod python;
 pub mod query;
 mod report;
 mod solver;
@@ -59,6 +58,9 @@ pub mod library {
     pub mod library {
         pub mod library {
             pub mod library {
+                pub use pyrefly_python::sys_info::PythonPlatform;
+                pub use pyrefly_python::sys_info::PythonVersion;
+
                 #[cfg(not(target_arch = "wasm32"))]
                 pub use crate::commands::config_finder::standard_config_finder;
                 #[cfg(not(target_arch = "wasm32"))]
@@ -74,8 +76,6 @@ pub mod library {
                 pub use crate::error::kind::Severity;
                 pub use crate::module::module_name::ModuleName;
                 pub use crate::module::module_path::ModulePath;
-                pub use crate::python::sys_info::PythonPlatform;
-                pub use crate::python::sys_info::PythonVersion;
             }
         }
     }

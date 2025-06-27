@@ -9,6 +9,9 @@ use std::fmt::Debug;
 use std::mem;
 
 use parse_display::Display;
+use pyrefly_python::ast::Ast;
+use pyrefly_python::dunder;
+use pyrefly_python::sys_info::SysInfo;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprName;
@@ -51,9 +54,6 @@ use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::module::module_name::ModuleName;
 use crate::module::short_identifier::ShortIdentifier;
-use crate::python::ast::Ast;
-use crate::python::dunder;
-use crate::python::sys_info::SysInfo;
 use crate::types::class::ClassDefIndex;
 
 /// Many names may map to the same TextRange (e.g. from foo import *).

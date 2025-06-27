@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use itertools::Itertools;
+use pyrefly_python::sys_info::PythonPlatform;
+use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::globs::Glob;
 use pyrefly_util::globs::Globs;
 use serde::Deserialize;
@@ -21,8 +23,6 @@ use crate::config::config::SubConfig;
 use crate::config::error::ErrorDisplayConfig;
 use crate::config::mypy::regex_converter;
 use crate::module::wildcard::ModuleWildcard;
-use crate::python::sys_info::PythonPlatform;
-use crate::python::sys_info::PythonVersion;
 
 // A pyproject.toml Mypy config differs a bit from the INI format:
 // - The [mypy] section is written as [tool.mypy]

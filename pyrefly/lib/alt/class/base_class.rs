@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::ast::Ast;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Expr;
 use ruff_text_size::Ranged;
@@ -15,7 +16,6 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::solve::TypeFormContext;
 use crate::error::collector::ErrorCollector;
 use crate::error::kind::ErrorKind;
-use crate::python::ast::Ast;
 use crate::types::special_form::SpecialForm;
 use crate::types::types::Type;
 

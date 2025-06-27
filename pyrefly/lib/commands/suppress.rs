@@ -9,6 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::anyhow;
+use pyrefly_python::ast::Ast;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::lined_buffer::LineNumber;
 use regex::Regex;
@@ -18,7 +19,6 @@ use tracing::error;
 
 use crate::error::error::Error;
 use crate::module::module_info::GENERATED_TOKEN;
-use crate::python::ast::Ast;
 
 /// Combines all errors that affect one line into a single entry.
 // The current format is: `# pyrefly: ignore  # error1, error2, ...`

@@ -170,14 +170,28 @@ impl Cycle {
     fn new(raw: Vec1<CalcId>) -> Self {
         let detected_at = raw.first().dupe();
         let (split_at, break_at) = raw.iter().enumerate().min_by_key(|(_, c)| *c).unwrap();
-        let (before, at_and_after) = raw.split_at(split_at);
-        let unwind_stack = before.iter().duped().collect();
-        let recursion_stack = at_and_after.iter().rev().duped().collect();
-        Cycle {
-            break_at: break_at.dupe(),
-            recursion_stack,
-            unwind_stack,
-            detected_at,
+        if *break_at != detected_at {
+            let (before, at_and_after) = raw.split_at(split_at);
+            // The raw cycle is in order of recency (current key at the front, entrypoint at the top). This means:
+            // - The recursion stack is already in the right order (older frames we will re-encounter at the top)
+            // - The unwind stack has to be flipped so that newer frames are at the top
+            let unwind_stack = before.iter().rev().duped().collect();
+            let recursion_stack = at_and_after.iter().duped().collect();
+            Cycle {
+                break_at: break_at.dupe(),
+                recursion_stack,
+                unwind_stack,
+                detected_at,
+            }
+        } else {
+            // Short circuit the recursion if we're already at `break_at`
+            let unwind_stack = raw.iter().rev().duped().collect();
+            Cycle {
+                break_at: break_at.dupe(),
+                recursion_stack: Vec::new(),
+                unwind_stack,
+                detected_at,
+            }
         }
     }
 }
@@ -226,17 +240,22 @@ impl Cycles {
         Self(RefCell::new(Vec::new()))
     }
 
-    #[expect(dead_code)]
-    fn cycle_detected(&self, raw: Vec1<CalcId>) {
-        self.0.borrow_mut().push(Cycle::new(raw));
+    // Handle a cycle we just detected.
+    ///
+    /// Return whether or not to break immediately (which is relatively
+    /// common, since we break on the minimal idx which is often where we would
+    /// detect the problem).
+    fn cycle_detected(&self, raw: Vec1<CalcId>) -> bool {
+        let cycle = Cycle::new(raw);
+        let res = cycle.break_at == cycle.detected_at;
+        self.0.borrow_mut().push(cycle);
+        res
     }
 
-    #[expect(dead_code)]
     fn cycle_completed(&self) {
         self.0.borrow_mut().pop();
     }
 
-    #[expect(dead_code)]
     fn pre_calculate_state(&self, current: &CalcId) -> CycleState {
         if let Some(active_cycle) = self.0.borrow_mut().last_mut()
             && let Some(c) = active_cycle.recursion_stack.last()
@@ -254,7 +273,6 @@ impl Cycles {
         }
     }
 
-    #[expect(dead_code)]
     fn post_calculate_state(&self, current: &CalcId) -> CycleState {
         if let Some(active_cycle) = self.0.borrow_mut().last_mut() {
             if let Some(c) = active_cycle.unwind_stack.last() {
@@ -364,16 +382,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     {
         let current = CalcId(self.bindings().dupe(), K::to_anyidx(idx));
         let calculation = self.get_calculation(idx);
-        match calculation.propose_calculation() {
-            ProposalResult::Calculated(v) => v,
-            ProposalResult::CycleBroken(r) => Arc::new(K::promote_recursive(r)),
-            ProposalResult::CycleDetected => self
-                .attempt_to_unwind_cycle_from_here(idx, calculation)
-                .unwrap_or_else(|r| Arc::new(K::promote_recursive(r))),
-            ProposalResult::Calculatable => {
-                self.calculate_and_record_answer(current, idx, calculation)
+        self.stack.push(current.dupe());
+        let result = match self.cycles.pre_calculate_state(&current) {
+            CycleState::NoDetectedCycle => match calculation.propose_calculation() {
+                ProposalResult::Calculated(v) => v,
+                ProposalResult::CycleBroken(r) => Arc::new(K::promote_recursive(r)),
+                ProposalResult::CycleDetected => {
+                    let current_cycle = self.stack.current_cycle().unwrap();
+                    let break_immediately = self.cycles.cycle_detected(current_cycle);
+                    if break_immediately {
+                        self.attempt_to_unwind_cycle_from_here(idx, calculation)
+                            .unwrap_or_else(|r| Arc::new(K::promote_recursive(r)))
+                    } else {
+                        self.calculate_and_record_answer(current, idx, calculation)
+                    }
+                }
+                ProposalResult::Calculatable => {
+                    self.calculate_and_record_answer(current, idx, calculation)
+                }
+            },
+            CycleState::BreakAt => {
+                // Begin unwinding the cycle using a recursive placeholder
+                self.attempt_to_unwind_cycle_from_here(idx, calculation)
+                    .unwrap_or_else(|r| Arc::new(K::promote_recursive(r)))
             }
-        }
+            CycleState::Participant => {
+                match calculation.propose_calculation() {
+                    ProposalResult::Calculatable => {
+                        unreachable!(
+                            "Should not get Calculatable when we are participating in a cycle"
+                        )
+                    }
+                    ProposalResult::CycleDetected => {
+                        // Ignore cycle detection (we're expecting this)
+                        self.calculate_and_record_answer(current, idx, calculation)
+                    }
+                    // Short circuit if another thread has already written an answer or recursive placeholder.
+                    ProposalResult::Calculated(v) => v,
+                    ProposalResult::CycleBroken(r) => Arc::new(K::promote_recursive(r)),
+                }
+            }
+        };
+        self.stack.pop();
+        result
     }
 
     /// Calculate the value for a `K::Value`, and record it in the `Calculation`.
@@ -390,16 +441,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        self.stack.push(current);
         let binding = self.bindings().get(idx);
         let answer = K::solve(self, binding, self.base_errors);
-        self.stack.pop();
         let (v, rec) = calculation.record_value(answer);
-        // if this was the first write to a Calculation that had a recursive placeholder,
+        // If this was the first write to a Calculation that had a recursive placeholder,
         // we need to record the placeholder => final answer correspondance.
         if let Some(r) = rec {
             let k = self.bindings().idx_to_key(idx).range();
             K::record_recursive(self, k, &v, r, self.base_errors);
+        }
+        // Handle cycle unwinding, if applicable.
+        match self.cycles.post_calculate_state(&current) {
+            CycleState::NoDetectedCycle => {}
+            CycleState::Participant => {
+                // TODO: at some point we'll want refactor so that at least some results in a cycle
+                // are isolated until we finish (otherwise we can get data races pinning `Var`s).
+            }
+            CycleState::BreakAt => {
+                self.cycles.cycle_completed();
+            }
         }
         v
     }

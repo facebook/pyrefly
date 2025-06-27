@@ -11,6 +11,7 @@ use dupe::Dupe;
 use enum_iterator::Sequence;
 use parse_display::Display;
 use paste::paste;
+use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::ModModule;
 
@@ -25,7 +26,6 @@ use crate::export::exports::LookupExport;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
 use crate::module::parse::module_parse;
-use crate::python::sys_info::SysInfo;
 use crate::solver::solver::Solver;
 use crate::state::load::Load;
 use crate::state::memory::MemoryFilesLookup;

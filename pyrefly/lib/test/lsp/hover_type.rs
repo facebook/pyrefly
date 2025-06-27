@@ -304,7 +304,7 @@ y = x
 # main.py
 5 | y = x
         ^
-Hover Result: `Literal[5] | Unknown`
+Hover Result: `int`
 "#
         .trim(),
         report.trim(),

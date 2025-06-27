@@ -33,7 +33,7 @@ use serde::Serialize;
 use serde::de;
 use serde::de::Visitor;
 
-use crate::python::ast::Ast;
+use crate::ast::Ast;
 
 #[derive(Debug, Clone, Copy, Dupe, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PythonVersion {
