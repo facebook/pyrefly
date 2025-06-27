@@ -20,6 +20,7 @@ pub use crate::commands::check::Args as CheckArgs;
 pub use crate::commands::init::Args as InitArgs;
 pub use crate::commands::lsp::Args as LspArgs;
 
+/// arguements for run settings
 #[deny(missing_docs)]
 #[derive(Debug, Parser, Clone)]
 pub struct CommonGlobalArgs {

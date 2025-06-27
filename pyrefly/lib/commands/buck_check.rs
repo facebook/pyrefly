@@ -33,6 +33,7 @@ use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
 
+/// Arguments for Buck integration type checking
 #[deny(missing_docs)]
 #[derive(Debug, Clone, Parser)]
 pub struct Args {

@@ -82,6 +82,7 @@ enum OutputFormat {
     OmitErrors,
 }
 
+///Main arguments for Pyrefly type checker
 #[deny(missing_docs)]
 #[derive(Debug, Parser, Clone)]
 pub struct Args {
