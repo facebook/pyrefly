@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::python::sys_info::PythonVersion;
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -710,6 +712,48 @@ SomeClass(1) # OK
 );
 
 testcase!(
+    test_field_ordering_valid_no_defaults,
+    r#"
+from dataclasses import dataclass
+@dataclass
+class C:
+    x: int
+    y: str
+    z: float
+C(1, "hello", 3.14)  # OK
+    "#,
+);
+
+testcase!(
+    test_field_ordering_valid_all_defaults,
+    r#"
+from dataclasses import dataclass
+@dataclass
+class C:
+    x: int = 1
+    y: str = "hello"
+    z: float = 3.14
+C()  # OK
+C(x=2)  # OK
+C(x=2, y="world", z=2.71)  # OK
+    "#,
+);
+
+testcase!(
+    test_field_ordering_valid_required_then_defaults,
+    r#"
+from dataclasses import dataclass
+@dataclass
+class C:
+    x: int
+    y: str
+    z: float = 3.14
+C(1, "hello")  # OK
+C(1, "hello", 2.71)  # OK
+    "#,
+);
+
+testcase!(
     test_field_ordering_basic_violation,
     r#"
 from dataclasses import dataclass
@@ -730,48 +774,6 @@ class C:
     b: str  # E: DataClass field 'b' without a default may not follow DataClass field with a default
     c: int = 2
     d: float  # E: DataClass field 'd' without a default may not follow DataClass field with a default
-    "#,
-);
-
-testcase!(
-    test_field_ordering_valid_all_defaults,
-    r#"
-from dataclasses import dataclass
-@dataclass
-class C:
-    x: int = 1
-    y: str = "hello"
-    z: float = 3.14
-C()  # OK
-C(x=2)  # OK
-C(x=2, y="world", z=2.71)  # OK
-    "#,
-);
-
-testcase!(
-    test_field_ordering_valid_no_defaults,
-    r#"
-from dataclasses import dataclass
-@dataclass
-class C:
-    x: int
-    y: str
-    z: float
-C(1, "hello", 3.14)  # OK
-    "#,
-);
-
-testcase!(
-    test_field_ordering_valid_required_then_defaults,
-    r#"
-from dataclasses import dataclass
-@dataclass
-class C:
-    x: int
-    y: str
-    z: float = 3.14
-C(1, "hello")  # OK
-C(1, "hello", 2.71)  # OK
     "#,
 );
 
@@ -798,14 +800,14 @@ class C:
 );
 
 testcase!(
-    test_field_ordering_kw_only_ignores_validation,
+    test_field_ordering_kw_only_bypass,
     r#"
 from dataclasses import dataclass, field
 @dataclass
 class C:
     x: int = 1
-    y: str = field(kw_only=True)  # OK - kw_only fields don't participate in ordering validation
-    z: int = field(kw_only=True)  # OK - kw_only fields don't participate in ordering validation
+    y: str = field(kw_only=True)  # OK - kw_only fields bypass ordering validation
+    z: int = field(kw_only=True)  # OK - kw_only fields bypass ordering validation
 C(1, y="hello", z=2)  # OK
     "#,
 );
@@ -825,7 +827,7 @@ C(1, y="hello", z=2)  # OK
 );
 
 testcase!(
-    test_field_ordering_kw_only_decorator,
+    test_field_ordering_kw_only_global,
     r#"
 from dataclasses import dataclass
 @dataclass(kw_only=True)
@@ -837,19 +839,19 @@ C(x=1, y="hello")  # OK
 );
 
 testcase!(
-    test_field_ordering_init_false_ignores_validation,
+    test_field_ordering_init_false_bypass,
     r#"
 from dataclasses import dataclass, field
 @dataclass
 class C:
     x: int = 1
-    y: str = field(init=False)  # OK - init=False fields don't participate in __init__
+    y: str = field(init=False)  # OK - init=False fields bypass ordering validation
     z: int  # E: DataClass field 'z' without a default may not follow DataClass field with a default
     "#,
 );
 
 testcase!(
-    test_field_ordering_mixed_init_and_kw_only,
+    test_field_ordering_mixed_bypass_flags,
     r#"
 from dataclasses import dataclass, field
 @dataclass
@@ -863,13 +865,13 @@ class C:
 );
 
 testcase!(
-    test_field_ordering_inheritance_base_with_defaults,
+    test_field_ordering_inheritance_violation,
     r#"
 from dataclasses import dataclass
 @dataclass
 class Base:
     x: int = 1
-    
+
 @dataclass
 class Child(Base):
     y: str  # E: DataClass field 'y' without a default may not follow DataClass field with a default
@@ -883,7 +885,7 @@ from dataclasses import dataclass
 @dataclass
 class Base:
     x: int
-    
+
 @dataclass
 class Child(Base):
     y: str = "default"  # OK
@@ -898,11 +900,11 @@ from dataclasses import dataclass
 @dataclass
 class Base1:
     x: int = 1
-    
-@dataclass  
+
+@dataclass
 class Base2:
     y: str = "default"
-    
+
 @dataclass
 class Child(Base1, Base2):
     z: float  # E: DataClass field 'z' without a default may not follow DataClass field with a default
@@ -910,17 +912,17 @@ class Child(Base1, Base2):
 );
 
 testcase!(
-    test_field_ordering_complex_inheritance,
+    test_field_ordering_inheritance_with_kw_only,
     r#"
 from dataclasses import dataclass, field
 @dataclass
 class A:
     a: int
-    
+
 @dataclass
 class B:
     b: str = "default"
-    
+
 @dataclass
 class C(A, B):
     c: float = field(kw_only=True)  # OK - kw_only
@@ -929,7 +931,7 @@ class C(A, B):
 );
 
 testcase!(
-    test_field_ordering_initvar_mixed,
+    test_field_ordering_initvar_violation,
     r#"
 from dataclasses import dataclass, InitVar
 @dataclass
@@ -941,56 +943,83 @@ class C:
 );
 
 testcase!(
-    test_field_ordering_classvar_ignored,
+    test_field_ordering_classvar_bypass,
     r#"
 from typing import ClassVar
 from dataclasses import dataclass
 @dataclass
 class C:
     x: int = 1
-    class_var: ClassVar[str] = "ignored"  # OK - ClassVar fields don't participate in __init__
+    class_var: ClassVar[str] = "ignored"  # OK - ClassVar fields bypass ordering validation
     y: int  # E: DataClass field 'y' without a default may not follow DataClass field with a default
     "#,
 );
 
 testcase!(
-    test_field_ordering_kw_only_override_with_defaults,
+    test_field_ordering_kw_only_positional_override,
     r#"
 from dataclasses import dataclass, field
 @dataclass(kw_only=True)
 class C:
-    a: int = 1                                    # kw_only (global setting), has default
+    a: int = 1
     b: str = field(kw_only=False)                 # positional override, no default
     c: float = field(kw_only=False, default=3.14) # positional override, has default
     d: bool = field(kw_only=False)                # E: DataClass field 'd' without a default may not follow DataClass field with a default
-C("hello", a=3, d=True)  # b is positional, c has default, a and d are keyword-only
+C("hello", 3.14, a=1, d=True)
     "#,
 );
 
 testcase!(
-    test_field_ordering_mixed_kw_only_overrides,
+    test_field_ordering_kw_only_mixed_overrides,
     r#"
 from dataclasses import dataclass, field
 @dataclass(kw_only=True)
 class C:
-    w: int                            # kw_only (global setting)
+    w: int
     x: str = field(kw_only=False)     # positional override
     y: float = field(kw_only=False)   # positional override
-    z: bool                           # kw_only (global setting)
+    z: bool
 C("hello", 3.14, w=1, z=True)  # x and y are positional, w and z are keyword-only
     "#,
 );
 
 testcase!(
-    test_field_ordering_kw_only_false_in_regular_dataclass,
+    test_field_ordering_kw_only_field_override,
     r#"
 from dataclasses import dataclass, field
-@dataclass  # kw_only=False by default
+@dataclass
 class C:
     a: int
     b: str = field(kw_only=True)      # keyword-only field
     c: float = 3.14                   # positional field with default
     d: bool = field(kw_only=False)    # E: DataClass field 'd' without a default may not follow DataClass field with a default
-C(1, 2.71, b="hello", d=True)  # a and c are positional, b and d are keyword-only
+C(1, 2.71, b="hello", d=True)
+    "#,
+);
+
+testcase!(
+    test_field_kw_only_unsupported,
+    TestEnv::new_with_version(PythonVersion::new(3, 9, 0)),
+    r#"
+from dataclasses import dataclass, field
+@dataclass
+class C:
+    x: int = 1
+    y: int = field(kw_only=True) # E: No matching overload found for function `dataclasses.field`
+    z: int # E: DataClass field 'z' without a default may not follow DataClass field with a default
+C(5, y=2)
+    "#,
+);
+
+testcase!(
+    test_field_ordering_kw_only_field_bypass,
+    r#"
+from dataclasses import dataclass, field
+@dataclass
+class C:
+    x: int = 1
+    y: int = field(kw_only=True)  # OK - kw_only field bypasses ordering validation
+    z: int # E: DataClass field 'z' without a default may not follow DataClass field with a default
+C(5, y=2)
     "#,
 );
