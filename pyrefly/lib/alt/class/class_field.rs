@@ -53,6 +53,7 @@ use crate::types::class::ClassType;
 use crate::types::literal::Lit;
 use crate::types::literal::LitEnum;
 use crate::types::quantified::Quantified;
+use crate::types::read_only::ReadOnlyReason;
 use crate::types::typed_dict::TypedDict;
 use crate::types::typed_dict::TypedDictField;
 use crate::types::types::BoundMethod;
@@ -109,7 +110,8 @@ enum ClassFieldInner {
         ty: Type,
         annotation: Option<Annotation>,
         initialization: ClassFieldInitialization,
-        readonly: bool,
+        /// The reason this field is read-only. `None` indicates it is read-write.
+        read_only_reason: Option<ReadOnlyReason>,
         // Descriptor getter method, if there is one. `None` indicates no getter.
         descriptor_getter: Option<Type>,
         // Descriptor setter method, if there is one. `None` indicates no setter.
@@ -133,7 +135,7 @@ impl ClassField {
         ty: Type,
         annotation: Option<Annotation>,
         initialization: ClassFieldInitialization,
-        readonly: bool,
+        read_only_reason: Option<ReadOnlyReason>,
         descriptor_getter: Option<Type>,
         descriptor_setter: Option<Type>,
         is_function_without_return_annotation: bool,
@@ -142,7 +144,7 @@ impl ClassField {
             ty,
             annotation,
             initialization,
-            readonly,
+            read_only_reason,
             descriptor_getter,
             descriptor_setter,
             is_function_without_return_annotation,
@@ -162,14 +164,13 @@ impl ClassField {
             ClassFieldInner::Simple {
                 ty,
                 annotation,
-                readonly,
                 descriptor_getter,
                 descriptor_setter,
                 ..
             } => Some((
                 ty,
                 annotation.as_ref(),
-                *readonly,
+                self.is_read_only(),
                 descriptor_getter,
                 descriptor_setter,
             )),
@@ -189,7 +190,7 @@ impl ClassField {
             ty,
             annotation: None,
             initialization: ClassFieldInitialization::Class(None),
-            readonly: false,
+            read_only_reason: None,
             descriptor_getter: None,
             descriptor_setter: None,
             is_function_without_return_annotation: false,
@@ -201,7 +202,7 @@ impl ClassField {
             ty: Type::any_implicit(),
             annotation: None,
             initialization: ClassFieldInitialization::recursive(),
-            readonly: false,
+            read_only_reason: None,
             descriptor_getter: None,
             descriptor_setter: None,
             is_function_without_return_annotation: false,
@@ -220,7 +221,7 @@ impl ClassField {
                 ty,
                 annotation,
                 initialization,
-                readonly,
+                read_only_reason,
                 descriptor_getter,
                 descriptor_setter,
                 is_function_without_return_annotation,
@@ -228,7 +229,7 @@ impl ClassField {
                 ty: instance.instantiate_member(ty.clone()),
                 annotation: annotation.clone(),
                 initialization: initialization.clone(),
-                readonly: *readonly,
+                read_only_reason: read_only_reason.clone(),
                 descriptor_getter: descriptor_getter
                     .as_ref()
                     .map(|ty| instance.instantiate_member(ty.clone())),
@@ -297,7 +298,11 @@ impl ClassField {
                 ..
             } => Some(TypedDictField {
                 ty: ty.clone(),
-                read_only: qualifiers.contains(&Qualifier::ReadOnly),
+                read_only_reason: if qualifiers.contains(&Qualifier::ReadOnly) {
+                    Some(ReadOnlyReason::ReadOnlyQualifier)
+                } else {
+                    None
+                },
                 required: if qualifiers.contains(&Qualifier::Required) {
                     true
                 } else if qualifiers.contains(&Qualifier::NotRequired) {
@@ -352,6 +357,50 @@ impl ClassField {
                 annotation.as_ref().is_some_and(|ann| ann.is_final()) || ty.has_final_decoration()
             }
         }
+    }
+
+    /// Check if this field is read-only for any reason.
+    pub fn is_read_only(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Simple {
+                read_only_reason, ..
+            } => read_only_reason.is_some(),
+        }
+    }
+
+    /// Determine the read_only reason from annotation and other factors
+    fn determine_read_only_reason<Ans: LookupAnswer>(
+        cls: &Class,
+        name: &Name,
+        annotation: &Option<Annotation>,
+        initialization: &ClassFieldInitialization,
+        solver: &AnswersSolver<'_, Ans>,
+    ) -> Option<ReadOnlyReason> {
+        if let Some(ann) = annotation {
+            // TODO: enable this for Final attrs that aren't initialized on the class
+            if ann.is_final() && matches!(initialization, ClassFieldInitialization::Class(_)) {
+                return Some(ReadOnlyReason::Final);
+            }
+            if ann.has_qualifier(&Qualifier::ReadOnly) {
+                return Some(ReadOnlyReason::ReadOnlyQualifier);
+            }
+        }
+        let metadata = solver.get_metadata_for_class(cls);
+        // NamedTuple members are read-only
+        if metadata
+            .named_tuple_metadata()
+            .is_some_and(|nt| nt.elements.contains(name))
+        {
+            return Some(ReadOnlyReason::NamedTuple);
+        }
+        // Frozen dataclass fields (not methods) are read-only
+        if let Some(dm) = metadata.dataclass_metadata() {
+            if dm.kws.is_set(&DataclassKeywords::FROZEN) && dm.fields.contains(name) {
+                return Some(ReadOnlyReason::FrozenDataclass);
+            }
+        }
+        // Default: the field is read-write
+        None
     }
 
     pub fn has_explicit_annotation(&self) -> bool {
@@ -490,7 +539,7 @@ fn bind_instance_attribute(
     instance: &Instance,
     attr: Type,
     is_class_var: bool,
-    readonly: bool,
+    read_only: Option<ReadOnlyReason>,
 ) -> Attribute {
     // Decorated objects are methods, so they can't be ClassVars
     match attr {
@@ -504,8 +553,12 @@ fn bind_instance_attribute(
             Some(make_bound_method(instance, attr).into_inner()),
             instance.class.dupe(),
         ),
-        attr if is_class_var || readonly => {
-            Attribute::read_only(make_bound_method(instance, attr).into_inner())
+        attr if is_class_var => Attribute::read_only(
+            make_bound_method(instance, attr).into_inner(),
+            ReadOnlyReason::ClassVar,
+        ),
+        attr if let Some(reason) = read_only => {
+            Attribute::read_only(make_bound_method(instance, attr).into_inner(), reason)
         }
         attr => Attribute::read_write(
             make_bound_method(instance, attr)
@@ -677,23 +730,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let is_override = value_ty.is_override();
 
         let annotation = direct_annotation.or(inherited_annotation.as_ref());
-
+        let read_only_reason = ClassField::determine_read_only_reason(
+            class,
+            name,
+            &annotation.cloned(),
+            &initialization,
+            self,
+        );
         let is_namedtuple_member = metadata
             .named_tuple_metadata()
-            .is_some_and(|named_tuple| named_tuple.elements.contains(name));
-        let is_frozen_dataclass_field = metadata.dataclass_metadata().is_some_and(|dataclass| {
-            dataclass.kws.is_set(&DataclassKeywords::FROZEN) && dataclass.fields.contains(name)
-        });
-
-        // Read-onlyness
-        let readonly = is_namedtuple_member
-            || is_frozen_dataclass_field
-            || (annotation.is_some_and(|a| a.is_read_only())
-                && matches!(initial_value, ClassFieldInitialValue::Class(_)));
+            .is_some_and(|nt| nt.elements.contains(name));
 
         // Promote literals. The check on `annotation` is an optimization, it does not (currently) affect semantics.
-        let value_ty = if (!readonly || is_namedtuple_member)
-            && (annotation.is_none_or(|a| a.ty.is_none()))
+        let value_ty = if (read_only_reason.is_none() || is_namedtuple_member)
+            && annotation.is_none_or(|a| a.ty.is_none())
             && value_ty.is_literal()
         {
             value_ty.clone().promote_literals(self.stdlib)
@@ -797,7 +847,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ty,
             direct_annotation.cloned(),
             initialization,
-            readonly,
+            read_only_reason,
             descriptor_getter,
             descriptor_setter,
             is_function_without_return_annotation,
@@ -1005,7 +1055,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             ClassFieldInner::Simple {
                 mut ty,
-                readonly,
+                read_only_reason,
                 annotation,
                 ..
             } => {
@@ -1013,10 +1063,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 match field.initialization() {
                     ClassFieldInitialization::Class(_) => {
                         self.expand_type_mut(&mut ty); // bind_instance matches on the type, so resolve it if we can
-                        bind_instance_attribute(instance, ty, is_class_var, readonly)
+                        bind_instance_attribute(instance, ty, is_class_var, read_only_reason)
                     }
-                    ClassFieldInitialization::Instance(_) if readonly || is_class_var => {
-                        Attribute::read_only(ty)
+                    ClassFieldInitialization::Instance(_)
+                        if let Some(read_only_reason) = read_only_reason =>
+                    {
+                        Attribute::read_only(ty, read_only_reason)
+                    }
+                    ClassFieldInitialization::Instance(_) if is_class_var => {
+                        Attribute::read_only(ty, ReadOnlyReason::ClassVar)
                     }
                     ClassFieldInitialization::Instance(_) => Attribute::read_write(ty),
                 }

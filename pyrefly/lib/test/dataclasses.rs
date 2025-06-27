@@ -243,7 +243,7 @@ class D:
 
 def f(c: C, d: D):
     c.x = 0
-    d.x = 0  # E: Cannot assign to read-only attribute `x`
+    d.x = 0  # E: Cannot set field `x`
     "#,
 );
 

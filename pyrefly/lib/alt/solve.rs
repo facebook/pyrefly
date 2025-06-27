@@ -1160,7 +1160,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             if let Some(field) =
                                 self.typed_dict_field(typed_dict, &Name::new(field_name))
                             {
-                                if field.read_only || field.required {
+                                if field.is_read_only() || field.required {
                                     self.error(
                                         errors,
                                         x.slice.range(),
@@ -1747,7 +1747,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (Type::TypedDict(typed_dict), Type::Literal(Lit::Str(field_name))) => {
                 let field_name = Name::new(field_name);
                 if let Some(field) = self.typed_dict_field(typed_dict, &field_name) {
-                    if field.read_only {
+                    if field.is_read_only() {
                         self.error(
                             errors,
                             subscript.slice.range(),

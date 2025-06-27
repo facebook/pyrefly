@@ -235,7 +235,7 @@ pub mod variance_visitor {
                 continue;
             }
 
-            if let Some((ty, _, readonly, descriptor_getter, descriptor_setter)) =
+            if let Some((ty, _, read_only, descriptor_getter, descriptor_setter)) =
                 field.for_variance_inference()
             {
                 // Case 1: Regular attribute
@@ -245,7 +245,7 @@ pub mod variance_visitor {
                 if descriptor_getter.is_none() && descriptor_setter.is_none() {
                     let variance = if ty.is_function_type()
                         || is_private_field(name)
-                        || readonly
+                        || read_only
                         || field.is_final()
                     {
                         Variance::Covariant

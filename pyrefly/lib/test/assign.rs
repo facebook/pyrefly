@@ -70,7 +70,7 @@ from typing import ClassVar
 class C:
     x: ClassVar[int] = 1
 c = C()
-c.x = 2  # E: Cannot assign to read-only attribute `x`
+c.x = 2  # E: Cannot set field `x`
 "#,
 );
 
@@ -398,12 +398,12 @@ from typing import Final
 class A:
     x: Final = 1
 a = A()
-a.x = 1  # E: Cannot assign to read-only attribute `x`
-del a.x  # E: Cannot delete read-only attribute `x`
+a.x = 1  # E: Cannot set field `x`
+del a.x  # E: Cannot delete field `x`
 class B:
     x: Final[int] = 1
 b = B()
-b.x += 1  # E: Cannot assign to read-only attribute `x`
+b.x += 1  # E: Cannot set field `x`
     "#,
 );
 

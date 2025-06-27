@@ -2484,8 +2484,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "Cannot assign to read-only attribute `xx`",
-      "description": "Cannot assign to read-only attribute `xx`",
+      "concise_description": "Cannot set field `xx`",
+      "description": "Cannot set field `xx`\n  A ClassVar may not be mutated from an instance of the class",
       "line": 65,
       "name": "read-only",
       "stop_column": 16,
@@ -2554,8 +2554,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Cannot assign to read-only attribute `stats`",
-      "description": "Cannot assign to read-only attribute `stats`",
+      "concise_description": "Cannot set field `stats`",
+      "description": "Cannot set field `stats`\n  A ClassVar may not be mutated from an instance of the class",
       "line": 105,
       "name": "read-only",
       "stop_column": 19,
@@ -3101,8 +3101,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Cannot assign to read-only attribute `final_with_default`",
-      "description": "Cannot assign to read-only attribute `final_with_default`",
+      "concise_description": "Cannot set field `final_with_default`",
+      "description": "Cannot set field `final_with_default`\n  This field is marked as Final",
       "line": 36,
       "name": "read-only",
       "stop_column": 21,
@@ -3123,8 +3123,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Cannot assign to read-only attribute `a`",
-      "description": "Cannot assign to read-only attribute `a`",
+      "concise_description": "Cannot set field `a`",
+      "description": "Cannot set field `a`\n  This field is a frozen dataclass member",
       "line": 16,
       "name": "read-only",
       "stop_column": 6,
@@ -3133,8 +3133,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Cannot assign to read-only attribute `b`",
-      "description": "Cannot assign to read-only attribute `b`",
+      "concise_description": "Cannot set field `b`",
+      "description": "Cannot set field `b`\n  This field is a frozen dataclass member",
       "line": 17,
       "name": "read-only",
       "stop_column": 6,
@@ -7664,8 +7664,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Cannot assign to read-only attribute `x`",
-      "description": "Cannot assign to read-only attribute `x`",
+      "concise_description": "Cannot set field `x`",
+      "description": "Cannot set field `x`\n  This field is a NamedTuple member",
       "line": 40,
       "name": "read-only",
       "stop_column": 4,
@@ -7684,8 +7684,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot delete read-only attribute `x`",
-      "description": "Cannot delete read-only attribute `x`",
+      "concise_description": "Cannot delete field `x`",
+      "description": "Cannot delete field `x`\n  This field is a NamedTuple member",
       "line": 42,
       "name": "read-only",
       "stop_column": 8,
@@ -8820,8 +8820,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "Cannot assign to read-only attribute `ID5`",
-      "description": "Cannot assign to read-only attribute `ID5`",
+      "concise_description": "Cannot set field `ID5`",
+      "description": "Cannot set field `ID5`\n  This field is marked as Final",
       "line": 54,
       "name": "read-only",
       "stop_column": 17,
@@ -8850,8 +8850,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "Cannot assign to read-only attribute `ID7`",
-      "description": "Cannot assign to read-only attribute `ID7`",
+      "concise_description": "Cannot set field `ID7`",
+      "description": "Cannot set field `ID7`\n  This field is marked as Final",
       "line": 65,
       "name": "read-only",
       "stop_column": 17,
@@ -8860,8 +8860,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "Cannot assign to read-only attribute `ID7`",
-      "description": "Cannot assign to read-only attribute `ID7`",
+      "concise_description": "Cannot set field `ID7`",
+      "description": "Cannot set field `ID7`\n  This field is marked as Final",
       "line": 67,
       "name": "read-only",
       "stop_column": 17,
@@ -10222,18 +10222,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Class member `RecordShop.albums` overrides parent class `AlbumCollection` in an inconsistent manner",
-      "description": "Class member `RecordShop.albums` overrides parent class `AlbumCollection` in an inconsistent manner\n  `RecordShop.albums` has type `list[TypedDict[Album1]]`, which is not consistent with `Collection[TypedDict[Album1]]` in `AlbumCollection.albums` (the type of read-write attributes cannot be changed)",
-      "line": 49,
-      "name": "bad-override",
-      "stop_column": 11,
-      "stop_line": 49
-    },
-    {
-      "code": -2,
-      "column": 5,
       "concise_description": "Class member `RecordShop.alt` overrides parent class `AlbumCollection` in an inconsistent manner",
-      "description": "Class member `RecordShop.alt` overrides parent class `AlbumCollection` in an inconsistent manner\n  `RecordShop.alt` has type `list[str]`, which is not consistent with `list[int | str]` in `AlbumCollection.alt` (the type of read-write attributes cannot be changed)",
+      "description": "Class member `RecordShop.alt` overrides parent class `AlbumCollection` in an inconsistent manner\n  `RecordShop.alt` has type `list[str]`, which is not assignable to `list[int | str]`, the type of `AlbumCollection.alt`",
       "line": 50,
       "name": "bad-override",
       "stop_column": 8,
@@ -10248,16 +10238,6 @@
       "name": "typed-dict-key-error",
       "stop_column": 21,
       "stop_line": 65
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "Class member `User.ident` overrides parent class `OptionalIdent` in an inconsistent manner",
-      "description": "Class member `User.ident` overrides parent class `OptionalIdent` in an inconsistent manner\n  `User.ident` has type `str`, which is not consistent with `int | str` in `OptionalIdent.ident` (the type of read-write attributes cannot be changed)",
-      "line": 76,
-      "name": "bad-override",
-      "stop_column": 10,
-      "stop_line": 76
     },
     {
       "code": -2,
@@ -10288,6 +10268,16 @@
       "name": "typed-dict-key-error",
       "stop_column": 7,
       "stop_line": 84
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Class member `F3.a` overrides parent class `F1` in an inconsistent manner",
+      "description": "Class member `F3.a` overrides parent class `F1` in an inconsistent manner\n  `F3.a` is read-only, but `F1.a` is read-write",
+      "line": 94,
+      "name": "bad-override",
+      "stop_column": 6,
+      "stop_line": 94
     }
   ],
   "typeddicts_readonly_kwargs.py": [
