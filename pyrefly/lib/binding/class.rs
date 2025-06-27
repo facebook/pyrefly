@@ -8,6 +8,7 @@
 use std::mem;
 use std::sync::LazyLock;
 
+use pyrefly_python::ast::Ast;
 use pyrefly_util::prelude::SliceExt;
 use regex::Regex;
 use ruff_python_ast::Expr;
@@ -60,7 +61,6 @@ use crate::error::kind::ErrorKind;
 use crate::graph::index::Idx;
 use crate::module::module_name::ModuleName;
 use crate::module::short_identifier::ShortIdentifier;
-use crate::python::ast::Ast;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
 use crate::types::special_form::SpecialForm;

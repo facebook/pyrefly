@@ -8,6 +8,9 @@
 use std::cmp;
 use std::sync::Arc;
 
+use pyrefly_python::ast::Ast;
+use pyrefly_python::dunder;
+use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
@@ -29,9 +32,6 @@ use crate::common::symbol_kind::SymbolKind;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModuleStyle;
 use crate::module::short_identifier::ShortIdentifier;
-use crate::python::ast::Ast;
-use crate::python::dunder;
-use crate::python::sys_info::SysInfo;
 
 /// How a name is defined. If a name is defined outside of this
 /// module, we additionally store the module we got it from

@@ -12,11 +12,11 @@ use std::iter;
 use itertools::EitherOrBoth;
 use itertools::Itertools;
 use itertools::izip;
+use pyrefly_python::dunder;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
-use crate::python::dunder;
 use crate::solver::solver::Subset;
 use crate::types::callable::Callable;
 use crate::types::callable::Function;

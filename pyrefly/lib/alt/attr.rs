@@ -8,6 +8,7 @@
 use std::iter;
 
 use dupe::Dupe;
+use pyrefly_python::dunder;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
@@ -28,7 +29,6 @@ use crate::error::kind::ErrorKind;
 use crate::export::exports::Exports;
 use crate::module::module_info::TextRangeWithModuleInfo;
 use crate::module::module_name::ModuleName;
-use crate::python::dunder;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;

@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::ast::Ast;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Pattern;
@@ -27,7 +28,6 @@ use crate::binding::narrow::expr_to_subjects;
 use crate::binding::scope::FlowStyle;
 use crate::error::kind::ErrorKind;
 use crate::graph::index::Idx;
-use crate::python::ast::Ast;
 use crate::types::facet::FacetKind;
 
 impl<'a> BindingsBuilder<'a> {

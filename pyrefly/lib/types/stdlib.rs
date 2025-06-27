@@ -8,10 +8,10 @@
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_python::sys_info::PythonVersion;
 use ruff_python_ast::name::Name;
 
 use crate::module::module_name::ModuleName;
-use crate::python::sys_info::PythonVersion;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::types::TArgs;

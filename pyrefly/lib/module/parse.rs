@@ -5,14 +5,14 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::ast::Ast;
+use pyrefly_python::sys_info::PythonVersion;
 use ruff_python_ast::ModModule;
 use ruff_text_size::TextRange;
 use vec1::vec1;
 
 use crate::error::collector::ErrorCollector;
 use crate::error::kind::ErrorKind;
-use crate::python::ast::Ast;
-use crate::python::sys_info::PythonVersion;
 
 pub fn module_parse(contents: &str, version: PythonVersion, errors: &ErrorCollector) -> ModModule {
     let (module, parse_errors) = Ast::parse(contents);

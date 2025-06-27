@@ -15,6 +15,9 @@ use anyhow::Context;
 use anyhow::anyhow;
 use itertools::Itertools;
 use path_absolutize::Absolutize;
+use pyrefly_python::sys_info::PythonPlatform;
+use pyrefly_python::sys_info::PythonVersion;
+use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::Glob;
@@ -41,9 +44,6 @@ use crate::module::finder::find_module_prefixes;
 use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
 use crate::module::wildcard::ModuleWildcard;
-use crate::python::sys_info::PythonPlatform;
-use crate::python::sys_info::PythonVersion;
-use crate::python::sys_info::SysInfo;
 use crate::state::loader::FindError;
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]

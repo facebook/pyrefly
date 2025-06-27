@@ -12,6 +12,7 @@ use std::fmt::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_python::dunder;
 use pyrefly_util::display::commas_iter;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
@@ -22,7 +23,6 @@ use ruff_python_ast::name::Name;
 use starlark_map::ordered_map::OrderedMap;
 
 use crate::module::module_name::ModuleName;
-use crate::python::dunder;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
