@@ -7,6 +7,8 @@
 
 use dupe::Dupe;
 use num_traits::ToPrimitive;
+use pyrefly_python::ast::Ast;
+use pyrefly_python::dunder;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
@@ -42,8 +44,6 @@ use crate::error::context::TypeCheckContext;
 use crate::error::kind::ErrorKind;
 use crate::graph::index::Idx;
 use crate::module::short_identifier::ShortIdentifier;
-use crate::python::ast::Ast;
-use crate::python::dunder;
 use crate::types::callable::Callable;
 use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
@@ -1169,6 +1169,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.check_dict_items_against_typed_dict(
                         flattened_items,
                         typed_dict,
+                        false,
+                        x.range,
+                        errors,
+                    );
+                    hint.clone()
+                } else if let Some(hint @ Type::PartialTypedDict(typed_dict)) = hint {
+                    self.check_dict_items_against_typed_dict(
+                        flattened_items,
+                        typed_dict,
+                        true,
                         x.range,
                         errors,
                     );

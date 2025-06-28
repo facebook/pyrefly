@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lined_buffer::DisplayPos;
 use pyrefly_util::lined_buffer::DisplayRange;
@@ -16,7 +17,6 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::module::ignore::Ignore;
-use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
 
 pub static GENERATED_TOKEN: &str = concat!("@", "generated");

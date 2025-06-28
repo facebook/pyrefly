@@ -14,13 +14,13 @@ use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
 
+use pyrefly_python::module_name::ModuleName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::module::module_info::ModuleInfo;
-use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
 use crate::types::equality::TypeEq;
 use crate::types::equality::TypeEqCtx;

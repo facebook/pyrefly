@@ -69,12 +69,6 @@ impl Annotation {
     pub fn has_qualifier(&self, qualifier: &Qualifier) -> bool {
         self.qualifiers.iter().any(|q| q == qualifier)
     }
-
-    pub fn is_read_only(&self) -> bool {
-        self.qualifiers
-            .iter()
-            .any(|q| q == &Qualifier::ReadOnly || q == &Qualifier::Final)
-    }
 }
 
 #[derive(Debug, Clone, VisitMut, TypeEq, PartialEq, Eq, Display)]

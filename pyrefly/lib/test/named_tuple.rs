@@ -23,7 +23,7 @@ assert_type(p[0], int)
 assert_type(p[1], str)
 assert_type(p[:2], tuple[int, str])
 p["oops"]  # E: Cannot index into `Pair`
-p.x = 1  # E: Cannot assign to read-only attribute `x`
+p.x = 1  # E: Cannot set field `x`
     "#,
 );
 
@@ -35,7 +35,7 @@ class Pair(NamedTuple):
     x: int
     y: str
 p: Pair = Pair(1, "")
-del p.x  # E: Cannot delete read-only attribute `x`
+del p.x  # E: Cannot delete field `x`
 del p[0]  # E: Cannot delete item in `Pair`
     "#,
 );

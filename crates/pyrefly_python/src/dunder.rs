@@ -36,7 +36,6 @@ pub const MATCH_ARGS: Name = Name::new_static("__match_args__");
 pub const NE: Name = Name::new_static("__ne__");
 pub const NEG: Name = Name::new_static("__neg__");
 pub const NEW: Name = Name::new_static("__new__");
-#[expect(dead_code)]
 pub const NEXT: Name = Name::new_static("__next__");
 pub const POS: Name = Name::new_static("__pos__");
 pub const SET: Name = Name::new_static("__set__");

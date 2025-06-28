@@ -147,6 +147,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ClassType::new(class.dupe(), self.targs_of_tparams(class))
     }
 
+    /// Gets this Class as a TypedDict with its tparams as the arguments.
+    pub fn as_typed_dict_unchecked(&self, class: &Class) -> TypedDict {
+        let targs = self.targs_of_tparams(class);
+        TypedDict::new(class.clone(), targs)
+    }
+
     /// Instantiates a class or typed dictionary with fresh variables for its type parameters.
     pub fn instantiate_fresh(&self, cls: &Class) -> Type {
         self.solver()

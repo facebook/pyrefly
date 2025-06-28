@@ -10,6 +10,8 @@
 use std::io::Cursor;
 
 use dupe::Dupe;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -20,9 +22,7 @@ use ruff_text_size::Ranged;
 use crate::alt::answers::Answers;
 use crate::config::finder::ConfigFinder;
 use crate::module::module_info::ModuleInfo;
-use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
-use crate::python::sys_info::SysInfo;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;

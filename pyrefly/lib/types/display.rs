@@ -10,6 +10,7 @@
 use std::fmt;
 use std::fmt::Display;
 
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::display::Fmt;
 use pyrefly_util::display::append;
 use pyrefly_util::display::commas_iter;
@@ -19,7 +20,6 @@ use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::smallmap;
 
-use crate::module::module_name::ModuleName;
 use crate::types::callable::Function;
 use crate::types::qname::QName;
 use crate::types::tuple::Tuple;

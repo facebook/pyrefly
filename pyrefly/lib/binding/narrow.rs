@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::ast::Ast;
 use pyrefly_util::assert_words;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
@@ -30,7 +31,6 @@ use vec1::Vec1;
 
 use crate::binding::bindings::BindingsBuilder;
 use crate::export::special::SpecialExport;
-use crate::python::ast::Ast;
 use crate::types::facet::FacetChain;
 use crate::types::facet::FacetKind;
 use crate::types::types::Type;

@@ -9,12 +9,11 @@ use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
 
+use pyrefly_python::module_name::ModuleName;
 use regex::Regex;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::Visitor;
-
-use crate::module::module_name::ModuleName;
 
 /// A pattern that allows for matching on module paths
 /// with a glob-like syntax. Only full matches are supported,

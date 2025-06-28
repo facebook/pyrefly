@@ -7,6 +7,8 @@
 
 use std::mem;
 
+use pyrefly_python::ast::Ast;
+use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::AnyParameterRef;
@@ -52,8 +54,6 @@ use crate::config::base::UntypedDefBehavior;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::module::short_identifier::ShortIdentifier;
-use crate::python::ast::Ast;
-use crate::python::sys_info::SysInfo;
 use crate::types::types::Type;
 
 struct Decorators {

@@ -8,9 +8,12 @@
 use std::iter;
 
 use dupe::Dupe;
+use pyrefly_python::dunder;
+use pyrefly_python::module_name::ModuleName;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -26,8 +29,6 @@ use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
 use crate::export::exports::Exports;
 use crate::module::module_info::TextRangeWithModuleInfo;
-use crate::module::module_name::ModuleName;
-use crate::python::dunder;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
@@ -39,6 +40,7 @@ use crate::types::literal::Lit;
 use crate::types::module::Module;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
+use crate::types::read_only::ReadOnlyReason;
 use crate::types::tuple::Tuple;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
@@ -187,7 +189,7 @@ pub struct Attribute {
 
 #[derive(Debug)]
 enum Visibility {
-    ReadOnly,
+    ReadOnly(ReadOnlyReason),
     ReadWrite,
 }
 
@@ -289,9 +291,9 @@ impl Attribute {
         }
     }
 
-    pub fn read_only(ty: Type) -> Self {
+    pub fn read_only(ty: Type, reason: ReadOnlyReason) -> Self {
         Attribute {
-            inner: AttributeInner::Simple(ty, Visibility::ReadOnly),
+            inner: AttributeInner::Simple(ty, Visibility::ReadOnly(reason)),
         }
     }
 
@@ -545,8 +547,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<Type> {
         let mut not_found = false;
         let mut attr_tys = Vec::new();
-        self.map_over_union(base, |base| {
-            match self.lookup_magic_dunder_attr_no_union(base, attr_name) {
+        let attr_bases = self.get_possible_attribute_bases(base);
+        for attr_base in attr_bases {
+            let lookup_result = match attr_base {
+                None => {
+                    LookupResult::InternalError(InternalError::AttributeBaseUndefined(base.clone()))
+                }
+                Some(base) => {
+                    let direct_lookup_result =
+                        self.lookup_magic_dunder_attr(base.clone(), attr_name);
+                    self.lookup_attr_from_base_getattr_fallback(
+                        base,
+                        attr_name,
+                        direct_lookup_result,
+                    )
+                }
+            };
+            match lookup_result {
                 LookupResult::Found(attr) => attr_tys.push(
                     self.resolve_get_access(attr, range, errors, context)
                         .unwrap_or_else(|e| {
@@ -570,7 +587,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     not_found = true;
                 }
             }
-        });
+        }
         if not_found {
             return None;
         }
@@ -799,15 +816,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 LookupResult::Found(Attribute {
-                    inner: AttributeInner::Simple(_, Visibility::ReadOnly),
+                    inner: AttributeInner::Simple(_, Visibility::ReadOnly(reason)),
                 }) => {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorKind::ReadOnly,
-                        context,
-                        format!("Cannot assign to read-only attribute `{attr_name}`"),
-                    );
+                    let msg = vec1![
+                        format!("Cannot set field `{attr_name}`"),
+                        reason.error_message()
+                    ];
+                    errors.add(range, ErrorKind::ReadOnly, None, msg);
                 }
                 LookupResult::Found(Attribute {
                     inner: AttributeInner::Property(_, None, cls),
@@ -929,15 +944,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 LookupResult::Found(Attribute {
-                    inner: AttributeInner::Simple(_, Visibility::ReadOnly),
+                    inner: AttributeInner::Simple(_, Visibility::ReadOnly(reason)),
                 }) => {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorKind::ReadOnly,
-                        context,
-                        format!("Cannot delete read-only attribute `{attr_name}`"),
-                    );
+                    let msg = vec1![
+                        format!("Cannot delete field `{attr_name}`"),
+                        reason.error_message()
+                    ];
+                    errors.add(range, ErrorKind::ReadOnly, None, msg);
                 }
                 LookupResult::InternalError(e) => {
                     self.error(
@@ -965,7 +978,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Err(AttrSubsetError::Property)
             }
             (
-                AttributeInner::Simple(_, Visibility::ReadOnly),
+                AttributeInner::Simple(_, Visibility::ReadOnly(_)),
                 AttributeInner::Property(_, Some(_), _)
                 | AttributeInner::Simple(_, Visibility::ReadWrite),
             ) => Err(AttrSubsetError::ReadOnly),
@@ -1001,7 +1014,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             (
                 AttributeInner::Simple(got, ..),
-                AttributeInner::Simple(want, Visibility::ReadOnly),
+                AttributeInner::Simple(want, Visibility::ReadOnly(_)),
             ) => {
                 if is_subset(got, want) {
                     Ok(())
@@ -1015,7 +1028,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             (
-                AttributeInner::Simple(got, Visibility::ReadOnly),
+                AttributeInner::Simple(got, Visibility::ReadOnly(_)),
                 AttributeInner::Property(want, _, _),
             ) => {
                 if is_subset(
@@ -1147,7 +1160,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match attr.inner {
             AttributeInner::NoAccess(reason) => Err(reason),
             AttributeInner::Simple(ty, Visibility::ReadWrite)
-            | AttributeInner::Simple(ty, Visibility::ReadOnly) => Ok(ty),
+            | AttributeInner::Simple(ty, Visibility::ReadOnly(_)) => Ok(ty),
             AttributeInner::Property(getter, ..) => {
                 Ok(self.call_property_getter(getter, range, errors, context))
             }
@@ -1193,7 +1206,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // TODO(stroxler): ReadWrite attributes are not actually methods but limiting access to
             // ReadOnly breaks unit tests; we should investigate callsites to understand this better.
             // NOTE(grievejia): We currently do not expect to use `__getattr__` for this lookup.
-            AttributeInner::Simple(ty, Visibility::ReadOnly)
+            AttributeInner::Simple(ty, Visibility::ReadOnly(_))
             | AttributeInner::Simple(ty, Visibility::ReadWrite) => Some(ty),
             AttributeInner::NoAccess(_)
             | AttributeInner::Property(..)
@@ -1207,7 +1220,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // NOTE(grievejia): We do not use `__getattr__` here because this lookup is expected to be invoked
         // on NamedTuple attributes with known names.
         match attr.inner {
-            AttributeInner::Simple(ty, Visibility::ReadOnly) => Some(ty),
+            AttributeInner::Simple(ty, Visibility::ReadOnly(_)) => Some(ty),
             AttributeInner::Simple(_, Visibility::ReadWrite)
             | AttributeInner::NoAccess(_)
             | AttributeInner::Property(..)
@@ -1464,20 +1477,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> LookupResult {
         let direct_lookup_result = self.lookup_attr_from_attribute_base(base.clone(), attr_name);
         self.lookup_attr_from_base_getattr_fallback(base, attr_name, direct_lookup_result)
-    }
-
-    // This function is intended as a low-level building block
-    // Unions or intersections should be handled by callers
-    fn lookup_magic_dunder_attr_no_union(&self, base: &Type, attr_name: &Name) -> LookupResult {
-        match self.as_attribute_base_no_union(base.clone()) {
-            None => {
-                LookupResult::InternalError(InternalError::AttributeBaseUndefined(base.clone()))
-            }
-            Some(base) => {
-                let direct_lookup_result = self.lookup_magic_dunder_attr(base.clone(), attr_name);
-                self.lookup_attr_from_base_getattr_fallback(base, attr_name, direct_lookup_result)
-            }
-        }
     }
 
     // This function is intended as a low-level building block

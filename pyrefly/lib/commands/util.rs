@@ -9,8 +9,8 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::module::module_name::ModuleName;
-use crate::python::dunder;
+use pyrefly_python::dunder;
+use pyrefly_python::module_name::ModuleName;
 
 /// If the module is on the search path, return its name from that path. Otherwise, return None.
 pub fn module_from_path<'a>(

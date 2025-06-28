@@ -6,8 +6,8 @@
  */
 
 use itertools::Itertools;
+use pyrefly_python::sys_info::PythonVersion;
 
-use crate::python::sys_info::PythonVersion;
 use crate::test::util::TestEnv;
 use crate::test::util::get_class;
 use crate::test::util::mk_state;

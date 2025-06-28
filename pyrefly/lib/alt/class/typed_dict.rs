@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use pyrefly_python::dunder;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -15,6 +16,7 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use starlark_map::smallmap;
 use vec1::Vec1;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -25,7 +27,6 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
-use crate::python::dunder;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
@@ -35,6 +36,7 @@ use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::literal::Lit;
 use crate::types::quantified::Quantified;
+use crate::types::tuple::Tuple;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
@@ -52,12 +54,14 @@ const POP_METHOD: Name = Name::new_static("pop");
 const SETDEFAULT_METHOD: Name = Name::new_static("setdefault");
 const KEY_PARAM: Name = Name::new_static("key");
 const DEFAULT_PARAM: Name = Name::new_static("default");
+const UPDATE_METHOD: Name = Name::new_static("update");
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn check_dict_items_against_typed_dict(
         &self,
         dict_items: Vec<&DictItem>,
         typed_dict: &TypedDict,
+        is_partial: bool,
         range: TextRange,
         errors: &ErrorCollector,
     ) {
@@ -117,7 +121,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
         });
-        if !has_expansion {
+        // If the TypedDict is not partial, then all required fields must be present.
+        if !has_expansion && !is_partial {
             for (key, field) in &fields {
                 if field.required && !keys.contains(key) {
                     self.error(
@@ -223,6 +228,80 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ),
         }));
         ClassSynthesizedField::new(ty)
+    }
+
+    fn get_typed_dict_update(
+        &self,
+        cls: &Class,
+        fields: &SmallMap<Name, bool>,
+    ) -> Option<ClassSynthesizedField> {
+        let metadata =
+            FuncMetadata::def(self.module_info().name(), cls.name().clone(), UPDATE_METHOD);
+
+        let self_param = self.class_self_param(cls, true);
+
+        // ---- Overload: def update(__m: Partial[C], /)
+        let full_typed_dict = self.as_typed_dict_unchecked(cls);
+        let partial_typed_dict_ty = Type::PartialTypedDict(full_typed_dict);
+
+        let partial_overload = OverloadType::Callable(Callable::list(
+            ParamList::new(vec![
+                self_param.clone(),
+                Param::PosOnly(
+                    Some(Name::new_static("__m")),
+                    partial_typed_dict_ty,
+                    Required::Required,
+                ),
+            ]),
+            Type::None,
+        ));
+
+        // ---- Overload: update(__m: Iterable[tuple[Literal["key"], value]])
+        let tuple_types: Vec<Type> = self
+            .names_to_fields(cls, fields)
+            .map(|(name, field)| {
+                Type::Tuple(Tuple::Concrete(vec![
+                    name_to_literal_type(name),
+                    field.ty.clone(),
+                ]))
+            })
+            .collect();
+
+        let iterable_ty = self.stdlib.iterable(Type::Union(tuple_types)).to_type();
+
+        let tuple_overload = OverloadType::Callable(Callable::list(
+            ParamList::new(vec![
+                self_param.clone(),
+                Param::PosOnly(
+                    Some(Name::new_static("__m")),
+                    iterable_ty,
+                    Required::Required,
+                ),
+            ]),
+            Type::None,
+        ));
+
+        // ---- Overload: update(*, x=..., y=...)
+        let keyword_params: Vec<_> = self
+            .names_to_fields(cls, fields)
+            .map(|(name, field)| Param::KwOnly(name.clone(), field.ty.clone(), Required::Optional))
+            .collect();
+
+        let overload_kwargs = OverloadType::Callable(Callable::list(
+            ParamList::new(
+                std::iter::once(self_param.clone())
+                    .chain(keyword_params)
+                    .collect(),
+            ),
+            Type::None,
+        ));
+
+        let signatures = vec1![partial_overload, tuple_overload, overload_kwargs];
+
+        Some(ClassSynthesizedField::new(Type::Overload(Overload {
+            signatures,
+            metadata: Box::new(metadata),
+        })))
     }
 
     fn get_typed_dict_get(
@@ -438,7 +517,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let fields_iter = self.names_to_fields(cls, fields);
         let self_param = self.class_self_param(cls, true);
         let make_overload = |(name, field): (&Name, TypedDictField)| {
-            if field.read_only {
+            if field.is_read_only() {
                 None
             } else {
                 Some(OverloadType::Callable(Callable::list(
@@ -471,7 +550,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn get_typed_dict_synthesized_fields(&self, cls: &Class) -> Option<ClassSynthesizedFields> {
-        // TODO: we're still missing update
         let metadata = self.get_metadata_for_class(cls);
         let td = metadata.typed_dict_metadata()?;
         let mut fields = smallmap! {
@@ -485,6 +563,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         if let Some(m) = self.get_typed_dict_delitem(cls, &td.fields) {
             fields.insert(dunder::DELITEM, m);
+        }
+
+        if let Some(m) = self.get_typed_dict_update(cls, &td.fields) {
+            fields.insert(UPDATE_METHOD, m);
         }
 
         if let Some(m) = self.get_typed_dict_setdefault(cls, &td.fields) {

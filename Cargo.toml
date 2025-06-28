@@ -9,7 +9,7 @@ lto = true
 codegen-units = 1
 
 [workspace]
-members = ["pyrefly", "pyrefly_derive", "pyrefly_util", "pyrefly_wasm"]
+members = ["crates/pyrefly_python", "pyrefly", "pyrefly_derive", "pyrefly_util", "pyrefly_wasm"]
 resolver = "2"
 
 [workspace.package]

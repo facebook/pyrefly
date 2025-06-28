@@ -12,10 +12,10 @@ use std::fmt::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_python::module_name::ModuleName;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 
-use crate::module::module_name::ModuleName;
 use crate::types::callable::FuncFlags;
 use crate::types::callable::FuncId;
 use crate::types::callable::FuncMetadata;

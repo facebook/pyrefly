@@ -11,12 +11,12 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use starlark_map::ordered_set::OrderedSet;
 
-use crate::module::module_name::ModuleName;
 use crate::types::types::Type;
 
 /// In Python if you do `import foo.bar` and `import foo.baz` then what you are really

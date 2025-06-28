@@ -5,11 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::module_name::ModuleName;
 use ruff_python_ast::name::Name;
 
 use crate::binding::binding::AnnotationTarget;
 use crate::error::kind::ErrorKind;
-use crate::module::module_name::ModuleName;
 use crate::types::callable::FuncId;
 use crate::types::types::Type;
 

@@ -6,6 +6,8 @@
  */
 
 use dupe::Dupe;
+use pyrefly_python::dunder;
+use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
@@ -22,7 +24,6 @@ use crate::alt::expr::TypeOrExpr;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::kind::ErrorKind;
-use crate::python::dunder;
 use crate::types::callable::BoolKeywords;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncFlags;
@@ -85,6 +86,9 @@ enum Target {
     FunctionOverload(Vec1<Callable>, FuncMetadata),
     /// An overloaded method.
     BoundMethodOverload(Type, Vec1<Callable>, FuncMetadata),
+    /// A union of call targets.
+    Union(Vec<Target>),
+    /// Any, as a call target.
     Any(AnyStyle),
 }
 
@@ -209,7 +213,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if res.len() == 1 {
                     Some(res.into_iter().next().unwrap())
                 } else {
-                    None
+                    let (qs, ts): (Vec<Vec<Var>>, Vec<Target>) =
+                        res.into_iter().map(|x| (x.qs, x.target)).unzip();
+                    let qs = qs.into_iter().flatten().collect();
+                    Some(CallTarget::forall(qs, Target::Union(ts)))
                 }
             }
             Type::Any(style) => Some(CallTarget::new(Target::Any(style))),
@@ -631,6 +638,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
                 context,
             ),
+            Target::Union(targets) => {
+                let call = CallWithTypes::new();
+                self.unions(targets.into_map(|t| {
+                    self.call_infer(
+                        CallTarget::new(t),
+                        &call.vec_call_arg(args, self, errors),
+                        &call.vec_call_keyword(keywords, self, errors),
+                        range,
+                        errors,
+                        context,
+                        None,
+                    )
+                }))
+            }
             Target::Any(style) => {
                 // Make sure we still catch errors in the arguments.
                 for arg in args {

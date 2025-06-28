@@ -9,6 +9,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::uniques::Unique;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -20,7 +21,6 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
-use crate::module::module_name::ModuleName;
 use crate::types::param_spec::ParamSpec;
 use crate::types::type_var::TypeVar;
 use crate::types::type_var_tuple::TypeVarTuple;

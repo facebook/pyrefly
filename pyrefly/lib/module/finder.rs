@@ -12,11 +12,11 @@ use std::sync::LazyLock;
 use std::sync::Mutex;
 
 use dupe::Dupe;
+use pyrefly_python::module_name::ModuleName;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 
-use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
 use crate::state::loader::FindError;
 

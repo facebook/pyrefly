@@ -11,6 +11,7 @@ use std::fmt::Write;
 use std::marker::PhantomData;
 use std::mem;
 
+use pyrefly_python::module_name::ModuleName;
 use starlark_map::small_map::SmallMap;
 
 use crate::binding::binding::Keyed;
@@ -18,7 +19,6 @@ use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
-use crate::module::module_name::ModuleName;
 use crate::state::state::Transaction;
 use crate::table;
 use crate::table_for_each;

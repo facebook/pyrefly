@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use itertools::Either;
+use pyrefly_python::ast::Ast;
+use pyrefly_python::dunder;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
@@ -80,8 +82,6 @@ use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
 use crate::error::style::ErrorStyle;
 use crate::module::short_identifier::ShortIdentifier;
-use crate::python::ast::Ast;
-use crate::python::dunder;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
 use crate::types::callable::Function;
@@ -1160,7 +1160,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             if let Some(field) =
                                 self.typed_dict_field(typed_dict, &Name::new(field_name))
                             {
-                                if field.read_only || field.required {
+                                if field.is_read_only() || field.required {
                                     self.error(
                                         errors,
                                         x.slice.range(),
@@ -1747,7 +1747,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (Type::TypedDict(typed_dict), Type::Literal(Lit::Str(field_name))) => {
                 let field_name = Name::new(field_name);
                 if let Some(field) = self.typed_dict_field(typed_dict, &field_name) {
-                    if field.read_only {
+                    if field.is_read_only() {
                         self.error(
                             errors,
                             subscript.slice.range(),

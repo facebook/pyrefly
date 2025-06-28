@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::locked_map::LockedMap;
 use vec1::Vec1;
@@ -19,7 +20,6 @@ use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
 use crate::config::config::ImportLookupPathPart;
 use crate::error::context::ErrorContext;
-use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
 
 #[derive(Debug, Clone, Dupe)]

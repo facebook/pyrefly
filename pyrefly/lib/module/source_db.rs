@@ -11,12 +11,12 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Context as _;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::fs_anyhow;
 use starlark_map::small_map::SmallMap;
 use tracing::debug;
 use vec1::Vec1;
 
-use crate::module::module_name::ModuleName;
 use crate::module::module_path::ModulePath;
 
 #[derive(Debug, PartialEq, Eq)]

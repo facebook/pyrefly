@@ -1881,7 +1881,6 @@ dependencies = [
  "crossbeam-channel",
  "dupe",
  "enum-iterator",
- "equivalent",
  "fuzzy-matcher",
  "indicatif",
  "itertools 0.14.0",
@@ -1896,6 +1895,7 @@ dependencies = [
  "pretty_assertions",
  "pulldown-cmark",
  "pyrefly_derive",
+ "pyrefly_python",
  "pyrefly_util",
  "regex",
  "regex-syntax 0.7.5",
@@ -1910,7 +1910,6 @@ dependencies = [
  "serde_with",
  "starlark_map",
  "static_assertions",
- "static_interner",
  "tar",
  "tempfile",
  "thiserror 2.0.12",
@@ -1933,6 +1932,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.101",
+]
+
+[[package]]
+name = "pyrefly_python"
+version = "0.21.0"
+dependencies = [
+ "anyhow",
+ "dupe",
+ "equivalent",
+ "itertools 0.14.0",
+ "parse-display",
+ "pyrefly_util",
+ "regex",
+ "ruff_python_ast",
+ "ruff_python_parser",
+ "ruff_text_size",
+ "serde",
+ "static_interner",
+ "thiserror 2.0.12",
+ "toml",
 ]
 
 [[package]]

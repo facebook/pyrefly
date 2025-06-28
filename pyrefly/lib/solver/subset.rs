@@ -12,11 +12,11 @@ use std::iter;
 use itertools::EitherOrBoth;
 use itertools::Itertools;
 use itertools::izip;
+use pyrefly_python::dunder;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
-use crate::python::dunder;
 use crate::solver::solver::Subset;
 use crate::types::callable::Callable;
 use crate::types::callable::Function;
@@ -720,7 +720,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 };
                 args_subset && self.is_subset_eq(&l.ret, &u.ret)
             }
-            (Type::TypedDict(got), Type::TypedDict(want)) => {
+            (Type::TypedDict(got), Type::TypedDict(want))
+            | (Type::TypedDict(got), Type::PartialTypedDict(want)) => {
                 // For each key in `want`, `got` has the corresponding key
                 // and the corresponding value type in `got` is consistent with the value type in `want`.
                 // For each required key in `got`, the corresponding key is required in `want`.
@@ -730,7 +731,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
                 want_fields.iter().all(|(k, want_v)| {
                     got_fields.get(k).is_some_and(|got_v| {
-                        match (got_v.read_only, want_v.read_only) {
+                        match (got_v.is_read_only(), want_v.is_read_only()) {
                             // ReadOnly cannot be assigned to Non-ReadOnly
                             (true, false) => false,
                             // Non-ReadOnly fields are invariant
@@ -997,7 +998,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     .all(|constraint| self.is_subset_eq(t1, constraint)),
                 _ => false,
             },
-            // TODO Zeina: Add a case for Partial[C] here
             _ => false,
         }
     }

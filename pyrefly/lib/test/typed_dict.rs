@@ -97,7 +97,7 @@ m = Movie(name='Blade Runner', year=1982)
 );
 
 testcase!(
-    test_typed_dict_readonly,
+    test_typed_dict_read_only,
     r#"
 from typing import TypedDict, ReadOnly
 class Coord(TypedDict):
@@ -108,6 +108,30 @@ def foo(c: Coord) -> None:
     c["x"] = "foo"  # E: `Literal['foo']` is not assignable to TypedDict key `x` with type `int`
     c["y"] = 3  # E: Key `y` in TypedDict `Coord` is read-only
     c["z"] = 4  # E: TypedDict `Coord` does not have key `z`
+    "#,
+);
+
+testcase!(
+    bug = "a1.update(a2) should be an error and a.update(b) should not be",
+    test_typed_dict_readonly2,
+    r#"
+from typing import Never, NotRequired, TypedDict, ReadOnly
+from typing_extensions import ReadOnly
+
+class A(TypedDict):
+    x: ReadOnly[int]
+    y: int
+
+a1: A = {"x": 1, "y": 2}
+a2: A = {"x": 3, "y": 4}
+a1.update(a2) 
+
+class B(TypedDict):
+    x: NotRequired[Never]
+    y: ReadOnly[int]
+
+def update_a(a: A, b: B) -> None:
+    a.update(b) # E: No matching overload found for function `A.update` 
     "#,
 );
 
@@ -451,7 +475,7 @@ def foo(a: Coord, b: Coord3D, c: Pair):
 );
 
 testcase!(
-    test_typed_dict_readonly_subtype,
+    test_typed_dict_read_only_subtype,
     r#"
 from typing import ReadOnly, TypedDict
 
@@ -595,7 +619,7 @@ f(x="", y=2)  # E: Argument `Literal['']` is not assignable to parameter `x` wit
 );
 
 testcase!(
-    test_typed_dict_readonly_variance,
+    test_typed_dict_read_only_variance,
     r#"
 from typing import ReadOnly, TypedDict
 
@@ -745,7 +769,6 @@ def f(c: C):
 );
 
 testcase!(
-    bug = "Omitting keys should be allowed",
     test_update,
     r#"
 from typing import TypedDict
@@ -761,15 +784,35 @@ class E(TypedDict):
 class F(TypedDict):
     x: int
 def f(c1: C, c2: C, c3: dict[str, int], d: D, e: E, f: F):
-    c1.update(c2)
-    c1.update(c3)  # E: `dict[str, int]` is not assignable to parameter `m` with type `TypedDict[C]`
-    c1.update(d)
-    c1.update(e)  # E: `TypedDict[E]` is not assignable to parameter `m` with type `TypedDict[C]`
+    c1.update(c2) 
+    c1.update(c3)  # E: No matching overload found for function `C.update`
+    c1.update(d) 
+    c1.update(e)  # E: No matching overload found for function `C.update`
     # This is not ok because `F` could contain `y` with an incompatible type
-    c1.update(f)  # E: `TypedDict[F]` is not assignable to parameter `m` with type `TypedDict[C]`
+    c1.update(f) # E: No matching overload found for function `C.update`
     c1.update({"x": 1, "y": 1})
-    c1.update({"x": 1})  # Should be OK  # E: Missing required key `y`
-    c1.update({"z": 1})  # E: Missing required key `x`  # E: Missing required key `y`  # E: Key `z` is not defined
+    c1.update({"x": 1})  
+    c1.update({"z": 1})  # E: Key `z` is not defined in TypedDict `C`
+    c1.update([("x", 1), ("y", 2)])
+    c1.update([("z", 3)]) # E: No matching overload found for function `C.update`
+    c1.update(x=1, y=2)
+    c1.update(z=1) # E: No matching overload found for function `C.update`
+    "#,
+);
+
+testcase!(
+    test_update_with_type_var,
+    r#"
+from typing import TypedDict
+
+class X[T](TypedDict):
+    a: T
+    
+def f(x: X[int], y: dict[str, int]):
+    x.update(y)  # E: No matching overload found for function `X.update`
+    x.update(x) 
+    x.update({"a": 1})
+    x.update({"b": 1}) # E: Key `b` is not defined in TypedDict `X`
     "#,
 );
 
@@ -809,7 +852,7 @@ def f(c: C, s: str):
 );
 
 testcase!(
-    test_setdefault_readonly,
+    test_setdefault_read_only,
     r#"
 from typing import ReadOnly, TypedDict
 class C(TypedDict):

@@ -5,9 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::module_name::ModuleName;
+
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckKind;
-use crate::module::module_name::ModuleName;
 use crate::types::callable::FuncId;
 use crate::types::display::TypeDisplayContext;
 use crate::types::types::Type;
