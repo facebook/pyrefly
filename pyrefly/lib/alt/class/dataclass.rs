@@ -163,7 +163,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 error::kind::ErrorKind::BadClassDefinition,
                                 None,
                                 format!(
-                                    "DataClass field '{}' without a default may not follow DataClass field with a default", name
+                                    "Dataclass field '{}' without a default may not follow dataclass field with a default", name
                                 ),
                             );
                         }

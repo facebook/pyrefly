@@ -760,7 +760,7 @@ from dataclasses import dataclass
 @dataclass
 class C:
     x: int = 1
-    y: str  # E: DataClass field 'y' without a default may not follow DataClass field with a default
+    y: str  # E: Dataclass field 'y' without a default may not follow dataclass field with a default
     "#,
 );
 
@@ -771,9 +771,9 @@ from dataclasses import dataclass
 @dataclass
 class C:
     a: int = 1
-    b: str  # E: DataClass field 'b' without a default may not follow DataClass field with a default
+    b: str  # E: Dataclass field 'b' without a default may not follow dataclass field with a default
     c: int = 2
-    d: float  # E: DataClass field 'd' without a default may not follow DataClass field with a default
+    d: float  # E: Dataclass field 'd' without a default may not follow dataclass field with a default
     "#,
 );
 
@@ -784,7 +784,7 @@ from dataclasses import dataclass, field
 @dataclass
 class C:
     x: int = field(default=1)
-    y: str  # E: DataClass field 'y' without a default may not follow DataClass field with a default
+    y: str  # E: Dataclass field 'y' without a default may not follow dataclass field with a default
     "#,
 );
 
@@ -795,8 +795,8 @@ from dataclasses import dataclass, field
 @dataclass
 class C:
     x: int = field(default=1)  # Has DEFAULT flag AND is initialized on class
-    y: int = field()           # E: DataClass field 'y' without a default may not follow DataClass field with a default
-    z: int                     # E: DataClass field 'z' without a default may not follow DataClass field with a default
+    y: int = field()           # E: Dataclass field 'y' without a default may not follow dataclass field with a default
+    z: int                     # E: Dataclass field 'z' without a default may not follow dataclass field with a default
 C(y=2, z=3)  # OK - y is not considered to have a default
     "#,
 );
@@ -808,7 +808,7 @@ from dataclasses import dataclass, field
 @dataclass
 class C:
     x: list[int] = field(default_factory=list)
-    y: str  # E: DataClass field 'y' without a default may not follow DataClass field with a default
+    y: str  # E: Dataclass field 'y' without a default may not follow dataclass field with a default
     "#,
 );
 
@@ -859,7 +859,7 @@ from dataclasses import dataclass, field
 class C:
     x: int = 1
     y: str = field(init=False)  # OK - init=False fields bypass ordering validation
-    z: int  # E: DataClass field 'z' without a default may not follow DataClass field with a default
+    z: int  # E: Dataclass field 'z' without a default may not follow dataclass field with a default
     "#,
 );
 
@@ -873,7 +873,7 @@ class C:
     b: str = "default"
     c: float = field(kw_only=True)  # OK - kw_only field
     d: int = field(init=False)      # OK - init=False field
-    e: bool  # E: DataClass field 'e' without a default may not follow DataClass field with a default
+    e: bool  # E: Dataclass field 'e' without a default may not follow dataclass field with a default
     "#,
 );
 
@@ -887,7 +887,7 @@ class Base:
 
 @dataclass
 class Child(Base):
-    y: str  # E: DataClass field 'y' without a default may not follow DataClass field with a default
+    y: str  # E: Dataclass field 'y' without a default may not follow dataclass field with a default
     "#,
 );
 
@@ -920,7 +920,7 @@ class Base2:
 
 @dataclass
 class Child(Base1, Base2):
-    z: float  # E: DataClass field 'z' without a default may not follow DataClass field with a default
+    z: float  # E: Dataclass field 'z' without a default may not follow dataclass field with a default
     "#,
 );
 
@@ -939,7 +939,7 @@ class B:
 @dataclass
 class C(A, B):
     c: float = field(kw_only=True)  # OK - kw_only
-    d: bool  # E: DataClass field 'd' without a default may not follow DataClass field with a default
+    d: bool  # E: Dataclass field 'd' without a default may not follow dataclass field with a default
     "#,
 );
 
@@ -950,8 +950,8 @@ from dataclasses import dataclass, InitVar
 @dataclass
 class C:
     x: int = 1
-    init_var: InitVar[str]  # E: DataClass field 'init_var' without a default may not follow DataClass field with a default
-    y: int  # E: DataClass field 'y' without a default may not follow DataClass field with a default
+    init_var: InitVar[str]  # E: Dataclass field 'init_var' without a default may not follow dataclass field with a default
+    y: int  # E: Dataclass field 'y' without a default may not follow dataclass field with a default
     "#,
 );
 
@@ -964,13 +964,12 @@ from dataclasses import dataclass
 class C:
     x: int = 1
     class_var: ClassVar[str] = "ignored"  # OK - ClassVar fields bypass ordering validation
-    y: int  # E: DataClass field 'y' without a default may not follow DataClass field with a default
+    y: int  # E: Dataclass field 'y' without a default may not follow dataclass field with a default
     "#,
 );
 
-/*
-
 testcase!(
+    bug = "dataclass kw_only fields are not properly ordered in constructors",
     test_field_ordering_kw_only_positional_override,
     r#"
 from dataclasses import dataclass, field
@@ -979,12 +978,13 @@ class C:
     a: int = 1
     b: str = field(kw_only=False)                 # positional override, no default
     c: float = field(kw_only=False, default=3.14) # positional override, has default
-    d: bool = field(kw_only=False)                # E: DataClass field 'd' without a default may not follow DataClass field with a default
-C("hello", 3.14, a=1, d=True)
+    d: bool = field(kw_only=False)                # E: Dataclass field 'd' without a default may not follow dataclass field with a default
+C("hello", 3.14, a=1, d=True) # E: Missing argument `b` in function `C.__init__` # E: Expected 0 positional arguments, got 2 in function `C.__init__`
     "#,
 );
 
 testcase!(
+    bug = "dataclass kw_only fields are not properly ordered in constructors",
     test_field_ordering_kw_only_mixed_overrides,
     r#"
 from dataclasses import dataclass, field
@@ -994,11 +994,12 @@ class C:
     x: str = field(kw_only=False)     # positional override
     y: float = field(kw_only=False)   # positional override
     z: bool
-C("hello", 3.14, w=1, z=True)  # x and y are positional, w and z are keyword-only
+C("hello", 3.14, w=1, z=True)  # E: Missing argument `x` in function `C.__init__` # E: Missing argument `y` in function `C.__init__` # E: Expected 0 positional arguments, got 2 in function `C.__init__
     "#,
 );
 
 testcase!(
+    bug = "dataclass kw_only fields are not properly ordered in constructors",
     test_field_ordering_kw_only_field_override,
     r#"
 from dataclasses import dataclass, field
@@ -1007,12 +1008,13 @@ class C:
     a: int
     b: str = field(kw_only=True)      # keyword-only field
     c: float = 3.14                   # positional field with default
-    d: bool = field(kw_only=False)    # E: DataClass field 'd' without a default may not follow DataClass field with a default
-C(1, 2.71, b="hello", d=True)
+    d: bool = field(kw_only=False)    # E: Dataclass field 'd' without a default may not follow dataclass field with a default
+C(1, 2.71, b="hello", d=True) # E: Expected 1 positional argument, got 2 in function `C.__init__`
     "#,
 );
 
 testcase!(
+    bug = "dataclass kw_only fields are not properly ordered in constructors",
     test_field_kw_only_unsupported,
     TestEnv::new_with_version(PythonVersion::new(3, 9, 0)),
     r#"
@@ -1021,12 +1023,13 @@ from dataclasses import dataclass, field
 class C:
     x: int = 1
     y: int = field(kw_only=True) # E: No matching overload found for function `dataclasses.field`
-    z: int # E: DataClass field 'z' without a default may not follow DataClass field with a default
-C(5, y=2)
+    z: int # E: Dataclass field 'z' without a default may not follow dataclass field with a default
+C(5, y=2) # E: Missing argument `z` in function `C.__init__`
     "#,
 );
 
 testcase!(
+    bug = "dataclass kw_only fields are not properly ordered in constructors",
     test_field_ordering_kw_only_field_bypass,
     r#"
 from dataclasses import dataclass, field
@@ -1034,9 +1037,7 @@ from dataclasses import dataclass, field
 class C:
     x: int = 1
     y: int = field(kw_only=True)  # OK - kw_only field bypasses ordering validation
-    z: int # E: DataClass field 'z' without a default may not follow DataClass field with a default
-C(5, y=2)
+    z: int # E: Dataclass field 'z' without a default may not follow dataclass field with a default
+C(5, y=2) # E: Missing argument `z` in function `C.__init__`
     "#,
 );
-
-*/
