@@ -5,7 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use crate::python::sys_info::PythonVersion;
+use pyrefly_python::sys_info::PythonVersion;
+
 use crate::test::util::TestEnv;
 use crate::testcase;
 
