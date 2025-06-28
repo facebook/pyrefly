@@ -7477,6 +7477,16 @@
     },
     {
       "code": -2,
+      "column": 5,
+      "concise_description": "Cannot override named tuple element `x`",
+      "description": "Cannot override named tuple element `x`",
+      "line": 79,
+      "name": "bad-override",
+      "stop_column": 6,
+      "stop_line": 79
+    },
+    {
+      "code": -2,
       "column": 19,
       "concise_description": "Argument `float` is not assignable to parameter `value` with type `str` in function `Property.__new__`",
       "description": "Argument `float` is not assignable to parameter `value` with type `str` in function `Property.__new__`",
