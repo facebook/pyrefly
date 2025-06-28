@@ -3289,8 +3289,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "DataClass field 'c' without a default may not follow DataClass field with a default",
-      "description": "DataClass field 'c' without a default may not follow DataClass field with a default",
+      "concise_description": "Dataclass field 'c' without a default may not follow dataclass field with a default",
+      "description": "Dataclass field 'c' without a default may not follow dataclass field with a default",
       "line": 58,
       "name": "bad-class-definition",
       "stop_column": 6,
@@ -4017,8 +4017,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "DataClass field 'b' without a default may not follow DataClass field with a default",
-      "description": "DataClass field 'b' without a default may not follow DataClass field with a default",
+      "concise_description": "Dataclass field 'b' without a default may not follow dataclass field with a default",
+      "description": "Dataclass field 'b' without a default may not follow dataclass field with a default",
       "line": 61,
       "name": "bad-class-definition",
       "stop_column": 6,
@@ -4027,8 +4027,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "DataClass field 'b' without a default may not follow DataClass field with a default",
-      "description": "DataClass field 'b' without a default may not follow DataClass field with a default",
+      "concise_description": "Dataclass field 'b' without a default may not follow dataclass field with a default",
+      "description": "Dataclass field 'b' without a default may not follow dataclass field with a default",
       "line": 67,
       "name": "bad-class-definition",
       "stop_column": 6,
