@@ -62,3 +62,73 @@ testcase!(
 3 + "3" # E:
 "#,
 );
+
+testcase!(
+    test_pyrefly_suppression_typed,
+    r#"
+def foo() -> str:
+  # pyrefly: ignore[bad-return]
+  return 1
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_typed_inline,
+    r#"
+def foo() -> str:
+  return 1  # pyrefly: ignore[bad-return]
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_typed_wrong_type,
+    r#"
+def foo() -> str:
+  # pyrefly: ignore[bad-assignment]
+  return 1 # E:
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_typed_inline_wrong_type,
+    r#"
+def foo() -> str:
+  return 1  # pyrefly: ignore[bad-assignment]  # E:
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_typed_bad_type,
+    r#"
+def foo() -> str:
+  # pyrefly: ignore[bad-]
+  return 1 # E:
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_typed_empty,
+    r#"
+def foo() -> str:
+  # pyrefly: ignore[]
+  return 1 # E:
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_typed_whitespace_variation,
+    r#"
+def foo() -> str:
+  #   pyrefly:    ignore   [  bad-return  ]
+  return 1
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_typed_multiple_codes,
+    r#"
+def foo() -> str:
+  # pyrefly: ignore[bad-return, bad-assignment]
+  return 1  # E:
+"#,
+);

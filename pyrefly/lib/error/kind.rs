@@ -189,6 +189,19 @@ pub enum ErrorKind {
     UnsupportedOperand,
 }
 
+impl std::str::FromStr for ErrorKind {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ERROR_KIND_CACHE
+            .iter()
+            .zip(enum_iterator::all::<ErrorKind>())
+            .find(|(cached, _)| cached == &s)
+            .map(|(_, kind)| kind)
+            .ok_or(())
+    }
+}
+
 /// Computing the error kinds is disturbingly expensive, so cache the results.
 /// Also means we can grab error code names without allocation, which is nice.
 static ERROR_KIND_CACHE: LazyLock<Vec<String>> = LazyLock::new(ErrorKind::cache);
