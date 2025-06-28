@@ -43,6 +43,7 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 #[cfg(target_os = "windows")]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+#[deny(missing_docs)]
 #[derive(Debug, Parser)]
 #[command(name = "pyrefly")]
 #[command(about = "Next generation of Pyre type checker", long_about = None)]
@@ -60,6 +61,7 @@ struct Args {
     command: Command,
 }
 
+#[deny(missing_docs)]
 #[derive(Debug, Clone, Parser)]
 struct FullCheckArgs {
     /// Files to check (glob supported).

@@ -203,6 +203,8 @@ pub(crate) enum IndexingMode {
     LazyBlocking,
 }
 
+///Arguments for LSP server
+#[deny(missing_docs)]
 #[derive(Debug, Parser, Clone)]
 pub struct Args {
     #[arg(long, value_enum, default_value_t, env = clap_env("INDEXING_MODE"))]
