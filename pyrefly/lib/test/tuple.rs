@@ -360,3 +360,13 @@ def g(x):
         assert_type(x, tuple)
 "#,
 );
+
+testcase!(
+    test_tuple_class_type,
+    r#"
+from typing import Any
+
+def f(x: type[tuple[Any, ...]]):
+    return x() # Ok
+    "#,
+);
