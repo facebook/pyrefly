@@ -39,6 +39,7 @@ pub fn to_real_path(path: &ModulePath) -> Option<PathBuf> {
             }?;
             Some(typeshed_path.join(path))
         }
+        ModulePathDetails::CommandSnippet => None,
     }
 }
 

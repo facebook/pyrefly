@@ -57,11 +57,15 @@ struct Args {
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Parser)]
 struct FullCheckArgs {
+    /// Type check a string of Python code directly (equivalent to mypy -c)
+    #[arg(long, value_name = "CODE", conflicts_with = "files")]
+    command: Option<String>,
     /// Files to check (glob supported).
     /// If no file is specified, switch to project-checking mode where the files to
     /// check are determined from the closest configuration file.
     /// When supplied, `project_excludes` in any config files loaded for these files to check
     /// are ignored, and we use the default excludes unless overridden with the `--project-excludes` flag.
+    #[arg(required_unless_present = "command")]
     files: Vec<String>,
     /// Files to exclude when type checking.
     #[arg(long)]
@@ -117,6 +121,21 @@ async fn run_autotype(
     args.run(files_to_check, config_finder)
 }
 
+async fn run_command_check(
+    code: String,
+    config: Option<PathBuf>,
+    mut args: library::run::CheckArgs,
+) -> anyhow::Result<CommandExitStatus> {
+    // Use the new run_once_with_snippet method that handles virtual modules properly
+    let (files_to_check, config_finder) =
+        globs_and_config_getter::get(vec![], None, config, &mut args)?;
+
+    match args.run_once_with_snippet(code, files_to_check, config_finder, true) {
+        Ok((status, _)) => Ok(status),
+        Err(e) => Err(e),
+    }
+}
+
 async fn run_check(
     args: library::run::CheckArgs,
     watch: bool,
@@ -140,24 +159,32 @@ async fn run_check(
 async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<CommandExitStatus> {
     match command {
         Command::Check(FullCheckArgs {
+            command,
             files,
             project_excludes,
             watch,
             config,
             mut args,
         }) => {
-            let (files_to_check, config_finder) = globs_and_config_getter::get(
-                files,
-                project_excludes,
-                config,
-                &mut args.config_override,
-            )?;
-            run_check(args, watch, files_to_check, config_finder, allow_forget).await
+            if let Some(code) = command {
+                // Handle command-line code snippet
+                run_command_check(code, config, args).await
+            } else {
+                // Handle files
+                let (files_to_check, config_finder) = globs_and_config_getter::get(
+                    files,
+                    project_excludes,
+                    config,
+                    &mut args.config_override,
+                )?;
+                run_check(args, watch, files_to_check, config_finder, allow_forget).await
+            }
         }
         Command::BuckCheck(args) => args.run(),
         Command::Lsp(args) => args.run(),
         Command::Init(args) => args.run(),
         Command::Autotype(FullCheckArgs {
+            command: _,
             files,
             project_excludes,
             config,
@@ -175,6 +202,7 @@ async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<Com
         // We intentionally make DumpConfig take the same arguments as Check so that dumping the
         // config is as easy as changing the command name.
         Command::DumpConfig(FullCheckArgs {
+            command: _,
             files,
             project_excludes,
             config,
