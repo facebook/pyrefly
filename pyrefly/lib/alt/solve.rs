@@ -1363,7 +1363,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(new_fields) = self.get_typed_dict_synthesized_fields(cls) {
                     fields = fields.combine(new_fields);
                 }
-                if let Some(new_fields) = self.get_dataclass_synthesized_fields(cls) {
+                if let Some(new_fields) = self.get_dataclass_synthesized_fields(cls, errors) {
                     fields = fields.combine(new_fields);
                 }
                 if let Some(new_fields) = self.get_named_tuple_synthesized_fields(cls) {
