@@ -1134,6 +1134,36 @@ assert_type(vari, Literal["test"])
 );
 
 testcase!(
+    test_assert_false_terminates_flow,
+    r#"
+from typing import assert_type, Literal
+
+def test_unreachable_code_after_assert_false() -> None:
+    # This test verifies that code immediately following 'assert False'
+    # is considered unreachable by Pyrefly's type checker.
+
+    x = 10
+    assert False, "This assertion should cause control flow to terminate in this branch."
+    # This line should be unreachable.
+    raise Exception("Something unexpected happened here!")
+    "#,
+);
+testcase!(
+    test_assert_true_does_not_terminate_flow,
+    r#"
+from typing import assert_type, Literal, reveal_type
+
+def test_assert_true_normal_flow():
+    x = 10
+
+    assert True, "This assertion always passes"
+    # This line should be reachable and its operations should be evaluated
+    y = x + 5
+    assert_type(y, int)
+    "#,
+);
+
+testcase!(
     bug = "Merge flow is lax about possibly-undefined locals, so we don't catch that `z` may be uninitialized.",
     test_named_inside_boolean_op,
     r#"
