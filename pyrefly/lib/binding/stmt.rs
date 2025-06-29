@@ -765,6 +765,9 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Assert(mut x) => {
                 self.ensure_expr(&mut x.test, &mut Usage::Narrowing);
                 self.bind_narrow_ops(&NarrowOps::from_expr(self, Some(&x.test)), x.range);
+                if let Some(false) = self.sys_info.evaluate_bool(&x.test) {
+                    self.scopes.mark_flow_termination();
+                }
                 self.insert_binding(Key::Anon(x.test.range()), Binding::Expr(None, *x.test));
                 if let Some(mut msg_expr) = x.msg {
                     let mut msg_user = self.declare_user(Key::UsageLink(msg_expr.range()));
