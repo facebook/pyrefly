@@ -777,7 +777,7 @@ fn to_real_path(path: &ModulePath) -> Option<&Path> {
         ModulePathDetails::FileSystem(path)
         | ModulePathDetails::Memory(path)
         | ModulePathDetails::Namespace(path) => Some(path),
-        ModulePathDetails::BundledTypeshed(_) => None,
+        ModulePathDetails::BundledTypeshed(_) | ModulePathDetails::CommandSnippet => None,
     }
 }
 
@@ -810,6 +810,10 @@ fn module_info_to_uri_with_document_content_provider(module_info: &ModuleInfo) -
                 general_purpose::STANDARD.encode(module_info.contents().as_str())
             ))
             .ok()
+        }
+        ModulePathDetails::CommandSnippet => {
+            // Command snippets don't have URIs for LSP
+            None
         }
     }
 }

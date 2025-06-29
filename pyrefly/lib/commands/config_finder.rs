@@ -106,6 +106,9 @@ pub fn standard_config_finder(
                     ModulePathDetails::BundledTypeshed(_) => {
                         return BundledTypeshed::config();
                     }
+                    ModulePathDetails::CommandSnippet => {
+                        return empty.dupe();
+                    }
                 };
                 cache_parents
                     .lock()
