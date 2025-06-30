@@ -55,6 +55,24 @@ assert_type(y, Literal[7, 100])
 );
 
 testcase!(
+    test_ifstmt_functionobject_as_condition,
+    r#"
+def f() -> bool:
+    return True
+if f: # E: Function object used as condition; did you mean to call it? (e.g., 'if f()')
+    pass
+    "#,
+);
+
+testcase!(
+    test_ifexpr_functionobject_as_condition,
+    r#""
+def f() -> bool:
+    return True
+v = 42 if f else 21 # E: Function object used as condition; did you mean to call it? (e.g., 'if f()')
+    #
+)
+testcase!(
     test_while_simple,
     r#"
 from typing import assert_type, Literal
