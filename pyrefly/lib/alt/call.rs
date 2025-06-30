@@ -33,7 +33,6 @@ use crate::types::callable::FunctionKind;
 use crate::types::callable::Params;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
-use crate::types::tuple::Tuple;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
@@ -187,27 +186,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Type(box Type::ClassType(cls)) | Type::Type(box Type::SelfType(cls)) => {
                 Some(CallTarget::new(Target::Class(cls)))
             }
-            Type::Type(box Type::Tuple(Tuple::Unbounded(element))) => {
-                Some(CallTarget::new(Target::Class(self.stdlib.tuple(*element))))
-            }
-            Type::Type(box Type::Tuple(Tuple::Concrete(elements))) => {
-                Some(CallTarget::new(Target::Class(if elements.is_empty() {
-                    self.stdlib.tuple(Type::Any(AnyStyle::Implicit))
-                } else {
-                    self.stdlib.tuple(self.unions(elements))
-                })))
-            }
-            Type::Type(box Type::Tuple(Tuple::Unpacked(box (
-                prefix,
-                Type::Tuple(Tuple::Unbounded(middle)),
-                suffix,
-            )))) => {
-                let mut elements = prefix;
-                elements.push(*middle);
-                elements.extend(suffix);
-                Some(CallTarget::new(Target::Class(
-                    self.stdlib.tuple(self.unions(elements)),
-                )))
+            Type::Type(box Type::Tuple(tuple)) => {
+                Some(CallTarget::new(Target::Class(self.erase_tuple_type(tuple))))
             }
             Type::Type(box Type::Quantified(quantified)) => {
                 Some(CallTarget::new(Target::Callable(Callable {

@@ -11,6 +11,8 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::types::callable::Param;
 use crate::types::callable::Required;
+use crate::types::class::ClassType;
+use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
@@ -223,6 +225,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some((Type::any_explicit(), Type::any_explicit()))
         } else {
             None
+        }
+    }
+
+    /// Erase the structural information (length, ordering) Type::Tuple return the union of the contents
+    /// Use to generate the type parameters for the Type::ClassType representation of tuple
+    pub fn erase_tuple_type(&self, tuple: Tuple) -> ClassType {
+        match tuple {
+            Tuple::Unbounded(element) => self.stdlib.tuple(*element),
+            Tuple::Concrete(elements) => {
+                if elements.is_empty() {
+                    self.stdlib.tuple(Type::any_implicit())
+                } else {
+                    self.stdlib.tuple(self.unions(elements))
+                }
+            }
+            Tuple::Unpacked(box (prefix, middle, suffix)) => {
+                let mut elements = prefix;
+                if let Type::Tuple(Tuple::Unbounded(unbounded_middle)) = middle {
+                    elements.push(*unbounded_middle);
+                } else {
+                    // We can't figure out the middle, fall back to `object`
+                    elements.push(self.stdlib.object().clone().to_type())
+                }
+                elements.extend(suffix);
+                self.stdlib.tuple(self.unions(elements))
+            }
         }
     }
 }

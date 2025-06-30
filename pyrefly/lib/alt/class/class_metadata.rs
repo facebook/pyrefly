@@ -39,7 +39,6 @@ use crate::types::callable::FunctionKind;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
-use crate::types::tuple::Tuple;
 use crate::types::types::CalleeKind;
 use crate::types::types::Type;
 
@@ -83,14 +82,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let metadata = self.get_metadata_for_class(c.class_object());
                 Some((c, metadata))
             }
-            Some((Type::Tuple(Tuple::Concrete(ts)), _)) => {
-                // TODO: we lose ordering/length information when we convert to the class representation
-                let class_ty = self.stdlib.tuple(self.unions(ts));
-                let metadata = self.get_metadata_for_class(class_ty.class_object());
-                Some((class_ty, metadata))
-            }
-            Some((Type::Tuple(Tuple::Unbounded(t)), _)) => {
-                let class_ty = self.stdlib.tuple(*t);
+            Some((Type::Tuple(tuple), _)) => {
+                let class_ty = self.erase_tuple_type(tuple);
                 let metadata = self.get_metadata_for_class(class_ty.class_object());
                 Some((class_ty, metadata))
             }
@@ -243,14 +236,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                             Some((c, base_class_metadata))
                         }
-                        Some((Type::Tuple(Tuple::Concrete(ts)), _)) => {
-                            // TODO: we lose ordering/length information when we convert to the class representation
-                            let class_ty = self.stdlib.tuple(self.unions(ts));
-                            let metadata = self.get_metadata_for_class(class_ty.class_object());
-                            Some((class_ty, metadata))
-                        }
-                        Some((Type::Tuple(Tuple::Unbounded(t)), _)) => {
-                            let class_ty = self.stdlib.tuple(*t);
+                        Some((Type::Tuple(tuple), _)) => {
+                            let class_ty = self.erase_tuple_type(tuple);
                             let metadata = self.get_metadata_for_class(class_ty.class_object());
                             Some((class_ty, metadata))
                         }

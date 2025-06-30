@@ -6555,8 +6555,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "Returned type `tuple[*tuple[Unknown, ...], Unknown]` is not assignable to declared return type `tuple[*Ts, T]`",
-      "description": "Returned type `tuple[*tuple[Unknown, ...], Unknown]` is not assignable to declared return type `tuple[*Ts, T]`",
+      "concise_description": "Returned type `tuple[*tuple[object | T, ...], object | T]` is not assignable to declared return type `tuple[*Ts, T]`",
+      "description": "Returned type `tuple[*tuple[object | T, ...], object | T]` is not assignable to declared return type `tuple[*Ts, T]`",
       "line": 56,
       "name": "bad-return",
       "stop_column": 30,

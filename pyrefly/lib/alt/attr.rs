@@ -41,7 +41,6 @@ use crate::types::module::Module;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::read_only::ReadOnlyReason;
-use crate::types::tuple::Tuple;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
@@ -1575,33 +1574,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::TypedDict(td) | Type::PartialTypedDict(td) => {
                 Some(AttributeBase::TypedDict(td.clone()))
             }
-            Type::Tuple(Tuple::Unbounded(element)) => {
-                Some(AttributeBase::ClassInstance(self.stdlib.tuple(*element)))
-            }
-            Type::Tuple(Tuple::Concrete(elements)) => {
-                Some(AttributeBase::ClassInstance(if elements.is_empty() {
-                    self.stdlib.tuple(Type::Any(AnyStyle::Implicit))
-                } else {
-                    self.stdlib.tuple(self.unions(elements))
-                }))
-            }
-            Type::Tuple(Tuple::Unpacked(box (
-                prefix,
-                Type::Tuple(Tuple::Unbounded(middle)),
-                suffix,
-            ))) => {
-                let mut elements = prefix;
-                elements.push(*middle);
-                elements.extend(suffix);
-                Some(AttributeBase::ClassInstance(
-                    self.stdlib.tuple(self.unions(elements)),
-                ))
-            }
-            // TODO(yangdanny): Can we do better here? There might be some information
-            // in the unpacked bit that would be useful.
-            Type::Tuple(Tuple::Unpacked(_)) => Some(AttributeBase::ClassInstance(
-                self.stdlib.tuple(Type::any_implicit()),
-            )),
+            Type::Tuple(tuple) => Some(AttributeBase::ClassInstance(self.erase_tuple_type(tuple))),
             Type::LiteralString => Some(AttributeBase::ClassInstance(self.stdlib.str().clone())),
             Type::Literal(Lit::Enum(lit_enum)) => Some(AttributeBase::EnumLiteral(
                 lit_enum.class,
