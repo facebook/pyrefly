@@ -85,7 +85,7 @@ testcase!(
     r#"
 def foo() -> str:
   # pyrefly: ignore[bad-assignment]
-  return 1 # E:
+  return 1 # E: Returned type `Literal[1]` is not assignable to declared return type `str`
 "#,
 );
 
@@ -93,7 +93,7 @@ testcase!(
     test_pyrefly_suppression_typed_inline_wrong_type,
     r#"
 def foo() -> str:
-  return 1  # pyrefly: ignore[bad-assignment]  # E:
+  return 1  # pyrefly: ignore[bad-assignment]  # E: Returned type `Literal[1]` is not assignable to declared return type `str`
 "#,
 );
 
@@ -102,7 +102,7 @@ testcase!(
     r#"
 def foo() -> str:
   # pyrefly: ignore[bad-]
-  return 1 # E:
+  return 1 # E: Returned type `Literal[1]` is not assignable to declared return type `str`
 "#,
 );
 
@@ -111,7 +111,7 @@ testcase!(
     r#"
 def foo() -> str:
   # pyrefly: ignore[]
-  return 1 # E:
+  return 1 # E: Returned type `Literal[1]` is not assignable to declared return type `str`
 "#,
 );
 
@@ -129,6 +129,16 @@ testcase!(
     r#"
 def foo() -> str:
   # pyrefly: ignore[bad-return, bad-assignment]
-  return 1  # E:
+  return 1  # E: Returned type `Literal[1]` is not assignable to declared return type `str`
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_typed_multiple_valid_codes,
+    r#"
+def foo() -> str:
+  # pyrefly: ignore[bad-return]
+  # pyrefly: ignore[bad-argument-type]
+  return len(1) # E: Returned type `int` is not assignable to declared return type `str`
 "#,
 );

@@ -14,6 +14,7 @@ use enum_iterator::Sequence;
 use parse_display::Display;
 use serde::Deserialize;
 use serde::Serialize;
+use starlark_map::small_map::SmallMap;
 use yansi::Paint;
 use yansi::Painted;
 
@@ -193,28 +194,32 @@ impl std::str::FromStr for ErrorKind {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        ERROR_KIND_CACHE
-            .iter()
-            .zip(enum_iterator::all::<ErrorKind>())
-            .find(|(cached, _)| cached == &s)
-            .map(|(_, kind)| kind)
-            .ok_or(())
+        ERROR_KIND_CACHE.get(s).copied().ok_or(())
     }
 }
 
 /// Computing the error kinds is disturbingly expensive, so cache the results.
 /// Also means we can grab error code names without allocation, which is nice.
-static ERROR_KIND_CACHE: LazyLock<Vec<String>> = LazyLock::new(ErrorKind::cache);
+static ERROR_KIND_CACHE: LazyLock<SmallMap<String, ErrorKind>> = LazyLock::new(ErrorKind::cache);
 
 impl ErrorKind {
-    fn cache() -> Vec<String> {
-        enum_iterator::all::<ErrorKind>()
-            .map(|x| x.to_string().to_case(Case::Kebab))
-            .collect()
+    fn cache() -> SmallMap<String, ErrorKind> {
+        let mut map = SmallMap::new();
+
+        for kind in enum_iterator::all::<ErrorKind>() {
+            let key = kind.to_string().to_case(Case::Kebab);
+            map.insert(key, kind);
+        }
+
+        map
     }
 
     pub fn to_name(self) -> &'static str {
-        ERROR_KIND_CACHE[self as usize].as_str()
+        ERROR_KIND_CACHE
+            .get_index(self as usize)
+            .unwrap()
+            .0
+            .as_str()
     }
 
     pub fn severity(self) -> Severity {

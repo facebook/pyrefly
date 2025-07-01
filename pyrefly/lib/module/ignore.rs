@@ -84,8 +84,10 @@ impl Ignore {
                         return Some(SuppressionKind::Pyrefly);
                     }
 
-                    if word.starts_with("ignore[") && word.ends_with(']') {
-                        if let Ok(kind) = ErrorKind::from_str(&word[7..word.len() - 1]) {
+                    if let Some(word) = word.strip_prefix("ignore[")
+                        && let Some(word) = word.strip_suffix(']')
+                    {
+                        if let Ok(kind) = ErrorKind::from_str(word) {
                             return Some(SuppressionKind::TypedPyrefly(kind));
                         }
                     }
