@@ -3288,6 +3288,16 @@
     },
     {
       "code": -2,
+      "column": 5,
+      "concise_description": "Dataclass field `c` without a default may not follow dataclass field with a default",
+      "description": "Dataclass field `c` without a default may not follow dataclass field with a default",
+      "line": 58,
+      "name": "bad-class-definition",
+      "stop_column": 6,
+      "stop_line": 58
+    },
+    {
+      "code": -2,
       "column": 4,
       "concise_description": "Missing argument `c` in function `DC4.__init__`",
       "description": "Missing argument `c` in function `DC4.__init__`",
@@ -4003,6 +4013,26 @@
       "name": "bad-argument-type",
       "stop_column": 37,
       "stop_line": 52
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Dataclass field `b` without a default may not follow dataclass field with a default",
+      "description": "Dataclass field `b` without a default may not follow dataclass field with a default",
+      "line": 61,
+      "name": "bad-class-definition",
+      "stop_column": 6,
+      "stop_line": 61
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Dataclass field `b` without a default may not follow dataclass field with a default",
+      "description": "Dataclass field `b` without a default may not follow dataclass field with a default",
+      "line": 67,
+      "name": "bad-class-definition",
+      "stop_column": 6,
+      "stop_line": 67
     },
     {
       "code": -2,
