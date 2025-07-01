@@ -19,6 +19,7 @@ use crate::alt::class::class_field::DataclassMember;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::error;
 use crate::error::collector::ErrorCollector;
 use crate::types::callable::BoolKeywords;
@@ -68,12 +69,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if dataclass.kws.is_set(&DataclassKeywords::INIT) {
             fields.insert(
                 dunder::INIT,
-                self.get_dataclass_init(
-                    cls,
-                    &dataclass.fields,
-                    dataclass.kws.is_set(&DataclassKeywords::KW_ONLY),
-                    errors,
-                ),
+                self.get_dataclass_init(cls, dataclass, errors),
             );
         }
         let dataclass_fields_type = self.stdlib.dict(
@@ -91,11 +87,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if dataclass.kws.is_set(&DataclassKeywords::MATCH_ARGS) {
             fields.insert(
                 dunder::MATCH_ARGS,
-                self.get_dataclass_match_args(
-                    cls,
-                    &dataclass.fields,
-                    dataclass.kws.is_set(&DataclassKeywords::KW_ONLY),
-                ),
+                self.get_dataclass_match_args(cls, dataclass),
             );
         }
         // See rules for `__hash__` creation under "unsafe_hash":
@@ -114,46 +106,54 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn iter_fields(
         &self,
         cls: &Class,
-        fields: &SmallSet<Name>,
+        dataclass: &DataclassMetadata,
         include_initvar: bool,
     ) -> Vec<(Name, ClassField, BoolKeywords)> {
-        let mut kw_only = false;
-        fields
-            .iter()
-            .filter_map(|name| match self.get_dataclass_member(cls, name, kw_only) {
+        let mut seen_kw_only_marker = false;
+        let mut positional_fields = Vec::new();
+        let mut kwonly_fields = Vec::new();
+        let cls_is_kw_only = dataclass.kws.is_set(&DataclassKeywords::KW_ONLY);
+        for name in dataclass.fields.iter() {
+            match self.get_dataclass_member(cls, name, cls_is_kw_only, seen_kw_only_marker) {
                 DataclassMember::KwOnlyMarker => {
-                    kw_only = true;
-                    None
+                    seen_kw_only_marker = true;
                 }
-                DataclassMember::NotAField => None,
-                DataclassMember::Field(field, keywords) => Some((name.clone(), field, keywords)),
-                DataclassMember::InitVar(field) => {
-                    if include_initvar {
-                        Some((name.clone(), field, BoolKeywords::new()))
+                DataclassMember::NotAField => {}
+                DataclassMember::Field(field, keywords) => {
+                    if keywords.is_set(&DataclassKeywords::KW_ONLY) {
+                        kwonly_fields.push((name.clone(), field, keywords))
                     } else {
-                        None
+                        positional_fields.push((name.clone(), field, keywords))
                     }
                 }
-            })
-            .collect()
+                DataclassMember::InitVar(field, keywords) => {
+                    if include_initvar {
+                        if keywords.is_set(&DataclassKeywords::KW_ONLY) {
+                            kwonly_fields.push((name.clone(), field, keywords))
+                        } else {
+                            positional_fields.push((name.clone(), field, keywords))
+                        }
+                    }
+                }
+            }
+        }
+        positional_fields.extend(kwonly_fields);
+        positional_fields
     }
 
     /// Gets __init__ method for an `@dataclass`-decorated class.
     fn get_dataclass_init(
         &self,
         cls: &Class,
-        fields: &SmallSet<Name>,
-        kw_only: bool,
+        dataclass: &DataclassMetadata,
         errors: &ErrorCollector,
     ) -> ClassSynthesizedField {
         let mut params = vec![self.class_self_param(cls, false)];
         let mut has_seen_default = false;
-
-        for (name, field, field_flags) in self.iter_fields(cls, fields, true) {
+        for (name, field, field_flags) in self.iter_fields(cls, dataclass, true) {
             if field_flags.is_set(&DataclassKeywords::INIT) {
                 let has_default = field_flags.is_set(&DataclassKeywords::DEFAULT);
-                let is_kw_only = field_flags.is_set(&(DataclassKeywords::KW_ONLY.0, kw_only));
-
+                let is_kw_only = field_flags.is_set(&DataclassKeywords::KW_ONLY);
                 if !is_kw_only {
                     if !has_default && has_seen_default {
                         if let Some(range) = cls.field_decl_range(&name) {
@@ -172,7 +172,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         has_seen_default = true;
                     }
                 }
-
                 params.push(field.as_param(&name, has_default, is_kw_only));
             }
         }
@@ -191,14 +190,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn get_dataclass_match_args(
         &self,
         cls: &Class,
-        fields: &SmallSet<Name>,
-        kw_only: bool,
+        dataclass: &DataclassMetadata,
     ) -> ClassSynthesizedField {
         // Keyword-only fields do not appear in __match_args__.
+        let kw_only = dataclass.kws.is_set(&DataclassKeywords::KW_ONLY);
         let ts = if kw_only {
             Vec::new()
         } else {
-            let filtered_fields = self.iter_fields(cls, fields, false);
+            let filtered_fields = self.iter_fields(cls, dataclass, false);
             filtered_fields
                 .iter()
                 .filter_map(|(name, _, field_flags)| {

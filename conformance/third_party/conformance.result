@@ -143,8 +143,6 @@
   "dataclasses_hash.py": [],
   "dataclasses_inheritance.py": [],
   "dataclasses_kwonly.py": [
-    "Line 32: Unexpected errors ['Missing argument `a` in function `DC2.__init__`', 'Expected 0 positional arguments, got 1 in function `DC2.__init__`']",
-    "Line 35: Unexpected errors ['Missing argument `a` in function `DC2.__init__`', 'Expected 0 positional arguments, got 1 in function `DC2.__init__`']",
     "Line 58: Unexpected errors ['Dataclass field `c` without a default may not follow dataclass field with a default']",
     "Line 61: Unexpected errors ['Missing argument `c` in function `DC4.__init__`', 'Argument `float` is not assignable to parameter `b` with type `int` in function `DC4.__init__`', 'Multiple values for argument `b` in function `DC4.__init__`']"
   ],
@@ -199,9 +197,7 @@
     "Line 60: Unexpected errors ['Unexpected keyword argument `other_name` in function `Customer1.__init__`']",
     "Line 79: Unexpected errors ['`<` is not supported between `Customer2` and `Customer2`\\n  Cannot find `__lt__` or `__gt__`']"
   ],
-  "dataclasses_usage.py": [
-    "Lines 70, 73: Expected error (tag 'DC3')"
-  ],
+  "dataclasses_usage.py": [],
   "directives_assert_type.py": [],
   "directives_cast.py": [],
   "directives_deprecated.py": [

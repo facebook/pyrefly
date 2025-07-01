@@ -430,7 +430,8 @@ impl ClassField {
                     }
                     ClassFieldInitialization::Instance(_) => BoolKeywords::new(),
                 };
-                if kw_only {
+                // If kw_only hasn't been explicitly set to false on the field, set it to true
+                if kw_only && flags.is_set(&(DataclassKeywords::KW_ONLY.0, true)) {
                     flags.set(DataclassKeywords::KW_ONLY.0, true);
                 }
                 flags
@@ -589,7 +590,7 @@ pub enum DataclassMember {
     /// A dataclass field
     Field(ClassField, BoolKeywords),
     /// A pseudo-field that only appears as a constructor argument
-    InitVar(ClassField),
+    InitVar(ClassField, BoolKeywords),
     /// A pseudo-field annotated with KW_ONLY
     KwOnlyMarker,
     /// Anything else
@@ -954,12 +955,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// This is used for dataclass field synthesis; when accessing attributes on dataclass instances,
     /// use `get_instance_attribute` or `get_class_attribute`
-    pub fn get_dataclass_member(&self, cls: &Class, name: &Name, kw_only: bool) -> DataclassMember {
+    pub fn get_dataclass_member(
+        &self,
+        cls: &Class,
+        name: &Name,
+        cls_is_kw_only: bool,
+        seen_kw_only_marker: bool,
+    ) -> DataclassMember {
         // Even though we check that the class member exists before calling this function,
         // it can be None if the class has an invalid MRO.
         let Some(member) = self.get_class_member_impl(cls, name, true) else {
             return DataclassMember::NotAField;
         };
+        let default_to_kw_only = member.defining_class == *cls && cls_is_kw_only;
         let field = &*member.value;
         // A field with type KW_ONLY is a sentinel value that indicates that the remaining
         // fields should be keyword-only params in the generated `__init__`.
@@ -974,9 +982,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             DataclassMember::NotAField // Class variables are not dataclass fields
         } else if field.is_init_var() {
-            DataclassMember::InitVar(field.clone())
+            DataclassMember::InitVar(
+                field.clone(),
+                field.dataclass_flags_of(seen_kw_only_marker || default_to_kw_only),
+            )
         } else {
-            DataclassMember::Field(field.clone(), field.dataclass_flags_of(kw_only))
+            DataclassMember::Field(
+                field.clone(),
+                field.dataclass_flags_of(seen_kw_only_marker || default_to_kw_only),
+            )
         }
     }
 

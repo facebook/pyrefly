@@ -3218,62 +3218,12 @@
     },
     {
       "code": -2,
-      "column": 4,
-      "concise_description": "Missing argument `a` in function `DC2.__init__`",
-      "description": "Missing argument `a` in function `DC2.__init__`",
-      "line": 32,
-      "name": "missing-argument",
-      "stop_column": 10,
-      "stop_line": 32
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "Expected 0 positional arguments, got 1 in function `DC2.__init__`",
-      "description": "Expected 0 positional arguments, got 1 in function `DC2.__init__`",
-      "line": 32,
-      "name": "bad-argument-type",
-      "stop_column": 9,
-      "stop_line": 32
-    },
-    {
-      "code": -2,
-      "column": 4,
-      "concise_description": "Missing argument `a` in function `DC2.__init__`",
-      "description": "Missing argument `a` in function `DC2.__init__`",
-      "line": 35,
-      "name": "missing-argument",
-      "stop_column": 15,
-      "stop_line": 35
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "Expected 0 positional arguments, got 1 in function `DC2.__init__`",
-      "description": "Expected 0 positional arguments, got 1 in function `DC2.__init__`",
-      "line": 35,
-      "name": "bad-argument-type",
-      "stop_column": 9,
-      "stop_line": 35
-    },
-    {
-      "code": -2,
-      "column": 4,
-      "concise_description": "Missing argument `a` in function `DC2.__init__`",
-      "description": "Missing argument `a` in function `DC2.__init__`",
-      "line": 38,
-      "name": "missing-argument",
-      "stop_column": 13,
-      "stop_line": 38
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "Expected 0 positional arguments, got 2 in function `DC2.__init__`",
-      "description": "Expected 0 positional arguments, got 2 in function `DC2.__init__`",
+      "column": 11,
+      "concise_description": "Expected 1 positional argument, got 2 in function `DC2.__init__`",
+      "description": "Expected 1 positional argument, got 2 in function `DC2.__init__`",
       "line": 38,
       "name": "bad-argument-type",
-      "stop_column": 9,
+      "stop_column": 12,
       "stop_line": 38
     },
     {
@@ -4033,6 +3983,16 @@
       "name": "bad-class-definition",
       "stop_column": 6,
       "stop_line": 67
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Dataclass field `b` without a default may not follow dataclass field with a default",
+      "description": "Dataclass field `b` without a default may not follow dataclass field with a default",
+      "line": 73,
+      "name": "bad-class-definition",
+      "stop_column": 6,
+      "stop_line": 73
     },
     {
       "code": -2,

@@ -1032,7 +1032,6 @@ class C:
 );
 
 testcase!(
-    bug = "dataclass kw_only fields are not properly ordered in constructors",
     test_field_ordering_kw_only_positional_override,
     r#"
 from dataclasses import dataclass, field
@@ -1042,12 +1041,11 @@ class C:
     b: str = field(kw_only=False)                 # positional override, no default
     c: float = field(kw_only=False, default=3.14) # positional override, has default
     d: bool = field(kw_only=False)                # E: Dataclass field `d` without a default may not follow dataclass field with a default
-C("hello", 3.14, a=1, d=True) # E: Missing argument `b` in function `C.__init__` # E: Expected 0 positional arguments, got 2 in function `C.__init__`
+C("hello", 3.14, a=1, d=True)
     "#,
 );
 
 testcase!(
-    bug = "dataclass kw_only fields are not properly ordered in constructors",
     test_field_ordering_kw_only_mixed_overrides,
     r#"
 from dataclasses import dataclass, field
@@ -1057,12 +1055,11 @@ class C:
     x: str = field(kw_only=False)     # positional override
     y: float = field(kw_only=False)   # positional override
     z: bool
-C("hello", 3.14, w=1, z=True)  # E: Missing argument `x` in function `C.__init__` # E: Missing argument `y` in function `C.__init__` # E: Expected 0 positional arguments, got 2 in function `C.__init__
+C("hello", 3.14, w=1, z=True)
     "#,
 );
 
 testcase!(
-    bug = "dataclass kw_only fields are not properly ordered in constructors",
     test_field_ordering_kw_only_field_override,
     r#"
 from dataclasses import dataclass, field
@@ -1072,12 +1069,11 @@ class C:
     b: str = field(kw_only=True)      # keyword-only field
     c: float = 3.14                   # positional field with default
     d: bool = field(kw_only=False)    # E: Dataclass field `d` without a default may not follow dataclass field with a default
-C(1, 2.71, b="hello", d=True) # E: Expected 1 positional argument, got 2 in function `C.__init__`
+C(1, 2.71, b="hello", d=True)
     "#,
 );
 
 testcase!(
-    bug = "dataclass kw_only fields are not properly ordered in constructors",
     test_field_kw_only_unsupported,
     TestEnv::new_with_version(PythonVersion::new(3, 9, 0)),
     r#"
@@ -1088,11 +1084,11 @@ class C:
     y: int = field(kw_only=True) # E: No matching overload found for function `dataclasses.field`
     z: int # E: Dataclass field `z` without a default may not follow dataclass field with a default
 C(5, y=2) # E: Missing argument `z` in function `C.__init__`
+C(5, y=2, z=3)
     "#,
 );
 
 testcase!(
-    bug = "dataclass kw_only fields are not properly ordered in constructors",
     test_field_ordering_kw_only_field_bypass,
     r#"
 from dataclasses import dataclass, field
@@ -1102,5 +1098,6 @@ class C:
     y: int = field(kw_only=True)  # OK - kw_only field bypasses ordering validation
     z: int # E: Dataclass field `z` without a default may not follow dataclass field with a default
 C(5, y=2) # E: Missing argument `z` in function `C.__init__`
+C(5, 1, y=2)
     "#,
 );
