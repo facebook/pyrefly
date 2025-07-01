@@ -24,6 +24,34 @@ name with the `--config`/`-c` flag, but they will not be automatically found by
 
 Both absolute and config-relative paths are supported.
 
+## Simple Configuration Example
+
+Here's an example of a simple config. To see more complex examples,
+including in a `pyproject.toml`, look at
+[Example Configurations](#example-configurations), which show Pyrefly's default
+config, as well as other ways you can set your configuration.
+
+```toml
+# set the directory Pyrefly will search for files to type check
+project-incldues = [
+    "a", "b/c/d", "e"
+]
+
+# manually set the `sys.platform` Pyrefly will assume when type checking
+python-platform = "linux"
+
+# return an import error when `<library>-stubs` can be imported, but no
+# non-stubs version of that library can be found
+ignore-missing-source = false
+
+# a table mapping error codes to an `is-enabled` boolean
+[errors]
+# disable `bad-assignment` errors
+bad-assignment = false
+# disable `bad-return` errors
+bad-return = false
+```
+
 ## Precedence in Options
 
 [Configuration options](#configuration-options) are selected in the following order
@@ -223,11 +251,36 @@ micro can be omitted to take the default positional value.
 - ENV equivalent: `PYREFLY_PYTHON_VERSION`
 - Equivalent configs: `pythonVersion` in Pyright, `python_version` in mypy
 
+### `conda-environment`
+
+The name of the Conda environment to query when attempting to autoconfigure
+Python environment values (`site-package-path`, `python-platform`, `python-version`).
+See the [Environment Autoconfiguration section](#environment-autoconfiguration) for more 
+information. We query Conda with `conda info --envs`, then find the environment's interpreter in Environment Autoconfirugration.
+
+We will query Conda for information about this environment, even when it's not sourced,
+unless a Python environment (venv, Conda) is activated or `--python-interpreter` or 
+`--conda-environment` are passed in through the CLI.
+
+This configuration option **is mutually exclusive with `python-interpreter`**. Specifying
+both is an error.
+
+- Type: string of existing Conda environment name
+- Default: none
+- Flag equivalent: `--conda-environment`
+- ENV equivalent: `PYREFLY_CONDA_ENVIRONMENT`
+- Equivalent configs: none
+- Notes:
+    - This enables the use of a non-local but customizable global environment without having to hard-code a path, which is not preferable on a shared project.
+
 ### `python-interpreter`
 
 The Python interpreter to query when attempting to autoconfigure
 Python environment values (`site-package-path`, `python-platform`, `python-version`).
 See the [Environment Autoconfiguration section](#environment-autoconfiguration) for more information.
+
+This configuration option **is mutually exclusive with `conda-environment`**. Specifying
+both is an error.
 
 - Type: path to executable
 - Default: `$(which python3)`, then `$(which python)`, or none
@@ -379,12 +432,13 @@ If any of [`python-platform`](#python-platform), [`python-version`](#python-vers
 for the missing values.
 
 We look for an interpreter with the following logic:
-1. Use [`python-interpreter`](#python-interpreter) if it's set by a flag or config option.
+1. Use [`python-interpreter`](#python-interpreter) or [`conda-environment`](#conda-environment) if either are set by a flag or config option. Both cannot be set in flags.
 2. Find a `venv` at the root of the project by searching for something that looks like a
-   Python interpreter, and looking for a `pyvenv.cfg` file in known locations.
-3. Query `$(which python3)` and `$(which python)` (platform independent) to use
+   Python interpreter (matches `python(\d(\.\d+)?)?(.exe)?` regex), and looking for a `pyvenv.cfg` file in known locations.
+3. Find an active `conda` environment.
+4. Query `$(which python3)` and `$(which python)` (platform independent) to use
    a system-installed interpreter.
-4. Fall back to Pyrefly's default values for any unspecified config options.
+5. Fall back to Pyrefly's default values for any unspecified config options.
 
 The config options we query the interpreter for are:
 * `python-platform`: `sys.platform`
@@ -513,7 +567,7 @@ To pick up your packages even when your environment isn't sourced, you can query
 location with `conda env list`, and add `<conda_environment_path>/bin/python3` to your Pyrefly configuration
 under [`python-interpreter`](#python-interpreter) or pass it in with the `--python-interpreter` flag.
 
-## Example Configuration
+## Example Configurations
 
 This section displays an example config showing the usage of all config options listed above to make creating
 your own easier, and to give you an easy place to start.
