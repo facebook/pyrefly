@@ -28,7 +28,7 @@ use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
 
 /// Arguments for the autotype command which automatically adds type annotations to Python code
-#[deny(missing_docs)]
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 pub struct Args {}
 

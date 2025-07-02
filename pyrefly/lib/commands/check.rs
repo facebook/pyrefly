@@ -82,20 +82,23 @@ enum OutputFormat {
     OmitErrors,
 }
 
-///Main arguments for Pyrefly type checker
-#[deny(missing_docs)]
+/// Main arguments for Pyrefly type checker
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 pub struct Args {
+    /// Output related configuration options
     #[command(flatten, next_help_heading = "Output")]
     output: OutputArgs,
+    /// Behaviour-related configuration options
     #[command(flatten, next_help_heading = "Behavior")]
     behavior: BehaviorArgs,
+    /// Configuration override options
     #[command(flatten, next_help_heading = "Config Overrides")]
     config_override: ConfigOverrideArgs,
 }
 
 /// how/what should Pyrefly output
-#[deny(missing_docs)]
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 struct OutputArgs {
     /// Write the errors to a file, instead of printing them.
@@ -147,7 +150,7 @@ struct OutputArgs {
 }
 
 /// non-config type checker behavior
-#[deny(missing_docs)]
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 struct BehaviorArgs {
     /// Check all reachable modules, not just the ones that are passed in explicitly on CLI positional arguments.
@@ -165,7 +168,7 @@ struct BehaviorArgs {
 }
 
 /// config overrides
-#[deny(missing_docs)]
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 struct ConfigOverrideArgs {
     /// The list of directories where imports are imported from, including

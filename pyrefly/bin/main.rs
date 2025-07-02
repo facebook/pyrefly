@@ -43,7 +43,8 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 #[cfg(target_os = "windows")]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-#[deny(missing_docs)]
+/// Main command line argument for pyrefly
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser)]
 #[command(name = "pyrefly")]
 #[command(about = "Next generation of Pyre type checker", long_about = None)]
@@ -54,14 +55,16 @@ struct Args {
     #[arg(long = "profiling", global = true, hide = true, env = clap_env("PROFILING"))]
     profiling: bool,
 
+    /// Common global arguments shared across commands
     #[command(flatten)]
     common: CommonGlobalArgs,
 
+    /// the subcommand to execute
     #[command(subcommand)]
     command: Command,
 }
 
-#[deny(missing_docs)]
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Parser)]
 struct FullCheckArgs {
     /// Files to check (glob supported).
@@ -87,6 +90,7 @@ struct FullCheckArgs {
     #[arg(long, short, env = clap_env("CONFIG"), value_name = "FILE")]
     config: Option<PathBuf>,
 
+    /// Type checking arguments and configuration
     #[command(flatten)]
     args: CheckArgs,
 }

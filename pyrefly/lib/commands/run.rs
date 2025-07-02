@@ -21,7 +21,7 @@ pub use crate::commands::init::Args as InitArgs;
 pub use crate::commands::lsp::Args as LspArgs;
 
 /// arguements for run settings
-#[deny(missing_docs)]
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 pub struct CommonGlobalArgs {
     /// Number of threads to use for parallelization.
