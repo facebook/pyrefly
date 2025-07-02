@@ -791,7 +791,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         hint = Some(ty.clone());
                         has_matching_param = true;
                     } else if kwargs.is_none() {
-                        unexpected_keyword_error(&id.id, kw.range);
+                        unexpected_keyword_error(&id.id, id.range);
                     }
                     let tcc: &dyn Fn() -> TypeCheckContext = &|| TypeCheckContext {
                         kind: if has_matching_param {
