@@ -1805,6 +1805,13 @@ def foo() -> int:
   return "this is a type error" # pyrefly: ignore
 ```
 
+You can also target specific error types:
+
+```python
+def foo() -> int:
+  return "this is a type error" # pyrefly: ignore[bad-return]
+```
+
 We respect the specification and allow `type: ignore` to be used:
 
 ```python
@@ -2384,10 +2391,17 @@ However, they support significantly fewer options, and only `disable_error_code`
 
 Like mypy, pyrefly has ways to silence specific error codes. Full details can be found in the [Error Suppression docs](error-suppressions.mdx)
 
-To silence an error on a specific line, add a disable comment above that line:
+To silence an error on a specific line, add a disable comment above that line. You can either suppress all errors on that line:
 
 ```
 # pyrefly: ignore
+x: str = 1
+```
+
+Or target a specific error type:
+
+```
+# pyrefly: ignore[bad-assignment]
 x: str = 1
 ```
 
@@ -2483,10 +2497,17 @@ Diagnostic settings are carried over to the equivalent subconfig, using the mapp
 
 Like pyright, pyrefly has ways to silence specific error codes. Full details can be found in the [Error Suppression docs](error-suppressions.mdx).
 
-To silence an error on a specific line, add a disable comment above that line:
+To silence an error on a specific line, add a disable comment above that line. You can either suppress all errors on that line:
 
 ```
 # pyrefly: ignore
+x: str = 1
+```
+
+Or target a specific error type:
+
+```
+# pyrefly: ignore[bad-assignment]
 x: str = 1
 ```
 
