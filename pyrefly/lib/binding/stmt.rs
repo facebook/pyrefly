@@ -631,6 +631,26 @@ impl<'a> BindingsBuilder<'a> {
                     self.bind_narrow_ops(&negated_prev_ops, range);
                     let mut base = self.scopes.clone_current_flow();
                     self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing);
+                    if let Some(test_expr) = &test {
+                        let name = match test_expr {
+                            Expr::Name(name) => Some(&name.id),
+                            Expr::Attribute(attr) => Some(&attr.attr.id),
+                            _ => None,
+                        };
+                        if let Some(lookup_name) = name {
+                            match self.lookup_name(Hashed::new(lookup_name), LookupKind::Regular) {
+                                Ok(Binding::Function(..)) => {
+                                    self.error(
+                                    test_expr.range(),
+                                    ErrorKind::InvalidSyntax,
+                                    None,
+                                    format!("Function object used as condition; did you mean to call it? (e.g., 'if f()')"),
+                                );
+                                }
+                                _ => {}
+                            }
+                        }
+                    } 
                     let new_narrow_ops = NarrowOps::from_expr(self, test.as_ref());
                     if let Some(test_expr) = test {
                         self.insert_binding(

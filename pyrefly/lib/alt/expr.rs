@@ -1012,6 +1012,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::If(x) => {
                 // TODO: Support type narrowing
                 let condition_type = self.expr_infer(&x.test, errors);
+                if condition_type.is_function_type() {
+                    self.error(
+                        errors,
+                        x.range(),
+                        ErrorKind::InvalidSyntax,
+                        None,
+                        format!("Function object used as condition; did you mean to call it? (e.g., 'if f()')"),
+                    );
+                }
                 let body_type = self.expr_infer_type_no_trace(&x.body, hint, errors);
                 let orelse_type = self.expr_infer_type_no_trace(&x.orelse, hint, errors);
                 self.check_dunder_bool_is_callable(&condition_type, x.range(), errors);
