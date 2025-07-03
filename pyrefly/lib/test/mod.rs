@@ -29,6 +29,7 @@ mod flow;
 mod generic_basic;
 mod generic_restrictions;
 mod imports;
+mod issue_550_init_helpers;
 mod literal;
 mod lsp;
 mod metadata;
