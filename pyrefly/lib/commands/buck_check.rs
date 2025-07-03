@@ -33,6 +33,8 @@ use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
 
+/// Arguments for Buck integration type checking
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Parser)]
 pub struct Args {
     /// Path to input JSON file

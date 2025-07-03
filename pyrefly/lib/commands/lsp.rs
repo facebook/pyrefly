@@ -205,8 +205,11 @@ pub(crate) enum IndexingMode {
     LazyBlocking,
 }
 
+///Arguments for LSP server
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 pub struct Args {
+    /// Find the struct that contains this field and add the indexing mode used by the language server
     #[arg(long, value_enum, default_value_t, env = clap_env("INDEXING_MODE"))]
     pub(crate) indexing_mode: IndexingMode,
 }
