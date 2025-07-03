@@ -496,11 +496,11 @@ micro can be omitted to take the default positional value.
 
 The name of the Conda environment to query when attempting to autoconfigure
 Python environment values (`site-package-path`, `python-platform`, `python-version`).
-See the [Environment Autoconfiguration section](#environment-autoconfiguration) for more 
+See the [Environment Autoconfiguration section](#environment-autoconfiguration) for more
 information. We query Conda with `conda info --envs`, then find the environment's interpreter in Environment Autoconfirugration.
 
 We will query Conda for information about this environment, even when it's not sourced,
-unless a Python environment (venv, Conda) is activated or `--python-interpreter` or 
+unless a Python environment (venv, Conda) is activated or `--python-interpreter` or
 `--conda-environment` are passed in through the CLI.
 
 This configuration option **is mutually exclusive with `python-interpreter`**. Specifying
@@ -647,6 +647,17 @@ and finding definitions will not be available there.
   - The `"skip-and-infer-return-any"` behavior emulates mypy's default behavior.
   - The `"check-and-infer-return-any"` behavior emulates mypy's
     `check_untyped_defs` flag.
+
+
+### `permissive-ignores`
+
+Should Pyrefly ignore errors based on annotations from other tools, e.g. `# pyre-ignore` or `# mypy: ignore`?
+By default, respects `# pyrefly: ignore` and `# type: ignore`.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: `--permissive-ignores`
+- ENV equivalent: `PYREFLY_PERMISSIVE_IGNORES`
 
 ### `sub-config`
 
@@ -1827,7 +1838,7 @@ We also have a special comment that will ignore all errors in a file.
   <CodeSnippet
   sampleFilename="why_hints.py"
   isCodeSnippet={true}
-  codeSample={`# pyrefly: ignore-all-errors
+  codeSample={`# pyrefly: ignore-errors
 
 from typing import *
 
