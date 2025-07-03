@@ -1594,6 +1594,53 @@ fn test_diagnostics_in_workspace() {
 }
 
 #[test]
+fn test_unexpected_keyword_range() {
+    let root = get_test_files_root();
+    let file_path = root.path().join("unexpected_keyword.py");
+    let messages_from_language_client = vec![
+        Message::from(build_did_open_notification(file_path.clone())),
+        Message::from(Request {
+            id: RequestId::from(1),
+            method: "textDocument/diagnostic".to_owned(),
+            params: serde_json::json!({
+            "textDocument": {
+                "uri": Url::from_file_path(file_path.clone()).unwrap().to_string()
+            }}),
+        }),
+    ];
+
+    let expected_messages_from_language_server = vec![Message::Response(Response {
+        id: RequestId::from(1),
+        result: Some(serde_json::json!({
+            "items": [
+                {
+                    "code": "unexpected-keyword",
+                    "message": "Unexpected keyword argument `foo` in function `test`",
+                    "range": {
+                        "end": {"character": 8, "line": 2},
+                        "start": {"character": 5, "line": 2}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        })),
+        error: None,
+    })];
+
+    run_test_lsp(TestCase {
+        messages_from_language_client,
+        expected_messages_from_language_server,
+        workspace_folders: Some(vec![(
+            "test".to_owned(),
+            Url::from_file_path(root).unwrap(),
+        )]),
+        ..Default::default()
+    });
+}
+
+#[test]
 fn test_disable_type_errors_language_services_still_work() {
     let test_files_root = get_test_files_root();
     let scope_uri = Url::from_file_path(test_files_root.path()).unwrap();
