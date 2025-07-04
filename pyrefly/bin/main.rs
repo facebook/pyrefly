@@ -126,7 +126,6 @@ async fn run_command_check(
     config: Option<PathBuf>,
     mut args: library::run::CheckArgs,
 ) -> anyhow::Result<CommandExitStatus> {
-    // Use the new run_once_with_snippet method that handles virtual modules properly
     let (files_to_check, config_finder) =
         globs_and_config_getter::get(vec![], None, config, &mut args)?;
 
