@@ -57,7 +57,7 @@ struct Args {
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Parser)]
 struct FullCheckArgs {
-    /// Type check a string of Python code directly (equivalent to mypy -c)
+    /// Type check a string of Python code directly
     #[arg(long, value_name = "CODE", conflicts_with = "files")]
     command: Option<String>,
     /// Files to check (glob supported).

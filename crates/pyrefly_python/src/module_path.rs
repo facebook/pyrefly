@@ -45,7 +45,7 @@ pub enum ModulePathDetails {
     /// The module source comes from typeshed bundled with Pyrefly (which gets stored in-memory).
     /// The path is relative to the root of the typeshed directory.
     BundledTypeshed(PathBuf),
-    /// The module source comes from a command-line snippet (pyrefly check --command).
+    /// The module source comes from a command-line snippet.
     CommandSnippet,
 }
 
