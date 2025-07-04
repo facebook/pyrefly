@@ -113,6 +113,6 @@ $ $PYREFLY check --command "x: int = 'hello'" --output-format=json
 ```scrut
 $ $PYREFLY check --help | grep -A 1 "command"
       --command <CODE>
-          Type check a string of Python code directly (equivalent to mypy -c)
+          Type check a string of Python code directly
 [0]
 ```
