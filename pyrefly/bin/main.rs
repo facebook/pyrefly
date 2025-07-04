@@ -70,7 +70,6 @@ struct FullCheckArgs {
     /// check are determined from the closest configuration file.
     /// When supplied, `project_excludes` in any config files loaded for these files to check
     /// are ignored, and we use the default excludes unless overridden with the `--project-excludes` flag.
-    #[arg(required_unless_present = "command")]
     files: Vec<String>,
     /// Files to exclude when type checking.
     #[arg(long, env = clap_env("PROJECT_EXCLUDES"))]
