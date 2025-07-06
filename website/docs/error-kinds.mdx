@@ -395,6 +395,21 @@ if isinstance(1, UserId):
   ...
 ```
 
+## invalid-condition
+
+This error is used to indicate a truthy value used in boolean context
+
+For example, uncalled functions or Literal values
+
+```python
+def f() -> Literal[int]:
+  return 42
+
+# This will throw error, functions should be called
+if f:
+  ...
+```
+
 ## invalid-inheritance
 
 An error caused by incorrect inheritance in a class or type definition.

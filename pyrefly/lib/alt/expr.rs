@@ -13,10 +13,12 @@ use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
+use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::BoolOp;
 use ruff_python_ast::Comprehension;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
+use ruff_python_ast::ExprIf;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprSlice;
 use ruff_python_ast::ExprStarred;
@@ -187,7 +189,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn ifs_infer(&self, comps: &[Comprehension], errors: &ErrorCollector) {
         for comp in comps {
             for if_clause in comp.ifs.iter() {
-                self.expr_infer(if_clause, errors);
+                let if_wrapper = Expr::If(ExprIf {
+                    test: Box::new(if_clause.clone()),
+                    body: Box::new(Expr::NoneLiteral(Default::default())),
+                    orelse: Box::new(Expr::NoneLiteral(Default::default())),
+                    range: if_clause.range(),
+                    node_index: AtomicNodeIndex::dummy(),
+                });
+                self.expr_infer(&if_wrapper, errors);
             }
         }
     }
@@ -1034,6 +1043,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let body_type = self.expr_infer_type_no_trace(&x.body, hint, errors);
                 let orelse_type = self.expr_infer_type_no_trace(&x.orelse, hint, errors);
                 self.check_dunder_bool_is_callable(&condition_type, x.range(), errors);
+                let module_name = errors.module_info().name();
+                if let Some(error_message) = condition_type.is_truthy(module_name) {
+                    self.error(
+                        errors,
+                        x.range(),
+                        ErrorKind::InvalidCondition,
+                        None,
+                        error_message,
+                    );
+                }
                 match condition_type.as_bool() {
                     Some(true) => body_type,
                     Some(false) => orelse_type,

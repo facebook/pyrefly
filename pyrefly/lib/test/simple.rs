@@ -1492,8 +1492,8 @@ testcase!(
 # Used to loop forever, https://github.com/facebook/pyrefly/issues/519
 
 # Note: Removing any element makes this test pass.
-while 3:
-    z = "" if 3 else ""
+while True:
+    z = "" if True else ""
     break
 else:
     exit(1)

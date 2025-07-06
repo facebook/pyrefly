@@ -1162,6 +1162,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             BindingExpect::Bool(x) => {
                 let ty = self.expr_infer(x, errors);
+
+                // Check if condition is
+                // trivially true (e.g. function name | class name etc.) or
+                // trivially false (e.g. false literal | empty literal container)
+                let module_name = errors.module_info().name();
+                if let Some(error_message) = ty.is_truthy(module_name) {
+                    self.error(
+                        errors,
+                        x.range(),
+                        ErrorKind::InvalidCondition,
+                        None,
+                        error_message,
+                    );
+                }
+
                 self.check_dunder_bool_is_callable(&ty, x.range(), errors);
             }
             BindingExpect::Delete(x) => match x {

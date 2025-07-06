@@ -165,7 +165,7 @@ testcase!(
     test_sys_info_with_or,
     r#"
 from typing import TYPE_CHECKING, Literal, assert_type
-x = 1
+x = True
 
 if x or TYPE_CHECKING:
     y = ""
