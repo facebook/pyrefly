@@ -1155,8 +1155,8 @@ def f():
     class X:
         pass
 
-    while 3:
-        z = "" if 3 else ""
+    while True:
+        z = "" if True else ""
         break
     else:
         exit(1)
@@ -1173,7 +1173,7 @@ from typing import *
 
 x = 1
 
-while 3:
+while True:
     reveal_type(x) # E: revealed type: Literal[1]
     break
 else:
