@@ -234,6 +234,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 "`typing.cast` missing required argument `val`".to_owned(),
             );
         }
+        if let Some(val_expr) = val {
+            let val_type = self.expr_infer(val_expr, errors);
+        
+            if self.subtype(&val_type, &ret) {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::RedundantCast,
+                    None,
+                    "`typing.cast` is unnecessary because the value already has the target type".to_owned(),
+                );
+            }
+        }        
         ret
     }
 
