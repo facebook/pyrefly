@@ -31,6 +31,10 @@ impl ErrorDisplayConfig {
     pub fn is_enabled(&self, kind: ErrorKind) -> bool {
         self.0.get(&kind) != Some(&false)
     }
+
+    pub fn with_error_setting(&mut self, kind: ErrorKind, enabled: bool) {
+        self.0.insert(kind, enabled);
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
