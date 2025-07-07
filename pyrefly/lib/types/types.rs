@@ -14,6 +14,7 @@ use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::assert_words;
 use pyrefly_util::display::commas_iter;
 use pyrefly_util::prelude::SliceExt;
@@ -1268,6 +1269,38 @@ impl Type {
             Type::Tuple(Tuple::Unbounded(box t)) => Some(vec![t.clone()]),
             Type::Type(box Type::Union(ts)) => Some(ts.map(|t| Type::type_form(t.clone()))),
             Type::TypeAlias(ta) => ta.as_value(stdlib).as_decomposed_tuple_or_union(stdlib),
+            _ => None,
+        }
+    }
+
+    /// tests for falsepositive boolean types
+    /// e.g. `if f: ` (missing function call) `if 42: ` (literal)
+    pub fn is_truthy(&self, module_name: ModuleName) -> Option<String> {
+        match self {
+            Type::Literal(l) => {
+                if let Lit::Bool(_) = l {
+                    return None;
+                };
+                Some(format!(
+                    "Literal {l} is constantly evaluated in boolean context. Are you sure it's correct?"
+                ))
+            }
+            Type::Function(f) => Some(format!(
+                "Function object userd as condition; did you mean to call it? (e.g. {}())",
+                f.metadata.kind.as_func_id().format(module_name)
+            )),
+            Type::Overload(f) => Some(format!(
+                "Function object used as condition; did you mean to call it? (e.g. {}())",
+                f.metadata.kind.as_func_id().format(module_name)
+            )),
+            Type::BoundMethod(f) => Some(format!(
+                "Bound method object used as condition did you mean to call it? (e.g. {}())",
+                f.func.metadata().kind.as_func_id().format(module_name)
+            )),
+            Type::ClassDef(cls) => Some(format!(
+                "Class instance expected for boolean condition. Got class name `{}` instead",
+                cls.name()
+            )),
             _ => None,
         }
     }

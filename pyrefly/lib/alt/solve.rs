@@ -1135,6 +1135,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // See test::attribute_narrow::test_invalid_narrows_on_bad_attribute_access for a
                 // test that fails if we do not discard the errors from expr_infer() here.
                 let ty = self.expr_infer(x, &self.error_swallower());
+
+                // Check if condition is
+                // trivially true (e.g. function name | class name etc.) or
+                // trivially false (e.g. false literal | empty literal container)
+
+                let module_name = errors.module_info().name();
+                if let Some(error_message) = ty.is_truthy(module_name) {
+                    self.error(
+                        errors,
+                        x.range(),
+                        ErrorKind::InvalidCondition,
+                        None,
+                        error_message,
+                    );
+                }
+
                 self.check_dunder_bool_is_callable(&ty, *range, errors);
             }
             BindingExpect::Delete(x) => match x {
