@@ -211,7 +211,7 @@ impl<T: Dupe + Debug + Send + Sync + 'static> ConfigFinder<T> {
                 f(absolute.as_ref().and_then(|x| x.parent()))
             }
             ModulePathDetails::Namespace(x) => f(x.absolutize().ok().as_deref()),
-            ModulePathDetails::BundledTypeshed(_) => f(None),
+            ModulePathDetails::BundledTypeshed(_) | ModulePathDetails::CommandSnippet => f(None),
         }
     }
 }

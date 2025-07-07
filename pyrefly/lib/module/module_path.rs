@@ -42,6 +42,8 @@ pub enum ModulePathDetails {
     /// The module source comes from typeshed bundled with Pyrefly (which gets stored in-memory).
     /// The path is relative to the root of the typeshed directory.
     BundledTypeshed(PathBuf),
+    /// The module source comes from a command-line snippet.
+    CommandSnippet,
 }
 
 fn is_path_init(path: &Path) -> bool {
@@ -74,6 +76,9 @@ impl Display for ModulePath {
                     relative_path.display()
                 )
             }
+            ModulePathDetails::CommandSnippet => {
+                write!(f, "<string>")
+            }
         }
     }
 }
@@ -84,7 +89,9 @@ impl Serialize for ModulePath {
             ModulePathDetails::FileSystem(path)
             | ModulePathDetails::Memory(path)
             | ModulePathDetails::Namespace(path) => path.serialize(serializer),
-            ModulePathDetails::BundledTypeshed(_) => self.to_string().serialize(serializer),
+            ModulePathDetails::BundledTypeshed(_) | ModulePathDetails::CommandSnippet => {
+                self.to_string().serialize(serializer)
+            }
         }
     }
 }
@@ -104,6 +111,10 @@ impl ModulePath {
 
     pub fn memory(path: PathBuf) -> Self {
         Self::new(ModulePathDetails::Memory(path))
+    }
+
+    pub fn command_snippet() -> Self {
+        Self::new(ModulePathDetails::CommandSnippet)
     }
 
     pub fn bundled_typeshed(relative_path: PathBuf) -> Self {
@@ -151,6 +162,7 @@ impl ModulePath {
             | ModulePathDetails::BundledTypeshed(path)
             | ModulePathDetails::Memory(path)
             | ModulePathDetails::Namespace(path) => path,
+            ModulePathDetails::CommandSnippet => Path::new("<string>"),
         }
     }
 
