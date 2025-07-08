@@ -89,6 +89,14 @@ import-error = false
 
 This is similar to pyright's [type check rule overrides](https://microsoft.github.io/pyright/#/configuration?id=type-check-rule-overrides), though of course the [error codes](error-kinds.mdx) are different!
 
+You can also use:
+
+```toml
+permissive-ignores = true
+```
+
+To allow `pyright: ignore` comments to be used by Pyrefly.
+
 ## Error Kind Mapping
 
 This table shows the mapping between pyright's [type check diagnostics settings](https://microsoft.github.io/pyright/#/configuration?id=type-check-diagnostics-settings)

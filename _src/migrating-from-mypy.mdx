@@ -37,6 +37,18 @@ We do recommend checking the resulting config for errors. While there is some ov
 If you'd rather start fresh with a hand-written config, please see the [pyrefly configuration docs](configuration.mdx).
 If you run into any issues with config migration, please [let us know](https://github.com/facebook/pyrefly/issues)!
 
+### Config options
+
+The following config options make Pyrefly behave more like Mypy:
+
+```toml
+# Ignore inferred return types and use `Any` if not specified
+untyped_def_behavior = "check-and-infer-return-any"
+
+# Ignore based on `mypy: ignore` and `mypy: ignore-errors` comments
+permissive-ignores = true
+```
+
 ### Config Migration Details
 
 `files`, `modules`, and `packages` are combined into `project_includes`. This should work exactly the same for `files` and `packages`. Mypy doesn't recurse into `modules`, but pyrefly will.
