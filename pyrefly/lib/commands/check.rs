@@ -52,7 +52,6 @@ use crate::commands::util::module_from_path;
 use crate::config::base::UntypedDefBehavior;
 use crate::config::config::ConfigFile;
 use crate::config::config::validate_path;
-use crate::config::environment::environment::SitePackagePathSource;
 use crate::config::error::ErrorDisplayConfig;
 use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
