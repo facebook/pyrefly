@@ -262,8 +262,7 @@ We will query Conda for information about this environment, even when it's not s
 unless a Python environment (venv, Conda) is activated or `--python-interpreter` or
 `--conda-environment` are passed in through the CLI.
 
-This configuration option **is mutually exclusive with `python-interpreter`**. Specifying
-both is an error.
+This configuration option **is mutually exclusive with `python-interpreter` and `skip-interpreter-query`**.
 
 - Type: string of existing Conda environment name
 - Default: none
@@ -279,8 +278,7 @@ The Python interpreter to query when attempting to autoconfigure
 Python environment values (`site-package-path`, `python-platform`, `python-version`).
 See the [Environment Autoconfiguration section](#environment-autoconfiguration) for more information.
 
-This configuration option **is mutually exclusive with `conda-environment`**. Specifying
-both is an error.
+This configuration option **is mutually exclusive with `conda-environment` and `skip-interpreter-query`**.
 
 - Type: path to executable
 - Default: `$(which python3)`, then `$(which python)`, or none
@@ -290,11 +288,30 @@ both is an error.
 - Notes:
   - This executes the value present in the `python-interpreter` field without any checks. It could
     be a security risk if your `python-interpreter` is an arbitrary executable.
+  - If you don't have a Python interpreter installed on your machine, we'll output an
+    error letting you that we couldn't appropriately configure your environment.
+    Configure `skip-interpreter-query` to skip the check and avoid the error.
 
 NOTE: Ideally, this should not be set manually, unless you're using a venv, running one-off tests,
 testing specific behavior, or having trouble with [Environment Autoconfiguration](#environment-autoconfiguration).
 Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
 to be reused between different systems and platforms.
+
+### `skip-interpreter-query`
+
+Skip querying any interpreters and do not do any 
+[Environment Autoconfiguration](#environment-autoconfiguration). This means that
+Pyrefly will take hard-coded defaults for [`python-version`](#python-version`)
+and [`python-platform`](#python-platform), and will use an empty
+[`site-package-path`](#site-package-path). It's likely you'll want to override
+these to match the environment you'll be running in.
+
+This configuration option **is mutually exclusive with `python-interpreter` and `conda-environment`**.
+
+- Type: bool
+- Default: `false`
+- Flag equivalent: `--skip-interpreter-query`
+- ENV equivalent: `PYREFLY_SKIP_INTERPRETER_QUERY`
 
 ### `errors`
 
@@ -340,7 +357,7 @@ The generated code status is determined by checking if the file contents contain
 the substring '<span>&#64;</span>generated'.
 
 - Type: bool
-- Default: false
+- Default: `false`
 - Flag equivalent: `--ignore-errors-in-generated-code`
 - ENV equivalent: `PYREFLY_IGNORE_ERRORS_IN_GENERATED_CODE`
 - Equivalent configs: none
@@ -354,7 +371,7 @@ and return the first valid import we can find. See
 more information on when a `site-package-path` cannot be used for typing information.
 
 - Type: bool
-- Default: true
+- Default: `true`
 - Flag equivalent: `--use-untyped-imports`
 - ENV equivalent: `PYREFLY_USE_UNTYPED_IMPORTS`
 - Equivalent configs: `useLibraryCodeForTypes` in Pyright, `follow_untyped_imports` in mypy
@@ -372,7 +389,7 @@ type stubs could be found. See
 [Stub Files vs Source Files](./import-resolution.mdx#stub-files-vs-source-files) for more information.
 
 - Type: bool
-- Default: true
+- Default: `true`
 - Flag equivalent: `--ignore-missing-source`
 - ENV equivalent: `PYREFLY_IGNORE_MISSING_SOURCE`
 - Equivalent configs: `reportMissingModuleSource` in Pyright
@@ -438,15 +455,26 @@ can fit under a single config option description.
 
 ### Environment Autoconfiguration
 
-If any of [`python-platform`](#python-platform), [`python-version`](#python-version), or
-[`site-package-path`](#site-package-path) are empty, we attempt to query an interpreter
-for the missing values.
+Unless `skip-interpreter-query` is set, we'll attempt to query a Python interpreter to 
+determine your [`python-platform`](#python-platform) or 
+[`python-version`](#python-version) if they're unset. We also get a 
+[`site-package-path`](#site-package-path) from your interpreter to determine which
+packages you have installed and append those to the end of any `site-package-path`
+you've configured yourself, either through CLI flags or a config file.
 
 We look for an interpreter with the following logic:
-1. Use [`python-interpreter`](#python-interpreter) or [`conda-environment`](#conda-environment) if either are set by a flag or config option. Both cannot be set in flags.
-2. Find a `venv` at the root of the project by searching for something that looks like a
-   Python interpreter (matches `python(\d(\.\d+)?)?(.exe)?` regex), and looking for a `pyvenv.cfg` file in known locations.
-3. Find an active `conda` environment.
+1. Use [`python-interpreter`](#python-interpreter) or 
+   [`conda-environment`](#conda-environment) if either are set by a flag.
+   Both cannot be set in flags at the same time.
+2. Determine if there's an active `venv` or `conda` environment. If both are active at 
+   the same time, we take `venv` over `conda`.
+3. Use [`python-interpreter`](#python-interpreter) or 
+   [`conda-environment`](#conda-environment) if either are set in a config file.
+   Both cannot be set in a config at the same time.
+4. Find a `venv` at the root of the project by searching for something that looks like a
+   Python interpreter (matches `python(\d(\.\d+)?)?(.exe)?` regex), and looking
+   for a `pyvenv.cfg` file in known locations. If we can't determine the root of your
+   project with a config file or other well-known root marker file (e.g. `setup.py`, `pyrightconfig.json`, `mypy.ini`), this step is skipped.
 4. Query `$(which python3)` and `$(which python)` (platform independent) to use
    a system-installed interpreter.
 5. Fall back to Pyrefly's default values for any unspecified config options.
@@ -455,6 +483,12 @@ The config options we query the interpreter for are:
 * `python-platform`: `sys.platform`
 * `python-version`: `sys.version_info[:3]`
 * `site-package-path`: `site.getsitepackages() + [site.getusersitepackages()]`
+
+:::info
+You can run `pyrefly dump-config` and pass in your file or configuration like you would
+with `pyrefly check` to see what Pyrefly finds for your Python interpreter and
+`site-package-path`, along with other useful config-debugging features.
+:::
 
 ### Filesystem Globbing
 
