@@ -50,8 +50,8 @@ use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyVariance;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamBuilder;
-use crate::binding::bindings::User;
 use crate::binding::scope::ClassIndices;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
@@ -87,7 +87,7 @@ impl<'a> BindingsBuilder<'a> {
         res
     }
 
-    fn class_object_and_indices(&mut self, class_name: &Identifier) -> (User, ClassIndices) {
+    fn class_object_and_indices(&mut self, class_name: &Identifier) -> (CurrentIdx, ClassIndices) {
         let def_index = self.def_index();
         let class_indices = ClassIndices {
             def_index,
@@ -99,7 +99,8 @@ impl<'a> BindingsBuilder<'a> {
         };
         // The user - used for first-usage tracking of any expressions we analyze in a class definition -
         // is the `Idx<Key>` of the class object bound to the class name.
-        let class_object = self.declare_user(Key::Definition(ShortIdentifier::new(class_name)));
+        let class_object =
+            self.declare_current_idx(Key::Definition(ShortIdentifier::new(class_name)));
         (class_object, class_indices)
     }
 
@@ -309,7 +310,7 @@ impl<'a> BindingsBuilder<'a> {
         let decorator_keys = decorators_with_ranges
             .map(|(idx, _)| *idx)
             .into_boxed_slice();
-        self.bind_definition_user(
+        self.bind_definition_current(
             &x.name,
             class_object,
             Binding::ClassDef(class_indices.class_idx, decorator_keys),
@@ -419,7 +420,7 @@ impl<'a> BindingsBuilder<'a> {
     fn synthesize_class_def(
         &mut self,
         class_name: Identifier,
-        class_object: User,
+        class_object: CurrentIdx,
         class_indices: ClassIndices,
         base: Option<Expr>,
         keywords: Box<[(Name, Expr)]>,
@@ -563,7 +564,7 @@ impl<'a> BindingsBuilder<'a> {
                 },
             );
         }
-        self.bind_definition_user(
+        self.bind_definition_current(
             &class_name,
             class_object,
             Binding::ClassDef(class_indices.class_idx, Box::new([])),

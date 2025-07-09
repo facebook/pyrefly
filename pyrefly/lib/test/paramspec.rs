@@ -438,6 +438,31 @@ def run[**P, R](func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
 );
 
 testcase!(
+    test_param_spec_component_subtype,
+    r#"
+def test[**P](*args: P.args, **kwargs: P.kwargs) -> None:
+  x: tuple[object, ...] = args
+  y: dict[str, object] = kwargs
+"#,
+);
+
+testcase!(
+    test_param_spec_component_iter,
+    r#"
+from typing import *
+
+R = TypeVar("R")
+P = ParamSpec("P")
+
+def wrap_any(f, *args, **kwargs):
+    return f(*args, **kwargs)
+
+def wrap(f: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
+    return wrap_any(f, *args, **kwargs)
+"#,
+);
+
+testcase!(
     test_param_spec_ellipsis,
     r#"
 from typing import Callable

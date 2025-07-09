@@ -127,6 +127,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // whether the argument is valid.
             Type::Type(box ty @ (Type::ClassType(_) | Type::Quantified(_))) => Some(ty.clone()),
             Type::Type(box Type::Tuple(_)) => Some(Type::any_tuple()),
+            Type::Type(box Type::Any(a)) => Some(a.propagate()),
             Type::None | Type::Type(box Type::None) => Some(Type::None),
             Type::ClassType(cls) if cls.is_builtin("type") => Some(Type::any_implicit()),
             Type::Any(_) => Some(ty.clone()),

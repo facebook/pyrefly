@@ -351,7 +351,6 @@ def f(x: Any):
 );
 
 testcase!(
-    bug = "PyTorch TODO: First assert_type should be Any as well",
     test_binop_on_any,
     r#"
 from typing import Any, assert_type
@@ -363,6 +362,16 @@ def f(x: Any):
 def f2(x: int | Any):
     assert_type(1 + x, int | Any)
     assert_type(x < 10,  bool | Any )
+    "#,
+);
+
+testcase!(
+    test_binop_type_var,
+    r#"
+from typing import TypeVar, reveal_type
+T_co = TypeVar("T_co", covariant=True)
+T_co == int 
+reveal_type(T_co) # E:  revealed type: type[TypeVar[T_co]]
     "#,
 );
 

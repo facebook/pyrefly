@@ -13,11 +13,11 @@ use std::sync::Mutex;
 
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 
-use crate::module::module_path::ModulePath;
 use crate::state::loader::FindError;
 
 static PY_TYPED_CACHE: LazyLock<Mutex<SmallMap<PathBuf, PyTyped>>> =
@@ -251,7 +251,9 @@ where
         [first, rest @ ..] => {
             let start_result = find_one_part(first, include.clone());
             let result = start_result
-                .and_then(|start_result| continue_find_module(start_result, rest).unwrap());
+                .map(|start_result| continue_find_module(start_result, rest))
+                .transpose()?
+                .flatten();
             if result.is_some() {
                 return Ok(result);
             }
@@ -266,19 +268,22 @@ where
     }
 }
 
-pub fn find_module_in_site_package_path(
+pub fn find_module_in_site_package_path<'a, I>(
     module: ModuleName,
-    include: &[PathBuf],
+    include: I,
     use_untyped_imports: bool,
     ignore_missing_source: bool,
-) -> Result<Option<ModulePath>, FindError> {
+) -> Result<Option<ModulePath>, FindError>
+where
+    I: Iterator<Item = &'a PathBuf> + Clone,
+{
     let components = module.components();
     let first = &components[0];
     let rest = &components[1..];
     let stub_first = Name::new(format!("{first}-stubs"));
 
     let stub_module_imports = include
-        .iter()
+        .clone()
         .filter_map(|root| find_one_part(&stub_first, iter::once(root)));
 
     let mut any_has_partial_py_typed = false;
@@ -288,7 +293,7 @@ pub fn find_module_in_site_package_path(
         let stub_module_py_typed = stub_module_import.py_typed();
         any_has_partial_py_typed |= stub_module_py_typed == PyTyped::Partial;
         checked_one_stub = true;
-        if let Some(stub_result) = continue_find_module(stub_module_import, rest).unwrap() {
+        if let Some(stub_result) = continue_find_module(stub_module_import, rest)? {
             found_stubs = Some(stub_result);
             break;
         }
@@ -304,7 +309,7 @@ pub fn find_module_in_site_package_path(
     }
 
     let mut fallback_modules = include
-        .iter()
+        .clone()
         .filter_map(|root| find_one_part(first, iter::once(root)))
         .peekable();
 
@@ -322,7 +327,7 @@ pub fn find_module_in_site_package_path(
             && module.py_typed() == PyTyped::Missing
         {
             any_has_none_py_typed = true;
-        } else if let Some(module_result) = continue_find_module(module, rest).unwrap() {
+        } else if let Some(module_result) = continue_find_module(module, rest)? {
             return Ok(Some(module_result));
         }
     }
@@ -630,7 +635,7 @@ mod tests {
         assert_eq!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.bar"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 false,
                 false,
             )
@@ -641,7 +646,7 @@ mod tests {
         assert!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.baz"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 false,
                 false,
             )
@@ -651,7 +656,7 @@ mod tests {
         assert_eq!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.baz"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 true,
                 false,
             )
@@ -662,7 +667,7 @@ mod tests {
         assert!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.qux"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 false,
                 false,
             )
@@ -689,7 +694,7 @@ mod tests {
         assert!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.bar"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 false,
                 false,
             )
@@ -698,7 +703,7 @@ mod tests {
         assert_eq!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.bar"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 true,
                 false
             )
@@ -709,7 +714,7 @@ mod tests {
         assert!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.baz"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 false,
                 false,
             )
@@ -718,7 +723,7 @@ mod tests {
         assert_eq!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.baz"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 true,
                 false,
             )
@@ -729,7 +734,7 @@ mod tests {
         assert!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.qux"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 false,
                 false,
             )
@@ -761,7 +766,7 @@ mod tests {
         assert_eq!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.bar"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 false,
                 false,
             )
@@ -772,7 +777,7 @@ mod tests {
         assert_eq!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.baz"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 false,
                 false,
             )
@@ -783,7 +788,7 @@ mod tests {
         assert!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.qux"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 false,
                 false,
             )
@@ -811,7 +816,7 @@ mod tests {
         assert_eq!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.bar"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 false,
                 false,
             )
@@ -822,7 +827,7 @@ mod tests {
         assert_eq!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.baz"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 false,
                 false,
             )
@@ -833,7 +838,7 @@ mod tests {
         assert!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.qux"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 false,
                 false,
             )
@@ -869,7 +874,7 @@ mod tests {
         assert!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.bar"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 false,
                 false,
             )
@@ -878,7 +883,7 @@ mod tests {
         assert_eq!(
             find_module_in_site_package_path(
                 ModuleName::from_str("foo.bar"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 false,
                 true,
             )
@@ -889,7 +894,7 @@ mod tests {
         assert_eq!(
             find_module_in_site_package_path(
                 ModuleName::from_str("baz.qux"),
-                &[root.to_path_buf()],
+                [root.to_path_buf()].iter(),
                 false,
                 false,
             )

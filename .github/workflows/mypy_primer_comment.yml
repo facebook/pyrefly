@@ -1,11 +1,12 @@
 name: Comment with mypy_primer diff
 
-on:  # zizmor: ignore[dangerous-triggers]
-  workflow_run:
-    workflows:
-      - Run mypy_primer
-    types:
-      - completed
+# Disabled for now, because it generates a lot of spurious errors.
+# on:  # zizmor: ignore[dangerous-triggers]
+#   workflow_run:
+#     workflows:
+#       - Run mypy_primer
+#     types:
+#       - completed
 
 permissions: {}
 

@@ -43,6 +43,8 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 #[cfg(target_os = "windows")]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+/// Main CLI entrypoint for Pyrefly.
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser)]
 #[command(name = "pyrefly")]
 #[command(about = "A fast Python type checker", long_about = None)]
@@ -53,13 +55,16 @@ struct Args {
     #[arg(long = "profiling", global = true, hide = true, env = clap_env("PROFILING"))]
     profiling: bool,
 
+    /// Common global arguments shared across commands.
     #[command(flatten)]
     common: CommonGlobalArgs,
 
+    /// Subcommand execution args.
     #[command(subcommand)]
     command: Command,
 }
 
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Parser)]
 struct FullCheckArgs {
     /// Files to check (glob supported).
@@ -85,10 +90,13 @@ struct FullCheckArgs {
     #[arg(long, short, env = clap_env("CONFIG"), value_name = "FILE")]
     config: Option<PathBuf>,
 
+    /// Type checking arguments and configuration
     #[command(flatten)]
     args: CheckArgs,
 }
 
+/// Subcommands to run Pyrefly with.
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Subcommand)]
 enum Command {
     /// Full type checking on a file or a project
@@ -107,6 +115,7 @@ enum Command {
     /// Start an LSP server
     Lsp(LspArgs),
 
+    /// Automatically add type annotations to a file or directory.
     Autotype(FullCheckArgs),
 }
 
@@ -218,6 +227,7 @@ async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<Com
                         println!("Configuration at `{}`", path.display());
                     }
                 }
+                println!("  Using interpreter: {}", config.interpreters);
                 println!("  Covered files:");
                 for (i, fi) in files.iter().enumerate() {
                     if i < 10 {

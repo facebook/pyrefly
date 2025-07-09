@@ -8,14 +8,14 @@
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_python::ignore::Ignore;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
 use crate::error::collector::CollectedErrors;
 use crate::error::expectation::Expectation;
-use crate::module::ignore::Ignore;
-use crate::module::module_path::ModulePath;
 use crate::state::load::Load;
 
 /// The errors from a collection of modules.

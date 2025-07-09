@@ -201,12 +201,12 @@ mod tests {
 
     use anyhow::anyhow;
     use pyrefly_python::ast::Ast;
+    use pyrefly_python::module_path::ModulePath;
+    use pyrefly_python::module_path::ModuleStyle;
     use starlark_map::small_map::SmallMap;
     use starlark_map::smallmap;
 
     use super::*;
-    use crate::module::module_path::ModulePath;
-    use crate::module::module_path::ModuleStyle;
 
     impl LookupExport for SmallMap<ModuleName, Exports> {
         fn get(&self, module: ModuleName) -> Result<Exports, FindError> {

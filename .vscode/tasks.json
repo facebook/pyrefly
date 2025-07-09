@@ -29,7 +29,7 @@
         "isDefault": true
       }
     },
-     {
+    {
       "type": "npm",
       "script": "watch:esbuild",
       "group": "build",
@@ -76,24 +76,37 @@
     },
     {
       "type": "shell",
-      "command": "cargo build --release --all-features --artifact-dir ../lsp/bin -Z unstable-options",
+      "command": "cargo",
       "group": "build",
       "isBackground": true,
       "label": "cargo: build pyrefly for extension",
+      "args": [
+        "build",
+        "--release",
+        "--artifact-dir",
+        "../lsp/bin",
+        "-Z",
+        "unstable-options"
+      ],
       "options": {
+        "cwd": "${workspaceFolder}/pyrefly",
         "shell": {
           // -l (login shell) necessary on some machines to find cargo
           // https://code.visualstudio.com/docs/editor/tasks#_why-do-i-get-command-not-found-when-running-a-task
-          "args": ["-c", "-l"]
+          "args": [
+            "-l",
+            "-c"
+          ],
         },
-        "cwd": "${workspaceFolder}/pyrefly"
       },
       "windows": {
         "options": {
           "shell": {
             // Leaving "args" blank does not override default option - a value is necessary
             // https://code.visualstudio.com/docs/debugtest/tasks#_custom-tasks
-            "args": ["-NonInteractive"]
+            "args": [
+              "-NonInteractive"
+            ]
           }
         }
       }

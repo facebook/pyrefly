@@ -11,6 +11,7 @@ use std::io::Cursor;
 
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::lined_buffer::DisplayRange;
@@ -25,7 +26,6 @@ use starlark_map::small_set::SmallSet;
 use crate::alt::answers::Answers;
 use crate::config::finder::ConfigFinder;
 use crate::module::module_info::ModuleInfo;
-use crate::module::module_path::ModulePath;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;

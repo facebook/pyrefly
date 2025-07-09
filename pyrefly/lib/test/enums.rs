@@ -353,3 +353,16 @@ class A(enum.IntEnum):
 assert_type(A.B, Literal[A.B])
     "#,
 );
+
+// This used to trigger a false positive where we thought the metaclass inheriting
+// Any meant it was an enum metaclass, see https://github.com/facebook/pyrefly/issues/622
+testcase!(
+    test_metaclass_subtype_of_any_is_not_enum_metaclass,
+    r#"
+from typing import Any
+class CustomMetaclass(Any):
+    pass
+class C[T](metaclass=CustomMetaclass):  # Ok - was a false positive
+    x: T
+    "#,
+);

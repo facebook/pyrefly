@@ -1603,7 +1603,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Type(box Type::Quantified(q)) => Some(AttributeBase::TypeVar(q, None)),
             Type::Type(box Type::Any(style)) => Some(AttributeBase::TypeAny(style)),
             Type::Module(module) => Some(AttributeBase::Module(module)),
-            Type::TypeVar(_) => Some(AttributeBase::ClassInstance(self.stdlib.type_var().clone())),
+            Type::TypeVar(_) | Type::Type(box Type::TypeVar(_)) => {
+                Some(AttributeBase::ClassInstance(self.stdlib.type_var().clone()))
+            }
             Type::ParamSpec(_) => Some(AttributeBase::ClassInstance(
                 self.stdlib.param_spec().clone(),
             )),

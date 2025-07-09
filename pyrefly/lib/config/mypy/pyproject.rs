@@ -22,6 +22,7 @@ use crate::config::config::ConfigFile;
 use crate::config::config::SubConfig;
 use crate::config::error::ErrorDisplayConfig;
 use crate::config::mypy::regex_converter;
+use crate::config::util::ConfigOrigin;
 use crate::module::wildcard::ModuleWildcard;
 
 // A pyproject.toml Mypy config differs a bit from the INI format:
@@ -164,7 +165,7 @@ pub fn parse_pyproject_config(raw_file: &str) -> anyhow::Result<ConfigFile> {
         cfg.python_environment.python_version = mypy.python_version;
     }
     if mypy.python_interpreter.is_some() {
-        cfg.python_interpreter = mypy.python_interpreter;
+        cfg.interpreters.python_interpreter = mypy.python_interpreter.map(ConfigOrigin::config);
     }
 
     let disable_error_code = mypy

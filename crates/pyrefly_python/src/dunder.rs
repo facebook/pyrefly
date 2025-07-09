@@ -39,6 +39,7 @@ pub const NEG: Name = Name::new_static("__neg__");
 pub const NEW: Name = Name::new_static("__new__");
 pub const NEXT: Name = Name::new_static("__next__");
 pub const POS: Name = Name::new_static("__pos__");
+pub const POST_INIT: Name = Name::new_static("__post_init__");
 pub const SET: Name = Name::new_static("__set__");
 pub const SETATTR: Name = Name::new_static("__setattr__");
 pub const SETITEM: Name = Name::new_static("__setitem__");

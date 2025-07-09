@@ -31,6 +31,8 @@ use crate::config::pyright;
 use crate::config::pyright::PyrightConfig;
 use crate::config::util::PyProject;
 
+/// Arguments for configuration migration from other type checkers
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Clone, Debug, Parser)]
 pub struct Args {
     /// The path to the mypy or pyright config file to convert. Optional.

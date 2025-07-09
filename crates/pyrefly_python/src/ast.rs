@@ -10,6 +10,7 @@ use std::slice;
 
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBooleanLiteral;
@@ -258,8 +259,12 @@ impl Ast {
 
     pub fn pattern_match_singleton_to_expr(x: &PatternMatchSingleton) -> Expr {
         match x.value {
-            Singleton::None => Expr::NoneLiteral(ExprNoneLiteral { range: x.range }),
+            Singleton::None => Expr::NoneLiteral(ExprNoneLiteral {
+                node_index: AtomicNodeIndex::dummy(),
+                range: x.range,
+            }),
             Singleton::True | Singleton::False => Expr::BooleanLiteral(ExprBooleanLiteral {
+                node_index: AtomicNodeIndex::dummy(),
                 range: x.range,
                 value: x.value == Singleton::True,
             }),

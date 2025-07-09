@@ -67,6 +67,11 @@ const docsSidebar = [
         id: 'import-resolution',
         label: 'Import Resolution',
     },
+    {
+        type: 'doc' as const,
+        id: 'autotype',
+        label: 'Automating Type Annotations',
+    },
 ];
 
 const sidebars: SidebarsConfig = {

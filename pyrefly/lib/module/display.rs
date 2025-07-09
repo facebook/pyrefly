@@ -10,6 +10,7 @@ use std::fmt::Display;
 
 use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
+use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprYield;
@@ -55,6 +56,12 @@ impl DisplayWith<ModuleInfo> for ExprYieldFrom {
 }
 
 impl DisplayWith<ModuleInfo> for ExprCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &ModuleInfo) -> fmt::Result {
+        write!(f, "{}", m.code_at(self.range()))
+    }
+}
+
+impl DisplayWith<ModuleInfo> for Arguments {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &ModuleInfo) -> fmt::Result {
         write!(f, "{}", m.code_at(self.range()))
     }

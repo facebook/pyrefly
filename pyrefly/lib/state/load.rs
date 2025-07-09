@@ -11,6 +11,8 @@ use anyhow::anyhow;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::fs_anyhow;
 use ruff_text_size::TextRange;
 use vec1::vec1;
@@ -20,8 +22,6 @@ use crate::error::kind::ErrorKind;
 use crate::error::style::ErrorStyle;
 use crate::module::bundled::typeshed;
 use crate::module::module_info::ModuleInfo;
-use crate::module::module_path::ModulePath;
-use crate::module::module_path::ModulePathDetails;
 use crate::state::memory::MemoryFilesLookup;
 
 /// The result of loading a module, including its `ModuleInfo` and `ErrorCollector`.

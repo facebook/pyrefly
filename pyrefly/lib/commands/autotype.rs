@@ -27,6 +27,8 @@ use crate::types::simplify::unions_with_literals;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
 
+/// Arguments for the autotype command which automatically adds type annotations to Python code
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 pub struct Args {}
 
@@ -61,6 +63,9 @@ fn format_hints(
             continue;
         }
         if formatted_hint.contains("Never") {
+            continue;
+        }
+        if formatted_hint == "None" && kind == AnnotationKind::Parameter {
             continue;
         }
         match kind {
@@ -320,6 +325,38 @@ def foo() -> str:
     def example(c: int | str = 1):
         return c
     example("a")
+    "#,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_none() -> anyhow::Result<()> {
+        assert_annotations(
+            r#"
+    def example(c):
+        c + 1
+    "#,
+            r#"
+    def example(c) -> None:
+        c + 1
+    "#,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_none_parameter() -> anyhow::Result<()> {
+        assert_annotations(
+            r#"
+    def example(c = None):
+        pass
+    example(None)
+    "#,
+            r#"
+    def example(c = None) -> None:
+        pass
+    example(None)
     "#,
         );
         Ok(())

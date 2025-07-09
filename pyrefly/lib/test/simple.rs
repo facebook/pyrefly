@@ -1591,3 +1591,26 @@ class NameTable:
         return last
 "#,
 );
+
+testcase!(
+    test_collapse_any,
+    r#"
+from typing import Any, reveal_type
+
+def f(a, b: Any, x1: bool, x2: bool):
+    c = error # E: Could not find name `error`
+    x = a if x1 else b if x2 else c
+    reveal_type([x]) # E: revealed type: list[Unknown]
+"#,
+);
+
+testcase!(
+    test_call_type_any,
+    r#"
+from typing import Any, assert_type
+
+def f(x: type[Any]):
+    assert_type(x(), Any)
+    assert_type(x(7, arg=8), Any)
+"#,
+);

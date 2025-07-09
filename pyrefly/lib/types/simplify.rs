@@ -67,12 +67,26 @@ pub fn unions_with_literals(xs: Vec<Type>, stdlib: &Stdlib) -> Type {
     unions_internal(xs, Some(stdlib))
 }
 
+fn remove_maximum<T: Ord>(xs: &mut Vec<T>) {
+    // Remove the maximum element, if it exists.
+    if xs.len() <= 1 {
+        xs.clear();
+        return;
+    }
+
+    // There are only three elements at most, so sort is pretty cheap
+    xs.sort();
+    xs.pop();
+}
+
 /// Perform all literal transformations we can think of.
 ///
 /// 1. Literal[True, False] ==> bool
 /// 2. Literal[0] | int => int (and for bool, int, str, bytes, enums)
 /// 3. LiteralString | str => str
-/// 3. LiteralString | Literal["x"] => LiteralString
+/// 4. LiteralString | Literal["x"] => LiteralString
+/// 5. Any | Any => Any (if the Any are different variants)
+/// 6. Never | Never => Never (if the Never are different variants)
 fn collapse_literals(types: &mut Vec<Type>, stdlib: &Stdlib) {
     // All literal types we see, plus `true` to indicate they are found
     let mut literal_types = SmallMap::new();
@@ -81,6 +95,9 @@ fn collapse_literals(types: &mut Vec<Type>, stdlib: &Stdlib) {
     let mut has_specific_str = false;
     let mut has_true = false;
     let mut has_false = false;
+
+    let mut any_styles = Vec::new();
+    let mut never_styles = Vec::new();
 
     // Invariant (from the sorting order) is that all Literal/Lit values occur
     // before any instances of the types.
@@ -108,13 +125,20 @@ fn collapse_literals(types: &mut Vec<Type>, stdlib: &Stdlib) {
                 // Note: Check if literal_types is empty first, and if so, avoid hashing the class object.
                 *found = true;
             }
+            Type::Any(style) => any_styles.push(*style),
+            Type::Never(style) => never_styles.push(*style),
             _ => {}
         }
     }
 
+    remove_maximum(&mut any_styles);
+    remove_maximum(&mut never_styles);
+
     if literal_types.values().any(|x| *x)
         || (has_true && has_false)
         || (has_literal_string && has_specific_str)
+        || !any_styles.is_empty()
+        || !never_styles.is_empty()
     {
         // We actually have some things to delete
         types.retain(|x| match x {
@@ -127,6 +151,8 @@ fn collapse_literals(types: &mut Vec<Type>, stdlib: &Stdlib) {
                 }
                 literal_types.get(x.general_class_type(stdlib)) == Some(&false)
             }
+            Type::Any(style) => !any_styles.contains(style),
+            Type::Never(style) => !never_styles.contains(style),
             _ => true,
         });
 

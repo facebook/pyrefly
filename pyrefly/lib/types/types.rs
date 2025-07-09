@@ -16,7 +16,6 @@ use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_util::assert_words;
 use pyrefly_util::display::commas_iter;
-use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::uniques::Unique;
 use pyrefly_util::uniques::UniqueFactory;
 use pyrefly_util::visit::Visit;
@@ -241,13 +240,15 @@ impl<'a> Substitution<'a> {
     }
 }
 
+/// The types of Never. Prefer later ones where we have multiple.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Display)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum NeverStyle {
-    Never,
     NoReturn,
+    Never,
 }
 
+/// The types of Any. Prefer later ones where we have multiple.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Display)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum AnyStyle {
@@ -1258,15 +1259,6 @@ impl Type {
                 }
                 answer
             }
-            _ => None,
-        }
-    }
-
-    pub fn as_decomposed_tuple_or_union(&self, stdlib: &Stdlib) -> Option<Vec<Type>> {
-        match self {
-            Type::Tuple(Tuple::Concrete(ts)) => Some(ts.clone()),
-            Type::Type(box Type::Union(ts)) => Some(ts.map(|t| Type::type_form(t.clone()))),
-            Type::TypeAlias(ta) => ta.as_value(stdlib).as_decomposed_tuple_or_union(stdlib),
             _ => None,
         }
     }

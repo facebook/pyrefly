@@ -12,11 +12,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dupe::Dupe;
-use pyrefly_python::dunder;
-use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::with_hash::WithHash;
 use serde::Serialize;
 use serde::Serializer;
+
+use crate::dunder;
+use crate::module_name::ModuleName;
 
 #[derive(Debug, Clone, Dupe, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ModuleStyle {

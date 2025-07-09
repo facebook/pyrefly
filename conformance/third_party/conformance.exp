@@ -550,10 +550,10 @@
     {
       "code": -2,
       "column": 26,
-      "concise_description": "`|` is not supported between `Literal['GenericTypeAlias1[T1]']` and `type[TypeVar[T1]]`",
-      "description": "`|` is not supported between `Literal['GenericTypeAlias1[T1]']` and `type[TypeVar[T1]]`\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar[T1]] (trying to access __ror__)",
+      "concise_description": "Expected a type form, got instance of `_SpecialForm`",
+      "description": "Expected a type form, got instance of `_SpecialForm`",
       "line": 58,
-      "name": "internal-error",
+      "name": "not-a-type",
       "stop_column": 54,
       "stop_line": 58
     },
@@ -590,11 +590,11 @@
     {
       "code": -2,
       "column": 26,
-      "concise_description": "`|` is not supported between `Literal['GenericTypeAlias2[T1, T2]']` and `type[TypeVar[T1]]`",
-      "description": "`|` is not supported between `Literal['GenericTypeAlias2[T1, T2]']` and `type[TypeVar[T1]]`\n  TODO: Expr::binop_infer attribute base undefined for type: type[TypeVar[T1]] (trying to access __ror__)",
+      "concise_description": "Expected a type form, got instance of `_SpecialForm`",
+      "description": "Expected a type form, got instance of `_SpecialForm`",
       "line": 65,
-      "name": "internal-error",
-      "stop_column": 58,
+      "name": "not-a-type",
+      "stop_column": 63,
       "stop_line": 65
     },
     {
@@ -662,8 +662,8 @@
     {
       "code": -2,
       "column": 22,
-      "concise_description": "Expected class object, got `TypeAlias[GoodAlias1, type[int]]`",
-      "description": "Expected class object, got `TypeAlias[GoodAlias1, type[int]]`",
+      "concise_description": "Expected class object, got `TypeAliasType`",
+      "description": "Expected class object, got `TypeAliasType`",
       "line": 31,
       "name": "invalid-argument",
       "stop_column": 32,
@@ -4853,6 +4853,16 @@
       "column": 12,
       "concise_description": "`+` is not supported between `AnyStr` and `AnyStr`",
       "description": "`+` is not supported between `AnyStr` and `AnyStr`\n  Argument `AnyStr` is not assignable to parameter `self` with type `Self@bytes` in function `bytes.__add__`",
+      "line": 34,
+      "name": "bad-argument-type",
+      "stop_column": 17,
+      "stop_line": 34
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "`+` is not supported between `AnyStr` and `AnyStr`",
+      "description": "`+` is not supported between `AnyStr` and `AnyStr`\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`",
       "line": 34,
       "name": "bad-argument-type",
       "stop_column": 17,
@@ -9489,76 +9499,6 @@
       "name": "bad-assignment",
       "stop_column": 35,
       "stop_line": 62
-    },
-    {
-      "code": -2,
-      "column": 14,
-      "concise_description": "Cannot unpack tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int] (of size 2) into 1 value",
-      "description": "Cannot unpack tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int] (of size 2) into 1 value",
-      "line": 93,
-      "name": "bad-unpacking",
-      "stop_column": 18,
-      "stop_line": 93
-    },
-    {
-      "code": -2,
-      "column": 24,
-      "concise_description": "assert_type(tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int], tuple[int]) failed",
-      "description": "assert_type(tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int], tuple[int]) failed",
-      "line": 95,
-      "name": "assert-type",
-      "stop_column": 41,
-      "stop_line": 95
-    },
-    {
-      "code": -2,
-      "column": 14,
-      "concise_description": "Cannot unpack tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int] (of size 1) into 2 values",
-      "description": "Cannot unpack tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int] (of size 1) into 2 values",
-      "line": 97,
-      "name": "bad-unpacking",
-      "stop_column": 20,
-      "stop_line": 97
-    },
-    {
-      "code": -2,
-      "column": 24,
-      "concise_description": "assert_type(tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int], tuple[int, int] | tuple[str, str]) failed",
-      "description": "assert_type(tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int], tuple[int, int] | tuple[str, str]) failed",
-      "line": 99,
-      "name": "assert-type",
-      "stop_column": 64,
-      "stop_line": 99
-    },
-    {
-      "code": -2,
-      "column": 14,
-      "concise_description": "Cannot unpack tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int] (of size 1) into 3 values",
-      "description": "Cannot unpack tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int] (of size 1) into 3 values",
-      "line": 101,
-      "name": "bad-unpacking",
-      "stop_column": 23,
-      "stop_line": 101
-    },
-    {
-      "code": -2,
-      "column": 14,
-      "concise_description": "Cannot unpack tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int] (of size 2) into 3 values",
-      "description": "Cannot unpack tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int] (of size 2) into 3 values",
-      "line": 101,
-      "name": "bad-unpacking",
-      "stop_column": 23,
-      "stop_line": 101
-    },
-    {
-      "code": -2,
-      "column": 24,
-      "concise_description": "assert_type(tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int], tuple[int, str, int]) failed",
-      "description": "assert_type(tuple[int] | tuple[str, str] | tuple[int, *tuple[str, ...], int], tuple[int, str, int]) failed",
-      "line": 103,
-      "name": "assert-type",
-      "stop_column": 51,
-      "stop_line": 103
     },
     {
       "code": -2,

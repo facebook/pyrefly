@@ -191,3 +191,14 @@ def f(b: B):
     assert_type(b.x3, int)
     "#,
 );
+
+// See https://github.com/facebook/pyrefly/issues/622
+testcase!(
+    bug = "We probably need to be able to handle `type(...)` as a base class.",
+    test_bad_gradual_is_subset_eq,
+    r#"
+from typing import Generic
+class CustomMetaclass(type(Generic)):  # E: Expected a type form, got instance of `type`
+    pass
+    "#,
+);

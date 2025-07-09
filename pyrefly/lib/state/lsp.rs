@@ -20,6 +20,8 @@ use lsp_types::SignatureInformation;
 use lsp_types::TextEdit;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::gas::Gas;
@@ -58,8 +60,6 @@ use crate::export::exports::ExportLocation;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::module::module_info::TextRangeWithModuleInfo;
-use crate::module::module_path::ModulePath;
-use crate::module::module_path::ModulePathDetails;
 use crate::module::short_identifier::ShortIdentifier;
 use crate::state::handle::Handle;
 use crate::state::ide::IntermediateDefinition;
@@ -197,6 +197,7 @@ struct IdentifierWithContext {
     context: IdentifierContext,
 }
 
+#[derive(PartialEq, Eq)]
 pub enum AnnotationKind {
     #[allow(dead_code)]
     Parameter,
@@ -563,6 +564,7 @@ impl<'a> Transaction<'a> {
                 let key = Key::BoundName(ShortIdentifier::new(&id));
                 if self.get_bindings(handle)?.is_valid_key(&key) {
                     if let Some(ExprCall {
+                        node_index: _,
                         range: _,
                         func,
                         arguments,
@@ -654,6 +656,7 @@ impl<'a> Transaction<'a> {
                 context: IdentifierContext::Attribute { range, .. },
             }) => {
                 if let Some(ExprCall {
+                    node_index: _,
                     range: _,
                     func,
                     arguments,
@@ -1687,9 +1690,7 @@ impl<'a> Transaction<'a> {
                 let callee = callee_at(mod_module, range.start());
                 match callee {
                     Some(ExprCall {
-                        range: _,
-                        func: _,
-                        arguments: args,
+                        arguments: args, ..
                     }) => args
                         .args
                         .iter()

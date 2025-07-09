@@ -18,6 +18,8 @@ use anstream::ColorChoice;
 use anyhow::anyhow;
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
@@ -40,8 +42,6 @@ use crate::config::base::UntypedDefBehavior;
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
-use crate::module::module_path::ModulePath;
-use crate::module::module_path::ModulePathDetails;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -181,6 +181,7 @@ impl TestEnv {
         for (name, (path, _)) in self.modules.iter() {
             config.custom_module_paths.insert(*name, path.clone());
         }
+        config.interpreters.skip_interpreter_query = true;
         config.configure();
         ArcId::new(config)
     }

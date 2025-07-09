@@ -304,6 +304,10 @@ impl Stdlib {
         Some(Self::apply(self.exception_group.as_ref()?, vec![x]))
     }
 
+    pub fn tuple_object(&self) -> &Class {
+        &Self::unwrap(&self.tuple).0
+    }
+
     pub fn tuple(&self, x: Type) -> ClassType {
         Self::apply(&self.tuple, vec![x])
     }

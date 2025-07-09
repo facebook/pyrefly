@@ -11,6 +11,7 @@ use std::io;
 use std::io::Write;
 
 use itertools::Itertools;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::number_thousands;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LinedBuffer;
@@ -27,7 +28,6 @@ use yansi::Paint;
 use crate::error::kind::ErrorKind;
 use crate::error::kind::Severity;
 use crate::module::module_info::ModuleInfo;
-use crate::module::module_path::ModulePath;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Error {

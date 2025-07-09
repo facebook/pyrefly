@@ -181,6 +181,7 @@ mod tests {
     use std::sync::Arc;
 
     use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
     use pyrefly_util::prelude::SliceExt;
     use ruff_python_ast::name::Name;
     use ruff_text_size::TextSize;
@@ -188,7 +189,6 @@ mod tests {
 
     use super::*;
     use crate::config::error::ErrorDisplayConfig;
-    use crate::module::module_path::ModulePath;
 
     fn add(errors: &ErrorCollector, range: TextRange, kind: ErrorKind, msg: String) {
         errors.add(range, kind, None, vec1![msg]);

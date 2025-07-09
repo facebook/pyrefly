@@ -197,6 +197,11 @@ impl Solver {
     /// and returns that answer. Note that if the `Var` is already bound to something that contains a
     /// `Var` (including itself), then we will return the answer.
     pub fn force_var(&self, v: Var) -> Type {
+        assert_ne!(
+            v,
+            Var::ZERO,
+            "Cannot force Var::ZERO, which is a dummy value"
+        );
         let mut lock = self.variables.write();
         let e = lock.get_mut(&v).expect(VAR_LEAK);
         match e {

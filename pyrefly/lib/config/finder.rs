@@ -14,6 +14,8 @@ use std::sync::Arc;
 use dupe::Dupe;
 use path_absolutize::Absolutize;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::upward_search::UpwardSearch;
@@ -26,8 +28,6 @@ use tracing::warn;
 
 use crate::config::config::ConfigFile;
 use crate::error::kind::Severity;
-use crate::module::module_path::ModulePath;
-use crate::module::module_path::ModulePathDetails;
 
 pub struct ConfigError {
     severity: Severity,

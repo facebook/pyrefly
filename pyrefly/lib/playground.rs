@@ -13,6 +13,7 @@ use dupe::Dupe;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lined_buffer::DisplayPos;
@@ -25,7 +26,6 @@ use serde::Serialize;
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::error::kind::Severity;
-use crate::module::module_path::ModulePath;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -133,6 +133,7 @@ impl Playground {
     pub fn new() -> Self {
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
+        config.interpreters.skip_interpreter_query = true;
         config.configure();
         let config = ArcId::new(config);
 

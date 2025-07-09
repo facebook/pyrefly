@@ -20,6 +20,8 @@ pub use crate::commands::check::Args as CheckArgs;
 pub use crate::commands::init::Args as InitArgs;
 pub use crate::commands::lsp::Args as LspArgs;
 
+/// Arguments shared between all commands.
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 pub struct CommonGlobalArgs {
     /// Number of threads to use for parallelization.

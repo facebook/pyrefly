@@ -471,12 +471,15 @@ pub enum MutableCaptureLookupKind {
 /// An abstraction representing the `Idx<Key>` for a binding that we
 /// are currently constructing, which can be used as a factory to create
 /// usage values for `ensure_expr`.
+///
+/// Note that while it wraps a `Usage`, that usage is always `Usage::CurrentIdx`,
+/// never some other variant.
 #[derive(Debug)]
-pub struct User(Usage);
+pub struct CurrentIdx(Usage);
 
-impl User {
+impl CurrentIdx {
     pub fn new(idx: Idx<Key>) -> Self {
-        Self(Usage::User(idx, SmallSet::new()))
+        Self(Usage::CurrentIdx(idx, SmallSet::new()))
     }
 
     pub fn usage(&mut self) -> &mut Usage {
@@ -485,7 +488,7 @@ impl User {
 
     fn idx(&self) -> Idx<Key> {
         match self.0 {
-            Usage::User(idx, ..) => idx,
+            Usage::CurrentIdx(idx, ..) => idx,
             _ => unreachable!(),
         }
     }
@@ -496,7 +499,7 @@ impl User {
 
     pub fn decompose(self) -> (SmallSet<Idx<Key>>, Idx<Key>) {
         match self.0 {
-            Usage::User(idx, first_used_by) => (first_used_by, idx),
+            Usage::CurrentIdx(idx, first_used_by) => (first_used_by, idx),
             _ => unreachable!(),
         }
     }
@@ -516,8 +519,8 @@ impl<'a> BindingsBuilder<'a> {
 
     /// Declare a `Key` as a usage, which can be used for name lookups. Like `idx_for_promise`,
     /// this is a promise to later provide a `Binding` corresponding this key.
-    pub fn declare_user(&mut self, key: Key) -> User {
-        User::new(self.idx_for_promise(key))
+    pub fn declare_current_idx(&mut self, key: Key) -> CurrentIdx {
+        CurrentIdx::new(self.idx_for_promise(key))
     }
 
     /// Insert a binding into the bindings table immediately, given a `key`
@@ -544,8 +547,8 @@ impl<'a> BindingsBuilder<'a> {
 
     /// Insert a binding into the bindings table, given a `Usage`. This will panic if the usage
     /// is `Usage::NoUsageTracking`.
-    pub fn insert_binding_user(&mut self, user: User, value: Binding) -> Idx<Key> {
-        self.insert_binding_idx(user.into_idx(), value)
+    pub fn insert_binding_current(&mut self, current: CurrentIdx, value: Binding) -> Idx<Key> {
+        self.insert_binding_idx(current.into_idx(), value)
     }
 
     /// Allow access to an `Idx<Key>` given a `LastStmt` coming from a scan of a function body.
@@ -868,19 +871,19 @@ impl<'a> BindingsBuilder<'a> {
         match self.table.types.1.get(flow_idx) {
             Some(Binding::Pin(unpinned_idx, FirstUse::Undetermined)) => match usage {
                 Usage::StaticTypeInformation | Usage::Narrowing => (flow_idx, Some(flow_idx)),
-                Usage::User(..) => (*unpinned_idx, Some(flow_idx)),
+                Usage::CurrentIdx(..) => (*unpinned_idx, Some(flow_idx)),
             },
             Some(Binding::Pin(unpinned_idx, first_use)) => match first_use {
                 FirstUse::DoesNotPin => (flow_idx, None),
                 FirstUse::Undetermined => match usage {
                     Usage::StaticTypeInformation | Usage::Narrowing => (flow_idx, Some(flow_idx)),
-                    Usage::User(..) => (*unpinned_idx, Some(flow_idx)),
+                    Usage::CurrentIdx(..) => (*unpinned_idx, Some(flow_idx)),
                 },
                 FirstUse::UsedBy(usage_idx) => {
                     // Detect secondary reads of the same name from a first use, and make
                     // sure they all use the raw binding rather than the `Pin`.
                     let currently_in_first_use = match usage {
-                        Usage::User(idx, ..) => idx == usage_idx,
+                        Usage::CurrentIdx(idx, ..) => idx == usage_idx,
                         Usage::Narrowing | Usage::StaticTypeInformation => false,
                     };
                     if currently_in_first_use {
@@ -899,7 +902,7 @@ impl<'a> BindingsBuilder<'a> {
         match self.table.types.1.get_mut(used) {
             Some(Binding::Pin(.., first_use @ FirstUse::Undetermined)) => {
                 *first_use = match usage {
-                    Usage::User(use_idx, first_uses_of) => {
+                    Usage::CurrentIdx(use_idx, first_uses_of) => {
                         first_uses_of.insert(used);
                         FirstUse::UsedBy(*use_idx)
                     }
@@ -1006,24 +1009,24 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_key(&name.id, idx, style).0
     }
 
-    pub fn bind_definition_user(
+    pub fn bind_definition_current(
         &mut self,
         name: &Identifier,
-        user: User,
+        current: CurrentIdx,
         binding: Binding,
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
-        let idx = self.insert_binding_user(user, binding);
+        let idx = self.insert_binding_current(current, binding);
         self.bind_key(&name.id, idx, style).0
     }
 
-    pub fn bind_user(
+    pub fn bind_current(
         &mut self,
         name: &Name,
-        user: &User,
+        current: &CurrentIdx,
         style: FlowStyle,
     ) -> (Option<Idx<KeyAnnotation>>, Option<Idx<Key>>) {
-        self.bind_key(name, user.idx(), style)
+        self.bind_key(name, current.idx(), style)
     }
 
     /// Return a pair of:

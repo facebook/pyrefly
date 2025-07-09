@@ -171,6 +171,10 @@
     --ifm-background-color: var(--color-background);
     --ifm-navbar-background-color: var(--ifm-background-color);
     --ifm-footer-background-color: var(--ifm-navbar-background-color);
+
+    /* Override Docusaurus link and sidebar colors */
+    --ifm-menu-color-active: var(--color-primary); /* Active menu item color */
+    --ifm-color-primary: var(--color-primary); /* Primary color used for various elements including sidebar category headings */
 }
 
 /* Dark mode styles */

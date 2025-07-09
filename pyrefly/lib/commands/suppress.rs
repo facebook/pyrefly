@@ -189,6 +189,7 @@ mod tests {
 
     use pretty_assertions::assert_str_eq;
     use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
     use pyrefly_util::lined_buffer::DisplayPos;
     use ruff_text_size::TextRange;
     use ruff_text_size::TextSize;
@@ -198,7 +199,6 @@ mod tests {
     use super::*;
     use crate::error::kind::ErrorKind;
     use crate::module::module_info::ModuleInfo;
-    use crate::module::module_path::ModulePath;
 
     fn error(path: PathBuf, row: usize, column: usize, error_kind: ErrorKind) -> Error {
         let contents = format!("{}{}", "\n".repeat(row - 1), " ".repeat(column - 1));

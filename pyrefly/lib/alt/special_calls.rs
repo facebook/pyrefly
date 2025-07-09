@@ -30,6 +30,8 @@ use crate::types::callable::FunctionKind;
 use crate::types::callable::unexpected_keyword;
 use crate::types::class::Class;
 use crate::types::special_form::SpecialForm;
+use crate::types::tuple::Tuple;
+use crate::types::types::AnyStyle;
 use crate::types::types::Type;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -277,104 +279,114 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         ty: Type,
         contains_subscript: bool,
+        contains_any: bool,
         range: TextRange,
         func_kind: &FunctionKind,
         errors: &ErrorCollector,
     ) {
-        if let Some(ts) = ty.as_decomposed_tuple_or_union(self.stdlib) {
-            for t in ts {
-                self.check_type_is_class_object(t, contains_subscript, range, func_kind, errors);
-            }
-        } else if let Type::ClassDef(cls) = &ty {
-            let metadata = self.get_metadata_for_class(cls);
-            let func_display = || {
-                format!(
-                    "{}()",
-                    func_kind.as_func_id().format(self.module_info().name())
-                )
-            };
-            if metadata.is_new_type() {
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::InvalidArgument,
-                    None,
-                    format!("NewType `{}` not allowed in {}", cls.name(), func_display(),),
-                );
-            }
-            // Check if this is a TypedDict
-            if metadata.is_typed_dict() {
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::InvalidArgument,
-                    None,
+        for ty in self.as_class_info(ty) {
+            if let Type::ClassDef(cls) = &ty {
+                let metadata = self.get_metadata_for_class(cls);
+                let func_display = || {
                     format!(
-                        "TypedDict `{}` not allowed as second argument to {}",
-                        cls.name(),
-                        func_display()
-                    ),
-                );
-            }
-            // Check if this is a protocol that needs @runtime_checkable
-            if metadata.is_protocol() && !metadata.is_runtime_checkable_protocol() {
-                self.error(
+                        "{}()",
+                        func_kind.as_func_id().format(self.module_info().name())
+                    )
+                };
+                if metadata.is_new_type() {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::InvalidArgument,
+                        None,
+                        format!("NewType `{}` not allowed in {}", cls.name(), func_display(),),
+                    );
+                }
+                // Check if this is a TypedDict
+                if metadata.is_typed_dict() {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::InvalidArgument,
+                        None,
+                        format!(
+                            "TypedDict `{}` not allowed as second argument to {}",
+                            cls.name(),
+                            func_display()
+                        ),
+                    );
+                }
+                // Check if this is a protocol that needs @runtime_checkable
+                if metadata.is_protocol() && !metadata.is_runtime_checkable_protocol() {
+                    self.error(
                     errors,
                     range,
                     ErrorKind::InvalidArgument,
                     None,
                     format!("Protocol `{}` is not decorated with @runtime_checkable and cannot be used with {}", cls.name(), func_display()),
                 );
-            } else if metadata.is_protocol() && metadata.is_runtime_checkable_protocol() {
-                // Additional validation for runtime checkable protocols:
-                // issubclass() can only be used with non-data protocols
-                if *func_kind == FunctionKind::IsSubclass && self.is_data_protocol(cls, range) {
-                    self.error(
+                } else if metadata.is_protocol() && metadata.is_runtime_checkable_protocol() {
+                    // Additional validation for runtime checkable protocols:
+                    // issubclass() can only be used with non-data protocols
+                    if *func_kind == FunctionKind::IsSubclass && self.is_data_protocol(cls, range) {
+                        self.error(
                         errors,
                         range,
                         ErrorKind::InvalidArgument,
                         None,
                         format!("Protocol `{}` has non-method members and cannot be used with issubclass()", cls.name()),
                     );
+                    }
                 }
+            } else if contains_subscript
+                && matches!(&ty, Type::Type(box Type::ClassType(cls)) if !cls.targs().is_empty())
+            {
+                // If the raw expression contains something that structurally looks like `A[T]` and
+                // part of the expression resolves to a parameterized class type, then we likely have a
+                // literal parameterized type, which is a runtime exception.
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::InvalidArgument,
+                    None,
+                    format!(
+                        "Expected class object, got parameterized generic type: `{}`",
+                        self.for_display(ty)
+                    ),
+                );
+            } else if contains_any && matches!(&ty, Type::Type(box Type::Any(AnyStyle::Explicit))) {
+                // If the raw expression contains something that structurally looks like `A[T]` and
+                // part of the expression resolves to a parameterized class type, then we likely have a
+                // literal parameterized type, which is a runtime exception.
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::InvalidArgument,
+                    None,
+                    "Expected class object, got `Any`".to_owned(),
+                );
+            } else if self.unwrap_class_object_silently(&ty).is_none() {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::InvalidArgument,
+                    None,
+                    format!("Expected class object, got `{}`", self.for_display(ty)),
+                );
+            } else {
+                self.check_type(
+                    &self.stdlib.builtins_type().clone().to_type(),
+                    &ty,
+                    range,
+                    errors,
+                    &|| {
+                        TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
+                            Some(Name::new_static("class_or_tuple")),
+                            Some(func_kind.as_func_id()),
+                        ))
+                    },
+                );
             }
-        } else if contains_subscript
-            && matches!(&ty, Type::Type(box Type::ClassType(cls)) if !cls.targs().is_empty())
-        {
-            // If the raw expression contains something that structurally looks like `A[T]` and
-            // part of the expression resolves to a parameterized class type, then we likely have a
-            // literal parameterized type, which is a runtime exception.
-            self.error(
-                errors,
-                range,
-                ErrorKind::InvalidArgument,
-                None,
-                format!(
-                    "Expected class object, got parameterized generic type: `{}`",
-                    self.for_display(ty)
-                ),
-            );
-        } else if self.unwrap_class_object_silently(&ty).is_none() {
-            self.error(
-                errors,
-                range,
-                ErrorKind::InvalidArgument,
-                None,
-                format!("Expected class object, got `{}`", self.for_display(ty)),
-            );
-        } else {
-            self.check_type(
-                &self.stdlib.builtins_type().clone().to_type(),
-                &ty,
-                range,
-                errors,
-                &|| {
-                    TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
-                        Some(Name::new_static("class_or_tuple")),
-                        Some(func_kind.as_func_id()),
-                    ))
-                },
-            );
         }
     }
 
@@ -413,18 +425,56 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         let arg_class_type = self.expr_infer(arg_expr, errors);
         let mut contains_subscript = false;
+        let mut contains_any = false;
         arg_expr.visit(&mut |e| {
             if matches!(e, Expr::Subscript(_)) {
                 contains_subscript = true;
+            }
+            if matches!(e, Expr::Name(x) if x.id.as_str() == "Any") {
+                contains_any = true;
             }
         });
 
         self.check_type_is_class_object(
             arg_class_type,
             contains_subscript,
+            contains_any,
             arg_expr.range(),
             func_kind,
             errors,
         );
+    }
+
+    /// Returns the list of types passed as the second argument to `isinstance` or `issubclass`.
+    pub fn as_class_info(&self, ty: Type) -> Vec<Type> {
+        fn f<'a, Ans: LookupAnswer>(me: &AnswersSolver<'a, Ans>, t: Type, res: &mut Vec<Type>) {
+            match t {
+                Type::Var(v) if let Some(_guard) = me.recurser.recurse(v) => {
+                    f(me, me.solver().force_var(v), res)
+                }
+                Type::ClassType(ref c)
+                    if let [arg] = c.targs().as_slice()
+                        && c.class_object() == me.stdlib.tuple_object() =>
+                {
+                    f(me, arg.clone(), res)
+                }
+                Type::Tuple(Tuple::Concrete(ts)) | Type::Union(ts) => {
+                    for t in ts {
+                        f(me, t, res)
+                    }
+                }
+                Type::Tuple(Tuple::Unbounded(box t)) => f(me, t, res),
+                Type::Type(box Type::Union(ts)) => {
+                    for t in ts {
+                        f(me, Type::type_form(t), res)
+                    }
+                }
+                Type::TypeAlias(ta) => f(me, ta.as_value(me.stdlib), res),
+                _ => res.push(t),
+            }
+        }
+        let mut res = Vec::new();
+        f(self, ty, &mut res);
+        res
     }
 }

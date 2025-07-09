@@ -226,18 +226,22 @@ impl SysInfo {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, PartialOrd)]
 enum Value {
     Tuple(Vec<Value>),
     String(String),
     Int(i64),
     Bool(bool),
+    /// I know what the value evaluates to when considered truthy, but not it's precise outcome.
+    /// We make sure below that it never compares equal to itself
+    Truthiness(bool),
 }
 
 impl Value {
     fn to_bool(&self) -> bool {
         match self {
             Value::Bool(x) => *x,
+            Value::Truthiness(x) => *x,
             Value::Int(x) => *x != 0,
             Value::String(x) => !x.is_empty(),
             Value::Tuple(x) => !x.is_empty(),
@@ -250,13 +254,14 @@ impl Value {
             (Value::String(_), Value::String(_)) => true,
             (Value::Int(_), Value::Int(_)) => true,
             (Value::Bool(_), Value::Bool(_)) => true,
+            (Value::Truthiness(_), Value::Truthiness(_)) => false, // We don't know if they are the same ype
             _ => false,
         }
     }
 
     fn compare(&self, op: CmpOp, other: &Value) -> Option<bool> {
         if !self.same_type(other) {
-            return None; // Someone got confused
+            return None; // Someone got confused, or we are working with Truthiness
         }
         Some(match op {
             CmpOp::Eq => self == other,
@@ -339,24 +344,34 @@ impl SysInfo {
             Expr::StringLiteral(x) => Some(Value::String(x.value.to_str().to_owned())),
             Expr::BoolOp(x) => match x.op {
                 BoolOp::And => {
-                    let mut last = Value::Bool(true);
+                    let mut res = Some(Value::Bool(true));
                     for x in &x.values {
-                        last = self.evaluate(x)?;
-                        if !last.to_bool() {
-                            break;
+                        match self.evaluate(x) {
+                            None => res = None,
+                            Some(x) => match (x.to_bool(), res.is_none()) {
+                                (false, false) => return Some(x),
+                                (false, true) => return Some(Value::Truthiness(false)),
+                                (true, false) => res = Some(x),
+                                (true, true) => res = None,
+                            },
                         }
                     }
-                    Some(last)
+                    res
                 }
                 BoolOp::Or => {
-                    let mut last = Value::Bool(false);
+                    let mut res = Some(Value::Bool(false));
                     for x in &x.values {
-                        last = self.evaluate(x)?;
-                        if last.to_bool() {
-                            break;
+                        match self.evaluate(x) {
+                            None => res = None,
+                            Some(x) => match (x.to_bool(), res.is_none()) {
+                                (false, false) => res = Some(x),
+                                (false, true) => res = None,
+                                (true, false) => return Some(x),
+                                (true, true) => return Some(Value::Truthiness(true)),
+                            },
                         }
                     }
-                    Some(last)
+                    res
                 }
             },
             Expr::UnaryOp(x) => match x.op {

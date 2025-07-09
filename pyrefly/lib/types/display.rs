@@ -399,13 +399,13 @@ pub mod tests {
     use std::sync::Arc;
 
     use dupe::Dupe;
+    use pyrefly_python::module_path::ModulePath;
     use pyrefly_util::uniques::UniqueFactory;
     use ruff_python_ast::Identifier;
     use ruff_text_size::TextSize;
 
     use super::*;
     use crate::module::module_info::ModuleInfo;
-    use crate::module::module_path::ModulePath;
     use crate::types::callable::Callable;
     use crate::types::callable::Param;
     use crate::types::callable::ParamList;

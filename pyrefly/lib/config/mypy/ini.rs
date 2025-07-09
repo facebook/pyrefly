@@ -25,6 +25,7 @@ use crate::config::config::SubConfig;
 use crate::config::environment::environment::PythonEnvironment;
 use crate::config::error::ErrorDisplayConfig;
 use crate::config::mypy::regex_converter;
+use crate::config::util::ConfigOrigin;
 use crate::module::wildcard::ModuleWildcard;
 #[derive(Clone, Debug, Deserialize)]
 pub struct MypyConfig {
@@ -172,7 +173,9 @@ impl MypyConfig {
         if let Some(python_interpreter) = python_executable {
             // TODO: Add handling for when these are virtual environments
             // Is this something we can auto detect instead of hardcoding here.
-            cfg.python_interpreter = PathBuf::from_str(&python_interpreter).ok();
+            cfg.interpreters.python_interpreter = PathBuf::from_str(&python_interpreter)
+                .ok()
+                .map(ConfigOrigin::config);
         }
 
         if let Some(version) = python_version {

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use dupe::Dupe;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
 use starlark_map::small_map::SmallMap;
@@ -21,7 +22,6 @@ use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::config::finder::debug_log;
 use crate::module::bundled::BundledTypeshed;
-use crate::module::module_path::ModulePathDetails;
 
 /// Create a standard `ConfigFinder`. The `configure` function is expected to set any additional options,
 /// then call `configure` and `validate`.
@@ -143,13 +143,13 @@ mod tests {
     use clap::Parser;
     use pretty_assertions::assert_eq;
     use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
     use crate::commands::check::Args;
     use crate::config::config::ConfigSource;
     use crate::config::environment::environment::PythonEnvironment;
-    use crate::module::module_path::ModulePath;
 
     #[test]
     fn test_site_package_path_from_environment() {
@@ -159,7 +159,7 @@ mod tests {
         let env = PythonEnvironment::get_default_interpreter_env();
         if let Some(paths) = env.site_package_path {
             for p in paths {
-                assert!(config.site_package_path().contains(&p));
+                assert!(config.site_package_path().collect::<Vec<_>>().contains(&&p));
             }
         }
     }

@@ -198,6 +198,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ret: Type::Quantified(quantified),
                 })))
             }
+            Type::Type(box Type::Any(style)) => Some(CallTarget::new(Target::Any(style))),
             Type::Forall(forall) => {
                 let (qs, t) = self.solver().fresh_quantified(
                     &forall.tparams,

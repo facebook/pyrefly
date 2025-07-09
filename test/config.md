@@ -14,18 +14,23 @@ $ mkdir $TMPDIR/test && echo "" > $TMPDIR/test/empty.py && echo -e "project_incl
 ## Dump config
 
 ```scrut
-$ touch $TMPDIR/foo.py && mkdir $TMPDIR/bar && touch $TMPDIR/bar/baz.py && touch $TMPDIR/bar/qux.py && $PYREFLY dump-config $TMPDIR/foo.py $TMPDIR/bar/*.py
+$ touch $TMPDIR/foo.py && mkdir $TMPDIR/bar && touch $TMPDIR/bar/baz.py && touch $TMPDIR/bar/qux.py && mkdir $TMPDIR/spp && touch $TMPDIR/spp/mylib.py \
+> && $PYREFLY dump-config --site-package-path $TMPDIR/spp/ $TMPDIR/foo.py $TMPDIR/bar/*.py
 Default configuration
+  Using interpreter: * (glob)
   Covered files:
     */bar/baz.py (glob)
     */bar/qux.py (glob)
   Fallback search path (guessed from project_includes): * (glob)
-  Site package path (*): * (glob)
+  Site package path from user: * (glob)
+  Site package path queried from interpreter: * (glob)
 Default configuration
+  Using interpreter: * (glob)
   Covered files:
     */foo.py (glob)
   Fallback search path (guessed from project_includes): * (glob)
-  Site package path (*): * (glob)
+  Site package path from user: * (glob)
+  Site package path queried from interpreter: * (glob)
 [0]
 ```
 
@@ -99,4 +104,72 @@ expected * (glob)
 
 Fatal configuration error
 [1]
+```
+
+## Interpreter priority takes CLI interpreter
+
+```scrut {output_stream: stdout}
+$ mkdir $TMPDIR/interpreters && touch $TMPDIR/interpreters/test.py \
+> touch $TMPDIR/test-interpreter && \
+> echo 'python-interpreter = "$TMPDIR/test-interpreter"' > $TMPDIR/interpreters/pyrefly.toml && \
+> mkdir $TMPDIR/interpreters/venv && touch $TMPDIR/interpreters/venv/python3 && \
+> touch $TMPDIR/interpreters/venv/pyvenv.cfg && \
+> mkdir $TMPDIR/alternative-venv && touch $TMPDIR/alternative-venv/python3 && \
+> touch $TMPDIR/alternative-venv/pyvenv.cfg && \
+> VIRTUAL_ENV=$TMPDIR/alternative-venv $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml \
+> --python-interpreter "cli-interpreter"
+Configuration at * (glob)
+  Using interpreter: cli-interpreter
+* (glob+)
+[0]
+```
+
+## Interpreter priority takes activated interpreter
+
+<!-- Reusing interpreters dir set up in "Interpreter priority takes CLI interpreter" -->
+
+```scrut {output_stream: stdout}
+$ VIRTUAL_ENV=$TMPDIR/alternative-venv $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml
+Configuration at * (glob)
+  Using interpreter: */alternative-venv/python3 (glob)
+* (glob+)
+[0]
+```
+
+## Interpreter priority takes config-file interpreter
+
+<!-- Reusing interpreters dir set up in "Interpreter priority takes CLI interpreter" -->
+
+```scrut {output_stream: stdout}
+$ $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml
+Configuration at * (glob)
+  Using interpreter: */test-interpreter (glob)
+* (glob+)
+[0]
+```
+
+## Interpreter priority takes venv interpreter
+
+<!-- Reusing interpreters dir set up in "Interpreter priority takes CLI interpreter" -->
+
+```scrut {output_stream: stdout}
+$ echo "" > $TMPDIR/interpreters/pyrefly.toml && \
+> $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml
+Configuration at * (glob)
+  Using interpreter: */interpreters/venv/python3 (glob)
+* (glob+)
+[0]
+```
+
+## Interpreter priority takes system interpreter last
+
+<!-- Reusing interpreters dir set up in "Interpreter priority takes CLI interpreter" -->
+
+```scrut {output_stream: stdout}
+$ rm -rf $TMPDIR/interpreters/venv && \
+> $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml
+Configuration at * (glob)
+  Using interpreter: /*/python3 (glob)
+* (glob+)
+[0]
 ```

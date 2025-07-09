@@ -162,6 +162,21 @@ assert_type(Y(), int)
 );
 
 testcase!(
+    test_sys_info_with_or,
+    r#"
+from typing import TYPE_CHECKING, Literal, assert_type
+x = 1
+
+if x or TYPE_CHECKING:
+    y = ""
+else:
+    y = 1
+
+assert_type(y, Literal[''])
+"#,
+);
+
+testcase!(
     test_python_3_14,
     TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
     "",

@@ -817,6 +817,23 @@ C(1, "hello", 2.71)  # OK
 );
 
 testcase!(
+    test_post_init_defining_attrs,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class Magic:
+    foo: int
+    def __post_init__(self):
+        self.bar: int = 1
+magic = Magic(foo=1)
+assert_type(magic.foo, int)
+assert_type(magic.bar, int)
+    "#,
+);
+
+testcase!(
     test_field_ordering_basic_violation,
     r#"
 from dataclasses import dataclass

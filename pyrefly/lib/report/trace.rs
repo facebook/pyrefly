@@ -7,13 +7,13 @@
 
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_text_size::Ranged;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
 
-use crate::module::module_path::ModulePath;
 use crate::state::handle::Handle;
 use crate::state::state::Transaction;
 

@@ -148,6 +148,8 @@ use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WorkspaceConfiguration;
 use path_absolutize::Absolutize;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::arc_id::WeakArcId;
 use pyrefly_util::args::clap_env;
@@ -176,12 +178,11 @@ use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
 use crate::config::environment::environment::PythonEnvironment;
 use crate::config::finder::ConfigFinder;
+use crate::config::util::ConfigOrigin;
 use crate::error::error::Error;
 use crate::error::kind::Severity;
 use crate::module::module_info::ModuleInfo;
 use crate::module::module_info::TextRangeWithModuleInfo;
-use crate::module::module_path::ModulePath;
-use crate::module::module_path::ModulePathDetails;
 use crate::state::handle::Handle;
 use crate::state::lsp::FindDefinitionItem;
 use crate::state::require::Require;
@@ -191,6 +192,9 @@ use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionData;
 
+/// Pyrefly's indexing strategy for open projects when performing go-to-definition
+/// requests.
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
 pub(crate) enum IndexingMode {
     /// Do not index anything. Features that depend on indexing (e.g. find-refs) will be disabled.
@@ -205,8 +209,11 @@ pub(crate) enum IndexingMode {
     LazyBlocking,
 }
 
+/// Arguments for LSP server
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 pub struct Args {
+    /// Find the struct that contains this field and add the indexing mode used by the language server
     #[arg(long, value_enum, default_value_t, env = clap_env("INDEXING_MODE"))]
     pub(crate) indexing_mode: IndexingMode,
 }
@@ -494,26 +501,23 @@ impl Workspaces {
         let workspaces = workspaces.dupe();
         standard_config_finder(Arc::new(move |dir, mut config| {
             if let Some(dir) = dir
-                && config.python_interpreter.is_none()
-                && config.conda_environment.is_none()
+                && config.interpreters.python_interpreter.is_none()
+                && config.interpreters.conda_environment.is_none()
             {
                 workspaces.get_with(dir.to_owned(), |w| {
                     if let Some(search_path) = w.search_path.clone() {
                         config.search_path_from_args = search_path;
                     }
-                    if let Some(PythonInfo { interpreter, env }) = w.python_info.clone() {
+                    if let Some(PythonInfo {
+                        interpreter,
+                        mut env,
+                    }) = w.python_info.clone()
+                    {
                         let site_package_path = config.python_environment.site_package_path.take();
-                        config.python_interpreter = Some(interpreter);
+                        env.site_package_path = site_package_path;
+                        config.interpreters.python_interpreter =
+                            Some(ConfigOrigin::auto(interpreter));
                         config.python_environment = env;
-                        if let Some(new) = site_package_path {
-                            let mut workspace = config
-                                .python_environment
-                                .site_package_path
-                                .take()
-                                .unwrap_or_default();
-                            workspace.extend(new);
-                            config.python_environment.site_package_path = Some(workspace);
-                        }
                     }
                 })
             };

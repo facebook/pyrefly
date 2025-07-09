@@ -21,6 +21,8 @@
 
 pub mod ast;
 pub mod dunder;
+pub mod ignore;
 pub mod module_name;
+pub mod module_path;
 pub mod symbol_kind;
 pub mod sys_info;

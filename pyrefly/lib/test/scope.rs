@@ -426,3 +426,19 @@ y = [x for x in x]
 assert_type(y, list[int])
 "#,
 );
+
+testcase!(
+    test_walrus_behaviors,
+    r#"
+from typing import assert_type
+
+def f(arg: int) -> None:
+    x = (y := arg)
+    assert_type(y, int)
+    w = [z for x in [arg, arg] if (z := x) > 1]
+    z  # E: Could not find name `z`
+    assert_type(w, list[int])
+    lambd = lambda x: (z := x) + 1
+    z  # E: Could not find name `z`
+"#,
+);

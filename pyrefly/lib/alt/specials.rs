@@ -223,6 +223,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Expr::Attribute(ExprAttribute {
+                node_index: _,
                 range,
                 value,
                 attr: member_name,

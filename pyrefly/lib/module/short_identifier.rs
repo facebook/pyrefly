@@ -49,10 +49,10 @@ mod tests {
 
     use pyrefly_python::ast::Ast;
     use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
     use ruff_python_ast::Expr;
 
     use super::*;
-    use crate::module::module_path::ModulePath;
 
     fn from_expr(x: &Expr) -> ShortIdentifier {
         match x {

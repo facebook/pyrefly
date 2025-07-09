@@ -357,10 +357,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let empty_tparams = self.get_class_tparams(cls).is_empty();
         if let Some(metaclass) = &metaclass {
             self.check_base_class_metaclasses(cls, metaclass, &base_metaclasses, errors);
-            if self.is_subset_eq(
-                &Type::ClassType(metaclass.clone()),
-                &Type::ClassType(self.stdlib.enum_meta().clone()),
-            ) {
+            if self
+                .as_superclass(metaclass, self.stdlib.enum_meta().class_object())
+                .is_some()
+            {
                 if !empty_tparams {
                     self.error(
                         errors,

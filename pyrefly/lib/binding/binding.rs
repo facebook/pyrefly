@@ -87,19 +87,19 @@ assert_words!(KeyYield, 1);
 assert_words!(KeyYieldFrom, 1);
 assert_words!(KeyFunction, 1);
 
-assert_words!(Binding, 9);
-assert_words!(BindingExpect, 9);
-assert_words!(BindingAnnotation, 13);
-assert_words!(BindingClass, 18);
-assert_words!(BindingTParams, 9);
+assert_words!(Binding, 11);
+assert_words!(BindingExpect, 11);
+assert_words!(BindingAnnotation, 15);
+assert_words!(BindingClass, 20);
+assert_words!(BindingTParams, 10);
 assert_words!(BindingClassMetadata, 8);
 assert_bytes!(BindingClassMro, 4);
-assert_words!(BindingClassField, 26);
+assert_words!(BindingClassField, 30);
 assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 4);
-assert_words!(BindingYield, 3);
-assert_words!(BindingYieldFrom, 3);
-assert_words!(BindingFunction, 21);
+assert_words!(BindingYield, 4);
+assert_words!(BindingYieldFrom, 4);
+assert_words!(BindingFunction, 22);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
@@ -308,6 +308,8 @@ pub enum Key {
     BoundName(ShortIdentifier),
     /// I am an expression that does not have a simple name but needs its type inferred.
     Anon(TextRange),
+    /// I am a a narrowing operation created by a pattern in a match statement
+    PatternNarrow(TextRange),
     /// I am an expression that appears in a statement. The range for this key is the range of the expr itself, which is different than the range of the stmt expr.
     StmtExpr(TextRange),
     /// I am an expression that appears in a `with` context.
@@ -355,6 +357,7 @@ impl Ranged for Key {
             Self::SuperInstance(r) => *r,
             Self::Unpack(r) => *r,
             Self::UsageLink(r) => *r,
+            Self::PatternNarrow(r) => *r,
         }
     }
 }
@@ -392,6 +395,7 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::SuperInstance(r) => write!(f, "Key::SuperInstance({})", ctx.display(r)),
             Self::Unpack(r) => write!(f, "Key::Unpack({})", ctx.display(r)),
             Self::UsageLink(r) => write!(f, "Key::UsageLink({})", ctx.display(r)),
+            Self::PatternNarrow(r) => write!(f, "Key::PatternNarrow({})", ctx.display(r)),
         }
     }
 }
@@ -451,7 +455,7 @@ pub enum BindingExpect {
     /// `del` statement
     Delete(Expr),
     /// Expression used in a boolean context (`bool()`, `if`, or `while`)
-    Bool(Expr, TextRange),
+    Bool(Expr),
 }
 
 impl DisplayWith<Bindings> for BindingExpect {
@@ -461,7 +465,7 @@ impl DisplayWith<Bindings> for BindingExpect {
             Self::TypeCheckExpr(x) => {
                 write!(f, "TypeCheckExpr({})", m.display(x))
             }
-            Self::Bool(x, ..) => {
+            Self::Bool(x) => {
                 write!(f, "Bool({})", m.display(x))
             }
             Self::Delete(x) => {
@@ -892,7 +896,7 @@ pub enum ReturnTypeKind {
         /// The returns from the function.
         returns: Box<[Idx<Key>]>,
         implicit_return: Idx<Key>,
-        /// The yeilds and yield froms. If either of these are nonempty, this is a generator function.
+        /// The `yield`s and `yield from`s. If either of these are nonempty, this is a generator function.
         /// We don't need to store `is_generator` flag in this case, as we can deduce that info by checking
         /// whether these two fields are empty or not.
         yields: Box<[Idx<KeyYield>]>,
@@ -1232,7 +1236,12 @@ impl DisplayWith<Bindings> for Binding {
                 write!(f, "Default({}, {})", ctx.display(*k), x.display_with(ctx))
             }
             Self::Narrow(k, op, _) => {
-                write!(f, "Narrow({}, {op:?})", ctx.display(*k))
+                write!(
+                    f,
+                    "Narrow({}, {})",
+                    ctx.display(*k),
+                    op.display_with(ctx.module_info())
+                )
             }
             Self::NameAssign(name, None, expr) => {
                 write!(f, "NameAssign({name}, None, {})", m.display(expr))

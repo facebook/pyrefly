@@ -585,13 +585,29 @@ def f(x: str | int | None):
 );
 
 testcase!(
-    test_isinstance_type,
+    test_isinstance_unbounded_tuple,
     r#"
 from typing import assert_type
+
+def test(x, y: tuple[type[int], ...]):
+    if isinstance(x, y):
+        assert_type(x, int)
+"#,
+);
+
+testcase!(
+    test_isinstance_type,
+    r#"
+from typing import assert_type, Any
+
 def f(x: object, y: type[str]) -> None:
     if isinstance(x, y):
         assert_type(x, str)
-    "#,
+
+def g(x: object, y: type[Any]) -> None:
+    if isinstance(x, y):
+        assert_type(x, Any)
+"#,
 );
 
 testcase!(
@@ -937,7 +953,7 @@ testcase!(
     r#"
 from typing import Any
 def f(x: int | str):
-    if isinstance(x, Any): # E: Expected class object, got `type[Any]`
+    if isinstance(x, Any): # E: Expected class object, got `Any`
         pass
     "#,
 );
@@ -1205,9 +1221,6 @@ def test(x: tuple[int, int], y: tuple[int, *tuple[int, ...], int], z: tuple[int,
         assert_type(x, Never)
     else:
         assert_type(x, tuple[int, int])
-    if len(x) < 1:
-        # we currently do not narrow lengths for anything besides == and !=
-        assert_type(x, tuple[int, int])
     if len(x) != 1:
         assert_type(x, tuple[int, int])
     if len(x) == x[0]:
@@ -1238,5 +1251,62 @@ def test(x: tuple[int, int], y: tuple[int, *tuple[int, ...], int], z: tuple[int,
         assert_type(nt, Never)
     else:
         assert_type(nt, NT)
+    u: tuple[int, int] | tuple[int, *tuple[int, ...], int] | tuple[int, ...] = tuple(x)
+    if len(u) > 1:
+        assert_type(u, tuple[int, int] | tuple[int, *tuple[int, ...], int] | tuple[int, ...])
+    else:
+        assert_type(u, tuple[int, ...])
+    if len(u) >= 1:
+        assert_type(u, tuple[int, int] | tuple[int, *tuple[int, ...], int] | tuple[int, ...])
+    else:
+        assert_type(u, tuple[int, ...])
+    if len(u) >= 0:
+        assert_type(u, tuple[int, int] | tuple[int, *tuple[int, ...], int] | tuple[int, ...])
+    else:
+        assert_type(u, Never)
+    if len(u) > 0:
+        assert_type(u, tuple[int, int] | tuple[int, *tuple[int, ...], int] | tuple[int, ...])
+    else:
+        assert_type(u, tuple[int, ...])
+    if len(u) < 1:
+        assert_type(u, tuple[int, ...])
+    else:
+        assert_type(u, tuple[int, int] | tuple[int, *tuple[int, ...], int] | tuple[int, ...])
+    if len(u) <= 1:
+        assert_type(u, tuple[int, ...])
+    else:
+        assert_type(u, tuple[int, int] | tuple[int, *tuple[int, ...], int] | tuple[int, ...])
+    if len(u) <= 0:
+        assert_type(u, tuple[int, ...])
+    else:
+        assert_type(u, tuple[int, int] | tuple[int, *tuple[int, ...], int] | tuple[int, ...])
+    if len(u) < 0:
+        assert_type(u, Never)
+    else:
+        assert_type(u, tuple[int, int] | tuple[int, *tuple[int, ...], int] | tuple[int, ...])
+"#,
+);
+
+testcase!(
+    test_isinstance_loop,
+    r#"
+from typing import assert_type, Any
+
+def f(x: Any, ty: type[str], xs: Any):
+    for _ in xs:
+        if isinstance(x, ty):
+            assert_type(x, str)
+"#,
+);
+
+testcase!(
+    test_isinstance_tuple_object,
+    r#"
+from typing import assert_type
+
+def f(expr):
+    tys = {str: "test", int: 1}
+    if isinstance(expr, tuple(tys.keys())):
+        assert_type(expr, int | str)
 "#,
 );

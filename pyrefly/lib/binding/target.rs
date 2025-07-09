@@ -70,11 +70,12 @@ impl<'a> BindingsBuilder<'a> {
         // - We will get two different `Key::Unpacked` bindings, one for the
         //   entire RHS and another one, pointing at the first one, for `(y, z)`.
         // - We will also get three `Key::Definition` bindings, one each for `x`, `y`, and `z`.
-        let mut user = self.declare_user(Key::Unpack(range));
+        let mut unpacked = self.declare_current_idx(Key::Unpack(range));
         if ensure_assigned && let Some(assigned) = &mut assigned {
-            self.ensure_expr(assigned, user.usage())
+            self.ensure_expr(assigned, unpacked.usage())
         }
-        let unpack_idx = self.insert_binding_user(user, make_binding(assigned.as_deref(), None));
+        let unpack_idx =
+            self.insert_binding_current(unpacked, make_binding(assigned.as_deref(), None));
 
         // An unpacking has zero or one splats (starred expressions).
         let mut splat = false;
@@ -136,16 +137,16 @@ impl<'a> BindingsBuilder<'a> {
             identifier_and_chain_prefix_for_expr(&Expr::Attribute(attr.clone()))
                 .map(|(identifier, _)| identifier);
         let mut user = if let Some(identifier) = &narrowing_identifier {
-            self.declare_user(Key::FacetAssign(ShortIdentifier::new(identifier)))
+            self.declare_current_idx(Key::FacetAssign(ShortIdentifier::new(identifier)))
         } else {
-            self.declare_user(Key::Anon(attr.range))
+            self.declare_current_idx(Key::Anon(attr.range))
         };
         self.ensure_expr(&mut attr.value, user.usage());
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
         }
         let value = make_assigned_value(assigned.as_deref(), None);
-        let idx = self.insert_binding_user(
+        let idx = self.insert_binding_current(
             user,
             Binding::AssignToAttribute(attr, Box::new(value.clone())),
         );
@@ -185,9 +186,9 @@ impl<'a> BindingsBuilder<'a> {
             identifier_and_chain_prefix_for_expr(&Expr::Subscript(subscript.clone()))
                 .map(|(identifier, _)| identifier);
         let mut user = if let Some(identifier) = &narrowing_identifier {
-            self.declare_user(Key::FacetAssign(ShortIdentifier::new(identifier)))
+            self.declare_current_idx(Key::FacetAssign(ShortIdentifier::new(identifier)))
         } else {
-            self.declare_user(Key::Anon(subscript.range))
+            self.declare_current_idx(Key::Anon(subscript.range))
         };
         self.ensure_expr(&mut subscript.slice, user.usage());
         self.ensure_expr(&mut subscript.value, user.usage());
@@ -195,8 +196,8 @@ impl<'a> BindingsBuilder<'a> {
             self.ensure_expr(assigned, user.usage());
         }
         let value = make_assigned_value(assigned.as_deref(), None);
-        let idx =
-            self.insert_binding_user(user, Binding::AssignToSubscript(subscript, Box::new(value)));
+        let idx = self
+            .insert_binding_current(user, Binding::AssignToSubscript(subscript, Box::new(value)));
         if let Some(identifier) = narrowing_identifier {
             let name = Hashed::new(&identifier.id);
             if self.lookup_name(name, LookupKind::Regular).is_ok() {
@@ -305,12 +306,12 @@ impl<'a> BindingsBuilder<'a> {
                 self.ensure_expr(illegal_target, &mut Usage::StaticTypeInformation);
 
                 // Make sure the RHS is properly bound, so that we can report errors there.
-                let mut user = self.declare_user(Key::Anon(illegal_target.range()));
+                let mut user = self.declare_current_idx(Key::Anon(illegal_target.range()));
                 if ensure_assigned && let Some(assigned) = &mut assigned {
                     self.ensure_expr(assigned, user.usage());
                 }
                 let binding = binding_of(make_assigned_value(assigned.as_deref(), None), None);
-                self.insert_binding_user(user, binding);
+                self.insert_binding_current(user, binding);
             }
         }
     }
@@ -361,9 +362,9 @@ impl<'a> BindingsBuilder<'a> {
                 );
             }
             _ => {
-                let mut user = self.declare_user(Key::Anon(value.range()));
+                let mut user = self.declare_current_idx(Key::Anon(value.range()));
                 self.ensure_expr(value, user.usage());
-                let rhs_idx = self.insert_binding_user(user, Binding::Expr(None, value.clone()));
+                let rhs_idx = self.insert_binding_current(user, Binding::Expr(None, value.clone()));
                 for target in targets.iter_mut() {
                     let range = target.range();
                     self.bind_target_impl(
@@ -391,16 +392,16 @@ impl<'a> BindingsBuilder<'a> {
         make_binding: impl FnOnce(Option<&Expr>, Option<Idx<KeyAnnotation>>) -> Binding,
         ensure_assigned: bool,
     ) {
-        let mut user = self.declare_user(Key::Definition(ShortIdentifier::expr_name(name)));
+        let mut user = self.declare_current_idx(Key::Definition(ShortIdentifier::expr_name(name)));
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
         }
-        let (ann, default) = self.bind_user(&name.id, &user, FlowStyle::Other);
+        let (ann, default) = self.bind_current(&name.id, &user, FlowStyle::Other);
         let mut binding = make_binding(assigned.as_deref(), ann);
         if let Some(default) = default {
             binding = Binding::Default(default, Box::new(binding));
         }
-        self.insert_binding_user(user, binding);
+        self.insert_binding_current(user, binding);
     }
 
     /// Handle single assignment: this is closely related to `bind_target_name`, but
@@ -426,7 +427,7 @@ impl<'a> BindingsBuilder<'a> {
         direct_ann: Option<(&Expr, Idx<KeyAnnotation>)>,
     ) -> Option<Idx<KeyAnnotation>> {
         let identifier = ShortIdentifier::new(name);
-        let mut user = self.declare_user(Key::Definition(identifier.clone()));
+        let mut user = self.declare_current_idx(Key::Definition(identifier.clone()));
         let pinned_idx = self.idx_for_promise(Key::PinnedDefinition(identifier.clone()));
         let is_definitely_type_alias = if let Some((e, _)) = direct_ann
             && self.as_special_export(e) == Some(SpecialExport::TypeAlias)

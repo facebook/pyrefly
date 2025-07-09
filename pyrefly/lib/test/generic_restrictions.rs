@@ -64,6 +64,7 @@ iter_iter(iter([1, 2, 3]))
 );
 
 testcase!(
+    bug = "Instantiation is not validated against bound, see https://github.com/facebook/pyrefly/issues/111",
     test_generic_bounds,
     r#"
 class A: ...
@@ -82,6 +83,7 @@ test(C())
 );
 
 testcase!(
+    bug = "Instantiation is not validated against constraints, see https://github.com/facebook/pyrefly/issues/111",
     test_generic_constraints,
     r#"
 class A: ...
@@ -93,6 +95,7 @@ def test[T: (B, C)](x: T) -> None:
     a: A = x  # OK
     b: B = x  # E: `T` is not assignable to `B`
     c: C = x  # E: `T` is not assignable to `C`
+    d: B | C = x  # OK
 
 test(A())  # Not OK
 test(B())

@@ -12,6 +12,7 @@ use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
+use human_bytes::human_bytes;
 use tracing::debug;
 use tracing::info;
 
@@ -82,13 +83,18 @@ impl ThreadPool {
             return Self(None);
         }
 
-        let mut builder = rayon::ThreadPoolBuilder::new().stack_size(Self::stack_size());
+        let stack_size = Self::stack_size();
+        let mut builder = rayon::ThreadPoolBuilder::new().stack_size(stack_size);
         if let ThreadCount::NumThreads(threads) = count {
             builder = builder.num_threads(threads.get());
         }
         let pool = builder.build().expect("To be able to build a thread pool");
         // Only print the message once
-        debug!("Running with {} threads", pool.current_num_threads());
+        debug!(
+            "Running with {} threads ({} stack size)",
+            pool.current_num_threads(),
+            human_bytes(stack_size as f64)
+        );
         Self(Some(pool))
     }
 

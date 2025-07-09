@@ -25,6 +25,8 @@ use clap::ValueEnum;
 use dupe::Dupe;
 use path_absolutize::Absolutize;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
@@ -54,6 +56,7 @@ use crate::config::environment::environment::SitePackagePathSource;
 use crate::config::error::ErrorDisplayConfig;
 use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
+use crate::config::util::ConfigOrigin;
 use crate::error::error::Error;
 use crate::error::error::print_error_counts;
 use crate::error::kind::ErrorKind;
@@ -61,8 +64,6 @@ use crate::error::kind::Severity;
 use crate::error::legacy::LegacyErrors;
 use crate::error::summarise::print_error_summary;
 use crate::module::bundled::stdlib_search_path;
-use crate::module::module_path::ModulePath;
-use crate::module::module_path::ModulePathDetails;
 use crate::module::wildcard::ModuleWildcard;
 use crate::report;
 use crate::state::handle::Handle;
@@ -84,17 +85,23 @@ enum OutputFormat {
     OmitErrors,
 }
 
+/// Main arguments for Pyrefly type checker
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 pub struct Args {
+    /// Output related configuration options
     #[command(flatten, next_help_heading = "Output")]
     output: OutputArgs,
+    /// Behavior-related configuration options
     #[command(flatten, next_help_heading = "Behavior")]
     behavior: BehaviorArgs,
+    /// Configuration override options
     #[command(flatten, next_help_heading = "Config Overrides")]
     config_override: ConfigOverrideArgs,
 }
 
 /// how/what should Pyrefly output
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 struct OutputArgs {
     /// Write the errors to a file, instead of printing them.
@@ -146,6 +153,7 @@ struct OutputArgs {
 }
 
 /// non-config type checker behavior
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 struct BehaviorArgs {
     /// Check all reachable modules, not just the ones that are passed in explicitly on CLI positional arguments.
@@ -163,30 +171,45 @@ struct BehaviorArgs {
 }
 
 /// config overrides
+#[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 struct ConfigOverrideArgs {
     /// The list of directories where imports are imported from, including
     /// type checked files.
     #[arg(long, env = clap_env("SEARCH_PATH"))]
     search_path: Option<Vec<PathBuf>>,
+
     /// The Python version any `sys.version` checks should evaluate against.
     #[arg(long, env = clap_env("PYTHON_VERSION"))]
     python_version: Option<PythonVersion>,
+
     /// The platform any `sys.platform` checks should evaluate against.
     #[arg(long, env = clap_env("PLATFORM"))]
     python_platform: Option<PythonPlatform>,
+
     /// Directories containing third-party package imports, searched
     /// after first checking `search_path` and `typeshed`.
     #[arg(long, env = clap_env("SITE_PACKAGE_PATH"))]
     site_package_path: Option<Vec<PathBuf>>,
+
     /// Use a specific Conda environment to query Python environment information,
     /// even if it isn't activated.
     #[arg(long, env = clap_env("CONDA_ENVIRONMENT"), group = "env_source")]
     conda_environment: Option<String>,
+
     /// The Python executable that will be queried for `python_version`
     /// `python_platform`, or `site_package_path` if any of the values are missing.
     #[arg(long, env = clap_env("PYTHON_INTERPRETER"), value_name = "EXE_PATH", group = "env_source")]
     python_interpreter: Option<PathBuf>,
+
+    /// Skip doing any automatic querying for `python-interpreter` or `conda-environment`
+    #[arg(long, env = clap_env("SKIP_INTERPRETER_QUERY"), group = "env_source")]
+    skip_interpreter_query: bool,
+
+    /// Override the bundled typeshed with a custom path.
+    #[arg(long, env = clap_env("TYPESHED_PATH"))]
+    typeshed_path: Option<PathBuf>,
+
     /// Whether to search imports in `site-package-path` that do not have a `py.typed` file unconditionally.
     #[arg(long, env = clap_env("USE_UNTYPED_IMPORTS"))]
     use_untyped_imports: Option<bool>,
@@ -599,15 +622,25 @@ impl Args {
         }
         if let Some(x) = &self.config_override.site_package_path {
             config.python_environment.site_package_path = Some(x.clone());
-            config.python_environment.site_package_path_source = SitePackagePathSource::CommandLine;
+        }
+
+        if self.config_override.skip_interpreter_query || config.interpreters.skip_interpreter_query
+        {
+            config.interpreters.skip_interpreter_query = true;
+            config.interpreters.python_interpreter = None;
+            config.interpreters.conda_environment = None;
         }
         if let Some(conda_environment) = &self.config_override.conda_environment {
-            config.conda_environment = Some(conda_environment.clone());
-            config.python_interpreter = None;
+            config.interpreters.conda_environment =
+                Some(ConfigOrigin::cli(conda_environment.clone()));
+            config.interpreters.python_interpreter = None;
+        }
+        if let Some(x) = &self.config_override.typeshed_path {
+            config.typeshed_path = Some(x.clone());
         }
         if let Some(x) = &self.config_override.python_interpreter {
-            config.python_interpreter = Some(x.clone());
-            config.conda_environment = None;
+            config.interpreters.python_interpreter = Some(ConfigOrigin::cli(x.clone()));
+            config.interpreters.conda_environment = None;
         }
         if let Some(x) = &self.config_override.use_untyped_imports {
             config.use_untyped_imports = *x;
