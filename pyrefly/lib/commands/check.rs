@@ -51,6 +51,7 @@ use crate::config::base::UntypedDefBehavior;
 use crate::config::config::ConfigFile;
 use crate::config::config::validate_path;
 use crate::config::environment::environment::SitePackagePathSource;
+use crate::config::error::ErrorDisplayConfig;
 use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
@@ -204,12 +205,12 @@ struct ConfigOverrideArgs {
     /// Whether Pyrefly will respect ignore statements for other tools, e.g. `# mypy: ignore`.
     #[arg(long, env = clap_env("PERMISSIVE_IGNORES"))]
     permissive_ignores: Option<bool>,
-    /// Enable specific error types. Overrides any disabled errors of the same type.
+    /// Enable specific error kinds. Can specify multiple error kinds.
     #[arg(long, env = clap_env("ENABLE_ERROR"))]
-    enable_error: Option<Vec<String>>,
-    /// Disable specific error types.
+    enable_error: Vec<ErrorKind>,
+    /// Disable specific error kinds. Can specify multiple error kinds.
     #[arg(long, env = clap_env("DISABLE_ERROR"))]
-    disable_error: Option<Vec<String>>,
+    disable_error: Vec<ErrorKind>,
 }
 
 impl OutputFormat {
@@ -563,24 +564,26 @@ impl Args {
             self.config_override.site_package_path.as_deref(),
         )?;
         validate_arg("--search-path", self.config_override.search_path.as_deref())?;
-
-        // Check for conflicting error types in enable_error and disable_error
-        if let (Some(enable_errors), Some(disable_errors)) = (
-            &self.config_override.enable_error,
-            &self.config_override.disable_error,
-        ) {
-            let enable_set: HashSet<_> = enable_errors.iter().collect();
-            let disable_set: HashSet<_> = disable_errors.iter().collect();
-            let conflicts: Vec<_> = enable_set.intersection(&disable_set).collect();
-
-            if !conflicts.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "Error types cannot be both enabled and disabled: [{}]",
-                    display::commas_iter(|| conflicts.iter().map(|&&s| s))
-                ));
-            }
+        let conflicts: Vec<_> = self
+            .config_override
+            .enable_error
+            .iter()
+            .collect::<HashSet<_>>()
+            .intersection(
+                &self
+                    .config_override
+                    .disable_error
+                    .iter()
+                    .collect::<HashSet<_>>(),
+            )
+            .copied()
+            .collect();
+        if !conflicts.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Error types cannot be both enabled and disabled: [{}]",
+                display::commas_iter(|| conflicts.iter().map(|&&s| s))
+            ));
         }
-
         Ok(())
     }
 
@@ -629,28 +632,23 @@ impl Args {
         if let Some(x) = &self.config_override.ignore_errors_in_generated_code {
             config.root.ignore_errors_in_generated_code = Some(*x);
         }
-
-        // Process error enable/disable flags
-        if let Some(enable_errors) = &self.config_override.enable_error {
-            let mut error_config = config.root.errors.clone().unwrap_or_default();
-            for error_name in enable_errors {
-                if let Ok(error_kind) = error_name.parse::<ErrorKind>() {
-                    error_config.with_error_setting(error_kind, true);
-                }
+        let apply_error_settings = |mut error_config: ErrorDisplayConfig| {
+            for error_kind in &self.config_override.enable_error {
+                error_config.with_error_setting(*error_kind, true);
             }
-            config.root.errors = Some(error_config);
-        }
-
-        if let Some(disable_errors) = &self.config_override.disable_error {
-            let mut error_config = config.root.errors.clone().unwrap_or_default();
-            for error_name in disable_errors {
-                if let Ok(error_kind) = error_name.parse::<ErrorKind>() {
-                    error_config.with_error_setting(error_kind, false);
-                }
+            for error_kind in &self.config_override.disable_error {
+                error_config.with_error_setting(*error_kind, false);
             }
-            config.root.errors = Some(error_config);
+            error_config
+        };
+        config.root.errors = Some(apply_error_settings(
+            config.root.errors.clone().unwrap_or_default(),
+        ));
+        for sub_config in config.sub_configs.iter_mut() {
+            sub_config.settings.errors = Some(apply_error_settings(
+                sub_config.settings.errors.clone().unwrap_or_default(),
+            ));
         }
-
         let errors = config.configure();
         (ArcId::new(config), errors)
     }

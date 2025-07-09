@@ -7,6 +7,7 @@
 
 use std::sync::LazyLock;
 
+use clap::ValueEnum;
 use convert_case::Case;
 use convert_case::Casing;
 use dupe::Dupe;
@@ -61,7 +62,7 @@ impl Severity {
 // These categories are flexible; use them for guidance when naming new ErrorKinds, but
 // go with what feels right.
 #[derive(Debug, Copy, Dupe, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
-#[derive(Display, Sequence, Deserialize, Serialize)]
+#[derive(Display, Sequence, Deserialize, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum ErrorKind {
     /// Attempting to annotate a name with incompatible annotations.
