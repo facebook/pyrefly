@@ -411,6 +411,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .get(&Key::ReturnType(ShortIdentifier::new(&def.name)))
             .arc_clone_ty();
 
+        if matches!(&ret, Type::TypeGuard(_) | Type::TypeIs(_)) {
+            // https://typing.python.org/en/latest/spec/narrowing.html#typeguard
+            // https://typing.python.org/en/latest/spec/narrowing.html#typeis
+            // TypeGuard and TypeIs must accept at least one positional argument.
+            // If a type guard function is implemented as an instance method or
+            // class method, the first positional argument maps to the second
+            // parameter (after “self” or “cls”).
+            let position_args_count = params
+                .iter()
+                .filter(|p| matches!(p, Param::Pos(..) | Param::PosOnly(..)))
+                .count()
+                - (if class_key.is_some() && !is_staticmethod {
+                    1 // Subtract the "self" or "cls" parameter
+                } else {
+                    0
+                });
+            if position_args_count < 1 {
+                self.error(
+                    errors,
+                    // The error should be raised on the line of the function
+                    // definition, but using `def.range` would be too broad
+                    // since it includes the decorators, which does not match
+                    // the conformance testsuite.
+                    def.name.range,
+                    ErrorKind::BadFunctionDefinition,
+                    None,
+                    "Type guard functions must accept at least one positional argument".to_owned(),
+                );
+            }
+        };
+
         let mut tparams = self.scoped_type_params(def.type_params.as_deref(), errors);
         let legacy_tparams = legacy_tparams
             .iter()

@@ -7595,6 +7595,26 @@
   "narrowing_typeguard.py": [
     {
       "code": -2,
+      "column": 9,
+      "concise_description": "Type guard functions must accept at least one positional argument",
+      "description": "Type guard functions must accept at least one positional argument",
+      "line": 102,
+      "name": "bad-function-definition",
+      "stop_column": 13,
+      "stop_line": 102
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Type guard functions must accept at least one positional argument",
+      "description": "Type guard functions must accept at least one positional argument",
+      "line": 107,
+      "name": "bad-function-definition",
+      "stop_column": 13,
+      "stop_line": 107
+    },
+    {
+      "code": -2,
       "column": 20,
       "concise_description": "Argument `(val: object) -> TypeGuard[int]` is not assignable to parameter `f` with type `(object) -> str` in function `takes_callable_str`",
       "description": "Argument `(val: object) -> TypeGuard[int]` is not assignable to parameter `f` with type `(object) -> str` in function `takes_callable_str`",
@@ -7615,6 +7635,26 @@
     }
   ],
   "narrowing_typeis.py": [
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Type guard functions must accept at least one positional argument",
+      "description": "Type guard functions must accept at least one positional argument",
+      "line": 105,
+      "name": "bad-function-definition",
+      "stop_column": 13,
+      "stop_line": 105
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Type guard functions must accept at least one positional argument",
+      "description": "Type guard functions must accept at least one positional argument",
+      "line": 110,
+      "name": "bad-function-definition",
+      "stop_column": 13,
+      "stop_line": 110
+    },
     {
       "code": -2,
       "column": 20,
