@@ -338,10 +338,7 @@
   "namedtuples_type_compat.py": [],
   "namedtuples_usage.py": [],
   "narrowing_typeguard.py": [],
-  "narrowing_typeis.py": [
-    "Line 195: Expected 1 errors",
-    "Line 199: Expected 1 errors"
-  ],
+  "narrowing_typeis.py": [],
   "overloads_basic.py": [],
   "overloads_consistency.py": [
     "Lines 25, 28: Expected error (tag 'return_type')",

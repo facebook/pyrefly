@@ -442,6 +442,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
 
+        if let Type::TypeIs(ty_narrow) = &ret {
+            // https://typing.python.org/en/latest/spec/narrowing.html#typeis
+            // The return type R must be assignable to I. The type checker
+            // should emit an error if this condition is not met.
+            let ty_arg = if class_key.is_some() && !is_staticmethod {
+                // Skip the first argument (`self` or `cls`) if this is a method or class method.
+                params.get(1)
+            } else {
+                params.first()
+            };
+            if let Some(ty_arg) = ty_arg {
+                if !self.is_subset_eq(ty_narrow, ty_arg.param_to_type()) {
+                    // If the narrowed type is not a subtype of the argument type, we report an error.
+                    self.error(
+                        errors,
+                        def.name.range,
+                        ErrorKind::BadFunctionDefinition,
+                        None,
+                        format!(
+                            "Return type `{}` must be assignable to the first argument type `{}`",
+                            self.for_display(*ty_narrow.clone()),
+                            self.for_display(ty_arg.param_to_type().clone())
+                        ),
+                    );
+                }
+            }
+        }
+
         let mut tparams = self.scoped_type_params(def.type_params.as_deref(), errors);
         let legacy_tparams = legacy_tparams
             .iter()

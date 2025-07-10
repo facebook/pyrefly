@@ -7704,6 +7704,26 @@
       "name": "bad-argument-type",
       "stop_column": 29,
       "stop_line": 191
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Return type `str` must be assignable to the first argument type `int`",
+      "description": "Return type `str` must be assignable to the first argument type `int`",
+      "line": 195,
+      "name": "bad-function-definition",
+      "stop_column": 15,
+      "stop_line": 195
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Return type `list[int]` must be assignable to the first argument type `list[object]`",
+      "description": "Return type `list[int]` must be assignable to the first argument type `list[object]`",
+      "line": 199,
+      "name": "bad-function-definition",
+      "stop_column": 24,
+      "stop_line": 199
     }
   ],
   "overloads_basic.py": [

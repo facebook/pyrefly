@@ -1485,3 +1485,29 @@ class C:
         return True
 "#,
 );
+
+testcase!(
+    test_typeis_subtyping,
+    r#"
+from typing import TypeIs
+
+def bad_typeis(x: str) -> TypeIs[int]: # E: Return type `int` must be assignable to the first argument type `str`
+    return isinstance(x, int)
+
+# From the conformance tests
+def also_bad_typeis(x: list[object]) -> TypeIs[list[int]]: # E: Return type `list[int]` must be assignable to the first argument type `list[object]`
+    return all(isinstance(i, int) for i in x)
+
+class C:
+    def is_int(self, x: str) -> TypeIs[int]: # E: Return type `int` must be assignable to the first argument type `str`
+        return isinstance(x, int)
+
+    @classmethod
+    def is_int_cls(cls, x: str) -> TypeIs[int]: # E: Return type `int` must be assignable to the first argument type `str`
+        return isinstance(x, int)
+
+    @staticmethod
+    def is_int_static(x: str) -> TypeIs[int]: # E: Return type `int` must be assignable to the first argument type `str`
+        return isinstance(x, int)
+"#,
+);
