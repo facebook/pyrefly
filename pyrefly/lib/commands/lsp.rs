@@ -1152,6 +1152,7 @@ impl Server {
                 .state
                 .config_finder()
                 .python_file(ModuleName::unknown(), e.path());
+            // todo: if configured to show workspace errors, don't filter to only open files
             if open_files.contains_key(path)
                 && !config.project_excludes.covers(path)
                 && !self

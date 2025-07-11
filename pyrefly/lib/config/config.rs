@@ -283,6 +283,7 @@ pub struct ConfigFile {
                      alias = "ignore_missing_source",
                  )]
     pub ignore_missing_source: bool,
+    // todo: add config option here
 }
 
 impl Default for ConfigFile {
