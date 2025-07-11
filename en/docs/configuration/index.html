@@ -27,8 +27,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.50a07098.css">
-<script src="/assets/js/runtime~main.3a2f6fb4.js" defer="defer"></script>
-<script src="/assets/js/main.f79f4002.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.fadb47d4.js" defer="defer"></script>
+<script src="/assets/js/main.5f9ece5d.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -320,8 +320,8 @@ emit the error, while <code>false</code> tells Pyrefly to hide it.</p>
 <ul>
 <li>Type: Table of <a href="/en/docs/error-kinds/">error code</a> to boolean representing enabled status</li>
 <li>Default: <code>errors = {}</code>/<code>[errors]</code></li>
-<li>Flag equivalent: none</li>
-<li>ENV equivalent: none</li>
+<li>Flag equivalent: <code>--enable-error</code>, <code>--disable-error</code></li>
+<li>ENV equivalent: <code>PYREFLY_ENABLE_ERROR</code>, <code>PYREFLY_DISABLE_ERROR</code></li>
 <li>Equivalent configs:
 <a href="https://microsoft.github.io/pyright/#/configuration?id=type-check-rule-overrides" target="_blank" rel="noopener noreferrer">type check rule overrides</a>
 and <a href="https://microsoft.github.io/pyright/#/configuration?id=type-evaluation-settings" target="_blank" rel="noopener noreferrer">type evaluation settings</a>

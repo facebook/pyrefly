@@ -320,8 +320,8 @@ emit the error, while `false` tells Pyrefly to hide it.
 
 - Type: Table of [error code](./error-kinds.mdx) to boolean representing enabled status
 - Default: `errors = {}`/`[errors]`
-- Flag equivalent: none
-- ENV equivalent: none
+- Flag equivalent: `--enable-error`, `--disable-error`
+- ENV equivalent: `PYREFLY_ENABLE_ERROR`, `PYREFLY_DISABLE_ERROR`
 - Equivalent configs:
   [type check rule overrides](https://microsoft.github.io/pyright/#/configuration?id=type-check-rule-overrides)
   and [type evaluation settings](https://microsoft.github.io/pyright/#/configuration?id=type-evaluation-settings)
