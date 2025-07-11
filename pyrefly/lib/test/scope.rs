@@ -175,12 +175,12 @@ def f():
     global c1
     global c2
     # Should be permitted, the resulting operation is in-place
-    c0 += C()  # E: `c0` is not mutable from the current scope 
+    c0 += C()  # E: `c0` is not mutable from the current scope
     # Should be permitted, the resulting operation returns a new C which is okay
-    c1 -= C()  # E: `c1` is not mutable from the current scope 
+    c1 -= C()  # E: `c1` is not mutable from the current scope
     # Should *not* be permitted, this changes the type of the global in a way
     # that is incompatible with static analysis of the global scope
-    c2 *= C()  # E: `c2` is not mutable from the current scope 
+    c2 *= C()  # E: `c2` is not mutable from the current scope
 f()
 # This shows what would go wrong if we allow the aug assign on `c2`
 assert_type(c2, C)
@@ -440,5 +440,15 @@ def f(arg: int) -> None:
     assert_type(w, list[int])
     lambd = lambda x: (z := x) + 1
     z  # E: Could not find name `z`
+"#,
+);
+
+testcase!(
+    test_forward_reference_ok,
+    r#"
+def foo():
+    x = y
+
+y = 42
 "#,
 );

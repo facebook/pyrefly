@@ -216,6 +216,7 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         name: &Identifier,
         value: Result<Binding, LookupError>,
+        usage: &mut Usage,
     ) -> Idx<Key> {
         let key = Key::BoundName(ShortIdentifier::new(name));
         if name.is_empty() {
@@ -235,7 +236,7 @@ impl<'a> BindingsBuilder<'a> {
                     // Don't check flow for global/nonlocal lookups
                     if let Some(error_message) = self
                         .scopes
-                        .get_flow_style(&name.id)
+                        .get_flow_style(&name.id, usage)
                         .uninitialized_error_message(name)
                     {
                         self.error(name.range, ErrorKind::UnboundName, None, error_message);
@@ -630,7 +631,7 @@ impl<'a> BindingsBuilder<'a> {
                 let binding = self
                     .lookup_name_usage(Hashed::new(&name.id), usage)
                     .map(Binding::Forward);
-                self.ensure_name(&name, binding);
+                self.ensure_name(&name, binding, usage);
             }
             Expr::Yield(x) => {
                 self.record_yield(x.clone());
@@ -666,7 +667,7 @@ impl<'a> BindingsBuilder<'a> {
                         .lookup_name(Hashed::new(&name.id), LookupKind::Regular)
                         .map(Binding::Forward),
                 };
-                self.ensure_name(&name, binding);
+                self.ensure_name(&name, binding, static_type_usage);
             }
             Expr::Subscript(ExprSubscript { value, .. })
                 if self.as_special_export(value) == Some(SpecialExport::Literal) =>
