@@ -48,6 +48,7 @@ use crate::binding::binding::MethodThatSetsAttr;
 use crate::binding::binding::RawClassFieldInitialization;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::CurrentIdx;
+use crate::binding::expr::Usage;
 use crate::binding::function::SelfAssignments;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
@@ -798,10 +799,42 @@ impl Scopes {
         None
     }
 
-    pub fn get_flow_style(&self, name: &Name) -> &FlowStyle {
+    fn get_static_info(&self, name: &Name, should_skip_current_scope: bool) -> Option<&StaticInfo> {
+        let name = Hashed::new(name);
+        let mut iter = self.iter_rev();
+        if should_skip_current_scope {
+            iter.next();
+        }
+        for scope in iter {
+            if let Some(info) = scope.stat.0.get_hashed(name) {
+                return Some(info);
+            }
+        }
+        None
+    }
+
+    pub fn get_flow_style(&self, name: &Name, usage: &mut Usage) -> &FlowStyle {
         match self.get_flow_info(name) {
             Some(flow) => &flow.style,
-            None => &FlowStyle::Other,
+            None => {
+                // If we are looking for static type information, we can look at
+                // the current scope. Otherwise, we should skip the current
+                // scope, because it may permit a name to be used before it is defined.
+                let should_skip_current_scope = !matches!(usage, Usage::StaticTypeInformation);
+                if self
+                    .get_static_info(name, should_skip_current_scope)
+                    .is_some()
+                {
+                    // If we have a static binding, then we are in a scope where
+                    // the name is defined, so we can return Other.
+                    &FlowStyle::Other
+                } else {
+                    // If we don't have a static binding, then we are in a scope
+                    // where the name is not defined, so we return
+                    // Uninitialized.
+                    &FlowStyle::Uninitialized
+                }
+            }
         }
     }
 
