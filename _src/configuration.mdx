@@ -299,7 +299,7 @@ to be reused between different systems and platforms.
 
 ### `skip-interpreter-query`
 
-Skip querying any interpreters and do not do any 
+Skip querying any interpreters and do not do any
 [Environment Autoconfiguration](#environment-autoconfiguration). This means that
 Pyrefly will take hard-coded defaults for [`python-version`](#python-version`)
 and [`python-platform`](#python-platform), and will use an empty
@@ -315,13 +315,12 @@ This configuration option **is mutually exclusive with `python-interpreter` and 
 
 ### `errors`
 
-Configure (enable and disable) the errors Pyrefly emits. `true` (default) tells Pyrefly to
-emit the error, while `false` tells Pyrefly to hide it.
+Configure the severity for each kind of error that Pyrefly emits: `error`, `warn`, `ignore`.
 
 - Type: Table of [error code](./error-kinds.mdx) to boolean representing enabled status
 - Default: `errors = {}`/`[errors]`
-- Flag equivalent: `--enable-error`, `--disable-error`
-- ENV equivalent: `PYREFLY_ENABLE_ERROR`, `PYREFLY_DISABLE_ERROR`
+- Flag equivalent: `--error`, `--warn`, `--ignore`
+- ENV equivalent: `PYREFLY_ERROR`, `PYREFLY_IGNORE`, `PYREFLY_WARN`
 - Equivalent configs:
   [type check rule overrides](https://microsoft.github.io/pyright/#/configuration?id=type-check-rule-overrides)
   and [type evaluation settings](https://microsoft.github.io/pyright/#/configuration?id=type-evaluation-settings)
@@ -455,20 +454,20 @@ can fit under a single config option description.
 
 ### Environment Autoconfiguration
 
-Unless `skip-interpreter-query` is set, we'll attempt to query a Python interpreter to 
-determine your [`python-platform`](#python-platform) or 
-[`python-version`](#python-version) if they're unset. We also get a 
+Unless `skip-interpreter-query` is set, we'll attempt to query a Python interpreter to
+determine your [`python-platform`](#python-platform) or
+[`python-version`](#python-version) if they're unset. We also get a
 [`site-package-path`](#site-package-path) from your interpreter to determine which
 packages you have installed and append those to the end of any `site-package-path`
 you've configured yourself, either through CLI flags or a config file.
 
 We look for an interpreter with the following logic:
-1. Use [`python-interpreter`](#python-interpreter) or 
+1. Use [`python-interpreter`](#python-interpreter) or
    [`conda-environment`](#conda-environment) if either are set by a flag.
    Both cannot be set in flags at the same time.
-2. Determine if there's an active `venv` or `conda` environment. If both are active at 
+2. Determine if there's an active `venv` or `conda` environment. If both are active at
    the same time, we take `venv` over `conda`.
-3. Use [`python-interpreter`](#python-interpreter) or 
+3. Use [`python-interpreter`](#python-interpreter) or
    [`conda-environment`](#conda-environment) if either are set in a config file.
    Both cannot be set in a config at the same time.
 4. Find a `venv` at the root of the project by searching for something that looks like a

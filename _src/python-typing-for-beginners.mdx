@@ -11,7 +11,20 @@ import CodeSnippet from '@site/src/sandbox/CodeSnippet'
 
 **Note:** This tutorial assumes you understand some basic Python syntax, but are new to programming or type hints. To learn more about Python, see the [Python Tutorial](https://docs.python.org/3/tutorial/) and [Getting Started Guide](https://www.python.org/about/gettingstarted/)
 
-## 1. What is a Type Hint in Python?
+## 1. What is a Type?
+
+A type is a classification that defines what operations can be performed on a piece of data, what values it can hold, and how it behaves in memory. Types are fundamental to programming because they help ensure that operations on data make sense.
+
+For example:
+- An `int` (integer) type can be added, subtracted, or multiplied
+- A `str` (string) type can be concatenated or split
+- A `list` type can be indexed, sliced, or iterated over
+
+**Note:** These are just examples of common operations for each data type. Python's built-in types support many more operations that are not listed here.
+
+Understanding types helps you predict how your code will behave and avoid runtime errors from trying to perform operations that don't make sense, such as dividing a string by a number.
+
+## 2. What is a Type Hint in Python?
 
 A type hint in Python is a way to indicate the expected data type of a variable, function parameter, or return value. It's a hint to other developers (and to tools like type checkers and IDEs) about what type of data should be used with a particular piece of code.
 
@@ -23,7 +36,11 @@ def greet(name: str) -> None:
     print(f"Hello, {name}!")
 ```
 
-## 2. Why Bother with Type Hints?
+In this example:
+- `name: str` indicates that the `name` parameter should be a string.
+- `-> None` specifies that the function doesn't return any value (similar to `void` in other languages).
+
+## 3. Why Bother with Type Hints?
 
 Python is a dynamically typed language, which means you can write code without declaring types. However, this can lead to bugs or ambiguity in your code.
 
@@ -45,6 +62,11 @@ def repeat(text: str, times: int) -> str:
 `}
 />
 
+In this example:
+- The first function lacks type hints, making it unclear what types `text` and `times` should be. The `*` operator works differently depending on types (string repetition, list repetition, or multiplication).
+- The second function uses type hints to clearly indicate that `text` should be a string, `times` should be an integer, and the function returns a string.
+- This clarity helps prevent bugs like accidentally passing a string for `times` or using the function incorrectly.
+
 
 ### Can you spot the bug?
 
@@ -64,6 +86,10 @@ area = rect.width * rect.hieght
 print(area)
 ```
 
+In this example:
+- The bug is a typo in `rect.hieght` (should be `rect.height`).
+- Without type hints, Python would only report this error at runtime when it tries to access the non-existent attribute.
+- With type hints and a tool like Pyrefly, this error would be caught before running the code because the `Rectangle` class has defined attributes `width` and `height`, but not `hieght`.
 
 **Spelling is hard!** Let's add the `dataclass` decorator to our class definition. This will generate a constructor for us, and also add a few other useful methods.
 
@@ -83,8 +109,14 @@ area = rect.width * rect.hieght
 `}
 />
 
+In this dataclass example:
+- The `@dataclass` decorator automatically generates methods like `__init__`, `__repr__`, and `__eq__` based on the class attributes.
+- Type hints are used to define the class attributes (`width: int`, `height: int`).
+- The same spelling error exists (`rect.hieght`), but tools like Pyrefly can catch this before runtime because the dataclass clearly defines which attributes exist.
+- This demonstrates how type hints combined with dataclasses provide both convenience and better error detection.
 
-## 3. Primitive Types
+
+## 4. Primitive Types
 
 Since Python 3.9 you can use all the [primitive types](https://docs.python.org/3/library/stdtypes.html) directly as annotations.
 
@@ -96,6 +128,12 @@ name: str = "Tyler Typer"
 is_admin: bool = False
 `}
 />
+
+In this primitive types example:
+- Each variable is annotated with its expected type (`int`, `float`, `str`, `bool`).
+- The values assigned match their declared types.
+- These annotations help document the code and allow type checkers to verify that operations on these variables are valid for their types.
+- For example, a type checker would flag an error if you tried `age + name` since adding an integer and string isn't a valid operation.
 
 You can also specify a parameter as optional by using `Optional` type, or now with the `| None` syntax.
 
@@ -110,7 +148,13 @@ nickname: str | None = None              # 3.10+ shorthand
 `}
 />
 
-## 4. Collections
+In this Optional type example:
+- Both variables can either be a string or `None`.
+- `Optional[str]` is the traditional syntax (pre-Python 3.10).
+- `str | None` is the newer union syntax introduced in Python 3.10.
+- These annotations tell type checkers that the variable might be `None`, so they can warn you if you try to perform string operations without checking for `None` first.
+
+## 5. Collections
 
 ### Syntax	Examples
 - List of numbers	`list[int]	scores: list[int] = [98, 87, 91]`
@@ -120,7 +164,7 @@ nickname: str | None = None              # 3.10+ shorthand
 
 Since Python 3.9 you can subscript built‑ins directly—no need for `from typing import List`.
 
-## 5. Functions
+## 6. Functions
 <CodeSnippet
   sampleFilename="basic_function_types.py"
   codeSample={`# Simple function
@@ -128,6 +172,12 @@ def add(a: int, b: int) -> int:
     return a + b
   `}
 />
+
+In this basic function example:
+- Both parameters `a` and `b` are annotated as integers.
+- The function is annotated to return an integer (`-> int`).
+- This tells type checkers that the function should only be called with integers and that the return value should only be used in contexts where an integer is expected.
+
 Default values keep their annotation:
 
 <CodeSnippet
@@ -139,6 +189,13 @@ def greet(name: str, polite: bool = True) -> str:
     return "Hello!" if polite else f"Yo {name}"
     `}
 />
+
+In this function with default values:
+- The `name` parameter must be a string.
+- The `polite` parameter is a boolean with a default value of `True`.
+- The function returns a string.
+- Even though `polite` has a default value, it still has a type annotation to ensure that if it's explicitly provided, it must be a boolean.
+
 Variable‑length arguments:
 
 <CodeSnippet
@@ -148,16 +205,23 @@ from collections.abc import Callable
 
 Logger = Callable[[str], None]
 
-def debug(*msgs: str, log: Logger | None = print) -> None:
-  for m in msgs:
-    if log is not None:
-      log(m)
-    else:
-      print(m)
-    `}
+def debug(*msgs: str, log: Logger | None) -> None:
+    for m in msgs:
+      if log is not None:
+        log(m)
+      else:
+        print(m)
+  `}
 />
 
-## 6. Get Type Hint Signals Directly in Your Editor
+In this variable-length arguments example:
+- `Logger` is defined as a type alias for a callable that takes a string and returns nothing (`None`).
+- `*msgs: str` indicates that the function accepts any number of string arguments.
+- `log: Logger | None` means the `log` parameter can be either a Logger function or `None`.
+- The function is annotated to return `None`.
+- This demonstrates how to type complex function signatures with variable arguments and function parameters.
+
+## 7. Get Type Hint Signals Directly in Your Editor
 
 You can download the [Pyrefly extension for VSCode](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly) to get type hint signals directly in your IDE.
 

@@ -251,35 +251,7 @@ def func_a(p1: ClassA[float, int, int], p2: ClassA[int, float, float]):
   - `v2` fails because `T2` expects a supertype, but gets a subtype.
   - `v4` fails because `T3` expects a subtype, but gets a supertype.
 
-### Protocols
-
-Protocols enable structural typing, which allows you to define interfaces without explicit inheritance. This feature helps you write more modular and composable code.
-
-<CodeSnippet
-  sampleFilename="protocols.py"
-  codeSample={`# Example: Structural Typing with Protocols
-
-from typing import Iterable, Protocol
-
-class Writer(Protocol):
-    def write(self) -> None: ...
-
-class GoodWorld:
-    def write(self) -> None:
-        print("Hello world!")
-
-class BadWorld:
-    pass
-
-def f(writer: Writer):
-    pass
-
-f(GoodWorld()) # OK
-f(BadWorld())  # ERROR!
-`}
-/>
-
-## Structural Types
+## Structural Types and Protocols
 Python also employs a structural type system, often referred to as "duck typing." This concept is based on the idea that if two objects have the same shape or attributes, they can be treated as being of the same type.
 
 ### Dataclasses
@@ -343,6 +315,34 @@ def f(x: int | str) -> int | str:
 
 reveal_type(f(0))  # revealed type: int
 reveal_type(f("")) # revealed type: str
+`}
+/>
+
+### Protocols
+
+Protocols allows you to define interfaces without explicit inheritance. This feature helps you write more modular and composable code.
+
+<CodeSnippet
+  sampleFilename="protocols.py"
+  codeSample={`# Example: Structural Typing with Protocols
+
+from typing import Iterable, Protocol
+
+class Writer(Protocol):
+    def write(self) -> None: ...
+
+class GoodWorld:
+    def write(self) -> None:
+        print("Hello world!")
+
+class BadWorld:
+    pass
+
+def f(writer: Writer):
+    pass
+
+f(GoodWorld()) # OK
+f(BadWorld())  # ERROR!
 `}
 />
 
