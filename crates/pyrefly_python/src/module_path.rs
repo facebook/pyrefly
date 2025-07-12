@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::ffi::OsStr;
 use std::fmt;
 use std::fmt::Display;
 use std::path::Path;
@@ -124,7 +125,20 @@ impl ModulePath {
         self.style() == ModuleStyle::Interface
     }
 
-    /// Given a module, find the path that must have been on the search path to find it.
+    /// Attempt to match the given [`ModuleName`]'s components to this `ModulePath`,
+    /// returning the directory that is the import root for the `ModuleName`, if
+    /// *all* module components could be matched to directories. `ModulePath`s
+    /// with `-stubs` components are matched iff the *first* `ModuleName` component
+    /// prefix matches the directory it's being compared to.
+    ///
+    /// Example:
+    /// - `/some/path/to/root/a/b/c/d.py`, `a.b.c.d` -> `Some(/some/path/to/root)`
+    /// - `/some/path/to/root/a-stubs/b/c/d.py`, `a.b.c.d` -> `Some(/some/path/to/root)`
+    /// - `/some/path/to/root/a/b/c/d.py`, `z.b.c.d` -> `None`
+    /// - `/some/path/to/root/a-stubs/b/c/d.py`, `a.b.z.d` -> `None`
+    /// - `/some/path/to/root/a-stubs/b/c/d.py`, `root.a.b.c.d` -> `None`
+    ///   - because `a` can't match `a-stubs` if we're not looking at the first
+    ///     component of the `ModuleName`
     pub fn root_of(&self, name: ModuleName) -> Option<PathBuf> {
         if matches!(self.details(), ModulePathDetails::BundledTypeshed(_)) {
             return None;
@@ -136,8 +150,19 @@ impl ModulePath {
             path.pop();
         }
 
-        for part in name.components().iter().rev() {
-            if path.file_name() != Some(part.as_str().as_ref()) {
+        let components = name.components();
+        let mut components = components.iter().rev().peekable();
+        while let Some(part) = components.next() {
+            let file_name = path.file_name();
+
+            // does this `part` match the next part of the `path`?
+            let direct_match = file_name == Some(part.as_str().as_ref());
+            // if we're looking at the first component (import root) of the
+            // `ModuleName`, does it match the `part` if we postfix `-stubs`?
+            let stubs_match = components.peek().is_none()
+                && file_name == Some(OsStr::new(&(part.to_string() + "-stubs")));
+
+            if !(direct_match || stubs_match) {
                 return None;
             }
             path.pop();
@@ -169,18 +194,35 @@ mod tests {
         let path = ModulePath::filesystem(PathBuf::from("hello/foo/bar/baz.py"));
         assert_eq!(
             path.root_of(ModuleName::from_str("foo.bar.baz")),
-            Some(PathBuf::from("hello"))
+            Some(PathBuf::from("hello")),
         );
         assert_eq!(
             path.root_of(ModuleName::from_str("baz")),
-            Some(PathBuf::from("hello/foo/bar"))
+            Some(PathBuf::from("hello/foo/bar")),
         );
         assert_eq!(path.root_of(ModuleName::from_str("baaz")), None);
 
         let path = ModulePath::filesystem(PathBuf::from("hello/foo/bar/__init__.pyi"));
         assert_eq!(
             path.root_of(ModuleName::from_str("foo.bar")),
-            Some(PathBuf::from("hello"))
+            Some(PathBuf::from("hello")),
+        );
+    }
+
+    #[test]
+    fn test_root_of_stubs() {
+        let path = ModulePath::filesystem(PathBuf::from("hello/foo-stubs/bar/baz.py"));
+        assert_eq!(
+            path.root_of(ModuleName::from_str("foo.bar.baz")),
+            Some(PathBuf::from("hello")),
+        );
+        assert_eq!(
+            path.root_of(ModuleName::from_str("baz")),
+            Some(PathBuf::from("hello/foo-stubs/bar")),
+        );
+        assert_eq!(
+            path.root_of(ModuleName::from_str("hello.foo.bar.baz")),
+            None,
         );
     }
 }
