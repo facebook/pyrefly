@@ -40,6 +40,7 @@ pub enum SpecialExport {
     Type,
     NoTypeCheck,
     Overload,
+    AbstractMethod,
 }
 
 impl SpecialExport {
@@ -71,6 +72,7 @@ impl SpecialExport {
             "type" => Some(Self::Type),
             "no_type_check" => Some(Self::NoTypeCheck),
             "overload" => Some(Self::Overload),
+            "abstractmethod" => Some(Self::AbstractMethod),
             _ => None,
         }
     }
@@ -101,6 +103,7 @@ impl SpecialExport {
             }
             Self::Exit => matches!(m.as_str(), "sys" | "builtins"),
             Self::OsExit => matches!(m.as_str(), "os"),
+            Self::AbstractMethod => matches!(m.as_str(), "abc"),
         }
     }
 }
