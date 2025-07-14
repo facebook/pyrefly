@@ -23,7 +23,6 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::Binding;
-use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMetadata;
@@ -277,7 +276,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     {
                         self.expr(
                             default,
-                            Some((&param_ty, &|| {
+                            Some((¶m_ty, &|| {
                                 TypeCheckContext::of_kind(TypeCheckKind::FunctionParameterDefault(
                                     name.id.clone(),
                                 ))
@@ -402,6 +401,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Either::Right(var) => self.solver().force_var(var),
             };
+            // Check for TypedDict overlap with named parameters (Issue #595)
+            if let Type::TypedDict(fields) = &ty {
+                let named_params: Vec<String> = params.iter()
+                    .filter_map(|p| match p {
+                        Param::Pos(name, _, _) => Some(name.clone()),
+                        Param::PosOnly(name, _, _) => name.clone(),
+                        Param::KwOnly(name, _, _) => Some(name.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                for key in fields.keys() {
+                    if named_params.contains(key) {
+                        self.error(
+                            errors,
+                            x.name.range,
+                            ErrorKind::BadFunctionDefinition,
+                            None,
+                            format!(
+                                "TypedDict key '{}' in **kwargs overlaps with named parameter '{}'",
+                                key, key
+                            ),
+                        );
+                    }
+                }
+            }
             if let Type::Kwargs(q) = &ty {
                 paramspec_kwargs = Some(q.clone());
             }
@@ -511,7 +535,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
                 .collect();
         }
-        let callable = if let Some(q) = &paramspec_args
+        let callable = if let Some(q) = paramspec_args
             && paramspec_args == paramspec_kwargs
         {
             Callable::concatenate(
