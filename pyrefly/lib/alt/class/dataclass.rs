@@ -265,7 +265,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             // Overloaded function. Call it to see which signature is actually used.
             self.call_overloads(
-                Vec1::try_from_vec(sigs).unwrap(),
+                Vec1::try_from_vec(sigs.map(|x| (*x).clone())).unwrap(),
                 (*overload.metadata).clone(),
                 None,
                 &args.args.map(CallArg::expr_maybe_starred),
