@@ -15,9 +15,9 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_python::sys_info::SysInfo;
-use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::PythonPlatform;
+use pyrefly_python::sys_info::PythonVersion;
+use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lined_buffer::DisplayPos;
 use pyrefly_util::lined_buffer::DisplayRange;
@@ -137,7 +137,7 @@ impl Playground {
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
         config.interpreters.skip_interpreter_query = true;
-        
+
         let sys_info = match python_version {
             Some(version_str) => {
                 let parsed_version = PythonVersion::from_str(version_str)
@@ -147,7 +147,7 @@ impl Playground {
             }
             None => SysInfo::default(),
         };
-        
+
         config.configure();
         let config = ArcId::new(config);
 
