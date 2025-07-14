@@ -31,6 +31,7 @@ import type { editor } from 'monaco-editor';
 import type { PyreflyErrorMessage } from './SandboxResults';
 import { DEFAULT_SANDBOX_PROGRAM } from './DefaultSandboxProgram';
 import { usePythonWorker } from './usePythonWorker';
+import PythonVersionSelector from './PythonVersionSelector';
 
 // Import type for Pyrefly State
 export interface PyreflyState {
@@ -90,6 +91,15 @@ export default function Sandbox({
     const [pythonOutput, setPythonOutput] = useState<string>('');
     const [activeTab, setActiveTab] = useState<string>('errors');
     const [isHovered, setIsHovered] = useState(false);
+    const [pythonVersion, setPythonVersion] = useState('3.12');
+
+    // Initialize Python version from URL on component mount
+    useEffect(() => {
+        const versionFromURL = getVersionFromURL();
+        if (versionFromURL) {
+            setPythonVersion(versionFromURL);
+        }
+    }, []);
 
     // Initialize WebAssembly only when the component is in the viewport
     useEffect(() => {
@@ -106,15 +116,20 @@ export default function Sandbox({
 
         pyreflyWasmInitializedPromise
             .then((pyrefly) => {
-                setPyreService(new pyrefly.State());
-                setLoading(false);
-                setInternalError('');
+                try {
+                    setPyreService(new pyrefly.State(pythonVersion));
+                    setLoading(false);
+                    setInternalError('');
+                } catch (e) {
+                    setLoading(false);
+                    setInternalError(`Failed to initialize with Python ${pythonVersion}: ${e}`);
+                }
             })
             .catch((e) => {
                 setLoading(false);
                 setInternalError(JSON.stringify(e));
             });
-    }, [isInViewport]); // Re-run when isInViewport changes
+    }, [isInViewport, pythonVersion]); // Re-run when isInViewport or pythonVersion changes
 
     // Need to add createModel handler in case monaco model was not created at mount time
     monaco.editor.onDidCreateModel((_newModel) => {
@@ -240,6 +255,13 @@ export default function Sandbox({
         editor.setSelection(range);
     };
 
+    const handleVersionChange = (newVersion: string) => {
+        setPythonVersion(newVersion);
+        if (model && !isCodeSnippet) {
+            updateURL(model.getValue(), newVersion);
+        }
+    };
+
     const buttons = getMonacoButtons(
         isCodeSnippet,
         model,
@@ -247,7 +269,8 @@ export default function Sandbox({
         pyodideStatus,
         setPyodideStatus,
         forceRecheck,
-        codeSample
+        codeSample,
+        pythonVersion
     );
     return (
         <div
@@ -272,7 +295,8 @@ export default function Sandbox({
                     codeSample,
                     forceRecheck,
                     onEditorMount,
-                    editorHeightforCodeSnippet
+                    editorHeightforCodeSnippet,
+                    pythonVersion
                 )}
                 {
                     <div
@@ -295,6 +319,15 @@ export default function Sandbox({
                 }
             </div>
             {!isCodeSnippet && (
+                <div {...stylex.props(styles.versionSelectorContainer)}>
+                    <PythonVersionSelector
+                        selectedVersion={pythonVersion}
+                        onVersionChange={handleVersionChange}
+                        disabled={loading}
+                    />
+                </div>
+            )}
+            {!isCodeSnippet && (
                 <SandboxResults
                     loading={loading}
                     goToDef={handleGoToDefFromErrors}
@@ -310,9 +343,14 @@ export default function Sandbox({
     );
 }
 
-function updateURL(code: string): void {
+function updateURL(code: string, version?: string): void {
     const compressed = LZString.compressToEncodedURIComponent(code);
-    const newURL = `${window.location.pathname}?code=${compressed}`;
+    const params = new URLSearchParams();
+    params.set('code', compressed);
+    if (version) {
+        params.set('version', version);
+    }
+    const newURL = `${window.location.pathname}?${params.toString()}`;
     window.history.replaceState({}, '', newURL);
 }
 
@@ -321,6 +359,12 @@ function getCodeFromURL(): string | null {
     const params = new URLSearchParams(window.location.search);
     const code = params.get('code');
     return code ? LZString.decompressFromEncodedURIComponent(code) : null;
+}
+
+function getVersionFromURL(): string | null {
+    if (typeof window === 'undefined') return null;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('version');
 }
 
 function fetchCurMonacoModelAndTriggerUpdate(
@@ -358,7 +402,8 @@ function getPyreflyEditor(
     codeSample: string,
     forceRecheck: () => void,
     onEditorMount: (editor: editor.IStandaloneCodeEditor) => void,
-    editorHeightforCodeSnippet: number | null
+    editorHeightforCodeSnippet: number | null,
+    pythonVersion: string
 ): React.ReactElement {
     const { colorMode } = docusaurusTheme.useColorMode();
 
@@ -405,7 +450,7 @@ function getPyreflyEditor(
                 onChange={(value) => {
                     forceRecheck();
                     if (typeof value === 'string') {
-                        updateURL(value);
+                        updateURL(value, pythonVersion);
                     }
                 }}
                 onMount={onEditorMount}
@@ -429,7 +474,8 @@ function getMonacoButtons(
     pyodideStatus: PyodideStatus,
     setPyodideStatus: React.Dispatch<React.SetStateAction<PyodideStatus>>,
     forceRecheck: () => void,
-    codeSample: string
+    codeSample: string,
+    pythonVersion: string
 ): ReadonlyArray<React.ReactElement> {
     let buttons: ReadonlyArray<React.ReactElement> = [];
     if (isCodeSnippet) {
@@ -438,7 +484,7 @@ function getMonacoButtons(
             getCopyButton(model),
             /* Hide reset button if it's readonly, which is when it's a code snippet on mobile */
             !isMobile()
-                ? getResetButton(model, forceRecheck, codeSample, isCodeSnippet)
+                ? getResetButton(model, forceRecheck, codeSample, isCodeSnippet, pythonVersion)
                 : null,
         ].filter(Boolean);
     } else {
@@ -449,7 +495,7 @@ function getMonacoButtons(
                 setPyodideStatus
             ),
             getShareUrlButton(),
-            getResetButton(model, forceRecheck, codeSample, isCodeSnippet),
+            getResetButton(model, forceRecheck, codeSample, isCodeSnippet, pythonVersion),
             getGitHubIssuesButton(),
         ];
     }
@@ -568,7 +614,8 @@ function getResetButton(
     model: editor.ITextModel | null,
     forceRecheck: () => void,
     codeSample: string,
-    isCodeSnippet: boolean
+    isCodeSnippet: boolean,
+    pythonVersion: string
 ): React.ReactElement {
     return (
         <MonacoEditorButton
@@ -577,7 +624,7 @@ function getResetButton(
                 if (model) {
                     model.setValue(codeSample);
                     if (!isCodeSnippet) {
-                        updateURL(codeSample);
+                        updateURL(codeSample, pythonVersion);
                     }
                     forceRecheck();
                 }
@@ -687,6 +734,20 @@ const styles = stylex.create({
         '@media (max-width: 768px)': {
             margin: '0', // No margin needed as gap is handled by the container
             width: '100%', // Make buttons full width on mobile for sandbox
+        },
+    },
+    // Style for version selector container
+    versionSelectorContainer: {
+        padding: '12px 16px',
+        borderBottom: '1px solid var(--color-background-secondary)',
+        backgroundColor: 'var(--color-background)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        fontSize: '14px',
+        color: 'var(--color-text-secondary)',
+        ':before': {
+            content: '"Python Version:"',
         },
     },
 });
