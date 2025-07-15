@@ -1381,6 +1381,16 @@ def f(): ...
 f()  # deprecated!
 ```
 
+## implicit-import
+
+A module exists, but was not imported. At runtime, if something has made this import
+before your code, it will work. But relies on whatever did the import to continue doing it.
+
+```python
+import importlib
+importlib.util.find_spec("os")  # error, `importlib.util` was not imported
+```
+
 ## implicitly-defined-attribute
 
 An attribute was implicitly defined by assignment to `self` in a method that we
@@ -1823,6 +1833,17 @@ def two_args(a: int, b: int) -> int:
   ...
 
 two_args(a=1, b=2, c=3)
+```
+
+## unexpected-positional-argument
+
+A positional argument was passed for a keyword-only parameter.
+
+```python
+def takes_kwonly(*, x: int) -> int:
+  ...
+
+takes_kwonly(1)  # should be `takes_kwonly(x=1)`!
 ```
 
 ## unknown-name
