@@ -158,7 +158,11 @@ impl<'a> BindingsBuilder<'a> {
         let binding = self
             .lookup_name(Hashed::new(&name.id), LookupKind::Mutable)
             .map(Binding::Forward);
-        self.ensure_name(&name, binding, usage)
+        self.ensure_name(
+            &name,
+            binding,
+            matches!(usage, Usage::StaticTypeInformation),
+        )
     }
 
     fn define_nonlocal_name(&mut self, name: &Identifier) {

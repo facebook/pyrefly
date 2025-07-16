@@ -48,7 +48,6 @@ use crate::binding::binding::MethodThatSetsAttr;
 use crate::binding::binding::RawClassFieldInitialization;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::CurrentIdx;
-use crate::binding::expr::Usage;
 use crate::binding::function::SelfAssignments;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
@@ -813,18 +812,23 @@ impl Scopes {
         None
     }
 
-    pub fn get_flow_style(&self, name: &Name, usage: &mut Usage) -> &FlowStyle {
+    /// Get the flow style for `name`, depending on whether `name` is used in a
+    /// static type.
+    ///
+    /// If we can find a flow info for `name`, return its style. Otherwise, we
+    /// check the static type information to see if we have a uninitialized
+    /// binding, in which case, `FlowStyle::Uninitialized` is returned.
+    /// Otherwise we return `FlowStyle::Other` to indicate no information
+    /// available.
+    pub fn get_flow_style(&self, name: &Name, used_in_static_type: bool) -> &FlowStyle {
         match self.get_flow_info(name) {
             Some(flow) => &flow.style,
             None => {
-                // If we are looking for static type information, we can look at
-                // the current scope. Otherwise, we should skip the current
-                // scope, because it may permit a name to be used before it is defined.
-                let should_skip_current_scope = !matches!(usage, Usage::StaticTypeInformation);
-                if self
-                    .get_static_info(name, should_skip_current_scope)
-                    .is_some()
-                {
+                // If the name is used for static type information, we can look
+                // at the current scope.
+                // Otherwise, we should skip the current scope, because it may
+                // permit a name to be used before it is defined.
+                if self.get_static_info(name, !used_in_static_type).is_some() {
                     // If we have a static binding, then we are in a scope where
                     // the name is defined, so we can return Other.
                     &FlowStyle::Other
