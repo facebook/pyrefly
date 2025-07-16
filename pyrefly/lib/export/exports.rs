@@ -20,6 +20,7 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::error::collector::ErrorCollector;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
 use crate::export::definitions::DocString;
@@ -83,7 +84,12 @@ impl Display for Exports {
 }
 
 impl Exports {
-    pub fn new(x: &[Stmt], module_info: &ModuleInfo, sys_info: &SysInfo) -> Self {
+    pub fn new(
+        x: &[Stmt],
+        module_info: &ModuleInfo,
+        sys_info: &SysInfo,
+        errors: &ErrorCollector,
+    ) -> Self {
         let mut definitions = Definitions::new(
             x,
             module_info.name(),
@@ -105,6 +111,7 @@ impl Exports {
             ]);
         }
 
+        definitions.check_dunder_all_existence(errors);
         Self(Arc::new(ExportsInner {
             definitions,
             wildcard: Calculation::new(),
@@ -207,6 +214,9 @@ mod tests {
     use starlark_map::smallmap;
 
     use super::*;
+    use crate::error::style::ErrorStyle;
+    use crate::module::module_path::ModulePath;
+    use crate::module::module_path::ModuleStyle;
 
     impl LookupExport for SmallMap<ModuleName, Exports> {
         fn get(&self, module: ModuleName) -> Result<Exports, FindError> {
@@ -229,7 +239,12 @@ mod tests {
             path,
             Arc::new(contents.to_owned()),
         );
-        Exports::new(&ast.body, &module_info, &SysInfo::default())
+        Exports::new(
+            &ast.body,
+            &module_info,
+            &SysInfo::default(),
+            &ErrorCollector::new(module_info.clone(), ErrorStyle::Never),
+        )
     }
 
     fn eq_wildcards(exports: &Exports, lookup: &dyn LookupExport, all: &[&str]) {

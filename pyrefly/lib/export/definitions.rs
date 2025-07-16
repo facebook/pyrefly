@@ -30,7 +30,11 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use vec1::vec1;
 
+use crate::error::collector::ErrorCollector;
+use crate::error::kind::ErrorKind;
+use crate::module::module_path::ModuleStyle;
 use crate::module::short_identifier::ShortIdentifier;
 use crate::types::globals::Global;
 
@@ -187,6 +191,18 @@ impl Definitions {
     }
 
     /// Ensure that `dunder_all` is populated, synthesising it if `__all__` isn't present.
+    pub fn check_dunder_all_existence(&mut self, errors: &ErrorCollector) {
+        if let Some(dunder_all) = self.definitions.get(&dunder::ALL) {
+            for item in &self.dunder_all {
+                if let DunderAllEntry::Name(_range, name) = &item {
+                    if !self.definitions.contains_key(name) {
+                        errors.add(dunder_all.range, ErrorKind::MissingDunderAllImplementation, None, vec1![format!("MissingDunderAllImplementation: {} is specified in __all__ but not defined in this module", name)]);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn ensure_dunder_all(&mut self, style: ModuleStyle) {
         if self.definitions.contains_key(&dunder::ALL) {
             // Explicitly defined, so don't redefine it
