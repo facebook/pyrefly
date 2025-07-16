@@ -453,7 +453,7 @@ type checked file is imported by another type checked file, we check all search 
 determine how to import it.
 
 - Type: list of directories specifying the root
-- Default: [import root](./import-resolution.mdx#import-root)
+- Default: import root
 - Flag equivalent: `--search-path`
 - ENV equivalent: `PYREFLY_SEARCH_PATH`
 - Equivalent configs: `extraPaths` in Pyright, `mypy_path` in mypy
@@ -1535,6 +1535,19 @@ def f(x, *args: P1.args, **kwargs: P2.kwargs) -> None:
 
 Here, `P1.args` and `P2.kwargs` can't be used together; `*args` and `**kwargs` must come from the same `ParamSpec`.
 
+## invalid-self-type
+
+This error occurs when `Self` is used in a context Pyrefly does not currently support.
+
+For example, Pyrefly does not currently allow `Self` for `TypedDict`, so the
+following code would error:
+```python
+from typing import *
+
+class TD(TypedDict):
+    x: Option[Self]
+```
+
 ## invalid-super-call
 
 `super()` has [a few restrictions](https://docs.python.org/3/library/functions.html#super) on how it is called.
@@ -2314,9 +2327,10 @@ Pyrefly is fast! This means you can run it before every commit to get immediate 
 
 Add this to your `.pre-commit-config.yaml`:
 
+<!-- Note that website/src/plugins/version-replacer-plugin.js replaces main with the actual version -->
 ```yaml
 - repo: https://github.com/facebook/pyrefly
-  rev: main
+  rev: 0.24.2
   hooks:
     - id: pyrefly-typecheck
 ```

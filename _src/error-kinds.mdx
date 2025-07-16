@@ -468,6 +468,19 @@ def f(x, *args: P1.args, **kwargs: P2.kwargs) -> None:
 
 Here, `P1.args` and `P2.kwargs` can't be used together; `*args` and `**kwargs` must come from the same `ParamSpec`.
 
+## invalid-self-type
+
+This error occurs when `Self` is used in a context Pyrefly does not currently support.
+
+For example, Pyrefly does not currently allow `Self` for `TypedDict`, so the
+following code would error:
+```python
+from typing import *
+
+class TD(TypedDict):
+    x: Option[Self]
+```
+
 ## invalid-super-call
 
 `super()` has [a few restrictions](https://docs.python.org/3/library/functions.html#super) on how it is called.
