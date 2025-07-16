@@ -182,6 +182,8 @@ pub enum ErrorKind {
     MissingAttribute,
     /// Accessing an attribute that does not exist on a module.
     MissingModuleAttribute,
+    /// Element present in __all__ but not defined in the module.
+    MissingDunderAllImplementation,
     /// The attribute exists but does not support this access pattern.
     NoAccess,
     /// Attempting to call an overloaded function, but none of the signatures match.

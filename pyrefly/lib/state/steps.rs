@@ -159,7 +159,7 @@ impl Step {
         load: Arc<Load>,
         ast: Arc<ModModule>,
     ) -> Exports {
-        Exports::new(&ast.body, &load.module_info, ctx.sys_info)
+        Exports::new(&ast.body, &load.module_info, ctx.sys_info, &load.errors)
     }
 
     #[inline(never)]
