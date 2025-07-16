@@ -1499,6 +1499,7 @@ impl<'a> TransactionHandle<'a> {
         let handle = self
             .transaction
             .import_handle(&self.module_data.handle, module, path)?;
+        let handle2 = handle.dupe();
         let res = self.transaction.get_module(&handle);
         let mut write = self.module_data.deps.write();
         let did_insert = match write.entry(module) {
@@ -1509,6 +1510,10 @@ impl<'a> TransactionHandle<'a> {
             Entry::Occupied(mut e) => e.get_mut().insert(handle),
         };
         if did_insert {
+            tracing::warn!("FROM {} IMPORT {}",
+                self.module_data.handle.module(),
+                handle2.module(),
+            );
             let inserted = res.rdeps.lock().insert(self.module_data.handle.dupe());
             assert!(inserted);
         }
