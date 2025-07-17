@@ -20,10 +20,12 @@ The Pyrefly extension:
 By default, Pyrefly should work in the IDE with no configuration necessary. But to ensure your project is set up properly, see [configurations](../configuration).
 
 The following configuration options are IDE-specific and exposed as VSCode settings:
-- `python.pyrefly.disableLanguageServices` [boolean: false]: by default, Pyrefly will provide both type errors and other language features like go-to definition, intellisense, hover, etc. Enable this option to keep type errors from Pyrefly unchanged but use VSCode's Python extension for everything else.
-- `python.pyrefly.disableTypeErrors` [boolean: false]: by default, Pyrefly will provide type errors in your project. Enable this setting to disable type error squiggles appearing in the editor.
-- `pyrefly.lspPath` [string: '']: if your platform is not supported, you can build pyrefly from source and specify the binary here.
-
+- Disable language services
+  - `python.pyrefly.disableLanguageServices` [boolean: false]: By default, Pyrefly will provide both type errors and other language features like go-to definition, intellisense, hover, etc. Set `disableLanguageServices` to `true` to keep type errors from Pyrefly unchanged but use VSCode's Python extension for everything else.
+- Disable type errors
+  - `python.pyrefly.disableTypeErrors` [boolean: false]: By default, Pyrefly will provide type errors in your project. Set `disableTypeErrors` to `true` to prevent type error diagnostics (squiggles) from appearing in the editor.
+- Specify a custom Pyrefly Binary (lspPath)
+  - `pyrefly.lspPath` [string: '']: If your platform is not supported, you can build pyrefly from source and specify the binary path with the `lspPath` config.
 If the project configuration does not specify the Python interpreter, Pyrefly will use the [interpreter selected in VSCode](https://code.visualstudio.com/docs/python/environments).
 
 ## Issues?
