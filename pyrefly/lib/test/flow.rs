@@ -1177,7 +1177,7 @@ def foo() -> list[int]:
     results: list[int] = [1, 2, 3]
     for i, x in enumerate(results):
         results[i] = x * 10
-    return results  
+    return results
 "#,
 );
 
@@ -1201,7 +1201,7 @@ bar: str = "bar"
 
 def func():
     foo: str | None = None
-    
+
     for x in []:
         for y in []:
             pass
@@ -1226,7 +1226,7 @@ from typing import assert_type, Literal
 if 0.1:
     vari = "test"
     raise SystemExit
-assert_type(vari, Literal["test"])
+assert_type(vari, Literal["test"]) # E: `vari` is uninitialized
 "#,
 );
 
