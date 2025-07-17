@@ -582,8 +582,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.construct_typed_dict(td, args, keywords, range, errors, context)
                 }
                 Target::BoundMethod(obj, func) => {
-                    if func.metadata.flags.is_abstract_method 
-                        && !self.is_builtin_module(&func.metadata.kind.as_func_id().module) {
+                    if func.metadata.flags.is_abstract_method
+                        && !self.is_builtin_module(&func.metadata.kind.as_func_id().module)
+                    {
                         self.error(
                         errors,
                         range,
@@ -627,8 +628,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ),
                         );
                     }
-                    if metadata.flags.is_abstract_method 
-                        && !self.is_builtin_module(&metadata.kind.as_func_id().module) {
+                    if metadata.flags.is_abstract_method
+                        && !self.is_builtin_module(&metadata.kind.as_func_id().module)
+                    {
                         self.error(
                         errors,
                         range,
