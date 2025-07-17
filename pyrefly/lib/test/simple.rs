@@ -1672,4 +1672,3 @@ testcase!(
 [a for [a for # E: Could # E: Parse # E: Could # E: Parse # E: Parse
 "#,
 );
-
