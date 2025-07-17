@@ -201,6 +201,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut has_enum_member_decoration = false;
         let mut is_override = false;
         let mut has_final_decoration = false;
+        let mut is_abstract_method = false;
         let mut dataclass_transform_metadata = None;
         let decorators = decorators
             .iter()
@@ -234,6 +235,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     Some(CalleeKind::Function(FunctionKind::Final)) => {
                         has_final_decoration = true;
+                        false
+                    }
+                    Some(CalleeKind::Function(FunctionKind::AbstractMethod)) => {
+                        is_abstract_method = true;
                         false
                     }
                     _ if matches!(decorator_ty, Type::ClassType(cls) if cls.has_qname("warnings", "deprecated")) => {
@@ -540,6 +545,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 has_enum_member_decoration,
                 is_override,
                 has_final_decoration,
+                is_abstract_method,
                 dataclass_transform_metadata,
             },
         };
