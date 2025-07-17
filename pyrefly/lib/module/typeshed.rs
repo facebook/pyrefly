@@ -16,6 +16,7 @@ use anyhow::Context as _;
 use anyhow::anyhow;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
+use pyrefly_bundled::bundled_typeshed;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
@@ -27,7 +28,6 @@ use crate::config::config::ConfigFile;
 use crate::config::error::ErrorDisplayConfig;
 use crate::error::kind::ErrorKind;
 use crate::error::kind::Severity;
-use crate::module::bundled::bundled_typeshed;
 
 #[derive(Debug, Clone)]
 pub struct BundledTypeshed {
