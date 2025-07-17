@@ -1658,3 +1658,18 @@ def f(x:float, y:bool) -> float:
     return x * y 
 "#,
 );
+
+testcase!(
+    test_nested_list_comp,
+    r#"from typing import assert_type
+assert_type([a for a in [b for b in ["a", "b"]]], list[str])
+"#,
+);
+
+testcase!(
+    test_incomplete_nested_list_comp,
+    r#"# Issue https://github.com/facebook/pyrefly/issues/455
+[a for [a for # E: Could # E: Parse # E: Could # E: Parse # E: Parse
+"#,
+);
+
