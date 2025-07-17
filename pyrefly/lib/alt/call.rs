@@ -569,11 +569,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Target::TypedDict(td) => {
                 self.construct_typed_dict(td, args, keywords, range, errors, context)
             }
-            Target::BoundMethod(obj, func) => {
+            Target::BoundMethod(
+                obj,
+                Function {
+                    signature,
+                    metadata,
+                },
+            ) => {
+                if metadata.flags.is_deprecated {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::new(ErrorKind::Deprecated, context),
+                        format!(
+                            "Call to deprecated function `{}`",
+                            metadata.kind.as_func_id().format(self.module_info().name())
+                        ),
+                    );
+                }
                 let first_arg = CallArg::ty(&obj, range);
                 self.callable_infer(
-                    func.signature,
-                    Some(func.metadata.kind.as_func_id()),
+                    signature,
+                    Some(metadata.kind.as_func_id()),
                     Some(first_arg),
                     args,
                     keywords,

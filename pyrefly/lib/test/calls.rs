@@ -62,6 +62,19 @@ old_function()  # E: Call to deprecated function `old_function`
 );
 
 testcase!(
+    test_deprecated_method_call,
+    r#"
+from warnings import deprecated
+class C:
+    @deprecated("function is deprecated")
+    def old_function(self) -> None: ...
+
+c = C()
+c.old_function()  # E: Call to deprecated function `C.old_function`
+    "#,
+);
+
+testcase!(
     test_reduce_call,
     r#"
 from functools import reduce

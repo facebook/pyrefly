@@ -3962,6 +3962,66 @@
     },
     {
       "code": -2,
+      "column": 5,
+      "concise_description": "`+` is not supported between `Spam` and `Literal[1]`",
+      "description": "`+` is not supported between `Spam` and `Literal[1]`\n  Call to deprecated function `_directives_deprecated_library.Spam.__add__`",
+      "line": 41,
+      "name": "unsupported-operation",
+      "stop_column": 13,
+      "stop_line": 41
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "`+=` is not supported between `Spam` and `Literal[1]`",
+      "description": "`+=` is not supported between `Spam` and `Literal[1]`\n  Call to deprecated function `_directives_deprecated_library.Spam.__add__`",
+      "line": 42,
+      "name": "unsupported-operation",
+      "stop_column": 10,
+      "stop_line": 42
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Call to deprecated function `_directives_deprecated_library.Spam.greasy`",
+      "description": "Call to deprecated function `_directives_deprecated_library.Spam.greasy`",
+      "line": 44,
+      "name": "deprecated",
+      "stop_column": 12,
+      "stop_line": 44
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Call to deprecated function `_directives_deprecated_library.Spam.shape`",
+      "description": "Call to deprecated function `_directives_deprecated_library.Spam.shape`",
+      "line": 47,
+      "name": "deprecated",
+      "stop_column": 11,
+      "stop_line": 47
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Call to deprecated function `_directives_deprecated_library.Spam.shape`",
+      "description": "Call to deprecated function `_directives_deprecated_library.Spam.shape`",
+      "line": 48,
+      "name": "deprecated",
+      "stop_column": 11,
+      "stop_line": 48
+    },
+    {
+      "code": -2,
+      "column": 10,
+      "concise_description": "Call to deprecated function `Invocable.__call__`",
+      "description": "Call to deprecated function `Invocable.__call__`",
+      "line": 58,
+      "name": "deprecated",
+      "stop_column": 12,
+      "stop_line": 58
+    },
+    {
+      "code": -2,
       "column": 6,
       "concise_description": "Call to deprecated function `lorem`",
       "description": "Call to deprecated function `lorem`",
@@ -3969,6 +4029,16 @@
       "name": "deprecated",
       "stop_column": 8,
       "stop_line": 69
+    },
+    {
+      "code": -2,
+      "column": 10,
+      "concise_description": "Call to deprecated function `SupportsFoo1.foo`",
+      "description": "Call to deprecated function `SupportsFoo1.foo`",
+      "line": 98,
+      "name": "deprecated",
+      "stop_column": 12,
+      "stop_line": 98
     }
   ],
   "directives_no_type_check.py": [
