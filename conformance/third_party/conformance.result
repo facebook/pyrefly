@@ -369,7 +369,7 @@
     "Line 106: Expected 1 errors",
     "Line 107: Expected 1 errors",
     "Line 108: Expected 1 errors",
-    "Line 26: Unexpected errors ['Cannot instantiate `Proto` because it is a protocol']"
+    "Line 26: Unexpected errors ['Cannot instantiate `Proto` because it is a protocol', 'Cannot call abstract method `Proto.meth` - must be implemented in a subclass']"
   ],
   "protocols_definition.py": [
     "Line 116: Expected 1 errors",
@@ -377,7 +377,6 @@
     "Line 79: Unexpected errors ['`Concrete` is not assignable to `Template`']"
   ],
   "protocols_explicit.py": [
-    "Line 27: Expected 1 errors",
     "Line 60: Expected 1 errors",
     "Line 90: Expected 1 errors",
     "Line 110: Expected 1 errors",

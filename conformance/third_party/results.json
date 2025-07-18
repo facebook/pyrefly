@@ -3,7 +3,7 @@
   "pass": 70,
   "fail": 66,
   "pass_rate": 0.51,
-  "differences": 300,
+  "differences": 299,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -122,7 +122,7 @@
     "overloads_evaluation.py": 14,
     "protocols_class_objects.py": 7,
     "protocols_definition.py": 3,
-    "protocols_explicit.py": 6,
+    "protocols_explicit.py": 5,
     "protocols_generic.py": 1,
     "protocols_merging.py": 1,
     "protocols_modules.py": 1,

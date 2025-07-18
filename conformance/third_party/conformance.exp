@@ -7896,6 +7896,16 @@
     },
     {
       "code": -2,
+      "column": 22,
+      "concise_description": "Cannot call abstract method `Proto.meth` - must be implemented in a subclass",
+      "description": "Cannot call abstract method `Proto.meth` - must be implemented in a subclass",
+      "line": 26,
+      "name": "abstract-method-call",
+      "stop_column": 24,
+      "stop_line": 26
+    },
+    {
+      "code": -2,
       "column": 16,
       "concise_description": "`type[ConcreteA]` is not assignable to `ProtoA1`",
       "description": "`type[ConcreteA]` is not assignable to `ProtoA1`",
@@ -8118,6 +8128,16 @@
     }
   ],
   "protocols_explicit.py": [
+    {
+      "code": -2,
+      "column": 28,
+      "concise_description": "Cannot call abstract method `PColor.draw` - must be implemented in a subclass",
+      "description": "Cannot call abstract method `PColor.draw` - must be implemented in a subclass",
+      "line": 27,
+      "name": "abstract-method-call",
+      "stop_column": 30,
+      "stop_line": 27
+    },
     {
       "code": -2,
       "column": 20,
