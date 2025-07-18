@@ -60,3 +60,22 @@ def my_func(x: dict[MyEnumType, int]) -> int:
             return 0
 "#,
 );
+
+testcase!(
+    test_union_pattern_match_sequence,
+    r#"
+from typing import *
+
+class T: ...
+
+def my_func(x: T | tuple[T, T]):
+    match x:
+        case T(), T():  # Should not error: Type `T` is not iterable
+            print("Two T")
+        case T():
+            print("One T")
+
+my_func(T())
+my_func((T(), T()))
+"#,
+);
