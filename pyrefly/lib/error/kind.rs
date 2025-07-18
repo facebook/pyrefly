@@ -102,6 +102,8 @@ pub enum ErrorKind {
     /// e.g. multiple fields with the same name.
     /// Errors related specifically to inheritance should use InvalidInheritance.
     BadClassDefinition,
+    /// Attempting to use a type that cannot be used as a contextmanager in a `with` statement.
+    BadContextManager,
     /// A function definition has some typing-related error.
     /// e.g. putting a non-default argument after a default argument.
     BadFunctionDefinition,
@@ -214,8 +216,8 @@ pub enum ErrorKind {
     UnknownName,
     /// Attempting to use a feature that is not yet supported.
     Unsupported,
-    /// Attempting to apply an operator to arguments that do not support it.
-    UnsupportedOperand,
+    /// Attempting to apply an operation to arguments that do not support it.
+    UnsupportedOperation,
 }
 
 impl std::str::FromStr for ErrorKind {

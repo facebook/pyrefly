@@ -25,6 +25,7 @@ use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::KeyExport;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
@@ -530,8 +531,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Err(msg) => results.push(self.error(
                     errors,
                     range,
-                    ErrorKind::MissingAttribute,
-                    context,
+                    ErrorInfo::new(ErrorKind::MissingAttribute, context),
                     msg,
                 )),
             }
@@ -581,8 +581,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 range,
-                                ErrorKind::MissingAttribute,
-                                context,
+                                ErrorInfo::new(ErrorKind::MissingAttribute, context),
                                 e.to_error_msg(attr_name),
                             )
                         }),
@@ -590,8 +589,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 LookupResult::InternalError(e) => attr_tys.push(self.error(
                     errors,
                     range,
-                    ErrorKind::InternalError,
-                    context,
+                    ErrorInfo::new(ErrorKind::InternalError, context),
                     e.to_error_msg(attr_name, todo_ctx),
                 )),
                 LookupResult::NotFound(_) => {
@@ -672,8 +670,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::MissingAttribute,
-                    context,
+                    ErrorInfo::new(ErrorKind::MissingAttribute, context),
                     not_found.to_error_msg(attr_name),
                 );
             }
@@ -696,8 +693,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorKind::MissingAttribute,
-                            context,
+                            ErrorInfo::new(ErrorKind::MissingAttribute, context),
                             no_access.to_error_msg(attr_name),
                         );
                     }
@@ -721,8 +717,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::MissingAttribute,
-                    context,
+                    ErrorInfo::new(ErrorKind::MissingAttribute, context),
                     not_found.to_error_msg(attr_name),
                 );
             }
@@ -744,8 +739,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorKind::MissingAttribute,
-                            context,
+                            ErrorInfo::new(ErrorKind::MissingAttribute, context),
                             no_access.to_error_msg(attr_name),
                         );
                     }
@@ -771,8 +765,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::InternalError,
-                    context,
+                    ErrorInfo::new(ErrorKind::InternalError, context),
                     InternalError::AttributeBaseUndefined(base.clone())
                         .to_error_msg(attr_name, todo_ctx),
                 );
@@ -834,8 +827,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::NoAccess,
-                        context,
+                        ErrorInfo::new(ErrorKind::NoAccess, context),
                         e.to_error_msg(attr_name),
                     );
                 }
@@ -846,7 +838,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         format!("Cannot set field `{attr_name}`"),
                         reason.error_message()
                     ];
-                    errors.add(range, ErrorKind::ReadOnly, None, msg);
+                    errors.add(range, ErrorInfo::Kind(ErrorKind::ReadOnly), msg);
                 }
                 LookupResult::Found(Attribute {
                     inner: AttributeInner::Property(_, None, cls),
@@ -855,8 +847,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::ReadOnly,
-                        context,
+                        ErrorInfo::new(ErrorKind::ReadOnly, context),
                         e.to_error_msg(attr_name),
                     );
                 }
@@ -883,8 +874,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 range,
-                                ErrorKind::ReadOnly,
-                                context,
+                                ErrorInfo::new(ErrorKind::ReadOnly, context),
                                 e.to_error_msg(attr_name),
                             );
                         }
@@ -893,8 +883,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 range,
-                                ErrorKind::NoAccess,
-                                context,
+                                ErrorInfo::new(ErrorKind::NoAccess, context),
                                 e.to_error_msg(attr_name),
                             );
                         }
@@ -904,8 +893,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::InternalError,
-                        context,
+                        ErrorInfo::new(ErrorKind::InternalError, context),
                         e.to_error_msg(attr_name, todo_ctx),
                     );
                 }
@@ -932,8 +920,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::InternalError,
-                    context,
+                    ErrorInfo::new(ErrorKind::InternalError, context),
                     InternalError::AttributeBaseUndefined(base.clone())
                         .to_error_msg(attr_name, todo_ctx),
                 );
@@ -964,8 +951,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::NoAccess,
-                        context,
+                        ErrorInfo::new(ErrorKind::NoAccess, context),
                         e.to_error_msg(attr_name),
                     );
                 }
@@ -976,14 +962,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         format!("Cannot delete field `{attr_name}`"),
                         reason.error_message()
                     ];
-                    errors.add(range, ErrorKind::ReadOnly, None, msg);
+                    errors.add(range, ErrorInfo::Kind(ErrorKind::ReadOnly), msg);
                 }
                 LookupResult::InternalError(e) => {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::InternalError,
-                        context,
+                        ErrorInfo::new(ErrorKind::InternalError, context),
                         e.to_error_msg(attr_name, todo_ctx),
                     );
                 }
@@ -1197,8 +1182,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::ImplicitImport,
-                    context,
+                    ErrorInfo::new(ErrorKind::ImplicitImport, context),
                     format!("Module `{name}` exists, but was not imported explicitly. You are relying on other modules to load it."),
                 );
                 Ok(ty)
@@ -1312,9 +1296,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AttributeBase::ClassInstance(class) | AttributeBase::EnumLiteral(class, _, _) => {
                 let metadata = self.get_metadata_for_class(class.class_object());
                 let mut attr_name = attr_name.clone();
-                // Special case magic enum properties
+                // Special case magic enum properties for `AttributeBase::ClassInstance`
                 if metadata.is_enum() && attr_name.as_str() == "value" {
-                    attr_name = Name::new("_value_")
+                    attr_name = Name::new("_value_");
+                    if self.field_is_inherited_from_enum(class.class_object(), &attr_name) {
+                        // The `_value_` annotation on `enum.Enum` is `Any`; we can infer a better type
+                        let enum_value_types: Vec<_> = self
+                            .get_enum_members(class.class_object())
+                            .into_iter()
+                            .filter_map(|lit| {
+                                if let Lit::Enum(lit_enum) = lit {
+                                    Some(lit_enum.ty)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        return LookupResult::found_type(self.unions(enum_value_types));
+                    }
                 }
                 if metadata.is_enum() && attr_name.as_str() == "name" {
                     attr_name = Name::new("_name_")
@@ -1470,7 +1469,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let metadata = self.get_metadata_for_class(class);
                 let metaclass = metadata.metaclass().unwrap_or(self.stdlib.builtins_type());
                 if *dunder_name == dunder::GETATTRIBUTE
-                    && self.method_is_inherited_from_object(metaclass, dunder_name)
+                    && self.field_is_inherited_from_object(metaclass.class_object(), dunder_name)
                 {
                     return LookupResult::NotFound(NotFound::Attribute(
                         metaclass.class_object().clone(),
@@ -1490,7 +1489,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if (*dunder_name == dunder::SETATTR
                     || *dunder_name == dunder::DELATTR
                     || *dunder_name == dunder::GETATTRIBUTE)
-                    && self.method_is_inherited_from_object(cls, dunder_name) =>
+                    && self.field_is_inherited_from_object(cls.class_object(), dunder_name) =>
             {
                 LookupResult::NotFound(NotFound::Attribute(cls.class_object().clone()))
             }
@@ -2055,8 +2054,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorKind::InvalidArgument,
-                None,
+                ErrorInfo::Kind(ErrorKind::InvalidArgument),
                 format!(
                     "`{}.__bool__` has type `{}`, which is not callable",
                     self.for_display(condition_type.clone()),

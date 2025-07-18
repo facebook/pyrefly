@@ -26,6 +26,7 @@ use crate::alt::expr::TypeOrExpr;
 use crate::alt::solve::Iterable;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::display::function_suffix;
@@ -411,8 +412,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                kind,
-                context,
+                ErrorInfo::new(kind, context),
                 format!(
                     "{}{}",
                     msg,
@@ -968,8 +968,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 call_errors,
                                 range,
-                                ErrorKind::InvalidParamSpec,
-                                context,
+                                ErrorInfo::new(ErrorKind::InvalidParamSpec, context),
                                 format!(
                                     "Expected *-unpacked {}.args and **-unpacked {}.kwargs",
                                     q.name(),
@@ -997,8 +996,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             call_errors,
                             range,
-                            ErrorKind::InvalidParamSpec,
-                            context,
+                            ErrorInfo::new(ErrorKind::InvalidParamSpec, context),
                             format!("Unexpected ParamSpec type: `{}`", self.for_display(p)),
                         );
                     }

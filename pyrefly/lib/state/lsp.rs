@@ -172,10 +172,10 @@ enum IdentifierContext {
     },
     /// An identifier appeared as the name of a function.
     /// ex: `x` in `def x(...): ...`
-    FunctionDef,
+    FunctionDef { docstring: Option<Docstring> },
     /// An identifier appeared as the name of a class.
     /// ex: `x` in `class x(...): ...`
-    ClassDef,
+    ClassDef { docstring: Option<Docstring> },
     /// An identifier appeared as the name of a parameter.
     /// ex: `x` in `def f(x): ...`
     Parameter,
@@ -266,17 +266,17 @@ impl IdentifierWithContext {
         }
     }
 
-    fn from_stmt_function_def(id: &Identifier) -> Self {
+    fn from_stmt_function_def(id: &Identifier, docstring: Option<Docstring>) -> Self {
         Self {
             identifier: id.clone(),
-            context: IdentifierContext::FunctionDef,
+            context: IdentifierContext::FunctionDef { docstring },
         }
     }
 
-    fn from_stmt_class_def(id: &Identifier) -> Self {
+    fn from_stmt_class_def(id: &Identifier, docstring: Option<Docstring>) -> Self {
         Self {
             identifier: id.clone(),
-            context: IdentifierContext::ClassDef,
+            context: IdentifierContext::ClassDef { docstring },
         }
     }
 
@@ -363,10 +363,15 @@ impl IdentifierWithContext {
 }
 
 #[derive(Debug, Clone)]
-pub struct FindDefinitionItem {
+pub struct FindDefinitionItemWithDocstring {
     pub metadata: DefinitionMetadata,
     pub location: TextRangeWithModule,
     pub docstring: Option<Docstring>,
+}
+
+pub struct FindDefinitionItem {
+    pub metadata: DefinitionMetadata,
+    pub location: TextRangeWithModule,
 }
 
 impl<'a> Transaction<'a> {
@@ -424,13 +429,19 @@ impl<'a> Transaction<'a> {
                     import_from,
                 ))
             }
-            (Some(AnyNodeRef::Identifier(id)), Some(AnyNodeRef::StmtFunctionDef(_)), _, _) => {
+            (Some(AnyNodeRef::Identifier(id)), Some(AnyNodeRef::StmtFunctionDef(stmt)), _, _) => {
                 // def id(...): ...
-                Some(IdentifierWithContext::from_stmt_function_def(id))
+                Some(IdentifierWithContext::from_stmt_function_def(
+                    id,
+                    Docstring::from_stmts(&stmt.body),
+                ))
             }
-            (Some(AnyNodeRef::Identifier(id)), Some(AnyNodeRef::StmtClassDef(_)), _, _) => {
+            (Some(AnyNodeRef::Identifier(id)), Some(AnyNodeRef::StmtClassDef(stmt)), _, _) => {
                 // class id(...): ...
-                Some(IdentifierWithContext::from_stmt_class_def(id))
+                Some(IdentifierWithContext::from_stmt_class_def(
+                    id,
+                    Docstring::from_stmts(&stmt.body),
+                ))
             }
             (Some(AnyNodeRef::Identifier(id)), Some(AnyNodeRef::Parameter(_)), _, _) => {
                 // def ...(id): ...
@@ -604,14 +615,14 @@ impl<'a> Transaction<'a> {
             }
             Some(IdentifierWithContext {
                 identifier: _,
-                context: IdentifierContext::FunctionDef,
+                context: IdentifierContext::FunctionDef { docstring: _ },
             }) => {
                 // TODO(grievejia): Handle defintions of functions
                 None
             }
             Some(IdentifierWithContext {
                 identifier: _,
-                context: IdentifierContext::ClassDef,
+                context: IdentifierContext::ClassDef { docstring: _ },
             }) => {
                 // TODO(grievejia): Handle defintions of classes
                 None
@@ -915,7 +926,6 @@ impl<'a> Transaction<'a> {
         Some(FindDefinitionItem {
             metadata: DefinitionMetadata::Variable(Some(symbol_kind)),
             location: TextRangeWithModule::new(self.get_module_info(handle)?, identifier.range),
-            docstring: None,
         })
     }
 
@@ -924,7 +934,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         name: &Identifier,
         jump_through_renamed_import: bool,
-    ) -> Option<FindDefinitionItem> {
+    ) -> Option<FindDefinitionItemWithDocstring> {
         let def_key = Key::Definition(ShortIdentifier::new(name));
         if !self.get_bindings(handle)?.is_valid_key(&def_key) {
             return None;
@@ -939,7 +949,7 @@ impl<'a> Transaction<'a> {
         ) = self.key_to_export(handle, &def_key, jump_through_renamed_import, INITIAL_GAS)?;
         let module_info = self.get_module_info(&handle)?;
         let name = Name::new(module_info.code_at(location));
-        Some(FindDefinitionItem {
+        Some(FindDefinitionItemWithDocstring {
             metadata: DefinitionMetadata::VariableOrAttribute(name, symbol_kind),
             location: TextRangeWithModule::new(module_info, location),
             docstring,
@@ -951,7 +961,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         name: &Identifier,
         jump_through_renamed_import: bool,
-    ) -> Option<FindDefinitionItem> {
+    ) -> Option<FindDefinitionItemWithDocstring> {
         let use_key = Key::BoundName(ShortIdentifier::new(name));
         if !self.get_bindings(handle)?.is_valid_key(&use_key) {
             return None;
@@ -964,7 +974,7 @@ impl<'a> Transaction<'a> {
                 docstring,
             },
         ) = self.key_to_export(handle, &use_key, jump_through_renamed_import, INITIAL_GAS)?;
-        Some(FindDefinitionItem {
+        Some(FindDefinitionItemWithDocstring {
             metadata: DefinitionMetadata::Variable(symbol_kind),
             location: TextRangeWithModule::new(self.get_module_info(&handle)?, location),
             docstring,
@@ -976,7 +986,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         base_range: TextRange,
         name: &Identifier,
-    ) -> Vec<FindDefinitionItem> {
+    ) -> Vec<FindDefinitionItemWithDocstring> {
         if let Some(answers) = self.get_answers(handle)
             && let Some(base_type) = answers.get_type_trace(base_range)
         {
@@ -992,7 +1002,7 @@ impl<'a> Transaction<'a> {
                                     &x.name,
                                     x.definition?,
                                 )?;
-                                Some(FindDefinitionItem {
+                                Some(FindDefinitionItemWithDocstring {
                                     metadata: DefinitionMetadata::Attribute(x.name),
                                     location: definition,
                                     docstring,
@@ -1020,10 +1030,10 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         module_name: ModuleName,
-    ) -> Option<FindDefinitionItem> {
+    ) -> Option<FindDefinitionItemWithDocstring> {
         // TODO: Handle relative import (via ModuleName::new_maybe_relative)
         let handle = self.import_handle(handle, module_name, None).ok()?;
-        Some(FindDefinitionItem {
+        Some(FindDefinitionItemWithDocstring {
             metadata: DefinitionMetadata::Module,
             location: TextRangeWithModule::new(
                 self.get_module_info(&handle)?,
@@ -1080,7 +1090,6 @@ impl<'a> Transaction<'a> {
                         module_info.dupe(),
                         refined_param_range.unwrap_or(range),
                     ),
-                    docstring: None,
                 })
             }
         }
@@ -1110,7 +1119,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
         jump_through_renamed_import: bool,
-    ) -> Vec<FindDefinitionItem> {
+    ) -> Vec<FindDefinitionItemWithDocstring> {
         match self.identifier_at(handle, position) {
             Some(IdentifierWithContext {
                 identifier: id,
@@ -1156,38 +1165,74 @@ impl<'a> Transaction<'a> {
                 .map_or(vec![], |item| vec![item]),
             Some(IdentifierWithContext {
                 identifier,
-                context: IdentifierContext::FunctionDef,
+                context: IdentifierContext::FunctionDef { docstring },
             }) => self
                 .find_definition_for_simple_def(handle, &identifier, SymbolKind::Function)
-                .map_or(vec![], |item| vec![item]),
+                .map_or(vec![], |item| {
+                    vec![FindDefinitionItemWithDocstring {
+                        metadata: item.metadata,
+                        location: item.location,
+                        docstring,
+                    }]
+                }),
             Some(IdentifierWithContext {
                 identifier,
-                context: IdentifierContext::ClassDef,
+                context: IdentifierContext::ClassDef { docstring },
             }) => self
                 .find_definition_for_simple_def(handle, &identifier, SymbolKind::Class)
-                .map_or(vec![], |item| vec![item]),
+                .map_or(vec![], |item| {
+                    vec![FindDefinitionItemWithDocstring {
+                        metadata: item.metadata,
+                        location: item.location,
+                        docstring,
+                    }]
+                }),
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::Parameter,
             }) => self
                 .find_definition_for_simple_def(handle, &identifier, SymbolKind::Parameter)
-                .map_or(vec![], |item| vec![item]),
+                .map_or(vec![], |item| {
+                    vec![FindDefinitionItemWithDocstring {
+                        metadata: item.metadata,
+                        location: item.location,
+                        docstring: None,
+                    }]
+                }),
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::TypeParameter,
             }) => self
                 .find_definition_for_simple_def(handle, &identifier, SymbolKind::TypeParameter)
-                .map_or(vec![], |item| vec![item]),
+                .map_or(vec![], |item| {
+                    vec![FindDefinitionItemWithDocstring {
+                        metadata: item.metadata,
+                        location: item.location,
+                        docstring: None,
+                    }]
+                }),
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::ExceptionHandler | IdentifierContext::PatternMatch(_),
             }) => self
                 .find_definition_for_simple_def(handle, &identifier, SymbolKind::Variable)
-                .map_or(vec![], |item| vec![item]),
+                .map_or(vec![], |item| {
+                    vec![FindDefinitionItemWithDocstring {
+                        metadata: item.metadata,
+                        location: item.location,
+                        docstring: None,
+                    }]
+                }),
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::KeywordArgument(callee_kind),
-            }) => self.find_definition_for_keyword_argument(handle, &identifier, &callee_kind),
+            }) => self
+                .find_definition_for_keyword_argument(handle, &identifier, &callee_kind)
+                .map(|item| FindDefinitionItemWithDocstring {
+                    metadata: item.metadata.clone(),
+                    location: item.location.clone(),
+                    docstring: None,
+                }),
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::Attribute { base_range, .. },
@@ -1260,7 +1305,7 @@ impl<'a> Transaction<'a> {
         self.find_definition(handle, position, false)
             .into_iter()
             .filter_map(
-                |FindDefinitionItem {
+                |FindDefinitionItemWithDocstring {
                      metadata,
                      location,
                      docstring: _,

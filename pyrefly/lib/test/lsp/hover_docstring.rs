@@ -30,7 +30,26 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
     }
 }
 
-// TODO(kylei) same-module docstrings
+#[test]
+fn class_test() {
+    let code = r#"
+class F:
+    """Test docstring"""
+print(F)
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+4 | print(F)
+          ^
+Docstring Result: `Test docstring`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
 #[test]
 fn function_test() {
     let code = r#"
@@ -45,14 +64,33 @@ print(f())
 # main.py
 4 | print(f())
           ^
-Docstring Result: None
+Docstring Result: `Test docstring`
 "#
         .trim(),
         report.trim(),
     );
 }
 
-// TODO(kylei) same-module docstrings
+#[test]
+fn class_itself_test() {
+    let code = r#"
+class Foo:
+#     ^
+    """Test docstring"""
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | class Foo:
+          ^
+Docstring Result: `Test docstring`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
 #[test]
 fn function_itself_test() {
     let code = r#"
@@ -66,7 +104,28 @@ def f():
 # main.py
 2 | def f():
         ^
-Docstring Result: None
+Docstring Result: `Test docstring`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn attribute_itself_test() {
+    let code = r#"
+class Foo:
+    def f():
+#       ^
+        """Test docstring"""
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 |     def f():
+            ^
+Docstring Result: `Test docstring`
 "#
         .trim(),
         report.trim(),

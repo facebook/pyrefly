@@ -40,6 +40,7 @@ use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
+use crate::error::context::ErrorInfo;
 use crate::error::kind::ErrorKind;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
@@ -168,8 +169,7 @@ impl<'a> BindingsBuilder<'a> {
                 Err(error) => {
                     self.error(
                         name.range,
-                        ErrorKind::UnknownName,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::UnknownName),
                         error.message(name),
                     );
                     Binding::Type(Type::any_error())
@@ -191,8 +191,7 @@ impl<'a> BindingsBuilder<'a> {
                 Err(error) => {
                     self.error(
                         name.range,
-                        ErrorKind::UnknownName,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::UnknownName),
                         error.message(name),
                     );
                     Binding::Type(Type::any_error())
@@ -250,8 +249,7 @@ impl<'a> BindingsBuilder<'a> {
             };
             self.error(
                 oops_top_level.range,
-                ErrorKind::BadReturn,
-                None,
+                ErrorInfo::Kind(ErrorKind::BadReturn),
                 "Invalid `return` outside of a function".to_owned(),
             );
         }
@@ -484,8 +482,7 @@ impl<'a> BindingsBuilder<'a> {
                     {
                         self.error(
                              x.range,
-                             ErrorKind::BadAssignment,
-                             None,
+                             ErrorInfo::Kind(ErrorKind::BadAssignment),
                              format!(
                                 "Type cannot be declared in assignment to non-self attribute `{}.{}`",
                                 self.module_info.display(&attr.value),
@@ -501,8 +498,7 @@ impl<'a> BindingsBuilder<'a> {
                         // but Mypy and Pyright both error here, so let's do the same.
                         self.error(
                             x.annotation.range(),
-                            ErrorKind::InvalidSyntax,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidSyntax),
                             "Subscripts should not be annotated".to_owned(),
                         );
                     }
@@ -591,8 +587,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.error(
                         x.range,
-                        ErrorKind::InvalidSyntax,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
                         "Invalid assignment target".to_owned(),
                     );
                 }
@@ -633,7 +628,11 @@ impl<'a> BindingsBuilder<'a> {
                 let mut negated_prev_ops = NarrowOps::new();
                 let mut implicit_else = true;
                 for (range, mut test, body) in Ast::if_branches_owned(x) {
-                    let this_branch_chosen = self.sys_info.evaluate_bool_opt(test.as_ref());
+                    // If there is no test, it's an `else` clause and `this_branch_chosen` will be true.
+                    let this_branch_chosen = match &test {
+                        None => Some(true),
+                        Some(x) => self.sys_info.evaluate_bool(x),
+                    };
                     if this_branch_chosen == Some(false) {
                         continue; // We definitely won't pick this branch
                     }
@@ -795,7 +794,11 @@ impl<'a> BindingsBuilder<'a> {
                     let m = ModuleName::from_name(&x.name.id);
                     if let Err(err @ FindError::NotFound(..)) = self.lookup.get(m) {
                         let (ctx, msg) = err.display();
-                        self.error_multiline(x.range, ErrorKind::ImportError, ctx.as_deref(), msg);
+                        self.error_multiline(
+                            x.range,
+                            ErrorInfo::new(ErrorKind::ImportError, ctx.as_deref()),
+                            msg,
+                        );
                     }
                     match x.asname {
                         Some(asname) => {
@@ -843,8 +846,7 @@ impl<'a> BindingsBuilder<'a> {
                                         } else {
                                             self.error(
                                                 x.range,
-                                                ErrorKind::MissingModuleAttribute,
-                                                None,
+                                                ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
                                                 format!("Could not import `{name}` from `{m}`"),
                                             );
                                             Binding::Type(Type::any_error())
@@ -886,8 +888,7 @@ impl<'a> BindingsBuilder<'a> {
                                         } else {
                                             self.error(
                                                 x.range,
-                                                ErrorKind::MissingModuleAttribute,
-                                                None,
+                                                ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
                                                 format!(
                                                     "Could not import `{}` from `{m}`",
                                                     x.name.id
@@ -913,8 +914,7 @@ impl<'a> BindingsBuilder<'a> {
                             let (ctx, msg) = err.display();
                             self.error_multiline(
                                 x.range,
-                                ErrorKind::ImportError,
-                                ctx.as_deref(),
+                                ErrorInfo::new(ErrorKind::ImportError, ctx.as_deref()),
                                 msg,
                             );
                             self.bind_unimportable_names(&x);
@@ -923,8 +923,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.error(
                         x.range,
-                        ErrorKind::ImportError,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::ImportError),
                         format!(
                             "Could not resolve relative import `{}`",
                             ".".repeat(x.level as usize)
@@ -957,8 +956,7 @@ impl<'a> BindingsBuilder<'a> {
             }
             Stmt::IpyEscapeCommand(x) => self.error(
                 x.range,
-                ErrorKind::Unsupported,
-                None,
+                ErrorInfo::Kind(ErrorKind::Unsupported),
                 "IPython escapes are not supported".to_owned(),
             ),
         }

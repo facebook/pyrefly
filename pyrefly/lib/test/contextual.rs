@@ -18,6 +18,17 @@ xs: list[A] = [B()]
 );
 
 testcase!(
+    test_context_list_mult,
+    r#"
+def test(x: list[int], n: int) -> None:
+    a: list[object] = [1] * n
+    b: list[object] = x * n  # E: `list[int]` is not assignable to `list[object]`
+    c: list[object] = [1] * 2
+    d: list[object] = x * 2  # E: `list[int]` is not assignable to `list[object]`
+"#,
+);
+
+testcase!(
     test_context_assign_annotated_binding,
     r#"
 class A: ...

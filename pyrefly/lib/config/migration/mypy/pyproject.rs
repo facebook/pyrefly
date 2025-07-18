@@ -5,33 +5,29 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-
-use itertools::Itertools;
-use pyrefly_python::sys_info::PythonPlatform;
-use pyrefly_python::sys_info::PythonVersion;
-use pyrefly_util::globs::Glob;
-use pyrefly_util::globs::Globs;
+use configparser::ini::Ini;
+use configparser::ini::IniDefault;
 use serde::Deserialize;
 use serde_with::OneOrMany;
 use serde_with::serde_as;
 
-use crate::config::base::ConfigBase;
 use crate::config::config::ConfigFile;
-use crate::config::config::SubConfig;
-use crate::config::error::ErrorDisplayConfig;
-use crate::config::migration::mypy::regex_converter;
-use crate::config::util::ConfigOrigin;
-use crate::error::kind::Severity;
-use crate::module::wildcard::ModuleWildcard;
+use crate::config::migration::config_option_migrater::ConfigOptionMigrater;
+use crate::config::migration::error_codes::ErrorCodes;
+use crate::config::migration::project_excludes::ProjectExcludes;
+use crate::config::migration::project_includes::ProjectIncludes;
+use crate::config::migration::python_interpreter::PythonInterpreter;
+use crate::config::migration::python_version::PythonVersionConfig;
+use crate::config::migration::replace_imports::ReplaceImports;
+use crate::config::migration::search_path::SearchPath;
+use crate::config::migration::sub_configs::SubConfigs;
+use crate::config::migration::use_untyped_imports::UseUntypedImports;
 
 // A pyproject.toml Mypy config differs a bit from the INI format:
 // - The [mypy] section is written as [tool.mypy]
 // - The `exclude` regex can be written as an array of regexes OR a single string
 // - Per-module configs go in [[tool.mypy.overrides]]
 // - Any of the fields may be a string, a list of strings, or a string that needs to be split (possibly with a delimiter besides `,`.)
-// This means it's hard to share code with the INI parsing implementation.
 
 #[allow(dead_code)]
 #[serde_as]
@@ -73,13 +69,21 @@ struct MypySection {
     search_path: Option<Vec<String>>,
     #[serde(rename = "platform")]
     python_platform: Option<String>,
-    python_version: Option<PythonVersion>,
+    python_version: Option<String>,
     #[serde(rename = "python_executable")]
-    python_interpreter: Option<PathBuf>,
+    python_interpreter: Option<String>,
+    #[serde_as(as = "Option<OneOrMany<_>>")]
+    #[serde(default)]
     disable_error_code: Option<Vec<String>>,
+    #[serde_as(as = "Option<OneOrMany<_>>")]
+    #[serde(default)]
     enable_error_code: Option<Vec<String>>,
     #[serde(default)]
     follow_untyped_imports: Option<bool>,
+    #[serde(default)]
+    ignore_missing_imports: Option<bool>,
+    #[serde(default)]
+    follow_imports: Option<String>,
     #[serde(default)]
     overrides: Vec<ModuleSection>,
 }
@@ -98,133 +102,148 @@ struct PyProject {
 #[error("No [tool.mypy] section found in pyproject.toml")]
 pub struct MypyNotFoundError {}
 
-fn split_all(strs: &[String], pat: &[char]) -> Vec<String> {
-    strs.iter()
-        .flat_map(|s| s.split(pat))
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect::<Vec<_>>()
-}
-
-fn split_comma(strs: &[String]) -> Vec<String> {
-    split_all(strs, &[','])
-}
-
-fn make_error_config(disable: Vec<String>, enable: Vec<String>) -> Option<ErrorDisplayConfig> {
-    let mut errors = HashMap::new();
-    for error_code in disable {
-        errors.insert(error_code, Severity::Ignore);
-    }
-    // enable_error_code overrides disable_error_code
-    for error_code in enable {
-        errors.insert(error_code, Severity::Error);
-    }
-    crate::config::migration::mypy::code_to_kind(errors)
-}
-
-pub fn parse_pyproject_config(raw_file: &str) -> anyhow::Result<ConfigFile> {
+/// Convert a pyproject.toml file to an Ini object that can be used with the existing ConfigOptionMigrater implementations
+fn pyproject_to_ini(raw_file: &str) -> anyhow::Result<Ini> {
     let mypy = toml::from_str::<PyProject>(raw_file)?
         .tool
         .and_then(|t| t.mypy)
         .ok_or(MypyNotFoundError {})?;
 
+    let mut default = IniDefault::default();
+    default.multiline = true;
+    let mut ini = Ini::new_from_defaults(default);
+
+    // Add the global mypy section
+    if let Some(files) = mypy.files {
+        ini.set("mypy", "files", Some(join_strings(&files)));
+    }
+    if let Some(packages) = mypy.packages {
+        ini.set("mypy", "packages", Some(join_strings(&packages)));
+    }
+    if let Some(modules) = mypy.modules {
+        ini.set("mypy", "modules", Some(join_strings(&modules)));
+    }
+    if let Some(exclude_regex) = mypy.exclude_regex {
+        // For exclude patterns, we need to join them with | instead of commas
+        // because the regex_converter::convert function expects a regex pattern
+        ini.set("mypy", "exclude", Some(exclude_regex.join("|")));
+    }
+    if let Some(search_path) = mypy.search_path {
+        ini.set("mypy", "mypy_path", Some(join_strings(&search_path)));
+    }
+    if let Some(platform) = mypy.python_platform {
+        ini.set("mypy", "platform", Some(platform));
+    }
+    if let Some(version) = mypy.python_version {
+        ini.set("mypy", "python_version", Some(version));
+    }
+    if let Some(interpreter) = mypy.python_interpreter {
+        ini.set("mypy", "python_executable", Some(interpreter));
+    }
+    if let Some(disable_error_code) = mypy.disable_error_code {
+        ini.set(
+            "mypy",
+            "disable_error_code",
+            Some(join_strings(&disable_error_code)),
+        );
+    }
+    if let Some(enable_error_code) = mypy.enable_error_code {
+        ini.set(
+            "mypy",
+            "enable_error_code",
+            Some(join_strings(&enable_error_code)),
+        );
+    }
+    if let Some(follow_untyped_imports) = mypy.follow_untyped_imports {
+        ini.set(
+            "mypy",
+            "follow_untyped_imports",
+            Some(follow_untyped_imports.to_string()),
+        );
+    }
+    if let Some(ignore_missing_imports) = mypy.ignore_missing_imports {
+        ini.set(
+            "mypy",
+            "ignore_missing_imports",
+            Some(ignore_missing_imports.to_string()),
+        );
+    }
+    if let Some(follow_imports) = mypy.follow_imports {
+        ini.set("mypy", "follow_imports", Some(follow_imports));
+    }
+
+    // Add the per-module sections
+    for module_section in mypy.overrides {
+        for module_name in &module_section.module {
+            let section_name = format!("mypy-{module_name}");
+
+            if module_section.ignore_missing_imports {
+                ini.set(
+                    &section_name,
+                    "ignore_missing_imports",
+                    Some("True".to_owned()),
+                );
+            }
+            if module_section.follow_untyped_imports {
+                ini.set(
+                    &section_name,
+                    "follow_untyped_imports",
+                    Some("True".to_owned()),
+                );
+            }
+            if let Some(follow_imports) = &module_section.follow_imports {
+                ini.set(
+                    &section_name,
+                    "follow_imports",
+                    Some(follow_imports.clone()),
+                );
+            }
+            if let Some(disable_error_code) = &module_section.disable_error_code {
+                ini.set(
+                    &section_name,
+                    "disable_error_code",
+                    Some(join_strings(disable_error_code)),
+                );
+            }
+            if let Some(enable_error_code) = &module_section.enable_error_code {
+                ini.set(
+                    &section_name,
+                    "enable_error_code",
+                    Some(join_strings(enable_error_code)),
+                );
+            }
+        }
+    }
+
+    Ok(ini)
+}
+
+/// Join a vector of strings with commas
+fn join_strings(strings: &[String]) -> String {
+    strings.join(",")
+}
+
+pub fn parse_pyproject_config(raw_file: &str) -> anyhow::Result<ConfigFile> {
+    let ini = pyproject_to_ini(raw_file)?;
     let mut cfg = ConfigFile::default();
 
-    let project_includes = [mypy.files, mypy.packages, mypy.modules]
-        .into_iter()
-        .flatten()
-        .flatten()
-        .collect::<Vec<_>>();
-    if !project_includes.is_empty() {
-        let project_includes = split_comma(&project_includes);
-        cfg.project_includes = Globs::new(project_includes);
-    }
+    let config_options: Vec<Box<dyn ConfigOptionMigrater>> = vec![
+        Box::new(ProjectIncludes),
+        Box::new(ProjectExcludes),
+        Box::new(PythonInterpreter),
+        Box::new(PythonVersionConfig),
+        Box::new(UseUntypedImports),
+        Box::new(ReplaceImports),
+        Box::new(SearchPath),
+        Box::new(ErrorCodes),
+        Box::new(SubConfigs),
+    ];
 
-    if let Some(regexes) = mypy.exclude_regex {
-        let mut patterns = vec![];
-        for reg in regexes {
-            patterns.extend(regex_converter::convert(&reg)?);
-        }
-        if !patterns.is_empty() {
-            cfg.project_excludes = Globs::new(patterns);
-        }
+    // Iterate through all config options and apply them to the config
+    for option in config_options {
+        // Ignore errors for now, we can use this in the future if we want to print out error messages or use for logging purpose
+        let _ = option.migrate_from_mypy(&ini, &mut cfg);
     }
-
-    if let Some(paths) = mypy.search_path {
-        let search_path = split_all(&paths, &[',', ':'])
-            .iter()
-            .map_into()
-            .collect::<Vec<PathBuf>>();
-        cfg.search_path_from_file = search_path;
-    }
-
-    if let Some(platform) = mypy.python_platform {
-        cfg.python_environment.python_platform = Some(PythonPlatform::new(&platform));
-    }
-    if mypy.python_version.is_some() {
-        cfg.python_environment.python_version = mypy.python_version;
-    }
-    if mypy.python_interpreter.is_some() {
-        cfg.interpreters.python_interpreter = mypy.python_interpreter.map(ConfigOrigin::config);
-    }
-
-    let disable_error_code = mypy
-        .disable_error_code
-        .map(|d| split_comma(&d))
-        .unwrap_or(vec![]);
-    let enable_error_code = mypy
-        .enable_error_code
-        .map(|d| split_comma(&d))
-        .unwrap_or(vec![]);
-    cfg.root.errors = make_error_config(disable_error_code, enable_error_code);
-
-    // follow_untyped_imports may be used as a global or per-module setting. As a per-module setting, it's used to
-    // indicate that the module should be ignored if it's untyped.
-    // Pyrefly's use_untyped_imports is only a global setting.
-    // We handle this by *only* checking the for the global config.
-    cfg.use_untyped_imports = mypy
-        .follow_untyped_imports
-        .unwrap_or(cfg.use_untyped_imports);
-
-    let mut replace_imports = vec![];
-    let mut sub_configs = vec![];
-    for module in mypy.overrides {
-        if module.ignore_missing_imports || module.follow_imports.is_some_and(|v| v == "skip") {
-            replace_imports.extend(
-                module
-                    .module
-                    .iter()
-                    .filter_map(|m| ModuleWildcard::new(m).ok()),
-            );
-        }
-        let disable = module
-            .disable_error_code
-            .map(|d| split_comma(&d))
-            .unwrap_or(vec![]);
-        let enable = module
-            .enable_error_code
-            .map(|d| split_comma(&d))
-            .unwrap_or(vec![]);
-        let errors = make_error_config(disable, enable);
-        if errors.is_some() {
-            sub_configs.extend(module.module.iter().map(|m| {
-                let matches = Glob::new(m.replace('.', "/").replace('*', "**"));
-                SubConfig {
-                    matches,
-                    settings: ConfigBase {
-                        errors: errors.clone(),
-                        ..Default::default()
-                    },
-                }
-            }));
-        }
-    }
-
-    // SubConfig supports replace_imports_with_any, but mypy's ignore_missing_imports and follow_imports=skip
-    // are equivalent to the root replace_imports_with_any.
-    cfg.root.replace_imports_with_any = Some(replace_imports);
-    cfg.sub_configs = sub_configs;
 
     Ok(cfg)
 }
@@ -232,9 +251,13 @@ pub fn parse_pyproject_config(raw_file: &str) -> anyhow::Result<ConfigFile> {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::path::PathBuf;
+
+    use pyrefly_util::globs::Globs;
 
     use super::*;
     use crate::error::kind::ErrorKind;
+    use crate::module::wildcard::ModuleWildcard;
 
     #[test]
     fn test_missing_mypy() -> anyhow::Result<()> {

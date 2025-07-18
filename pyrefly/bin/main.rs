@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::backtrace::Backtrace;
 use std::env::args_os;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -26,6 +25,7 @@ use pyrefly::library::library::library::library;
 use pyrefly_util::args::clap_env;
 use pyrefly_util::args::get_args_expanded;
 use pyrefly_util::globs::FilteredGlobs;
+use pyrefly_util::panic::exit_on_panic;
 use pyrefly_util::watcher::Watcher;
 
 // fbcode likes to set its own allocator in fbcode.default_allocator
@@ -108,14 +108,6 @@ enum Command {
 
     /// Automatically add type annotations to a file or directory.
     Autotype(FullCheckArgs),
-}
-
-fn exit_on_panic() {
-    std::panic::set_hook(Box::new(move |info| {
-        eprintln!("Thread panicked, shutting down: {}", info);
-        eprintln!("Backtrace:\n{}", Backtrace::force_capture());
-        std::process::exit(1);
-    }));
 }
 
 async fn run_autotype(
@@ -204,7 +196,7 @@ async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<Com
 /// Run based on the command line arguments.
 async fn run() -> anyhow::Result<ExitCode> {
     let args = Args::parse_from(get_args_expanded(args_os())?);
-    args.common.init();
+    args.common.init(false);
     Ok(run_command(args.command, true).await?.to_exit_code())
 }
 

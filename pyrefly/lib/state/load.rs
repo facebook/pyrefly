@@ -18,10 +18,11 @@ use ruff_text_size::TextRange;
 use vec1::vec1;
 
 use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorInfo;
 use crate::error::kind::ErrorKind;
 use crate::error::style::ErrorStyle;
-use crate::module::bundled::typeshed;
 use crate::module::module_info::ModuleInfo;
+use crate::module::typeshed::typeshed;
 use crate::state::memory::MemoryFilesLookup;
 
 /// The result of loading a module, including its `ModuleInfo` and `ErrorCollector`.
@@ -67,8 +68,7 @@ impl Load {
         if let Some(err) = self_error {
             errors.add(
                 TextRange::default(),
-                ErrorKind::ImportError,
-                None,
+                ErrorInfo::Kind(ErrorKind::ImportError),
                 vec1![format!(
                     "Failed to load `{name}` from `{}`, got {err:#}",
                     module_info.path()

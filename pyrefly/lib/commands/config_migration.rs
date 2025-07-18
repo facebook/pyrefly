@@ -89,25 +89,28 @@ impl Args {
         }
     }
 
-    pub fn run(&self) -> anyhow::Result<(CommandExitStatus, Option<PathBuf>)> {
+    /// This function handles finding the config file if needed, loading it, and converting it to a Pyrefly config.
+    /// It returns the config and the path to the original config file.
+    pub fn load_config(&self) -> anyhow::Result<(ConfigFile, PathBuf)> {
         if let Some(path) = self.original_config_path.as_ref()
             && !path.exists()
         {
             error!("Could not find or cannot access `{}`", path.display());
-            return Ok((CommandExitStatus::InfraError, None));
+            return Err(anyhow::anyhow!("Could not find or access config file"));
         }
 
         let original_config_path = match &self.original_config_path {
-            Some(path) if path.is_file() => path,
-            Some(path) => &Self::find_config(path)?,
+            Some(path) if path.is_file() => path.clone(),
+            Some(path) => Self::find_config(path)?,
             None => {
                 let cwd = std::env::current_dir()
                     .context("Could not find dir to start search for configs from")?;
-                &Self::find_config(&cwd)?
+                Self::find_config(&cwd)?
             }
         };
+
         let config = if original_config_path.file_name() == Some("pyrightconfig.json".as_ref()) {
-            let raw_file = fs_anyhow::read_to_string(original_config_path)?;
+            let raw_file = fs_anyhow::read_to_string(&original_config_path)?;
             info!(
                 "Migrating pyright config file from: `{}`",
                 original_config_path.display()
@@ -119,13 +122,16 @@ impl Args {
                 "Migrating mypy config file from: `{}`",
                 original_config_path.display()
             );
-            MypyConfig::parse_mypy_config(original_config_path)?
+            MypyConfig::parse_mypy_config(&original_config_path)?
         } else if original_config_path.file_name() == Some("pyproject.toml".as_ref()) {
-            match Self::load_from_pyproject(original_config_path) {
+            match Self::load_from_pyproject(&original_config_path) {
                 Ok(config) => config,
                 Err(e) => {
                     error!("Failed to load config from pyproject.toml: {}", e);
-                    return Ok((CommandExitStatus::UserError, None));
+                    return Err(anyhow::anyhow!(
+                        "Failed to load config from pyproject.toml: {}",
+                        e
+                    ));
                 }
             }
         } else {
@@ -133,16 +139,25 @@ impl Args {
                 "Currently only migration from pyrightconfig.json, mypy.ini, and pyproject.toml is supported, not `{}`",
                 original_config_path.display(),
             );
-            return Ok((CommandExitStatus::UserError, None));
+            return Err(anyhow::anyhow!("Unsupported config file format"));
         };
 
         Self::check_and_warn(&config);
+
+        Ok((config, original_config_path))
+    }
+
+    pub fn run(&self) -> anyhow::Result<(CommandExitStatus, Option<PathBuf>)> {
+        let (config, original_config_path) = match self.load_config() {
+            Ok(result) => result,
+            Err(_) => return Ok((CommandExitStatus::UserError, None)),
+        };
 
         let pyrefly_config_path = {
             if original_config_path.ends_with(ConfigFile::PYPROJECT_FILE_NAME) {
                 original_config_path
             } else {
-                &original_config_path.with_file_name(ConfigFile::PYREFLY_FILE_NAME)
+                original_config_path.with_file_name(ConfigFile::PYREFLY_FILE_NAME)
             }
         };
         if !pyrefly_config_path
@@ -159,11 +174,11 @@ impl Args {
                 .with_context(|| "While trying to write the migrated config file")?;
         }
         if pyrefly_config_path.ends_with(ConfigFile::PYPROJECT_FILE_NAME) {
-            write_pyproject(pyrefly_config_path, config)?;
+            write_pyproject(&pyrefly_config_path, config)?;
             info!("Config written to `{}`", pyrefly_config_path.display());
         } else {
             let serialized = toml::to_string_pretty(&config)?;
-            fs_anyhow::write(pyrefly_config_path, serialized.as_bytes())?;
+            fs_anyhow::write(&pyrefly_config_path, serialized.as_bytes())?;
             info!("New config written to `{}`", pyrefly_config_path.display());
         }
         Ok((

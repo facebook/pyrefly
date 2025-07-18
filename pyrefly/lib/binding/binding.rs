@@ -55,6 +55,7 @@ use crate::alt::types::yields::YieldFromResult;
 use crate::alt::types::yields::YieldResult;
 use crate::binding::bindings::Bindings;
 use crate::binding::narrow::NarrowOp;
+use crate::export::docstring::Docstring;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::module::short_identifier::ShortIdentifier;
@@ -90,16 +91,16 @@ assert_words!(KeyFunction, 1);
 assert_words!(Binding, 11);
 assert_words!(BindingExpect, 11);
 assert_words!(BindingAnnotation, 15);
-assert_words!(BindingClass, 20);
+assert_words!(BindingClass, 21);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassMetadata, 8);
 assert_bytes!(BindingClassMro, 4);
-assert_words!(BindingClassField, 30);
+assert_words!(BindingClassField, 21);
 assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 4);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
-assert_words!(BindingFunction, 22);
+assert_words!(BindingFunction, 23);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
@@ -845,6 +846,7 @@ pub struct BindingFunction {
     pub decorators: Box<[Idx<Key>]>,
     pub legacy_tparams: Box<[Idx<KeyLegacyTypeParam>]>,
     pub successor: Option<Idx<KeyFunction>>,
+    pub docstring: Option<Docstring>,
 }
 
 impl DisplayWith<Bindings> for BindingFunction {
@@ -855,6 +857,7 @@ impl DisplayWith<Bindings> for BindingFunction {
 
 #[derive(Clone, Debug)]
 pub struct ClassBinding {
+    /// A class definition, but with the body stripped out.
     pub def: StmtClassDef,
     pub def_index: ClassDefIndex,
     /// The fields are all the names declared on the class that we were able to detect
@@ -871,6 +874,7 @@ pub struct ClassBinding {
     /// that there can be no legacy tparams? If no, we need a `BindingTParams`, if yes
     /// we can directly compute the `TParams` from the class def.
     pub tparams_require_binding: bool,
+    pub docstring: Option<Docstring>,
 }
 
 #[derive(Clone, Debug)]
@@ -1614,6 +1618,82 @@ impl DisplayWith<Bindings> for BindingTParams {
     }
 }
 
+/// Represents everything we know about a class field definition at binding time.
+#[derive(Clone, Debug)]
+pub enum ClassFieldDefinition {
+    /// Declared by an annotation, with no assignment
+    DeclaredByAnnotation { annotation: Idx<KeyAnnotation> },
+    /// Declared with no annotation or assignment (this is impossible
+    /// in a normal class, but can happen with some synthesized classes).
+    DeclaredWithoutAnnotation,
+    /// Defined via assignment, possibly with an annotation
+    AssignedInBody {
+        value: ExprOrBinding,
+        annotation: Option<Idx<KeyAnnotation>>,
+    },
+    /// Defined by a `def` form. Because of decorators it may not
+    /// actually *be* a method, hence the name `MethodLike`.
+    MethodLike {
+        definition: Idx<Key>,
+        has_return_annotation: bool,
+    },
+    /// Defined in some way other than assignment or a `def` form,
+    /// for example a name imported into a class body.
+    DefinedWithoutAssign { definition: Idx<Key> },
+    /// Implicitly defined in a method, without any explicit reference
+    /// in the class body.
+    DefinedInMethod {
+        value: ExprOrBinding,
+        annotation: Option<Idx<KeyAnnotation>>,
+        method: MethodThatSetsAttr,
+    },
+}
+
+impl DisplayWith<Bindings> for ClassFieldDefinition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
+        match self {
+            Self::DeclaredByAnnotation { annotation } => {
+                write!(
+                    f,
+                    "ClassFieldDefinition::DeclaredByAnnotation({})",
+                    ctx.display(*annotation),
+                )
+            }
+            Self::DeclaredWithoutAnnotation => {
+                write!(f, "ClassFieldDefinition::DeclaredWithoutAnnotation",)
+            }
+            Self::AssignedInBody { value, .. } => {
+                write!(
+                    f,
+                    "ClassFieldDefinition::AssignedInBody({}, ..)",
+                    value.display_with(ctx),
+                )
+            }
+            Self::MethodLike { definition, .. } => {
+                write!(
+                    f,
+                    "ClassFieldDefinition::MethodLike({}, ..)",
+                    ctx.display(*definition)
+                )
+            }
+            Self::DefinedWithoutAssign { definition, .. } => {
+                write!(
+                    f,
+                    "ClassFieldDefinition::DefinedWithoutAssign({})",
+                    ctx.display(*definition),
+                )
+            }
+            Self::DefinedInMethod { value, .. } => {
+                write!(
+                    f,
+                    "ClassFieldDefinition::DefinedInMethod({}, ..)",
+                    value.display_with(ctx),
+                )
+            }
+        }
+    }
+}
+
 /// Binding for a class field, which is any attribute (including methods) of a class defined in
 /// either the class body or in method (like `__init__`) that we recognize as
 /// defining instance attributes.
@@ -1621,12 +1701,8 @@ impl DisplayWith<Bindings> for BindingTParams {
 pub struct BindingClassField {
     pub class_idx: Idx<KeyClass>,
     pub name: Name,
-    pub value: ExprOrBinding,
-    pub annotation: Option<Idx<KeyAnnotation>>,
     pub range: TextRange,
-    pub initial_value: RawClassFieldInitialization,
-    pub is_function_without_return_annotation: bool,
-    pub implicit_def_method: Option<Name>,
+    pub definition: ClassFieldDefinition,
 }
 
 impl DisplayWith<Bindings> for BindingClassField {
@@ -1636,9 +1712,20 @@ impl DisplayWith<Bindings> for BindingClassField {
             "BindingClassField({}, {}, {})",
             ctx.display(self.class_idx),
             self.name,
-            self.value.display_with(ctx),
+            self.definition.display_with(ctx),
         )
     }
+}
+
+/// The method where an attribute was defined implicitly by assignment to `self.<attr_name>`
+///
+/// We track whether this method is recognized as a valid attribute-defining
+/// method (e.g. a constructor); if an attribute is inferred only from assignments
+/// in non-recognized methods, we will infer its type but also produce a type error.
+#[derive(Clone, Debug)]
+pub struct MethodThatSetsAttr {
+    pub method_name: Name,
+    pub recognized_attribute_defining_method: bool,
 }
 
 /// Information about the value, if any, that a field is initialized to when it is declared.
@@ -1655,7 +1742,7 @@ pub enum RawClassFieldInitialization {
     ///         self.x = 42
     ///         self.y = 42
     /// `x`'s initialization type is `Uninitialized`, whereas y's is `Method('__init__')`.
-    Method(Name),
+    Method(MethodThatSetsAttr),
     /// The field is declared and initialized to a value in the class body.
     ///
     /// If the value is from an assignment, stores the expression that the field is assigned to,

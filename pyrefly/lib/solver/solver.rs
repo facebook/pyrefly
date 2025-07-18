@@ -24,6 +24,7 @@ use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::solver::type_order::TypeOrder;
@@ -404,13 +405,12 @@ impl Solver {
             &self.for_display(want.clone()),
             errors.module_info().name(),
         );
-        let kind = tcc.kind.as_error_kind();
         match tcc.context {
             Some(ctx) => {
-                errors.add(loc, kind, Some(&|| ctx.clone()), vec1![msg]);
+                errors.add(loc, ErrorInfo::Context(&|| ctx.clone()), vec1![msg]);
             }
             None => {
-                errors.add(loc, kind, None, vec1![msg]);
+                errors.add(loc, ErrorInfo::Kind(tcc.kind.as_error_kind()), vec1![msg]);
             }
         }
     }

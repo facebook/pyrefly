@@ -176,11 +176,11 @@ use crate::lsp::transaction_manager::IDETransactionManager;
 use crate::lsp::workspace::PythonInfo;
 use crate::lsp::workspace::Workspace;
 use crate::lsp::workspace::Workspaces;
-use crate::module::bundled::typeshed;
 use crate::module::module_info::ModuleInfo;
 use crate::module::module_info::TextRangeWithModule;
+use crate::module::typeshed::typeshed;
 use crate::state::handle::Handle;
-use crate::state::lsp::FindDefinitionItem;
+use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::state::State;
@@ -1340,7 +1340,7 @@ impl Server {
             return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
         let position = info.lined_buffer().from_lsp_position(position);
-        let Some(FindDefinitionItem {
+        let Some(FindDefinitionItemWithDocstring {
             metadata,
             location,
             docstring: _,

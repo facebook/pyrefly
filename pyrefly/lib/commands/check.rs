@@ -52,7 +52,7 @@ use crate::error::error::print_error_counts;
 use crate::error::kind::Severity;
 use crate::error::legacy::LegacyErrors;
 use crate::error::summarise::print_error_summary;
-use crate::module::bundled::stdlib_search_path;
+use crate::module::typeshed::stdlib_search_path;
 use crate::report;
 use crate::state::handle::Handle;
 use crate::state::require::Require;

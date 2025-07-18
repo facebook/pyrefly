@@ -44,6 +44,7 @@ use crate::binding::binding::KeyFunction;
 use crate::binding::binding::KeyVariance;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
+use crate::binding::binding::MethodThatSetsAttr;
 use crate::binding::binding::RawClassFieldInitialization;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::CurrentIdx;
@@ -337,16 +338,6 @@ pub struct ScopeClass {
     pub indices: ClassIndices,
     attributes_from_recognized_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
     attributes_from_other_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
-}
-
-/// The method where an attribute was defined implicitly by assignment to `self.<attr_name>`
-///
-/// We track whether this method is recognized as a valid attribute-defining
-/// method (e.g. a constructor); if an attribute is inferred only from assignments
-/// in non-recognized methods, we will infer its type but also produce a type error.
-pub struct MethodThatSetsAttr {
-    pub method_name: Name,
-    pub recognized_attribute_defining_method: bool,
 }
 
 impl ScopeClass {

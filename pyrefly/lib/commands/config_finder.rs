@@ -21,7 +21,7 @@ use crate::config::config::ProjectLayout;
 use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::config::finder::debug_log;
-use crate::module::bundled::BundledTypeshed;
+use crate::module::typeshed::BundledTypeshed;
 
 /// Create a standard `ConfigFinder`. The `configure` function is expected to set any additional options,
 /// then call `configure` and `validate`.

@@ -1660,6 +1660,22 @@ def f(x:float, y:bool) -> float:
 );
 
 testcase!(
+    test_assert_type_class_union,
+    r#"
+from typing import assert_type
+
+class A: pass
+
+def f(condition: bool):
+    if condition:
+        x = A()
+    else:
+        x = A
+    assert_type(x, A | type[A])
+    "#,
+);
+
+testcase!(
     test_nested_list_comp,
     r#"from typing import assert_type
 assert_type([a for a in [b for b in ["a", "b"]]], list[str])

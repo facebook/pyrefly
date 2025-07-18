@@ -78,6 +78,7 @@ use crate::binding::narrow::identifier_and_chain_for_expr;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
@@ -333,8 +334,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         x.range(),
-                        ErrorKind::InvalidAnnotation,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                         format!("`{special}` is only allowed inside a class body"),
                     );
                     None
@@ -348,8 +348,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         x.range(),
-                        ErrorKind::InvalidAnnotation,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                         format!(
                             "`{special}` is only allowed on a class or local variable annotation"
                         ),
@@ -365,8 +364,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         x.range(),
-                        ErrorKind::InvalidAnnotation,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                         "`TypeAlias` is only allowed on variable annotations".to_owned(),
                     );
                     None
@@ -433,8 +431,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.error(
             errors,
             x.range(),
-            ErrorKind::InvalidAnnotation,
-            None,
+            ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
             format!("{problem} cannot be used in annotations"),
         );
         false
@@ -464,8 +461,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             x.range(),
-                            ErrorKind::InvalidAnnotation,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                             format!("Expected a type argument for `{qualifier}`"),
                         );
                     }
@@ -487,8 +483,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             x.range(),
-                            ErrorKind::InvalidAnnotation,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                             "`Annotated` needs at least one piece of metadata in addition to the type".to_owned(),
                         );
                     }
@@ -496,8 +491,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         x.range(),
-                        ErrorKind::InvalidAnnotation,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                         format!(
                             "Expected 1 type argument for `{}`, got {}",
                             qualifier,
@@ -511,8 +505,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         unpacked_slice[0].range(),
-                        ErrorKind::InvalidAnnotation,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                         "`ClassVar` arguments may not contain any type variables".to_owned(),
                     );
                 }
@@ -520,8 +513,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         unpacked_slice[0].range(),
-                        ErrorKind::InvalidAnnotation,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                         "`ClassVar` may not be nested inside `Final`".to_owned(),
                     );
                 }
@@ -533,8 +525,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         x.range(),
-                        ErrorKind::InvalidAnnotation,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                         "Cannot combine `Required` and `NotRequired` for a TypedDict field"
                             .to_owned(),
                     );
@@ -551,16 +542,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             x.range(),
-                            ErrorKind::InvalidAnnotation,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                             format!("Expected a type argument for `{special_form}`"),
                         );
                     } else {
                         self.error(
                             errors,
                             x.range(),
-                            ErrorKind::InvalidAnnotation,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                             format!("`{special_form}` is not allowed in this context"),
                         );
                     }
@@ -616,8 +605,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorKind::NotIterable,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::NotIterable),
                             context().format(),
                         )
                     });
@@ -644,8 +632,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::NotIterable,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::NotIterable),
                         context().format(),
                     )
                 });
@@ -673,8 +660,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorKind::InvalidInheritance,
-                None,
+                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                 format!(
                     "Expression `{}` has type `{}` which does not derive from BaseException",
                     self.module_info().display(x),
@@ -864,8 +850,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorKind::TypeAliasError,
-                None,
+                ErrorInfo::Kind(ErrorKind::TypeAliasError),
                 format!("Expected `{name}` to be a type alias, got `{ty}`"),
             );
             return Type::any_error();
@@ -916,8 +901,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None => self.error(
                     errors,
                     range,
-                    ErrorKind::AsyncError,
-                    context,
+                    ErrorInfo::new(ErrorKind::AsyncError, context),
                     format!("Expected `{}` to be async", dunder::AENTER),
                 ),
             },
@@ -965,8 +949,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None => self.error(
                     errors,
                     range,
-                    ErrorKind::AsyncError,
-                    context,
+                    ErrorInfo::new(ErrorKind::AsyncError, context),
                     format!("Expected `{}` to be async", dunder::AEXIT),
                 ),
             },
@@ -1027,8 +1010,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 raw_param.range(),
-                                ErrorKind::InvalidTypeVarTuple,
-                                None,
+                                ErrorInfo::Kind(ErrorKind::InvalidTypeVarTuple),
                                 "There cannot be more than one TypeVarTuple type parameter"
                                     .to_owned(),
                             );
@@ -1062,8 +1044,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::InvalidTypeVar,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
                         format!(
                             "Type parameter `{}` without a default cannot follow type parameter `{}` with a default",
                             tparam.quantified.name(),
@@ -1086,7 +1067,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 });
                 if !out_of_scope_names.is_empty() {
-                    self.error(errors, range, ErrorKind::InvalidTypeVar, None, format!(
+                    self.error(errors, range, ErrorInfo::Kind(ErrorKind::InvalidTypeVar), format!(
                         "Default of type parameter `{}` refers to out-of-scope type parameter{} {}",
                         tparam.quantified.name(),
                         if out_of_scope_names.len() != 1 {
@@ -1103,8 +1084,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::InvalidTypeVar,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
                         format!(
                             "TypeVar `{}` with a default cannot follow TypeVarTuple `{}`",
                             tparam.quantified.name(),
@@ -1191,8 +1171,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     self.error(
                                         errors,
                                         x.slice.range(),
-                                        ErrorKind::DeleteError,
-                                        None,
+                                        ErrorInfo::Kind(ErrorKind::DeleteError),
                                         format!(
                                             "Key `{}` in TypedDict `{}` may not be deleted",
                                             field_name,
@@ -1204,8 +1183,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 self.error(
                                     errors,
                                     x.slice.range(),
-                                    ErrorKind::TypedDictKeyError,
-                                    None,
+                                    ErrorInfo::Kind(ErrorKind::TypedDictKeyError),
                                     format!(
                                         "TypedDict `{}` does not have key `{}`",
                                         typed_dict.name(),
@@ -1231,8 +1209,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         x.range(),
-                        ErrorKind::DeleteError,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::DeleteError),
                         "Invalid target for `del`".to_owned(),
                     );
                 }
@@ -1268,8 +1245,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     self.error(
                                         errors,
                                         *range,
-                                        ErrorKind::BadUnpacking,
-                                        None,
+                                        ErrorInfo::Kind(ErrorKind::BadUnpacking),
                                         format!(
                                             "Cannot unpack {} (of size {}) into {}",
                                             iterable_ty,
@@ -1308,8 +1284,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         self.bindings().idx_to_key(*new).range(),
-                        ErrorKind::AnnotationMismatch,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::AnnotationMismatch),
                         format!(
                             "`{}` cannot be annotated with `{}`, it is already defined with type `{}`",
                             name,
@@ -1360,20 +1335,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Arc<ClassField> {
         let field = match &self.get_idx(field.class_idx).0 {
             None => ClassField::recursive(),
-            Some(class) => {
-                let annotation = field.annotation.map(|a| self.get_idx(a));
-                self.calculate_class_field(
-                    &field.name,
-                    &field.value,
-                    annotation.as_deref().map(|annot| &annot.annotation),
-                    &field.initial_value,
-                    class,
-                    field.is_function_without_return_annotation,
-                    field.implicit_def_method.as_ref(),
-                    field.range,
-                    errors,
-                )
-            }
+            Some(class) => self.calculate_class_field(
+                class,
+                &field.name,
+                field.range,
+                &field.definition,
+                errors,
+            ),
         };
         Arc::new(field)
     }
@@ -1459,8 +1427,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     self.error(
                                         errors,
                                         range,
-                                        ErrorKind::InvalidSuperCall,
-                                        None,
+                                        ErrorInfo::Kind(ErrorKind::InvalidSuperCall),
                                         format!(
                                             "Illegal `super({cls_type}, {obj_cls})` call: `{obj_cls}` is not an instance or subclass of `{cls_type}`"
                                         ),
@@ -1489,8 +1456,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 self.error(
                                     errors,
                                     range,
-                                    ErrorKind::InvalidArgument,
-                                    None,
+                                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
                                     format!("Expected second argument to `super` to be a class object or instance, got `{}`", self.for_display(t.clone())),
                                 )
                             }
@@ -1499,8 +1465,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     t => self.error(
                         errors,
                         range,
-                        ErrorKind::InvalidArgument,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
                         format!(
                             "Expected first argument to `super` to be a class object, got `{}`",
                             self.for_display(t.clone())
@@ -1523,8 +1488,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 return self.error(
                                     errors,
                                     range,
-                                    ErrorKind::InvalidSuperCall,
-                                    None,
+                                    ErrorInfo::Kind(ErrorKind::InvalidSuperCall),
                                     "`super` call with no arguments is not valid inside a staticmethod".to_owned(),
                                 );
                             } else if method_ty.metadata.flags.is_classmethod {
@@ -1564,8 +1528,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::from_quantified(kind),
-                        None,
+                        ErrorInfo::Kind(ErrorKind::from_quantified(kind)),
                         format!(
                             "Expected default `{default}` of `{name}` to be assignable to the upper bound of `{bound_ty}`",
                         ),
@@ -1587,8 +1550,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::from_quantified(kind),
-                        None,
+                        ErrorInfo::Kind(ErrorKind::from_quantified(kind)),
                         format!(
                             "Expected default `{default}` of `{name}` to be one of the following constraints: {formatted_constraints}"
                         ),
@@ -1606,8 +1568,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::InvalidParamSpec,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidParamSpec),
                         format!("Default for `ParamSpec` must be a parameter list, `...`, or another `ParamSpec`, got `{default}`"),
                     );
                     Type::any_error()
@@ -1622,8 +1583,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::InvalidTypeVarTuple,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidTypeVarTuple),
                         format!("Default for `TypeVarTuple` must be an unpacked tuple form or another `TypeVarTuple`, got `{default}`"),
                     );
                     Type::any_error()
@@ -1634,8 +1594,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::InvalidTypeVar,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
                         format!( "Default for `TypeVar` may not be a `TypeVarTuple` or `ParamSpec`, got `{default}`"),
                     );
                     Type::any_error()
@@ -1775,8 +1734,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             subscript.slice.range(),
-                            ErrorKind::ReadOnly,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::ReadOnly),
                             format!(
                                 "Key `{}` in TypedDict `{}` is read-only",
                                 field_name,
@@ -1809,8 +1767,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         subscript.slice.range(),
-                        ErrorKind::TypedDictKeyError,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::TypedDictKeyError),
                         format!(
                             "TypedDict `{}` does not have key `{}`",
                             typed_dict.name(),
@@ -1866,8 +1823,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::BadReturn,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::BadReturn),
                     "Async generator function should return `AsyncGenerator`".to_owned(),
                 );
             }
@@ -1882,8 +1838,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::BadReturn,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::BadReturn),
                     "Generator function should return `Generator`".to_owned(),
                 );
             }
@@ -1976,8 +1931,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ty => self.error(
                             errors,
                             *r,
-                            ErrorKind::InvalidSelfType,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidSelfType),
                             format!(
                                 "Cannot apply `typing.Self` to non-class-instance type `{}`",
                                 self.for_display(ty)
@@ -1988,8 +1942,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         *r,
-                        ErrorKind::InvalidSelfType,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidSelfType),
                         "Could not resolve the class for `typing.Self` (may indicate unexpected recursion resolving types)".to_owned(),
                     )
                 }
@@ -2024,8 +1977,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             e.range(),
-                            ErrorKind::BadAssignment,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::BadAssignment),
                             "Assignment target is marked final".to_owned(),
                         );
                     }
@@ -2045,8 +1997,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             *range,
-                            ErrorKind::BadAssignment,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::BadAssignment),
                             "Assignment target is marked final".to_owned(),
                         );
                     }
@@ -2056,8 +2007,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             *range,
-                            ErrorKind::BadAssignment,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::BadAssignment),
                             format!(
                                 "Wrong type for assignment, expected `{}` and got `{}`",
                                 &annot_ty, ty
@@ -2115,8 +2065,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 self.error(
                                     errors,
                                     *range,
-                                    ErrorKind::MatchError,
-                                    Some(&context),
+                                    ErrorInfo::Context(&context),
                                     format!(
                                         "Expected literal string in `__match_args__`, got `{}`",
                                         ts[*idx]
@@ -2127,8 +2076,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 *range,
-                                ErrorKind::MatchError,
-                                Some(&context),
+                                ErrorInfo::Context(&context),
                                 format!("Index {idx} out of range for `__match_args__`"),
                             )
                         }
@@ -2138,8 +2086,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             *range,
-                            ErrorKind::MatchError,
-                            Some(&context),
+                            ErrorInfo::Context(&context),
                             format!(
                                 "Expected concrete tuple for `__match_args__`, got `{match_args}`",
                             ),
@@ -2171,8 +2118,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 expr.range(),
-                                ErrorKind::BadAssignment,
-                                None,
+                                ErrorInfo::Kind(ErrorKind::BadAssignment),
                                 format!("`{name}` is marked final"),
                             );
                         }
@@ -2387,8 +2333,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             expr.range(),
-                            ErrorKind::BadReturn,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::BadReturn),
                             "Return statement with value is not allowed in async generator"
                                 .to_owned(),
                         )
@@ -2463,8 +2408,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             ann.range(),
-                            ErrorKind::Unsupported,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::Unsupported),
                             "`expect*` is unsupported until Python 3.11".to_owned(),
                         );
                     }
@@ -2485,8 +2429,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorKind::InvalidInheritance,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                             "Exception handler annotation in `except*` clause may not extend `BaseExceptionGroup`".to_owned());
                     }
                     exception
@@ -2681,8 +2624,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             *range,
-                            ErrorKind::InvalidTypeVar,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
                             format!(
                                 "Expected at least 2 constraints in TypeVar `{}`, got {}",
                                 name,
@@ -2755,8 +2697,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 *r,
-                                ErrorKind::InvalidTypeVar,
-                                None,
+                                ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
                                 format!(
                                     "Type parameter {} is not included in the type parameter list",
                                     self.module_info()
@@ -2776,8 +2717,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::Forall(..) => self.error(
                         errors,
                         expr.range(),
-                        ErrorKind::InvalidTypeVar,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
                         format!("Type parameters used in `{name}` but not declared"),
                     ),
                     Type::TypeAlias(ta) => {
@@ -2897,8 +2837,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     x.range,
-                    ErrorKind::InvalidYield,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidYield),
                     "Invalid `yield` outside of a function".to_owned(),
                 );
                 Arc::new(YieldResult::any_error())
@@ -2935,8 +2874,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ty = self.error(
                         errors,
                         x.range,
-                        ErrorKind::InvalidYield,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidYield),
                         format!(
                             "yield from value must be iterable, got `{}`",
                             self.for_display(ty)
@@ -2956,8 +2894,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     x.range,
-                    ErrorKind::InvalidYield,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidYield),
                     "Invalid `yield from` outside of a function".to_owned(),
                 );
                 Arc::new(YieldFromResult::any_error())
@@ -2975,8 +2912,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorKind::NotAType,
-                None,
+                ErrorInfo::Kind(ErrorKind::NotAType),
                 format!(
                     "Expected a type form, got instance of `{}`",
                     self.for_display(ty),
@@ -3058,8 +2994,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return self.error(
                 errors,
                 range,
-                ErrorKind::InvalidAnnotation,
-                None,
+                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                 "`Unpack` with a `TypedDict` is only allowed in a **kwargs annotation".to_owned(),
             );
         }
@@ -3069,8 +3004,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return self.error(
                 errors,
                 range,
-                ErrorKind::InvalidAnnotation,
-                None,
+                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                 "`ParamSpec` **kwargs is only allowed in a **kwargs annotation".to_owned(),
             );
         }
@@ -3080,8 +3014,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return self.error(
                 errors,
                 range,
-                ErrorKind::InvalidAnnotation,
-                None,
+                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                 "`ParamSpec` *args is only allowed in an *args annotation".to_owned(),
             );
         }
@@ -3098,8 +3031,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return self.error(
                 errors,
                 range,
-                ErrorKind::InvalidAnnotation,
-                None,
+                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                 "`Unpack` is not allowed in this context".to_owned(),
             );
         }
@@ -3115,8 +3047,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return self.error(
                 errors,
                 range,
-                ErrorKind::InvalidAnnotation,
-                None,
+                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                 format!("`{ty}` is not allowed in this context"),
             );
         }
@@ -3137,16 +3068,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return self.error(
                     errors,
                     range,
-                    ErrorKind::InvalidAnnotation,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                     "`TypeVarTuple` must be unpacked".to_owned(),
                 );
             } else {
                 return self.error(
                     errors,
                     range,
-                    ErrorKind::InvalidAnnotation,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                     "`TypeVarTuple` is not allowed in this context".to_owned(),
                 );
             }
@@ -3158,16 +3087,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::InvalidAnnotation,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                     format!("Expected a type argument for `{special_form}`"),
                 );
             } else {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::InvalidAnnotation,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                     format!("`{special_form}` is not allowed in this context"),
                 );
             }
@@ -3184,8 +3111,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return self.error(
                     errors,
                     range,
-                    ErrorKind::InvalidAnnotation,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                     "`ParamSpec` is not allowed in this context".to_owned(),
                 );
             }
@@ -3200,8 +3126,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return self.error(
                     errors,
                     range,
-                    ErrorKind::InvalidAnnotation,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                     "`TypeVarTuple` must be unpacked".to_owned(),
                 );
             }
@@ -3211,8 +3136,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return self.error(
                 errors,
                 range,
-                ErrorKind::InvalidAnnotation,
-                None,
+                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                 "Type variable bounds and constraints must be concrete".to_owned(),
             );
         }

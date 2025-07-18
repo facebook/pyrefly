@@ -25,6 +25,7 @@ use crate::alt::callable::CallWithTypes;
 use crate::alt::expr::TypeOrExpr;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::error::context::ErrorInfo;
 use crate::error::kind::ErrorKind;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
@@ -123,7 +124,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         error_kind: ErrorKind,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> CallTarget {
-        self.error(errors, range, error_kind, context, msg);
+        self.error(errors, range, ErrorInfo::new(error_kind, context), msg);
         CallTarget::new(Target::Any(AnyStyle::Error))
     }
 
@@ -550,8 +551,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::BadInstantiation,
-                        context,
+                        ErrorInfo::new(ErrorKind::BadInstantiation, context),
                         format!(
                             "Cannot instantiate `{}` because it is a protocol",
                             cls.name()
@@ -569,11 +569,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Target::TypedDict(td) => {
                 self.construct_typed_dict(td, args, keywords, range, errors, context)
             }
-            Target::BoundMethod(obj, func) => {
+            Target::BoundMethod(
+                obj,
+                Function {
+                    signature,
+                    metadata,
+                },
+            ) => {
+                if metadata.flags.is_deprecated {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::new(ErrorKind::Deprecated, context),
+                        format!(
+                            "Call to deprecated function `{}`",
+                            metadata.kind.as_func_id().format(self.module_info().name())
+                        ),
+                    );
+                }
                 let first_arg = CallArg::ty(&obj, range);
                 self.callable_infer(
-                    func.signature,
-                    Some(func.metadata.kind.as_func_id()),
+                    signature,
+                    Some(metadata.kind.as_func_id()),
                     Some(first_arg),
                     args,
                     keywords,
@@ -594,8 +611,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::Deprecated,
-                        context,
+                        ErrorInfo::new(ErrorKind::Deprecated, context),
                         format!(
                             "Call to deprecated function `{}`",
                             metadata.kind.as_func_id().format(self.module_info().name())
@@ -821,7 +837,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // We intentionally discard closest_overload.call_errors. When no overload matches,
             // there's a high likelihood that the "closest" one by our heuristic isn't the right
             // one, in which case the call errors are just noise.
-            errors.add(range, ErrorKind::NoMatchingOverload, context, msg);
+            errors.add(
+                range,
+                ErrorInfo::new(ErrorKind::NoMatchingOverload, context),
+                msg,
+            );
             (Type::any_error(), closest_overload.signature)
         }
     }

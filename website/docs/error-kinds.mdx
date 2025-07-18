@@ -153,6 +153,16 @@ Ex = Enum("Ex", [("Red", 1), ("Blue", 2), ("Red", 3)])  # Duplicate field `Red` 
 
 However, it is best practice to use the class syntax if possible, which doesn't treat duplicate names as an error.
 
+## bad-context-manager
+
+This error occurs when a type that cannot be used as a context manager appears in a `with` statement.
+
+```python
+class A:
+    def __enter__(self): ...
+with A(): ...  # `A` is missing an `__exit__` method!
+```
+
 ## bad-function-definition
 
 Like `bad-class-definition`, this error kind is uncommon because other error kinds are used for more specific issues.
@@ -806,12 +816,9 @@ def where() -> None:
 
 This error indicates that pyrefly does not currently support a typing feature.
 
-## unsupported-operand
+## unsupported-operation
 
 This error arises when attempting to perform an operation between values of two incompatible types.
-Since many Python operators are actually syntactic sugar for function calls, many operations will result in [`bad-argument-type`](#bad-argument-type) errors.
-
-An exception is the `in` operator, which fails when looking for a value in something that does not support `in`:
 
 ```python
 if "hello" in 1:  # int doesn't support `in`!

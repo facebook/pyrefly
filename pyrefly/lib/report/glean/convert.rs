@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use num_traits::ToPrimitive;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Alias;
 use ruff_python_ast::ExceptHandler;
@@ -62,6 +63,21 @@ impl Facts {
             callee_to_callers: vec![],
             containing_top_level_declarations: vec![],
         }
+    }
+
+    fn file_lines_fact(&self, module_info: &ModuleInfo) -> src::FileLines {
+        let lined_buffer = module_info.lined_buffer();
+        let lens: Vec<u64> = lined_buffer
+            .lines()
+            .map(|x| x.len().to_u64().unwrap() + 1)
+            .collect();
+        let ends_in_new_line = lens.len() < lined_buffer.line_count();
+        src::FileLines::new(
+            self.file.clone(),
+            lens,
+            ends_in_new_line,
+            !lined_buffer.is_ascii() || lined_buffer.contents().contains('\t'),
+        )
     }
 
     fn decl_location_fact(
@@ -436,12 +452,15 @@ impl Glean {
         let file_fact = src::File::new(module_info.path().to_string());
         let container = python::DeclarationContainer::module(module_fact.clone());
         let top_level_decl = python::Declaration::module(module_fact.clone());
+        let file_language_fact = src::FileLanguage::new(file_fact.clone(), src::Language::Python);
 
         let mut facts = Facts::new(
             file_fact.clone(),
             module_fact.clone(),
             module_info.name().to_string(),
         );
+
+        let file_lines = facts.file_lines_fact(module_info);
 
         facts.module_facts(&module_fact, ast.range, top_level_decl.clone());
 
@@ -465,6 +484,14 @@ impl Glean {
             GleanEntry::Predicate {
                 predicate: python::Module::GLEAN_name(),
                 facts: vec![json(module_fact)],
+            },
+            GleanEntry::Predicate {
+                predicate: src::FileLanguage::GLEAN_name(),
+                facts: vec![json(file_language_fact)],
+            },
+            GleanEntry::Predicate {
+                predicate: src::FileLines::GLEAN_name(),
+                facts: vec![json(file_lines)],
             },
             GleanEntry::Predicate {
                 predicate: digest::FileDigest::GLEAN_name(),

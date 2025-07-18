@@ -30,6 +30,7 @@ use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyFunction;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
@@ -90,8 +91,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorKind::InvalidOverload,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidOverload),
                             "@overload declarations must come before function implementation"
                                 .to_owned(),
                         );
@@ -99,8 +99,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             last_range,
-                            ErrorKind::InvalidOverload,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidOverload),
                             "@overload decorator should not be used on function implementation"
                                 .to_owned(),
                         );
@@ -108,8 +107,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             first.id_range,
-                            ErrorKind::InvalidOverload,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidOverload),
                             "Overloaded function must have an implementation".to_owned(),
                         );
                     }
@@ -118,8 +116,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         first.id_range,
-                        ErrorKind::InvalidOverload,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidOverload),
                         "Overloaded function needs at least two @overload declarations".to_owned(),
                     );
                     acc.split_off_first().0.1
@@ -152,8 +149,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         first.id_range,
-                        ErrorKind::InvalidOverload,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidOverload),
                         "Overloaded function needs at least two @overload declarations".to_owned(),
                     );
                     defs.split_off_first().0.1
@@ -345,8 +341,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         x.parameter.name.range,
-                        ErrorKind::BadFunctionDefinition,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::BadFunctionDefinition),
                         format!(
                             "Positional-only parameter `{}` cannot appear after keyword parameters",
                             x.parameter.name
@@ -374,8 +369,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 param.range,
-                ErrorKind::BadFunctionDefinition,
-                None,
+                ErrorInfo::Kind(ErrorKind::BadFunctionDefinition),
                 format!(
                     "Keyword-only parameter `{}` may not appear after ParamSpec args parameter",
                     param.parameter.name
@@ -428,8 +422,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // since it includes the decorators, which does not match
                     // the conformance testsuite.
                     def.name.range,
-                    ErrorKind::BadFunctionDefinition,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::BadFunctionDefinition),
                     "Type guard functions must accept at least one positional argument".to_owned(),
                 );
             }
@@ -452,8 +445,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     def.name.range,
-                    ErrorKind::BadFunctionDefinition,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::BadFunctionDefinition),
                     format!(
                         "Return type `{}` must be assignable to the first argument type `{}`",
                         self.for_display(*ty_narrow.clone()),
@@ -473,16 +465,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     def.range,
-                    ErrorKind::InvalidParamSpec,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidParamSpec),
                     "`ParamSpec` *args and **kwargs must be used together".to_owned(),
                 );
             } else {
                 self.error(
                     errors,
                     def.range,
-                    ErrorKind::InvalidParamSpec,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidParamSpec),
                     "*args and **kwargs must come from the same `ParamSpec`".to_owned(),
                 );
             }
@@ -637,8 +627,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::InvalidOverload,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidOverload),
                     format!(
                         "`{}` has type `{}` after decorator application, which is not callable",
                         func,

@@ -18,7 +18,7 @@ use starlark_map::small_set::SmallSet;
 
 use crate::export;
 use crate::state::handle::Handle;
-use crate::state::lsp::FindDefinitionItem;
+use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::state::Transaction;
 
 pub struct HoverValue {
@@ -94,7 +94,7 @@ pub fn get_hover(
     position: TextSize,
 ) -> Option<Hover> {
     let type_ = transaction.get_type_at(handle, position)?;
-    let (kind, name, docstring) = if let Some(FindDefinitionItem {
+    let (kind, name, docstring) = if let Some(FindDefinitionItemWithDocstring {
         metadata,
         location,
         docstring,

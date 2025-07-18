@@ -225,6 +225,67 @@ impl InitArgs {
         Ok(CommandExitStatus::Success)
     }
 
+    /// Disables typechecking for all repos except the selected directories by:
+    /// Setting project_includes to only include the selected directories
+    fn disable_typechecking_for_repos_other_than_selected_files(
+        &self,
+        config_path: &Option<PathBuf>,
+        selected_dirs: &[PathBuf],
+    ) -> anyhow::Result<()> {
+        if let Some(root_config_path) = config_path {
+            let mut include_patterns = Vec::new();
+
+            for dir in selected_dirs {
+                let config_dir = root_config_path.parent().unwrap_or(Path::new("/"));
+
+                let rel_path = if dir.starts_with(config_dir) {
+                    match dir.strip_prefix(config_dir) {
+                        Ok(rel) => rel.to_string_lossy().to_string(),
+                        Err(_) => dir.to_string_lossy().to_string(), // Fallback to absolute path
+                    }
+                } else {
+                    dir.to_string_lossy().to_string()
+                };
+
+                let glob_pattern = if rel_path.is_empty() {
+                    "**".to_owned()
+                } else {
+                    format!("{rel_path}/**")
+                };
+
+                include_patterns.push(glob_pattern);
+            }
+
+            // Read the existing config to preserve any other settings
+            let (mut existing_config, _) = ConfigFile::from_file(root_config_path);
+
+            // Update only the project_includes field
+            existing_config.project_includes = pyrefly_util::globs::Globs::new(include_patterns);
+
+            // Handle differently based on config file type
+            if root_config_path.ends_with(ConfigFile::PYPROJECT_FILE_NAME) {
+                // For pyproject.toml, use write_pyproject to update only the pyrefly section
+                // This preserves other tool configurations in the file
+                write_pyproject(root_config_path, existing_config)?;
+                info!(
+                    "Updated pyrefly section in pyproject.toml to focus typechecking on selected directories"
+                );
+            } else {
+                // For pyrefly.toml, write the updated config back to the file
+                let serialized = toml::to_string_pretty(&existing_config)?;
+                fs_anyhow::write(root_config_path, serialized.as_bytes())?;
+                info!("Updated pyrefly.toml to focus typechecking on selected directories");
+            }
+
+            info!(
+                "Updated root config at {} to focus typechecking on selected directories",
+                root_config_path.display()
+            );
+        }
+
+        Ok(())
+    }
+
     fn prompt_init_on_subdirectory(
         &self,
         config_path: Option<PathBuf>,
@@ -324,18 +385,32 @@ impl InitArgs {
         let (suppress_globs, suppress_config_finder) = globs_and_config_getter::get(
             files_to_check,
             None,
-            config_path,
+            config_path.clone(),
             &mut suppress_args.config_override,
         )?;
 
         // Run the check with suppress-errors flag
         match suppress_args.run_once(suppress_globs, suppress_config_finder, true) {
-            Ok(_) => Ok(CommandExitStatus::Success),
+            Ok(_) => {}
             Err(e) => {
                 error!("Failed to suppress errors: {}", e);
-                Ok(CommandExitStatus::Success) // Still return success to match original behavior
             }
+        };
+
+        // Disable typechecking for all repos except the selected ones
+        if let Err(e) = self
+            .disable_typechecking_for_repos_other_than_selected_files(&config_path, &selected_dirs)
+        {
+            error!("Failed to configure typechecking: {}", e);
         }
+        info!(
+            "Disabled typechecking for all directories except the selected {}",
+            dirs_str
+        );
+        info!(
+            "To enable typechecking in other directories in the future, please expand project-include in pyproject.toml."
+        );
+        Ok(CommandExitStatus::Success)
     }
 
     fn create_config(&self) -> anyhow::Result<(CommandExitStatus, Option<PathBuf>)> {

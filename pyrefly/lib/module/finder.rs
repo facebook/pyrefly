@@ -225,18 +225,16 @@ fn continue_find_module(
             }
         }
     }
-    Ok(current_result.map(|x| match x {
-        FindResult::SingleFileModule(path) |
-        FindResult::RegularPackage(path, _) |
-        // TODO(melvinhe): Address CompiledModule to return an ignored Error, for Typing.Any treatment
-        FindResult::CompiledModule(path) => {
-            ModulePath::filesystem(path)
+    current_result.map_or(Ok(None), |x| match x {
+        FindResult::SingleFileModule(path) | FindResult::RegularPackage(path, _) => {
+            Ok(Some(ModulePath::filesystem(path)))
         }
         FindResult::NamespacePackage(roots) => {
             // TODO(grievejia): Preserving all info in the list instead of dropping all but the first one.
-            ModulePath::namespace(roots.first().clone())
+            Ok(Some(ModulePath::namespace(roots.first().clone())))
         }
-    }))
+        FindResult::CompiledModule(_) => Err(FindError::Ignored),
+    })
 }
 
 /// Search for the given [`ModuleName`] in the given `include`, which is
@@ -271,9 +269,10 @@ where
             }
 
             // If we couldn't find it in a `-stubs` module, look normally.
-            let start_result = find_one_part(first, include);
-            Ok(start_result
-                .and_then(|start_result| continue_find_module(start_result, rest).unwrap()))
+            let result = find_one_part(first, include)
+                .and_then(|start_result| continue_find_module(start_result, rest).transpose())
+                .transpose()?;
+            Ok(result)
         }
     }
 }
@@ -1051,14 +1050,11 @@ mod tests {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
         TestPath::setup_test_directory(root, vec![TestPath::file("compiled_module.pyc")]);
-        assert_eq!(
-            find_module_in_search_path(
-                ModuleName::from_str("compiled_module"),
-                [root.to_path_buf()].iter(),
-            )
-            .unwrap(),
-            Some(ModulePath::filesystem(root.join("compiled_module.pyc")))
+        let find_compiled_result = find_module_in_search_path(
+            ModuleName::from_str("compiled_module"),
+            [root.to_path_buf()].iter(),
         );
+        assert!(matches!(find_compiled_result, Err(FindError::Ignored)));
         assert_eq!(
             find_module_in_search_path(
                 ModuleName::from_str("compiled_module.nested"),
@@ -1107,16 +1103,11 @@ mod tests {
             .unwrap(),
             Some(ModulePath::filesystem(root.join("subdir/nested_import.py")))
         );
-        assert_eq!(
-            find_module_in_search_path(
-                ModuleName::from_str("subdir.another_compiled_module"),
-                [root.to_path_buf()].iter(),
-            )
-            .unwrap(),
-            Some(ModulePath::filesystem(
-                root.join("subdir/another_compiled_module.pyc")
-            ))
+        let find_compiled_result = find_module_in_search_path(
+            ModuleName::from_str("subdir.another_compiled_module"),
+            [root.to_path_buf()].iter(),
         );
+        assert!(matches!(find_compiled_result, Err(FindError::Ignored)));
     }
 
     #[test]
@@ -1200,14 +1191,8 @@ mod tests {
         );
         let start_result =
             find_one_part(&Name::new("subdir"), [root.to_path_buf()].iter()).unwrap();
-        let module_path =
-            continue_find_module(start_result, &[Name::new("nested_module")]).unwrap();
-        assert_eq!(
-            module_path,
-            Some(ModulePath::filesystem(
-                root.join("subdir/nested_module.pyc")
-            ))
-        );
+        let module_path = continue_find_module(start_result, &[Name::new("nested_module")]);
+        assert!(matches!(module_path, Err(FindError::Ignored)));
         let start_result =
             find_one_part(&Name::new("subdir"), [root.to_path_buf()].iter()).unwrap();
         let module_path =
@@ -1232,12 +1217,13 @@ mod tests {
     }
 
     #[test]
-    fn test_find_module_in_search_path_signature() {
-        let module = ModuleName::from_str("test_module");
-        let include: Vec<PathBuf> = vec![];
-        let result: Result<Option<ModulePath>, FindError> =
-            find_module_in_search_path(module, include.iter());
-        let unwrapped_result = result.unwrap();
-        assert_eq!(unwrapped_result, None);
+    fn test_continue_find_module_with_pyc_no_source_ignored() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("module.pyc")]);
+        let start_result =
+            find_one_part(&Name::new("module"), [root.to_path_buf()].iter()).unwrap();
+        let result = continue_find_module(start_result, &[]);
+        assert!(matches!(result, Err(FindError::Ignored)));
     }
 }

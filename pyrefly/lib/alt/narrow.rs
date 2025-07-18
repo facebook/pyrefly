@@ -52,7 +52,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if cls.class_object().fields().len() > NARROW_ENUM_LIMIT {
             return Type::ClassType(cls.clone());
         }
-        let e = self.get_enum_from_class_type(cls).unwrap();
+        let e = self.get_enum_from_class(cls.class_object()).unwrap();
         // Enums derived from enum.Flag cannot be treated as a union of their members
         if e.is_flag {
             return Type::ClassType(cls.clone());

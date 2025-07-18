@@ -61,7 +61,7 @@ use crate::binding::scope::Scopes;
 use crate::binding::table::TableKeyed;
 use crate::config::base::UntypedDefBehavior;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorContext;
+use crate::error::context::ErrorInfo;
 use crate::error::kind::ErrorKind;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
@@ -645,8 +645,7 @@ impl<'a> BindingsBuilder<'a> {
                 let (ctx, msg) = err.display();
                 self.error_multiline(
                     TextRange::default(),
-                    ErrorKind::InternalError,
-                    ctx.as_deref(),
+                    ErrorInfo::new(ErrorKind::InternalError, ctx.as_deref()),
                     msg,
                 );
             }
@@ -673,24 +672,12 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    pub fn error(
-        &self,
-        range: TextRange,
-        error_kind: ErrorKind,
-        context: Option<&dyn Fn() -> ErrorContext>,
-        msg: String,
-    ) {
-        self.errors.add(range, error_kind, context, vec1![msg]);
+    pub fn error(&self, range: TextRange, info: ErrorInfo, msg: String) {
+        self.errors.add(range, info, vec1![msg]);
     }
 
-    pub fn error_multiline(
-        &self,
-        range: TextRange,
-        error_kind: ErrorKind,
-        context: Option<&dyn Fn() -> ErrorContext>,
-        msg: Vec1<String>,
-    ) {
-        self.errors.add(range, error_kind, context, msg);
+    pub fn error_multiline(&self, range: TextRange, info: ErrorInfo, msg: Vec1<String>) {
+        self.errors.add(range, info, msg);
     }
 
     pub fn lookup_mutable_captured_name(
