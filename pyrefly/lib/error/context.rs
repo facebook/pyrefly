@@ -48,6 +48,44 @@ pub enum ErrorContext {
     ImportNotFound(ModuleName),
 }
 
+impl ErrorContext {
+    pub fn as_error_kind(&self) -> ErrorKind {
+        match self {
+            Self::BadContextManager(..) => ErrorKind::BadContextManager,
+            Self::UnaryOp(..) => ErrorKind::UnsupportedOperation,
+            Self::BinaryOp(..) => ErrorKind::UnsupportedOperation,
+            Self::InplaceBinaryOp(..) => ErrorKind::UnsupportedOperation,
+            Self::Iteration(..) => ErrorKind::NotIterable,
+            Self::AsyncIteration(..) => ErrorKind::NotIterable,
+            Self::Await(..) => ErrorKind::AsyncError,
+            Self::Index(..) => ErrorKind::IndexError,
+            Self::SetItem(..) => ErrorKind::UnsupportedOperation,
+            Self::DelItem(..) => ErrorKind::UnsupportedOperation,
+            Self::MatchPositional(..) => ErrorKind::MatchError,
+            Self::ImportNotFound(..) => ErrorKind::ImportError,
+        }
+    }
+}
+
+/// Info about an error. All errors have a kind; some also have a context (see ErrorContext).
+/// Use ErrorInfo::Context for errors with both a kind and a context (the kind will be looked up
+/// from the context); use ErrorInfo::Kind for errors with a kind but no context.
+pub enum ErrorInfo<'a> {
+    Context(&'a dyn Fn() -> ErrorContext),
+    Kind(ErrorKind),
+}
+
+impl<'a> ErrorInfo<'a> {
+    /// Build ErrorInfo from a kind and context. Note that the kind is used only when the context is None.
+    pub fn new(error_kind: ErrorKind, context: Option<&'a dyn Fn() -> ErrorContext>) -> Self {
+        if let Some(ctx) = context {
+            Self::Context(ctx)
+        } else {
+            Self::Kind(error_kind)
+        }
+    }
+}
+
 /// The context in which a got <: want type check occurs. This differs from ErrorContext in that
 /// TypeCheckContext applies specifically to type mismatches. For example:
 ///   class C:

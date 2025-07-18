@@ -149,6 +149,10 @@ impl LinedBuffer {
             self.from_lsp_position(position.end),
         )
     }
+
+    pub fn is_ascii(&self) -> bool {
+        self.lines.is_ascii()
+    }
 }
 
 /// A range in a file, with a start and end, both containing line and column.

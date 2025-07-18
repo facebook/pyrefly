@@ -2014,6 +2014,7 @@ dependencies = [
  "path-absolutize",
  "pretty_assertions",
  "pulldown-cmark",
+ "pyrefly_bundled",
  "pyrefly_derive",
  "pyrefly_python",
  "pyrefly_types",
@@ -2032,7 +2033,6 @@ dependencies = [
  "serde_with",
  "starlark_map",
  "static_assertions",
- "tar",
  "tempfile",
  "thiserror 2.0.12",
  "tikv-jemallocator",
@@ -2044,6 +2044,15 @@ dependencies = [
  "walkdir",
  "which",
  "yansi 1.0.1",
+]
+
+[[package]]
+name = "pyrefly_bundled"
+version = "0.24.2"
+dependencies = [
+ "anyhow",
+ "starlark_map",
+ "tar",
  "zstd",
 ]
 

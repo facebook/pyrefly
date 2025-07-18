@@ -116,10 +116,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.get_metadata_for_class(cls).enum_metadata().cloned()
     }
 
-    pub fn get_enum_from_class_type(&self, class_type: &ClassType) -> Option<EnumMetadata> {
-        self.get_enum_from_class(class_type.class_object())
-    }
-
     pub fn unwrap_class_object_silently(&self, ty: &Type) -> Option<Type> {
         match ty {
             Type::ClassDef(c) if c.is_builtin("tuple") => Some(Type::any_tuple()),

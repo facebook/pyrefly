@@ -14,8 +14,9 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
-use crate::error;
 use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorInfo;
+use crate::error::kind::ErrorKind;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
@@ -47,8 +48,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     *range,
-                    error::kind::ErrorKind::BadClassDefinition,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
                     format!(
                         "NamedTuple field '{name}' without a default may not follow NamedTuple field with a default"
                     ),

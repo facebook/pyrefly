@@ -7,9 +7,9 @@
 
 use itertools::Itertools as _;
 use pretty_assertions::assert_eq;
+use pyrefly_python::module::TextRangeWithModule;
 use ruff_text_size::TextSize;
 
-use crate::module::module_info::TextRangeWithModule;
 use crate::state::handle::Handle;
 use crate::state::state::State;
 use crate::test::util::code_frame_of_source_at_range;

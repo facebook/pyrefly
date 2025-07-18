@@ -30,11 +30,11 @@ use tracing::debug;
 use tracing::info;
 
 use crate::alt::answers::Answers;
-use crate::module::bundled::typeshed;
 use crate::module::module_info::ModuleInfo;
+use crate::module::typeshed::typeshed;
 use crate::state::handle::Handle;
 use crate::state::lsp::DefinitionMetadata;
-use crate::state::lsp::FindDefinitionItem;
+use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::state::Transaction;
 use crate::types::display::TypeDisplayContext;
 use crate::types::stdlib::Stdlib;
@@ -150,7 +150,7 @@ struct VisitorContext<'a> {
 
 fn add_expression_definitions(
     range: &DisplayRange,
-    definitions: Vec<FindDefinitionItem>,
+    definitions: Vec<FindDefinitionItemWithDocstring>,
     identifier: &str,
     context: &mut VisitorContext,
 ) {

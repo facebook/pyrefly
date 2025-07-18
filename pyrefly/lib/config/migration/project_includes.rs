@@ -10,6 +10,7 @@ use pyrefly_util::globs::Globs;
 
 use crate::config::config::ConfigFile;
 use crate::config::migration::config_option_migrater::ConfigOptionMigrater;
+use crate::config::migration::pyright::PyrightConfig;
 use crate::config::migration::utils;
 
 /// Configuration option for project includes (files, packages, modules)
@@ -36,11 +37,36 @@ impl ConfigOptionMigrater for ProjectIncludes {
         pyrefly_cfg.project_includes = Globs::new(includes);
         Ok(())
     }
+
+    fn migrate_from_pyright(
+        &self,
+        pyright_cfg: &PyrightConfig,
+        pyrefly_cfg: &mut ConfigFile,
+    ) -> anyhow::Result<()> {
+        // In pyright, project includes are specified in the "include" field
+        let includes = match &pyright_cfg.project_includes {
+            Some(includes) => includes,
+            None => {
+                return Err(anyhow::anyhow!(
+                    "No project includes found in pyright config"
+                ));
+            }
+        };
+        if includes.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Empty project includes found in pyright config"
+            ));
+        }
+
+        pyrefly_cfg.project_includes = includes.clone();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::migration::test_utils::default_pyright_config;
 
     #[test]
     fn test_migrate_from_mypy() {
@@ -75,6 +101,51 @@ mod tests {
         let project_includes = ProjectIncludes;
         let _ = project_includes.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
+        assert_eq!(pyrefly_cfg.project_includes, default_includes);
+    }
+
+    #[test]
+    fn test_migrate_from_pyright() {
+        let project_includes_globs =
+            Globs::new(vec!["src/**/*.py".to_owned(), "test/**/*.py".to_owned()]);
+        let mut pyright_cfg = default_pyright_config();
+        pyright_cfg.project_includes = Some(project_includes_globs.clone());
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let project_includes = ProjectIncludes;
+        let result = project_includes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_ok());
+        assert_eq!(pyrefly_cfg.project_includes, project_includes_globs);
+    }
+
+    #[test]
+    fn test_migrate_from_pyright_empty() {
+        let pyright_cfg = default_pyright_config();
+
+        let mut pyrefly_cfg = ConfigFile::default();
+        let default_includes = pyrefly_cfg.project_includes.clone();
+
+        let project_includes = ProjectIncludes;
+        let result = project_includes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_err());
+        assert_eq!(pyrefly_cfg.project_includes, default_includes);
+    }
+
+    #[test]
+    fn test_migrate_from_pyright_empty_globs() {
+        let mut pyright_cfg = default_pyright_config();
+        pyright_cfg.project_includes = Some(Globs::new(vec![]));
+
+        let mut pyrefly_cfg = ConfigFile::default();
+        let default_includes = pyrefly_cfg.project_includes.clone();
+
+        let project_includes = ProjectIncludes;
+        let result = project_includes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_err());
         assert_eq!(pyrefly_cfg.project_includes, default_includes);
     }
 }

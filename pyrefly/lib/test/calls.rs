@@ -62,9 +62,39 @@ old_function()  # E: Call to deprecated function `old_function`
 );
 
 testcase!(
+    test_deprecated_method_call,
+    r#"
+from warnings import deprecated
+class C:
+    @deprecated("function is deprecated")
+    def old_function(self) -> None: ...
+
+c = C()
+c.old_function()  # E: Call to deprecated function `C.old_function`
+    "#,
+);
+
+testcase!(
     test_reduce_call,
     r#"
 from functools import reduce
 reduce(max, [1,2])
+    "#,
+);
+
+testcase!(
+    test_union_with_type,
+    r#"
+from typing import assert_type
+class A:
+    pass
+def identity[T](x: T) -> T:
+    return x
+def f(condition: bool):
+    if condition:
+        g = type
+    else:
+        g = identity
+    assert_type(g(A()), type[A] | A)
     "#,
 );

@@ -12,9 +12,14 @@ pub mod project_excludes;
 pub mod project_includes;
 pub mod pyright;
 pub mod python_interpreter;
+pub mod python_platform;
 pub mod python_version;
 pub mod replace_imports;
 pub mod search_path;
 pub mod sub_configs;
+pub mod untyped_def_behavior;
 pub mod use_untyped_imports;
 pub mod utils;
+
+#[cfg(test)]
+pub mod test_utils;

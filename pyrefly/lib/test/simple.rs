@@ -1658,3 +1658,19 @@ def f(x:float, y:bool) -> float:
     return x * y 
 "#,
 );
+
+testcase!(
+    test_assert_type_class_union,
+    r#"
+from typing import assert_type
+
+class A: pass
+
+def f(condition: bool):
+    if condition:
+        x = A()
+    else:
+        x = A
+    assert_type(x, A | type[A])
+    "#,
+);

@@ -11,6 +11,7 @@ use pyrefly_util::globs::Globs;
 use crate::config::config::ConfigFile;
 use crate::config::migration::config_option_migrater::ConfigOptionMigrater;
 use crate::config::migration::mypy::regex_converter;
+use crate::config::migration::pyright::PyrightConfig;
 
 /// Configuration option for project excludes
 pub struct ProjectExcludes;
@@ -39,11 +40,32 @@ impl ConfigOptionMigrater for ProjectExcludes {
         pyrefly_cfg.project_excludes = Globs::new(patterns);
         Ok(())
     }
+    fn migrate_from_pyright(
+        &self,
+        pyright_cfg: &PyrightConfig,
+        pyrefly_cfg: &mut ConfigFile,
+    ) -> anyhow::Result<()> {
+        // In pyright, project excludes are specified in the "exclude" field
+        if let Some(excludes) = &pyright_cfg.project_excludes {
+            if excludes.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "No project excludes found in pyright config"
+                ));
+            }
+            pyrefly_cfg.project_excludes = excludes.clone();
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "No project excludes found in pyright config"
+            ))
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::migration::test_utils::default_pyright_config;
 
     #[test]
     fn test_migrate_from_mypy() {
@@ -67,15 +89,47 @@ mod tests {
     }
 
     #[test]
-    fn test_migrate_from_mypy_empty() {
-        let mypy_cfg = Ini::new();
+    fn test_migrate_from_pyright() {
+        let project_excludes_globs =
+            Globs::new(vec!["src/**/*.py".to_owned(), "test/**/*.py".to_owned()]);
+        let mut pyright_cfg = default_pyright_config();
+        pyright_cfg.project_excludes = Some(project_excludes_globs.clone());
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let project_excludes = ProjectExcludes;
+        let result = project_excludes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_ok());
+        assert_eq!(pyrefly_cfg.project_excludes, project_excludes_globs);
+    }
+
+    #[test]
+    fn test_migrate_from_pyright_empty() {
+        let pyright_cfg = default_pyright_config();
 
         let mut pyrefly_cfg = ConfigFile::default();
         let default_excludes = pyrefly_cfg.project_excludes.clone();
 
         let project_excludes = ProjectExcludes;
-        let _ = project_excludes.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+        let result = project_excludes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
 
+        assert!(result.is_err());
+        assert_eq!(pyrefly_cfg.project_excludes, default_excludes);
+    }
+
+    #[test]
+    fn test_migrate_from_pyright_empty_globs() {
+        let mut pyright_cfg = default_pyright_config();
+        pyright_cfg.project_excludes = Some(Globs::new(vec![]));
+
+        let mut pyrefly_cfg = ConfigFile::default();
+        let default_excludes = pyrefly_cfg.project_excludes.clone();
+
+        let project_excludes = ProjectExcludes;
+        let result = project_excludes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_err());
         assert_eq!(pyrefly_cfg.project_excludes, default_excludes);
     }
 }

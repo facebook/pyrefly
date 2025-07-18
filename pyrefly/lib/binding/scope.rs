@@ -12,6 +12,7 @@ use parse_display::Display;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use ruff_python_ast::AtomicNodeIndex;
@@ -44,6 +45,7 @@ use crate::binding::binding::KeyFunction;
 use crate::binding::binding::KeyVariance;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
+use crate::binding::binding::MethodThatSetsAttr;
 use crate::binding::binding::RawClassFieldInitialization;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::CurrentIdx;
@@ -54,7 +56,6 @@ use crate::export::exports::LookupExport;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
-use crate::module::short_identifier::ShortIdentifier;
 use crate::types::class::ClassDefIndex;
 
 /// Many names may map to the same TextRange (e.g. from foo import *).
@@ -337,16 +338,6 @@ pub struct ScopeClass {
     pub indices: ClassIndices,
     attributes_from_recognized_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
     attributes_from_other_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
-}
-
-/// The method where an attribute was defined implicitly by assignment to `self.<attr_name>`
-///
-/// We track whether this method is recognized as a valid attribute-defining
-/// method (e.g. a constructor); if an attribute is inferred only from assignments
-/// in non-recognized methods, we will infer its type but also produce a type error.
-pub struct MethodThatSetsAttr {
-    pub method_name: Name,
-    pub recognized_attribute_defining_method: bool,
 }
 
 impl ScopeClass {
