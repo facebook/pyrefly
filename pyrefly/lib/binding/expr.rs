@@ -270,7 +270,6 @@ impl<'a> BindingsBuilder<'a> {
             self.ensure_expr(&mut comp.iter, usage);
             // Incomplete nested comprehensions can have identical iterators
             // for inner and outer loops. It is safe to overwrite it because it literally the same.
-            println!("{:?}", comp.iter);
             let iterable_value_idx = self.insert_binding_overwrite(
                 Key::Anon(comp.iter.range()),
                 Binding::IterableValue(None, comp.iter.clone(), IsAsync::new(comp.is_async)),
