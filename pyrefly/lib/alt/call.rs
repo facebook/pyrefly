@@ -583,7 +583,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Target::BoundMethod(obj, func) => {
                     if func.metadata.flags.is_abstract_method
-                        && !self.is_builtin_module(&func.metadata.kind.as_func_id().module)
+                        && !self.is_builtin_module(func.metadata.kind.as_func_id().module)
                     {
                         self.error(
                         errors,
@@ -629,7 +629,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                     }
                     if metadata.flags.is_abstract_method
-                        && !self.is_builtin_module(&metadata.kind.as_func_id().module)
+                        && !self.is_builtin_module(metadata.kind.as_func_id().module)
                     {
                         self.error(
                         errors,
@@ -1060,11 +1060,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Check if a module is a built-in module (like builtins, typing, etc.)
     /// Built-in modules should not be subject to abstract method validation
-    fn is_builtin_module(&self, module: &ModuleName) -> bool {
-        module == &ModuleName::from_str("builtins")
-            || module == &ModuleName::from_str("typing")
-            || module == &ModuleName::from_str("abc")
-            || module == &ModuleName::from_str("collections.abc")
+    fn is_builtin_module(&self, module: ModuleName) -> bool {
+        module == ModuleName::from_str("builtins")
+            || module == ModuleName::from_str("typing")
+            || module == ModuleName::from_str("abc")
+            || module == ModuleName::from_str("collections.abc")
             || module.as_str().starts_with("typing_extensions")
     }
 }
