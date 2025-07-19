@@ -863,6 +863,16 @@
     },
     {
       "code": -2,
+      "column": 51,
+      "concise_description": "`GoodAlias4` is uninitialized",
+      "description": "`GoodAlias4` is uninitialized",
+      "line": 19,
+      "name": "unbound-name",
+      "stop_column": 61,
+      "stop_line": 19
+    },
+    {
+      "code": -2,
       "column": 79,
       "concise_description": "Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "description": "Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
@@ -870,6 +880,16 @@
       "name": "bad-argument-type",
       "stop_column": 83,
       "stop_line": 19
+    },
+    {
+      "code": -2,
+      "column": 40,
+      "concise_description": "`GoodAlias5` is uninitialized",
+      "description": "`GoodAlias5` is uninitialized",
+      "line": 22,
+      "name": "unbound-name",
+      "stop_column": 50,
+      "stop_line": 22
     },
     {
       "code": -2,
@@ -983,6 +1003,26 @@
     },
     {
       "code": -2,
+      "column": 40,
+      "concise_description": "`BadAlias4` is uninitialized",
+      "description": "`BadAlias4` is uninitialized",
+      "line": 46,
+      "name": "unbound-name",
+      "stop_column": 49,
+      "stop_line": 46
+    },
+    {
+      "code": -2,
+      "column": 44,
+      "concise_description": "`BadAlias5` is uninitialized",
+      "description": "`BadAlias5` is uninitialized",
+      "line": 47,
+      "name": "unbound-name",
+      "stop_column": 53,
+      "stop_line": 47
+    },
+    {
+      "code": -2,
       "column": 72,
       "concise_description": "Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
       "description": "Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`",
@@ -990,6 +1030,16 @@
       "name": "bad-argument-type",
       "stop_column": 76,
       "stop_line": 47
+    },
+    {
+      "code": -2,
+      "column": 40,
+      "concise_description": "`BadAlias7` is uninitialized",
+      "description": "`BadAlias7` is uninitialized",
+      "line": 48,
+      "name": "unbound-name",
+      "stop_column": 49,
+      "stop_line": 48
     }
   ],
   "aliases_variance.py": [],
@@ -6001,6 +6051,26 @@
       "name": "not-a-type",
       "stop_column": 27,
       "stop_line": 18
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "`T` is uninitialized",
+      "description": "`T` is uninitialized",
+      "line": 35,
+      "name": "unbound-name",
+      "stop_column": 8,
+      "stop_line": 35
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "`T` is uninitialized",
+      "description": "`T` is uninitialized",
+      "line": 44,
+      "name": "unbound-name",
+      "stop_column": 18,
+      "stop_line": 44
     },
     {
       "code": -2,

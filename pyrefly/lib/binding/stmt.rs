@@ -153,12 +153,16 @@ impl<'a> BindingsBuilder<'a> {
         })
     }
 
-    pub fn ensure_mutable_name(&mut self, x: &ExprName) -> Idx<Key> {
+    pub fn ensure_mutable_name(&mut self, x: &ExprName, usage: &mut Usage) -> Idx<Key> {
         let name = Ast::expr_name_identifier(x.clone());
         let binding = self
             .lookup_name(Hashed::new(&name.id), LookupKind::Mutable)
             .map(Binding::Forward);
-        self.ensure_name(&name, binding)
+        self.ensure_name(
+            &name,
+            binding,
+            matches!(usage, Usage::StaticTypeInformation),
+        )
     }
 
     fn define_nonlocal_name(&mut self, name: &Identifier) {
@@ -271,7 +275,7 @@ impl<'a> BindingsBuilder<'a> {
                 for target in &mut x.targets {
                     let mut delete_link = self.declare_current_idx(Key::UsageLink(target.range()));
                     if let Expr::Name(name) = target {
-                        let idx = self.ensure_mutable_name(name);
+                        let idx = self.ensure_mutable_name(name, delete_link.usage());
                         self.scopes.upsert_flow_info(
                             Hashed::new(&name.id),
                             idx,
@@ -527,7 +531,7 @@ impl<'a> BindingsBuilder<'a> {
                             .declare_current_idx(Key::Definition(ShortIdentifier::expr_name(name)));
                         // Ensure the target name, which must already be in scope (it is part of the implicit dunder method call
                         // used in augmented assignment).
-                        self.ensure_mutable_name(name);
+                        self.ensure_mutable_name(name, assigned.usage());
                         self.ensure_expr(&mut x.value, assigned.usage());
                         // TODO(stroxler): Should we really be using `bind_key` here? This will update the
                         // flow info to define the name, even if it was not previously defined.

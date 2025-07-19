@@ -41,8 +41,6 @@
   ],
   "aliases_typealiastype.py": [
     "Line 44: Expected 1 errors",
-    "Line 46: Expected 1 errors",
-    "Line 48: Expected 1 errors",
     "Line 52: Expected 1 errors",
     "Line 53: Expected 1 errors",
     "Line 54: Expected 1 errors",
@@ -58,7 +56,8 @@
     "Line 64: Expected 1 errors",
     "Line 17: Unexpected errors ['Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
     "Line 18: Unexpected errors ['Argument `tuple[type[TypeVar[S]], type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
-    "Line 19: Unexpected errors ['Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
+    "Line 19: Unexpected errors ['`GoodAlias4` is uninitialized', 'Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
+    "Line 22: Unexpected errors ['`GoodAlias5` is uninitialized']",
     "Line 23: Unexpected errors ['Argument `tuple[type[TypeVar[S]], type[TypeVar[TStr]], type[ParamSpec[P]], type[TypeVarTuple[Ts]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
     "Line 35: Unexpected errors ['Expected a type form, got instance of `GenericAlias`']",
     "Line 36: Unexpected errors ['Expected a type form, got instance of `GenericAlias`']",
@@ -263,7 +262,6 @@
   "generics_syntax_declarations.py": [],
   "generics_syntax_infer_variance.py": [],
   "generics_syntax_scoping.py": [
-    "Line 35: Expected 1 errors",
     "Line 92: Expected 1 errors",
     "Line 95: Expected 1 errors",
     "Line 98: Expected 1 errors",

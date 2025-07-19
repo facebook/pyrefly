@@ -625,10 +625,17 @@ x3: B
 );
 
 testcase!(
-    bug = "False negative",
+    test_use_before_write,
+    r#"
+y  # E: `y` is uninitialized
+y = 42
+    "#,
+);
+
+testcase!(
     test_read_before_write,
     r#"
-x = y  # this should be an error
+x = y  # E: `y` is uninitialized
 y = 42
     "#,
 );
@@ -757,7 +764,7 @@ def f(x):
 
 def f(x):
     x = 3
-    x = "None" 
+    x = "None"
     "#,
 );
 
