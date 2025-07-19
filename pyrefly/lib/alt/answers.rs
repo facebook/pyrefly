@@ -632,7 +632,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 loc,
                 OverloadedCallee {
                     all_overloads: all_overloads
-                        .into_iter()
+                        .iter()
                         .map(|overload| overload.signature.clone())
                         .collect(),
                     closest_overload: closest_overload.clone(),
