@@ -788,12 +788,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // empty, as parameter types from the overload signature may be used as hints when
                 // evaluating arguments, producing arg_errors for some overloads but not others.
                 // See test::overload::test_pass_generic_class_to_overload for an example.
+
+                // If the selected overload is deprecated, we log a deprecation error.
                 if callable.is_deprecated {
                     self.error(
                         errors,
                         range,
                         ErrorInfo::new(ErrorKind::Deprecated, context),
-                        format!("Call to deprecated overload `{}`", method_name,),
+                        format!("Call to deprecated overload `{method_name}`"),
                     );
                 }
                 return (res, callable.signature.clone());
@@ -835,12 +837,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             //
             // the call to f should match the first overload, even though `1 + "2"` generates an
             // arg error for both overloads.
+
+            // If the closest overload is deprecated, we log a deprecation error.
             if closest_overload.is_deprecated {
                 self.error(
                     errors,
                     range,
                     ErrorInfo::new(ErrorKind::Deprecated, context),
-                    format!("Call to deprecated overload `{}`", method_name,),
+                    format!("Call to deprecated overload `{method_name}`"),
                 );
             }
             (closest_overload.return_type, closest_overload.signature)
