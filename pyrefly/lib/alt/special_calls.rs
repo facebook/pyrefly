@@ -297,12 +297,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for ty in self.as_class_info(ty) {
             if let Type::ClassDef(cls) = &ty {
                 let metadata = self.get_metadata_for_class(cls);
-                let func_display = || {
-                    format!(
-                        "{}()",
-                        func_kind.as_func_id().format(self.module_info().name())
-                    )
-                };
+                let func_display =
+                    || format!("{}()", func_kind.as_func_id().format(self.module().name()));
                 if metadata.is_new_type() {
                     self.error(
                         errors,

@@ -1833,6 +1833,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
     }
+
+    // When coercing an instance of condition_type to bool, check that either it does not override
+    // __bool__, or that condition_type.__bool__ is callable.
+    pub fn check_dunder_bool_is_callable(
+        &self,
+        condition_type: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let cond_bool_ty = self.type_of_magic_dunder_attr(
+            condition_type,
+            &dunder::BOOL,
+            range,
+            errors,
+            None,
+            "__bool__",
+        );
+
+        // test::narrow::test_walrus_value is an example of a valid union type that
+        // as_call_target() does not handle.
+        if let Some(ty) = cond_bool_ty
+            && !matches!(ty, Type::Union(_) | Type::Never(_))
+            && self.as_call_target(ty.clone()).is_none()
+        {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                format!(
+                    "`{}.__bool__` has type `{}`, which is not callable",
+                    self.for_display(condition_type.clone()),
+                    self.for_display(ty.clone()),
+                ),
+            );
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -2024,43 +2060,5 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // - If `base` is a union, expose only attributes shared by all members
         // - If `base` is an intersection, expose all possible attributes for any members
         self.completions_no_union_intersection(base, expected_attribute_name, include_types)
-    }
-}
-
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    // When coercing an instance of condition_type to bool, check that either it does not override
-    // __bool__, or that condition_type.__bool__ is callable.
-    pub fn check_dunder_bool_is_callable(
-        &self,
-        condition_type: &Type,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) {
-        let cond_bool_ty = self.type_of_magic_dunder_attr(
-            condition_type,
-            &dunder::BOOL,
-            range,
-            errors,
-            None,
-            "__bool__",
-        );
-
-        // test::narrow::test_walrus_value is an example of a valid union type that
-        // as_call_target() does not handle.
-        if let Some(ty) = cond_bool_ty
-            && !matches!(ty, Type::Union(_) | Type::Never(_))
-            && self.as_call_target(ty.clone()).is_none()
-        {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                format!(
-                    "`{}.__bool__` has type `{}`, which is not callable",
-                    self.for_display(condition_type.clone()),
-                    self.for_display(ty.clone()),
-                ),
-            );
-        }
     }
 }

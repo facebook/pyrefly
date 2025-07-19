@@ -22,7 +22,6 @@ use library::run::InitArgs;
 use library::run::LspArgs;
 use library::run::dump_config;
 use pyrefly::library::library::library::library;
-use pyrefly_util::args::clap_env;
 use pyrefly_util::args::get_args_expanded;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::panic::exit_on_panic;
@@ -65,10 +64,10 @@ struct FullCheckArgs {
     /// are ignored, and we use the default excludes unless overridden with the `--project-excludes` flag.
     files: Vec<String>,
     /// Files to exclude when type checking.
-    #[arg(long, env = clap_env("PROJECT_EXCLUDES"))]
+    #[arg(long)]
     project_excludes: Option<Vec<String>>,
     /// Watch for file changes and re-check them.
-    #[arg(long, env = clap_env("WATCH"), conflicts_with = "check_all")]
+    #[arg(long, conflicts_with = "check_all")]
     watch: bool,
 
     /// Explicitly set the Pyrefly configuration to use when type checking or starting a language server.
@@ -78,7 +77,7 @@ struct FullCheckArgs {
     /// When not set, Pyrefly will perform an upward-filesystem-walk approach to find the nearest
     /// pyrefly.toml or pyproject.toml with `tool.pyrefly` section'. If no config is found, Pyrefly exits with error.
     /// If both a pyrefly.toml and valid pyproject.toml are found, pyrefly.toml takes precedence.
-    #[arg(long, short, env = clap_env("CONFIG"), value_name = "FILE")]
+    #[arg(long, short, value_name = "FILE")]
     config: Option<PathBuf>,
 
     /// Type checking arguments and configuration

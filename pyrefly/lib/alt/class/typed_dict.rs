@@ -223,11 +223,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let ty = Type::Function(Box::new(Function {
             signature: Callable::list(ParamList::new(params), Type::None),
-            metadata: FuncMetadata::def(
-                self.module_info().name(),
-                cls.name().clone(),
-                dunder::INIT,
-            ),
+            metadata: FuncMetadata::def(self.module().name(), cls.name().clone(), dunder::INIT),
         }));
         ClassSynthesizedField::new(ty)
     }
@@ -237,8 +233,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> Option<ClassSynthesizedField> {
-        let metadata =
-            FuncMetadata::def(self.module_info().name(), cls.name().clone(), UPDATE_METHOD);
+        let metadata = FuncMetadata::def(self.module().name(), cls.name().clone(), UPDATE_METHOD);
 
         let self_param = self.class_self_param(cls, true);
 
@@ -315,7 +310,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> ClassSynthesizedField {
-        let metadata = FuncMetadata::def(self.module_info().name(), cls.name().clone(), GET_METHOD);
+        let metadata = FuncMetadata::def(self.module().name(), cls.name().clone(), GET_METHOD);
         // Synthesizes signatures for each field and a fallback `(self, key: str, default: object = ...) -> object` signature.
         let self_param = self.class_self_param(cls, true);
         let object_ty = self.stdlib.object().clone().to_type();
@@ -410,7 +405,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> Option<ClassSynthesizedField> {
-        let metadata = FuncMetadata::def(self.module_info().name(), cls.name().clone(), POP_METHOD);
+        let metadata = FuncMetadata::def(self.module().name(), cls.name().clone(), POP_METHOD);
         let self_param = self.class_self_param(cls, true);
 
         let mut literal_signatures: Vec<OverloadType> = Vec::new();
@@ -477,11 +472,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> Option<ClassSynthesizedField> {
-        let metadata = FuncMetadata::def(
-            self.module_info().name(),
-            cls.name().clone(),
-            dunder::DELITEM,
-        );
+        let metadata = FuncMetadata::def(self.module().name(), cls.name().clone(), dunder::DELITEM);
 
         let self_param = self.class_self_param(cls, true);
 
@@ -548,7 +539,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(ClassSynthesizedField::new(Type::Overload(Overload {
             signatures: Vec1::try_from_vec(overloads).ok()?,
             metadata: Box::new(FuncMetadata::def(
-                self.module_info().name(),
+                self.module().name(),
                 cls.name().clone(),
                 SETDEFAULT_METHOD,
             )),

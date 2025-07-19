@@ -14,11 +14,11 @@ use serde_with::serde_as;
 use crate::config::config::ConfigFile;
 use crate::config::migration::config_option_migrater::ConfigOptionMigrater;
 use crate::config::migration::error_codes::ErrorCodes;
+use crate::config::migration::ignore_missing_imports::IgnoreMissingImports;
 use crate::config::migration::project_excludes::ProjectExcludes;
 use crate::config::migration::project_includes::ProjectIncludes;
 use crate::config::migration::python_interpreter::PythonInterpreter;
 use crate::config::migration::python_version::PythonVersionConfig;
-use crate::config::migration::replace_imports::ReplaceImports;
 use crate::config::migration::search_path::SearchPath;
 use crate::config::migration::sub_configs::SubConfigs;
 use crate::config::migration::use_untyped_imports::UseUntypedImports;
@@ -233,7 +233,7 @@ pub fn parse_pyproject_config(raw_file: &str) -> anyhow::Result<ConfigFile> {
         Box::new(PythonInterpreter),
         Box::new(PythonVersionConfig),
         Box::new(UseUntypedImports),
-        Box::new(ReplaceImports),
+        Box::new(IgnoreMissingImports),
         Box::new(SearchPath),
         Box::new(ErrorCodes),
         Box::new(SubConfigs),
@@ -326,7 +326,7 @@ disable_error_code = ["union-attr"]
     }
 
     #[test]
-    fn test_replace_imports() -> anyhow::Result<()> {
+    fn test_ignore_imports() -> anyhow::Result<()> {
         let src = r#"[tool.mypy]
 files = ["src/a.py"]
 
@@ -349,13 +349,14 @@ module = [
 "#;
         let cfg = parse_pyproject_config(src)?;
         assert_eq!(
-            cfg.root.replace_imports_with_any,
+            cfg.root.ignore_missing_imports,
             Some(vec![
                 ModuleWildcard::new("a.*.b").unwrap(),
                 ModuleWildcard::new("some.module").unwrap(),
                 ModuleWildcard::new("uses.follow").unwrap(),
             ])
         );
+        assert_eq!(cfg.root.replace_imports_with_any, Some(vec![]),);
 
         Ok(())
     }

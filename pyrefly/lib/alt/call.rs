@@ -533,7 +533,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ErrorInfo::new(ErrorKind::Deprecated, context),
                 format!(
                     "Call to deprecated function `{}`",
-                    m.kind.as_func_id().format(self.module_info().name())
+                    m.kind.as_func_id().format(self.module().name())
                 ),
             );
         }
@@ -806,7 +806,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut msg = vec1![
                 format!(
                     "No matching overload found for function `{}`",
-                    metadata.kind.as_func_id().format(self.module_info().name())
+                    metadata.kind.as_func_id().format(self.module().name())
                 ),
                 "Possible overloads:".to_owned(),
             ];

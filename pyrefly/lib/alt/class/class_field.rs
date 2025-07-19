@@ -918,7 +918,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 && let Some(enum_value_ty) = self.type_of_enum_value(enum_)
                 && !class.fields().contains(&dunder::NEW)
                 && (!matches!(value, ExprOrBinding::Expr(Expr::EllipsisLiteral(_)))
-                    || !self.module_info().path().is_interface())
+                    || !self.module().path().is_interface())
             {
                 self.check_enum_value_annotation(&ty, &enum_value_ty, name, range, errors);
             }

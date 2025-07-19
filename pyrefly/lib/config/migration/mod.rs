@@ -7,6 +7,7 @@
 
 pub mod config_option_migrater;
 pub mod error_codes;
+pub mod ignore_missing_imports;
 pub mod mypy;
 pub mod project_excludes;
 pub mod project_includes;
@@ -14,7 +15,6 @@ pub mod pyright;
 pub mod python_interpreter;
 pub mod python_platform;
 pub mod python_version;
-pub mod replace_imports;
 pub mod search_path;
 pub mod sub_configs;
 pub mod untyped_def_behavior;

@@ -212,7 +212,7 @@ impl<'a> BindingsBuilder<'a> {
     /// the type if we found that name in scope; if we do not find the name we
     /// record an error and fall back to `Any`.
     ///
-    /// This function is the the core scope lookup logic for binding creation.
+    /// This function is the core scope lookup logic for binding creation.
     pub fn ensure_name(
         &mut self,
         name: &Identifier,
@@ -272,7 +272,9 @@ impl<'a> BindingsBuilder<'a> {
             // This is necessary so that, e.g. `[x for x in x]` correctly uses the outer scope for
             // the `in x` lookup.
             self.ensure_expr(&mut comp.iter, usage);
-            let iterable_value_idx = self.insert_binding(
+            // Incomplete nested comprehensions can have identical iterators
+            // for inner and outer loops. It is safe to overwrite it because it literally the same.
+            let iterable_value_idx = self.insert_binding_overwrite(
                 Key::Anon(comp.iter.range()),
                 Binding::IterableValue(None, comp.iter.clone(), IsAsync::new(comp.is_async)),
             );

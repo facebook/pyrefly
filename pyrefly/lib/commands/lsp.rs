@@ -13,7 +13,6 @@ use clap::ValueEnum;
 use crossbeam_channel::Select;
 use dupe::Dupe;
 use lsp_server::Connection;
-use pyrefly_util::args::clap_env;
 
 use crate::commands::run::CommandExitStatus;
 use crate::lsp::server::ProcessEvent;
@@ -44,7 +43,7 @@ pub(crate) enum IndexingMode {
 #[derive(Debug, Parser, Clone)]
 pub struct LspArgs {
     /// Find the struct that contains this field and add the indexing mode used by the language server
-    #[arg(long, value_enum, default_value_t, env = clap_env("INDEXING_MODE"))]
+    #[arg(long, value_enum, default_value_t)]
     pub(crate) indexing_mode: IndexingMode,
 }
 

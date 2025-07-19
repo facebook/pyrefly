@@ -386,6 +386,12 @@ impl ConfigFile {
             self.ignore_missing_source,
         )? {
             Ok(path)
+        } else if self
+            .ignore_missing_imports(path)
+            .iter()
+            .any(|p| p.matches(module))
+        {
+            Err(FindError::Ignored)
         } else {
             Err(FindError::import_lookup_path(
                 self.structured_import_lookup_path(),
@@ -505,6 +511,16 @@ impl ConfigFile {
              self.root.replace_imports_with_any.as_deref().unwrap())
     }
 
+    pub fn ignore_missing_imports(&self, path: Option<&Path>) -> &[ModuleWildcard] {
+        path.and_then(|path| {
+            self.get_from_sub_configs(ConfigBase::get_ignore_missing_imports, path)
+        })
+        .unwrap_or_else(||
+             // we can use unwrap here, because the value in the root config must
+             // be set in `ConfigFile::configure()`.
+             self.root.ignore_missing_imports.as_deref().unwrap())
+    }
+
     pub fn untyped_def_behavior(&self, path: &Path) -> UntypedDefBehavior {
         self.get_from_sub_configs(ConfigBase::get_untyped_def_behavior, path)
             .unwrap_or_else(||
@@ -583,6 +599,10 @@ impl ConfigFile {
 
         if self.root.replace_imports_with_any.is_none() {
             self.root.replace_imports_with_any = Some(Default::default());
+        }
+
+        if self.root.ignore_missing_imports.is_none() {
+            self.root.ignore_missing_imports = Some(Default::default());
         }
 
         if self.root.untyped_def_behavior.is_none() {
@@ -760,7 +780,7 @@ impl Display for ConfigFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{{source: {:?}, project_includes: {}, project_excludes: {}, search_path: [{}], python_interpreter: {:?}, python_environment: {}, replace_imports_with_any: [{}]}}",
+            "{{source: {:?}, project_includes: {}, project_excludes: {}, search_path: [{}], python_interpreter: {:?}, python_environment: {}, replace_imports_with_any: [{}], ignore_missing_imports: [{}]}}",
             self.source,
             self.project_includes,
             self.project_excludes,
@@ -769,6 +789,11 @@ impl Display for ConfigFile {
             self.python_environment,
             self.root
                 .replace_imports_with_any
+                .as_ref()
+                .map(|r| { r.iter().map(|p| p.as_str()).join(", ") })
+                .unwrap_or_default(),
+            self.root
+                .ignore_missing_imports
                 .as_ref()
                 .map(|r| { r.iter().map(|p| p.as_str()).join(", ") })
                 .unwrap_or_default(),
@@ -820,24 +845,26 @@ mod tests {
              site-package-path = ["venv/lib/python1.2.3/site-packages"]
              python-interpreter = "venv/my/python"
              replace-imports-with-any = ["fibonacci"]
+             ignore-missing-imports = ["sprout"]
              ignore-errors-in-generated-code = true
              use-untyped-imports = true
              ignore-missing-source = true
 
              [errors]
              assert-type = true
-                 bad-return = false
+             bad-return = false
 
-                 [[sub-config]]
-                 matches = "sub/project/**"
+             [[sub-config]]
+             matches = "sub/project/**"
 
-                     untyped-def-behavior = "check-and-infer-return-any"
-                     replace-imports-with-any = []
-                     ignore-errors-in-generated-code = false
-                     [sub-config.errors]
-                     assert-type = false
-                         invalid-yield = false
-                         "#;
+             untyped-def-behavior = "check-and-infer-return-any"
+             replace-imports-with-any = []
+             ignore-missing-imports = []
+             ignore-errors-in-generated-code = false
+             [sub-config.errors]
+             assert-type = false
+             invalid-yield = false
+        "#;
         let config = ConfigFile::parse_config(config_str).unwrap();
         assert_eq!(
             config,
@@ -876,6 +903,7 @@ mod tests {
                     ]))),
                     ignore_errors_in_generated_code: Some(true),
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
+                    ignore_missing_imports: Some(vec![ModuleWildcard::new("sprout").unwrap()]),
                     untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                     permissive_ignores: None,
                 },
@@ -890,6 +918,7 @@ mod tests {
                         ]))),
                         ignore_errors_in_generated_code: Some(false),
                         replace_imports_with_any: Some(Vec::new()),
+                        ignore_missing_imports: Some(Vec::new()),
                         untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnAny),
                         permissive_ignores: None,
                     }
@@ -919,18 +948,18 @@ mod tests {
 
              [errors]
              assert-type = "error"
-                 bad-return = "ignore"
+             bad-return = "ignore"
 
-                 [[sub_config]]
-                 matches = "sub/project/**"
+             [[sub_config]]
+             matches = "sub/project/**"
 
-                     untyped_def_behavior = "check-and-infer-return-any"
-                     replace_imports_with_any = []
-                     ignore_errors_in_generated_code = false
-                     [sub_config.errors]
-                     assert-type = "warn"
-                         invalid-yield = "ignore"
-                         "#;
+             untyped_def_behavior = "check-and-infer-return-any"
+             replace_imports_with_any = []
+             ignore_errors_in_generated_code = false
+             [sub_config.errors]
+             assert-type = "warn"
+             invalid-yield = "ignore"
+        "#;
         let config = ConfigFile::parse_config(config_str).unwrap();
         assert!(config.root.extras.0.is_empty());
         assert!(
@@ -1225,6 +1254,7 @@ mod tests {
             root: ConfigBase {
                 errors: Some(Default::default()),
                 replace_imports_with_any: Some(vec![ModuleWildcard::new("root").unwrap()]),
+                ignore_missing_imports: None,
                 untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                 ignore_errors_in_generated_code: Some(false),
                 extras: Default::default(),

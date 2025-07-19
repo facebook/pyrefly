@@ -416,7 +416,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 format!(
                     "{}{}",
                     msg,
-                    function_suffix(callable_name.as_ref(), self.module_info().name())
+                    function_suffix(callable_name.as_ref(), self.module().name())
                 ),
             )
         };

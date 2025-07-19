@@ -675,7 +675,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                 format!(
                     "Expression `{}` has type `{}` which does not derive from BaseException",
-                    self.module_info().display(x),
+                    self.module().display(x),
                     self.for_display(actual_type),
                 ),
             );
@@ -1806,7 +1806,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // We already emit errors for `e` during `call_method_or_error`
                         self.expr_infer(
                             e,
-                            &ErrorCollector::new(errors.module_info().clone(), ErrorStyle::Never),
+                            &ErrorCollector::new(errors.module().clone(), ErrorStyle::Never),
                         )
                     }
                     ExprOrBinding::Binding(b) => {
@@ -2380,7 +2380,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 };
 
-                if self.module_info().path().is_interface() {
+                if self.module().path().is_interface() {
                     Type::any_implicit() // .pyi file, functions don't have bodies
                 } else if x.last_exprs.as_ref().is_some_and(|xs| {
                     xs.iter().all(|(last, k)| {
@@ -2712,8 +2712,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
                                 format!(
                                     "Type parameter {} is not included in the type parameter list",
-                                    self.module_info()
-                                        .display(&self.bindings().idx_to_key(*key).0)
+                                    self.module().display(&self.bindings().idx_to_key(*key).0)
                                 ),
                             );
                         }

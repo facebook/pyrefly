@@ -407,7 +407,7 @@ impl DisplayWith<ModuleInfo> for Key {
 
 impl DisplayWith<Bindings> for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        write!(f, "{}", ctx.module_info().display(self))
+        write!(f, "{}", ctx.module().display(self))
     }
 }
 
@@ -436,7 +436,7 @@ pub enum ExprOrBinding {
 impl DisplayWith<Bindings> for ExprOrBinding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         match self {
-            Self::Expr(x) => write!(f, "{}", x.display_with(ctx.module_info())),
+            Self::Expr(x) => write!(f, "{}", x.display_with(ctx.module())),
             Self::Binding(x) => write!(f, "{}", x.display_with(ctx)),
         }
     }
@@ -465,7 +465,7 @@ pub enum BindingExpect {
 
 impl DisplayWith<Bindings> for BindingExpect {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        let m = ctx.module_info();
+        let m = ctx.module();
         match self {
             Self::TypeCheckExpr(x) => {
                 write!(f, "TypeCheckExpr({})", m.display(x))
@@ -485,7 +485,7 @@ impl DisplayWith<Bindings> for BindingExpect {
                     f,
                     "UnpackLength({} {} {})",
                     ctx.display(*x),
-                    ctx.module_info().display(range),
+                    ctx.module().display(range),
                     expectation,
                 )
             }
@@ -1146,7 +1146,7 @@ pub enum Binding {
 
 impl DisplayWith<Bindings> for Binding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        let m = ctx.module_info();
+        let m = ctx.module();
         let ann = |k: &Option<Idx<KeyAnnotation>>| match k {
             None => "None".to_owned(),
             Some(k) => ctx.display(*k).to_string(),
@@ -1262,7 +1262,7 @@ impl DisplayWith<Bindings> for Binding {
                     f,
                     "Narrow({}, {})",
                     ctx.display(*k),
-                    op.display_with(ctx.module_info())
+                    op.display_with(ctx.module())
                 )
             }
             Self::NameAssign(name, None, expr) => {
@@ -1572,7 +1572,7 @@ impl DisplayWith<Bindings> for BindingAnnotation {
             Self::AnnotateExpr(target, x, class_key) => write!(
                 f,
                 "AnnotateExpr({target}, {}, {})",
-                ctx.module_info().display(x),
+                ctx.module().display(x),
                 match class_key {
                     None => "None".to_owned(),
                     Some(t) => ctx.display(*t).to_string(),
@@ -1821,7 +1821,7 @@ impl BindingYield {
 
 impl DisplayWith<Bindings> for BindingYield {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        let m = ctx.module_info();
+        let m = ctx.module();
         write!(f, "BindingYield({})", m.display(&self.expr()))
     }
 }
@@ -1843,7 +1843,7 @@ impl BindingYieldFrom {
 
 impl DisplayWith<Bindings> for BindingYieldFrom {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        let m = ctx.module_info();
+        let m = ctx.module();
         write!(f, "BindingYieldFrom({})", m.display(&self.expr()))
     }
 }

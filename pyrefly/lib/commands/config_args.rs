@@ -14,7 +14,6 @@ use path_absolutize::Absolutize;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::arc_id::ArcId;
-use pyrefly_util::args::clap_env;
 use pyrefly_util::display;
 
 use crate::config::base::UntypedDefBehavior;
@@ -33,66 +32,70 @@ use crate::module::wildcard::ModuleWildcard;
 pub struct ConfigOverrideArgs {
     /// The list of directories where imports are imported from, including
     /// type checked files.
-    #[arg(long, env = clap_env("SEARCH_PATH"))]
+    #[arg(long)]
     search_path: Option<Vec<PathBuf>>,
 
     /// The Python version any `sys.version` checks should evaluate against.
-    #[arg(long, env = clap_env("PYTHON_VERSION"))]
+    #[arg(long)]
     python_version: Option<PythonVersion>,
 
     /// The platform any `sys.platform` checks should evaluate against.
-    #[arg(long, env = clap_env("PLATFORM"))]
+    #[arg(long)]
     python_platform: Option<PythonPlatform>,
 
     /// Directories containing third-party package imports, searched
     /// after first checking `search_path` and `typeshed`.
-    #[arg(long, env = clap_env("SITE_PACKAGE_PATH"))]
+    #[arg(long)]
     site_package_path: Option<Vec<PathBuf>>,
 
     /// Use a specific Conda environment to query Python environment information,
     /// even if it isn't activated.
-    #[arg(long, env = clap_env("CONDA_ENVIRONMENT"), group = "env_source")]
+    #[arg(long, group = "env_source")]
     conda_environment: Option<String>,
 
     /// The Python executable that will be queried for `python_version`
     /// `python_platform`, or `site_package_path` if any of the values are missing.
-    #[arg(long, env = clap_env("PYTHON_INTERPRETER"), value_name = "EXE_PATH", group = "env_source")]
+    #[arg(long, value_name = "EXE_PATH", group = "env_source")]
     python_interpreter: Option<PathBuf>,
 
     /// Skip doing any automatic querying for `python-interpreter` or `conda-environment`
-    #[arg(long, env = clap_env("SKIP_INTERPRETER_QUERY"), group = "env_source")]
+    #[arg(long, group = "env_source")]
     skip_interpreter_query: bool,
 
     /// Override the bundled typeshed with a custom path.
-    #[arg(long, env = clap_env("TYPESHED_PATH"))]
+    #[arg(long)]
     typeshed_path: Option<PathBuf>,
 
     /// Whether to search imports in `site-package-path` that do not have a `py.typed` file unconditionally.
-    #[arg(long, env = clap_env("USE_UNTYPED_IMPORTS"))]
+    #[arg(long)]
     use_untyped_imports: Option<bool>,
-    /// Replace specified imports with typing.Any, suppressing related import errors even if the module is found.
-    #[arg(long, env = clap_env("REPLACE_IMPORTS_WITH_ANY"))]
+    /// Always replace specified imports with typing.Any, suppressing related import errors even if the module is found.
+    #[arg(long)]
     replace_imports_with_any: Option<Vec<String>>,
+    /// If the specified imported module can't be found, replace it with typing.Any, suppressing
+    /// related import errors.
+    #[arg(long)]
+    ignore_missing_imports: Option<Vec<String>>,
     /// Ignore missing source packages when only type stubs are available, allowing imports to proceed without source validation.
-    #[arg(long, env = clap_env("IGNORE_MISSING_SOURCE"))]
+    #[arg(long)]
     ignore_missing_source: Option<bool>,
     /// Whether to ignore type errors in generated code.
-    #[arg(long, env = clap_env("IGNORE_ERRORS_IN_GENERATED_CODE"))]
+    #[arg(long)]
     ignore_errors_in_generated_code: Option<bool>,
     /// Controls how Pyrefly analyzes function definitions that lack type annotations on parameters and return values.
-    #[arg(long, env = clap_env("UNTYPED_DEF_BEHAVIOR"))]
+    #[arg(long)]
     untyped_def_behavior: Option<UntypedDefBehavior>,
     /// Whether Pyrefly will respect ignore statements for other tools, e.g. `# mypy: ignore`.
-    #[arg(long, env = clap_env("PERMISSIVE_IGNORES"))]
+    #[arg(long)]
     permissive_ignores: Option<bool>,
     /// Force this rule to emit an error. Can be used multiple times.
-    #[arg(long, env = clap_env("ERROR"), hide_possible_values = true)]
+    #[arg(long, hide_possible_values = true)]
     error: Vec<ErrorKind>,
     /// Force this rule to emit a warning. Can be used multiple times.
-    #[arg(long, env = clap_env("WARN"), hide_possible_values = true)]
+    #[arg(long, hide_possible_values = true)]
     warn: Vec<ErrorKind>,
     /// Do not emit diagnostics for this rule. Can be used multiple times.
-    #[arg(long, env = clap_env("IGNORE"), hide_possible_values = true)]
+    #[arg(long, hide_possible_values = true)]
     ignore: Vec<ErrorKind>,
 }
 
@@ -190,6 +193,14 @@ impl ConfigOverrideArgs {
         }
         if let Some(wildcards) = &self.replace_imports_with_any {
             config.root.replace_imports_with_any = Some(
+                wildcards
+                    .iter()
+                    .filter_map(|x| ModuleWildcard::new(x).ok())
+                    .collect(),
+            );
+        }
+        if let Some(wildcards) = &self.ignore_missing_imports {
+            config.root.ignore_missing_imports = Some(
                 wildcards
                     .iter()
                     .filter_map(|x| ModuleWildcard::new(x).ok())

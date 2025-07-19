@@ -239,7 +239,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ErrorInfo::Kind(ErrorKind::InvalidLiteral),
                             format!(
                                 "`{}.{}` is not a valid enum member",
-                                value.display_with(self.module_info()),
+                                value.display_with(self.module()),
                                 member_name.id
                             ),
                         );

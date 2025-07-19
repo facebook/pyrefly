@@ -26,7 +26,6 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_util::args::clap_env;
 use pyrefly_util::display;
 use pyrefly_util::display::number_thousands;
 use pyrefly_util::events::CategorizedEvents;
@@ -93,28 +92,28 @@ pub struct CheckArgs {
 #[derive(Debug, Parser, Clone)]
 struct OutputArgs {
     /// Write the errors to a file, instead of printing them.
-    #[arg(long, short = 'o', env = clap_env("OUTPUT"), value_name = "OUTPUT_FILE")]
+    #[arg(long, short = 'o', value_name = "OUTPUT_FILE")]
     output: Option<PathBuf>,
     /// Set the error output format.
-    #[arg(long, value_enum, default_value_t, env = clap_env("OUTPUT_FORMAT"))]
+    #[arg(long, value_enum, default_value_t)]
     output_format: OutputFormat,
     /// Produce debugging information about the type checking process.
-    #[arg(long, env = clap_env("DEBUG_INFO"), value_name = "OUTPUT_FILE")]
+    #[arg(long, value_name = "OUTPUT_FILE")]
     debug_info: Option<PathBuf>,
     /// Report the memory usage of bindings.
-    #[arg(long, env = clap_env("REPORT_BINDING_MEMORY"), value_name = "OUTPUT_FILE")]
+    #[arg(long, value_name = "OUTPUT_FILE")]
     report_binding_memory: Option<PathBuf>,
     /// Report type traces.
-    #[arg(long, env = clap_env("REPORT_TRACE"), value_name = "OUTPUT_FILE")]
+    #[arg(long, value_name = "OUTPUT_FILE")]
     report_trace: Option<PathBuf>,
     /// Process each module individually to figure out how long each step takes.
-    #[arg(long, env = clap_env("REPORT_TIMINGS"), value_name = "OUTPUT_FILE")]
+    #[arg(long, value_name = "OUTPUT_FILE")]
     report_timings: Option<PathBuf>,
     /// Generate a Glean-compatible JSON file for each module
-    #[arg(long, env = clap_env("REPORT_GLEAN"), value_name = "OUTPUT_FILE")]
+    #[arg(long, value_name = "OUTPUT_FILE")]
     report_glean: Option<PathBuf>,
     /// Generate a Pysa-compatible JSON file for each module
-    #[arg(long, env = clap_env("REPORT_PYSA"), value_name = "OUTPUT_FILE")]
+    #[arg(long, value_name = "OUTPUT_FILE")]
     report_pysa: Option<PathBuf>,
     /// Count the number of each error kind. Prints the top N [default=5] errors, sorted by count, or all errors if N is 0.
     #[arg(
@@ -122,7 +121,6 @@ struct OutputArgs {
         default_missing_value = "5",
         require_equals = true,
         num_args = 0..=1,
-        env = clap_env("COUNT_ERRORS"),
         value_name = "N",
     )]
     count_errors: Option<usize>,
@@ -134,12 +132,11 @@ struct OutputArgs {
         default_missing_value = "0",
         require_equals = true,
         num_args = 0..=1,
-        env = clap_env("SUMMARIZE_ERRORS"),
         value_name = "INDEX",
     )]
     summarize_errors: Option<usize>,
     /// Omit the summary in the last line of the output.
-    #[arg(long, env = clap_env("NO_SUMMARY"))]
+    #[arg(long)]
     no_summary: bool,
 }
 
@@ -148,16 +145,16 @@ struct OutputArgs {
 #[derive(Debug, Parser, Clone)]
 struct BehaviorArgs {
     /// Check all reachable modules, not just the ones that are passed in explicitly on CLI positional arguments.
-    #[arg(long, short = 'a', env = clap_env("CHECK_ALL"))]
+    #[arg(long, short = 'a')]
     check_all: bool,
     /// Suppress errors found in the input files.
-    #[arg(long, env = clap_env("SUPPRESS_ERRORS"))]
+    #[arg(long)]
     suppress_errors: bool,
     /// Check against any `E:` lines in the file.
-    #[arg(long, env = clap_env("EXPECTATIONS"))]
+    #[arg(long)]
     expectations: bool,
     /// Remove unused ignores from the input files.
-    #[arg(long, env = clap_env("REMOVE_UNUSED_IGNORES"))]
+    #[arg(long)]
     remove_unused_ignores: bool,
 }
 

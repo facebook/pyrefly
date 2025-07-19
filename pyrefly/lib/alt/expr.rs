@@ -446,7 +446,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         TypeVar::new(
             name,
-            self.module_info().dupe(),
+            self.module().dupe(),
             restriction,
             default_value,
             variance,
@@ -551,7 +551,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             ));
         }
-        ParamSpec::new(name, self.module_info().dupe(), default_value)
+        ParamSpec::new(name, self.module().dupe(), default_value)
     }
 
     pub fn typevartuple_from_call(
@@ -660,7 +660,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             ));
         }
-        TypeVarTuple::new(name, self.module_info().dupe(), default_value)
+        TypeVarTuple::new(name, self.module().dupe(), default_value)
     }
 
     pub fn expr_infer(&self, x: &Expr, errors: &ErrorCollector) -> Type {

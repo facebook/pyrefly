@@ -31,11 +31,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ];
         let ty = Type::Function(Box::new(Function {
             signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
-            metadata: FuncMetadata::def(
-                self.module_info().name(),
-                cls.name().clone(),
-                dunder::INIT,
-            ),
+            metadata: FuncMetadata::def(self.module().name(), cls.name().clone(), dunder::INIT),
         }));
         ClassSynthesizedField::new(ty)
     }
@@ -51,7 +47,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ];
         let ty = Type::Function(Box::new(Function {
             signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
-            metadata: FuncMetadata::def(self.module_info().name(), cls.name().clone(), dunder::NEW),
+            metadata: FuncMetadata::def(self.module().name(), cls.name().clone(), dunder::NEW),
         }));
         ClassSynthesizedField::new(ty)
     }

@@ -17,11 +17,11 @@ use serde::Deserialize;
 use crate::config::config::ConfigFile;
 use crate::config::migration::config_option_migrater::ConfigOptionMigrater;
 use crate::config::migration::error_codes::ErrorCodes;
+use crate::config::migration::ignore_missing_imports::IgnoreMissingImports;
 use crate::config::migration::project_excludes::ProjectExcludes;
 use crate::config::migration::project_includes::ProjectIncludes;
 use crate::config::migration::python_interpreter::PythonInterpreter;
 use crate::config::migration::python_version::PythonVersionConfig;
-use crate::config::migration::replace_imports::ReplaceImports;
 use crate::config::migration::search_path::SearchPath;
 use crate::config::migration::sub_configs::SubConfigs;
 use crate::config::migration::untyped_def_behavior::UntypedDefBehaviorConfig;
@@ -74,7 +74,7 @@ impl MypyConfig {
             Box::new(PythonInterpreter),
             Box::new(PythonVersionConfig),
             Box::new(UseUntypedImports),
-            Box::new(ReplaceImports),
+            Box::new(IgnoreMissingImports),
             Box::new(SearchPath),
             Box::new(ErrorCodes),
             Box::new(SubConfigs),
@@ -157,7 +157,8 @@ ignore_missing_imports = True
             "**/src/specific/bad/file.py".to_owned(),
         ]);
         assert_eq!(cfg.project_excludes, expected_excludes);
-        assert_eq!(cfg.replace_imports_with_any(None).len(), 5);
+        assert_eq!(cfg.ignore_missing_imports(None).len(), 5);
+        assert_eq!(cfg.replace_imports_with_any(None).len(), 0);
         assert!(cfg.use_untyped_imports);
         Ok(())
     }

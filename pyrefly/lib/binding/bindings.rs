@@ -108,7 +108,7 @@ impl Display for Bindings {
                 writeln!(
                     f,
                     "{} = {}",
-                    me.module_info().display(k),
+                    me.module().display(k),
                     items.1.get_exists(idx).display_with(me)
                 )?;
             }
@@ -145,10 +145,10 @@ impl Bindings {
     where
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        self.module_info().display(self.idx_to_key(idx))
+        self.module().display(self.idx_to_key(idx))
     }
 
-    pub fn module_info(&self) -> &ModuleInfo {
+    pub fn module(&self) -> &ModuleInfo {
         &self.0.module_info
     }
 
@@ -209,9 +209,9 @@ impl Bindings {
             let key = self.idx_to_key(idx);
             panic!(
                 "Internal error: key lacking binding, module={}, path={}, key={}, key-debug={key:?}",
-                self.module_info().name(),
-                self.module_info().path(),
-                self.module_info().display(key),
+                self.module().name(),
+                self.module().path(),
+                self.module().display(key),
             )
         })
     }
@@ -240,8 +240,8 @@ impl Bindings {
                 &name.id,
                 name.range,
                 b.display_with(self),
-                self.module_info().name(),
-                self.module_info().path(),
+                self.module().name(),
+                self.module().path(),
             )
         }
     }
@@ -259,8 +259,8 @@ impl Bindings {
                 &name.id,
                 name.range,
                 b.display_with(self),
-                self.module_info().name(),
-                self.module_info().path(),
+                self.module().name(),
+                self.module().path(),
             )
         }
     }

@@ -403,7 +403,7 @@ impl Solver {
         let msg = tcc.kind.format_error(
             &self.for_display(got.clone()),
             &self.for_display(want.clone()),
-            errors.module_info().name(),
+            errors.module().name(),
         );
         match tcc.context {
             Some(ctx) => {

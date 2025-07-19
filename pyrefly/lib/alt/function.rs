@@ -63,7 +63,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         // Overloads in .pyi should not have an implementation.
-        let skip_implementation = self.module_info().path().style() == ModuleStyle::Interface
+        let skip_implementation = self.module().path().style() == ModuleStyle::Interface
             || class_metadata.is_some_and(|idx| self.get_idx(*idx).is_protocol());
         let def = self.get_idx(idx);
         if def.metadata.flags.is_overload {
@@ -517,7 +517,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Callable::list(ParamList::new(params), ret)
         };
         let kind = FunctionKind::from_name(
-            self.module_info().name(),
+            self.module().name(),
             defining_cls.as_ref().map(|cls| cls.name()),
             &def.name.id,
         );

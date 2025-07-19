@@ -136,7 +136,7 @@ impl ErrorCollector {
         self.errors.lock().push(err);
     }
 
-    pub fn module_info(&self) -> &ModuleInfo {
+    pub fn module(&self) -> &ModuleInfo {
         &self.module_info
     }
 
