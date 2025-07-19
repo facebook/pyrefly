@@ -18,6 +18,7 @@ use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::call::OverloadTarget;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::class::class_field::ClassField;
@@ -263,7 +264,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             // Overloaded function. Call it to see which signature is actually used.
             self.call_overloads(
-                Vec1::try_from_vec(sigs.map(|x| (*x).clone())).unwrap(),
+                Vec1::try_from_vec(sigs.map(|x| OverloadTarget::new_from_signature((*x).clone())))
+                    .unwrap(),
                 (*overload.metadata).clone(),
                 None,
                 &args.args.map(CallArg::expr_maybe_starred),
