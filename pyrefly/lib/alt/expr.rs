@@ -188,7 +188,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn ifs_infer(&self, comps: &[Comprehension], errors: &ErrorCollector) {
         for comp in comps {
             for if_clause in comp.ifs.iter() {
-                self.expr_infer(if_clause, errors);
+                let ty = self.expr_infer(&if_clause, errors);
+                self.check_truthy(&ty, &if_clause.range(), errors);
             }
         }
     }
@@ -1005,6 +1006,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let body_type = self.expr_infer_type_no_trace(&x.body, hint, errors);
                 let orelse_type = self.expr_infer_type_no_trace(&x.orelse, hint, errors);
                 self.check_dunder_bool_is_callable(&condition_type, x.range(), errors);
+                self.check_truthy(&condition_type, &x.range(), errors);
                 match condition_type.as_bool() {
                     Some(true) => body_type,
                     Some(false) => orelse_type,
@@ -1636,6 +1638,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
                 context,
             ),
+        }
+    }
+
+    #[inline]
+    fn check_truthy(&self, condition_type: &Type, range: &TextRange, errors: &ErrorCollector) {
+        let module_name = errors.module_info().name();
+        if let Some(error_message) = condition_type.is_truthy(module_name) {
+            self.error(
+                errors,
+                *range,
+                ErrorKind::InvalidCondition,
+                None,
+                error_message,
+            );
         }
     }
 }
