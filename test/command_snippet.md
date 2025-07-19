@@ -22,12 +22,25 @@ $ $PYREFLY check --command "x: int = 42"
 [0]
 ```
 
-## Command snippet with imports
+## Command snippet with built-in module import
 
 ```scrut {output_stream: stderr}
 $ $PYREFLY check --command "import sys; print(sys.version)"
  INFO Checking current directory with default configuration
  INFO errors shown: 0* (glob)
+[0]
+```
+
+## Command snippet with local file import
+
+```scrut
+$ echo "x: int = 5" > $TEST_PY && $PYREFLY check --command "import test; from typing import reveal_type; reveal_type(test.x)"
+ INFO revealed type: int [reveal-type]
+ --> <string>:1:57
+  |
+1 | import test; from typing import reveal_type; reveal_type(test.x)
+  |                                                         --------
+  |
 [0]
 ```
 
