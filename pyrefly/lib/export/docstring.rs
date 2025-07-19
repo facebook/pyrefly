@@ -16,7 +16,30 @@ pub struct Docstring(Arc<String>);
 
 impl Docstring {
     fn new(docstring: &str) -> Self {
-        let mut result = docstring.to_owned();
+        let result = docstring.replace("\r", "").replace("\t", "    ");
+
+        // Remove any string literal prefixes and suffixes
+        let patterns = [
+            ("\"\"\"", "\"\"\""),  // Multiline double quotes
+            ("\'\'\'", "\'\'\'"),  // Multiline single quotes
+            ("r\"\"\"", "\"\"\""), // Raw multiline double quotes
+            ("\'", "\'"),          // Single quotes
+            ("r\'", "\'"),         // Raw single quotes
+            ("\"", "\""),          // Double quotes
+            ("r\"", "\""),         // Raw double quotes
+        ];
+
+        let mut result = result;
+        for (prefix, suffix) in patterns {
+            if result.starts_with(prefix)
+                && result.ends_with(suffix)
+                && let Some(x) = result.strip_prefix(prefix)
+                && let Some(x) = x.strip_suffix(suffix)
+            {
+                result = x.to_owned();
+                break; // Stop after first match to avoid over-trimming
+            }
+        }
         result = result.replace("\r", "");
         result = result.replace("\t", "    ");
 
@@ -62,6 +85,53 @@ impl Docstring {
 #[cfg(test)]
 mod tests {
     use crate::export::docstring::Docstring;
+
+    #[test]
+    fn test_clean_removes_double_multiline_double_quotes() {
+        assert_eq!(
+            Docstring::new("\"\"\"test docstring\"\"\"").as_str(),
+            "test docstring"
+        );
+    }
+    #[test]
+    fn test_clean_removes_multiline_single_quotes() {
+        assert_eq!(
+            Docstring::new("\"\"\"test docstring\"\"\"").as_str(),
+            "test docstring"
+        );
+    }
+
+    #[test]
+    fn test_clean_removes_single_quotes() {
+        assert_eq!(
+            Docstring::new("\'test docstring\'").as_str(),
+            "test docstring"
+        );
+    }
+
+    #[test]
+    fn test_clean_removes_raw_multiline_double_quotes() {
+        assert_eq!(
+            Docstring::new("r\"\"\"test docstring\"\"\"").as_str(),
+            "test docstring"
+        );
+    }
+
+    #[test]
+    fn test_clean_removes_raw_multiline_single_quotes() {
+        assert_eq!(
+            Docstring::new("r\"\"\"test docstring\"\"\"").as_str(),
+            "test docstring"
+        );
+    }
+
+    #[test]
+    fn test_clean_removes_double_quotes() {
+        assert_eq!(
+            Docstring::new("\"test docstring\"").as_str(),
+            "test docstring"
+        );
+    }
 
     #[test]
     fn test_clean_removes_carriage_returns() {

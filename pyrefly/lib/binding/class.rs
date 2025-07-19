@@ -50,10 +50,10 @@ use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyVariance;
-use crate::binding::binding::RawClassFieldInitialization;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamBuilder;
+use crate::binding::scope::ClassFieldInBody;
 use crate::binding::scope::ClassIndices;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
@@ -65,7 +65,6 @@ use crate::export::docstring::Docstring;
 use crate::graph::index::Idx;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
-use crate::types::special_form::SpecialForm;
 use crate::types::types::Type;
 
 enum IllegalIdentifierHandling {
@@ -234,31 +233,26 @@ impl<'a> BindingsBuilder<'a> {
                         )
                     } else {
                         match info.as_initial_value() {
-                            RawClassFieldInitialization::ClassBody(Some(e)) => (
+                            ClassFieldInBody::InitializedByAssign(e) => (
                                 ClassFieldDefinition::AssignedInBody {
                                     value: ExprOrBinding::Expr(e.clone()),
                                     annotation: stat_info.annot,
                                 },
                                 true,
                             ),
-                            RawClassFieldInitialization::ClassBody(None) => (
+                            ClassFieldInBody::InitializedWithoutAssign => (
                                 ClassFieldDefinition::DefinedWithoutAssign {
                                     definition: info.key,
                                 },
                                 true,
                             ),
-                            RawClassFieldInitialization::Uninitialized => {
+                            ClassFieldInBody::Uninitialized => {
                                 let annotation = stat_info.annot.unwrap_or_else(
                                     || panic!("A class field known in the body but uninitialized always has an annotation.")
                                 );
                                 (
                                     ClassFieldDefinition::DeclaredByAnnotation { annotation },
                                     false,
-                                )
-                            }
-                            RawClassFieldInitialization::Method(..) => {
-                                unreachable!(
-                                    "A class field defined on the body cannot be method-defined"
                                 )
                             }
                         }
@@ -518,27 +512,19 @@ impl<'a> BindingsBuilder<'a> {
                     range,
                 ),
             );
-            let annotation = if let Some(annotation) = member_annotation {
-                let ann_key = KeyAnnotation::Annotation(ShortIdentifier::new(&Identifier::new(
-                    member_name.clone(),
-                    range,
-                )));
-                let ann_val = if let Some(special) = SpecialForm::new(&member_name, &annotation) {
-                    BindingAnnotation::Type(
-                        AnnotationTarget::ClassMember(member_name.clone()),
-                        special.to_type(),
-                    )
-                } else {
+            let annotation = member_annotation.map(|annotation_expr| {
+                self.insert_binding(
+                    KeyAnnotation::Annotation(ShortIdentifier::new(&Identifier::new(
+                        member_name.clone(),
+                        range,
+                    ))),
                     BindingAnnotation::AnnotateExpr(
                         AnnotationTarget::ClassMember(member_name.clone()),
-                        annotation,
+                        annotation_expr,
                         None,
-                    )
-                };
-                Some(self.insert_binding(ann_key, ann_val))
-            } else {
-                None
-            };
+                    ),
+                )
+            });
             let definition = match (member_value, force_class_initialization) {
                 (Some(value), _) => ClassFieldDefinition::AssignedInBody {
                     value: ExprOrBinding::Expr(value),

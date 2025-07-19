@@ -364,8 +364,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             // Assume recursive checks are true
             return true;
         }
-        let to = self.type_order;
-        let protocol_members = to.get_protocol_member_names(protocol.class_object());
+        let protocol_members = self
+            .type_order
+            .get_protocol_member_names(protocol.class_object());
         for name in protocol_members {
             if name == dunder::INIT || name == dunder::NEW {
                 // Protocols can't be instantiated
@@ -386,12 +387,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 } else if !self.is_subset_eq(&got, &want) {
                     return false;
                 }
-            } else if let got_attrs = to.try_lookup_attr(&got, &name)
+            } else if let got_attrs = self.type_order.try_lookup_attr(&got, &name)
                 && !got_attrs.is_empty()
-                && let Some(want) = to.try_lookup_attr_from_class_type(protocol.clone(), &name)
+                && let Some(want) = self
+                    .type_order
+                    .try_lookup_attr_from_class_type(protocol.clone(), &name)
             {
                 for got in got_attrs {
-                    if !to
+                    if !self
+                        .type_order
                         .is_attr_subset(&got, &want, &mut |got, want| self.is_subset_eq(got, want))
                     {
                         return false;

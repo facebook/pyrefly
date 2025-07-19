@@ -36,7 +36,6 @@ use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::MethodThatSetsAttr;
-use crate::binding::binding::RawClassFieldInitialization;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
@@ -66,6 +65,31 @@ use crate::types::types::OverloadType;
 use crate::types::types::SuperObj;
 use crate::types::types::TArgs;
 use crate::types::types::Type;
+
+/// Helper type for going from binding information to the calculated class field.
+///
+/// TODO(stroxler): This type is mostly an artifact of a refactor, it used to be
+/// used in `BindingClassField`. We probably can eliminate it.
+enum RawClassFieldInitialization {
+    /// At the point where the field is declared, it does not have an initial value. This includes
+    /// fields declared but not initialized in the class body, and instance-only fields of
+    /// synthesized classes.
+    Uninitialized,
+    /// The field is set in a method *and declared nowhere else*. Consider:
+    ///   class A:
+    ///     x: int
+    ///     def __init__(self):
+    ///         self.x = 42
+    ///         self.y = 42
+    /// `x`'s initialization type is `Uninitialized`, whereas y's is `Method('__init__')`.
+    Method(MethodThatSetsAttr),
+    /// The field is declared and initialized to a value in the class body.
+    ///
+    /// If the value is from an assignment, stores the expression that the field is assigned to,
+    /// which is needed for some cases like dataclass fields. The `None` case is for fields that
+    /// have values which don't come from assignment (e.g. function defs, imports in a class body)
+    ClassBody(Option<Expr>),
+}
 
 /// Correctly analyzing which attributes are visible on class objects, as well
 /// as handling method binding correctly, requires distinguishing which fields

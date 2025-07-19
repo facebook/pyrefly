@@ -1409,7 +1409,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 x.arguments.range,
                                 errors,
                                 None,
-                                hint.cloned(),
+                                hint,
                             )
                         }
                     })

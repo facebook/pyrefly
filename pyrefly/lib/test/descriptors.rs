@@ -102,6 +102,20 @@ def f(c: C):
 );
 
 testcase!(
+    test_abstract_property,
+    r#"
+from typing import assert_type
+from abc import ABC, abstractproperty
+class C(ABC):
+    @abstractproperty
+    def foo(self) -> int:
+        return 42
+def f(c: C):
+    assert_type(c.foo, int)
+    "#,
+);
+
+testcase!(
     test_property_with_setter,
     r#"
 from typing import assert_type, reveal_type

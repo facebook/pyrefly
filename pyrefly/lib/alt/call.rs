@@ -521,7 +521,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-        hint: Option<Type>,
+        hint: Option<&Type>,
     ) -> Type {
         let metadata = call_target.target.function_metadata();
         if let Some(m) = metadata
@@ -555,7 +555,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(hint) = hint {
                     // If a hint is provided, use it to bind any variables in the return type
                     // We only care about the side effect here, not the result
-                    self.is_subset_eq(&Type::ClassType(cls.clone()), &hint);
+                    self.is_subset_eq(&Type::ClassType(cls.clone()), hint);
                 }
                 if self
                     .get_metadata_for_class(cls.class_object())

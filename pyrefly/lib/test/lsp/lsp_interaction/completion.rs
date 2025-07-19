@@ -18,6 +18,26 @@ use crate::test::lsp::lsp_interaction::util::build_did_open_notification;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 use crate::test::lsp::lsp_interaction::util::run_test_lsp;
 
+/// Creates a completion response message
+/// completion_items is a serde_json value containing completion items to include in the response
+pub fn make_completion_result(request_id: i32, completion_items: serde_json::Value) -> Message {
+    let mut all_items = Vec::new();
+    if let Some(items) = completion_items.as_array() {
+        for item in items {
+            all_items.push(item.clone());
+        }
+    }
+
+    Message::Response(Response {
+        id: RequestId::from(request_id),
+        result: Some(serde_json::json!({
+            "isIncomplete": false,
+            "items": all_items,
+        })),
+        error: None,
+    })
+}
+
 #[test]
 fn test_completion() {
     let root = get_test_files_root();
@@ -83,20 +103,14 @@ fn test_completion() {
             }),
         ],
         expected_messages_from_language_server: vec![
-            Message::Response(Response {
-                id: RequestId::from(2),
-                result: Some(
-                    serde_json::json!({"isIncomplete":false,"items":[{"detail":"type[Bar]","kind":6,"label":"Bar","sortText":"0"}]}),
-                ),
-                error: None,
-            }),
-            Message::Response(Response {
-                id: RequestId::from(3),
-                result: Some(
-                    serde_json::json!({"isIncomplete":false,"items":[{"detail":"type[Bar]","kind":6,"label":"Bar","sortText":"0"}]}),
-                ),
-                error: None,
-            }),
+            make_completion_result(
+                2,
+                serde_json::json!([{"detail":"type[Bar]","kind":6,"label":"Bar","sortText":"0"}]),
+            ),
+            make_completion_result(
+                3,
+                serde_json::json!([{"detail":"type[Bar]","kind":6,"label":"Bar","sortText":"0"}]),
+            ),
         ],
         ..Default::default()
     });
@@ -138,26 +152,22 @@ fn test_completion_with_autoimport() {
                 }),
             }),
         ],
-        expected_messages_from_language_server: vec![Message::Response(Response {
-            id: RequestId::from(2),
-            result: Some(serde_json::json!({
-                "isIncomplete":false,
-                "items":[
-                    {"detail":"type[Bar]","kind":6,"label":"Bar","sortText":"0"},
-                    {
-                        "additionalTextEdits":[{
-                            "newText":"from autoimport_provider import this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search\n",
-                            "range":{"end":{"character":0,"line":5},"start":{"character":0,"line":5}}
-                        }],
-                        "detail":"from autoimport_provider import this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search\n",
-                        "kind":3,
-                        "label":"this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search",
-                        "sortText":"3"
-                    },
-                ]
-            })),
-            error: None,
-        })],
+        expected_messages_from_language_server: vec![make_completion_result(
+            2,
+            serde_json::json!([
+                {"detail":"type[Bar]","kind":6,"label":"Bar","sortText":"0"},
+                {
+                    "additionalTextEdits":[{
+                        "newText":"from autoimport_provider import this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search\n",
+                        "range":{"end":{"character":0,"line":5},"start":{"character":0,"line":5}}
+                    }],
+                    "detail":"from autoimport_provider import this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search\n",
+                    "kind":3,
+                    "label":"this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search",
+                    "sortText":"3"
+                }
+            ]),
+        )],
         indexing_mode: IndexingMode::LazyBlocking,
         workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
         ..Default::default()
@@ -186,13 +196,10 @@ fn test_module_completion() {
                 }),
             }),
         ],
-        expected_messages_from_language_server: vec![Message::Response(Response {
-            id: RequestId::from(2),
-            result: Some(
-                serde_json::json!({"isIncomplete":false,"items":[{"detail":"bar","kind":9,"label":"bar","sortText":"0"}]}),
-            ),
-            error: None,
-        })],
+        expected_messages_from_language_server: vec![make_completion_result(
+            2,
+            serde_json::json!([{"detail":"bar","kind":9,"label":"bar","sortText":"0"}]),
+        )],
         ..Default::default()
     });
 }
@@ -220,11 +227,10 @@ fn test_relative_module_completion() {
                 }),
             }),
         ],
-        expected_messages_from_language_server: vec![Message::Response(Response {
-            id: RequestId::from(2),
-            result: Some(serde_json::json!({"isIncomplete":false,"items":[]})),
-            error: None,
-        })],
+        expected_messages_from_language_server: vec![make_completion_result(
+            2,
+            serde_json::json!([]),
+        )],
         ..Default::default()
     });
 }
@@ -301,20 +307,14 @@ fn test_empty_filepath_file_completion() {
             }),
         ],
         expected_messages_from_language_server: vec![
-            Message::Response(Response {
-                id: RequestId::from(2),
-                result: Some(
-                    serde_json::json!({"isIncomplete":false,"items":[{"detail":"(a: int, b: int, c: str) -> int","kind":3,"label":"tear","sortText":"0"}]}),
-                ),
-                error: None,
-            }),
-            Message::Response(Response {
-                id: RequestId::from(3),
-                result: Some(
-                    serde_json::json!({"isIncomplete":false,"items":[{"detail":"(a: int, b: int, c: str) -> int","kind":3,"label":"tear","sortText":"0"}]}),
-                ),
-                error: None,
-            }),
+            make_completion_result(
+                2,
+                serde_json::json!([{"detail":"(a: int, b: int, c: str) -> int","kind":3,"label":"tear","sortText":"0"}]),
+            ),
+            make_completion_result(
+                3,
+                serde_json::json!([{"detail":"(a: int, b: int, c: str) -> int","kind":3,"label":"tear","sortText":"0"}]),
+            ),
         ],
         ..Default::default()
     });

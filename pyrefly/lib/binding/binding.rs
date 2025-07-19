@@ -1728,29 +1728,6 @@ pub struct MethodThatSetsAttr {
     pub recognized_attribute_defining_method: bool,
 }
 
-/// Information about the value, if any, that a field is initialized to when it is declared.
-#[derive(Clone, Debug)]
-pub enum RawClassFieldInitialization {
-    /// At the point where the field is declared, it does not have an initial value. This includes
-    /// fields declared but not initialized in the class body, and instance-only fields of
-    /// synthesized classes.
-    Uninitialized,
-    /// The field is set in a method *and declared nowhere else*. Consider:
-    ///   class A:
-    ///     x: int
-    ///     def __init__(self):
-    ///         self.x = 42
-    ///         self.y = 42
-    /// `x`'s initialization type is `Uninitialized`, whereas y's is `Method('__init__')`.
-    Method(MethodThatSetsAttr),
-    /// The field is declared and initialized to a value in the class body.
-    ///
-    /// If the value is from an assignment, stores the expression that the field is assigned to,
-    /// which is needed for some cases like dataclass fields. The `None` case is for fields that
-    /// have values which don't come from assignment (e.g. function defs, imports in a class body)
-    ClassBody(Option<Expr>),
-}
-
 /// Bindings for fields synthesized by a class, such as a dataclass's `__init__` method. This
 /// has to be its own key/binding type because of the dependencies between the various pieces of
 /// information about a class: ClassDef -> ClassMetadata -> ClassField -> ClassSynthesizedFields.

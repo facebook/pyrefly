@@ -46,7 +46,6 @@ use crate::binding::binding::KeyVariance;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::MethodThatSetsAttr;
-use crate::binding::binding::RawClassFieldInitialization;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::CurrentIdx;
 use crate::binding::function::SelfAssignments;
@@ -268,6 +267,14 @@ pub struct FlowInfo {
     pub style: FlowStyle,
 }
 
+/// Represent what we know about a class field based on the scope information
+/// at the end of the class body.
+pub enum ClassFieldInBody {
+    InitializedByAssign(Expr),
+    InitializedWithoutAssign,
+    Uninitialized,
+}
+
 impl FlowInfo {
     fn new(key: Idx<Key>, style: Option<FlowStyle>) -> Self {
         Self {
@@ -298,17 +305,18 @@ impl FlowInfo {
         )
     }
 
-    pub fn as_initial_value(&self) -> RawClassFieldInitialization {
+    pub fn as_initial_value(&self) -> ClassFieldInBody {
         match &self.style {
             FlowStyle::ClassField {
                 initial_value: Some(e),
-            } => RawClassFieldInitialization::ClassBody(Some(e.clone())),
+            } => ClassFieldInBody::InitializedByAssign(e.clone()),
+            // This is only reachable via `AnnAssign` with no value.
             FlowStyle::ClassField {
                 initial_value: None,
-            } => RawClassFieldInitialization::Uninitialized,
+            } => ClassFieldInBody::Uninitialized,
             // All other styles (e.g. function def, import) indicate we do have
             // a value, but it is not coming from a simple style.
-            _ => RawClassFieldInitialization::ClassBody(None),
+            _ => ClassFieldInBody::InitializedWithoutAssign,
         }
     }
 }
