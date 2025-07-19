@@ -301,10 +301,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let signatures = vec1![partial_overload, tuple_overload, overload_kwargs];
 
         Some(ClassSynthesizedField::new(Type::Overload(Overload {
-            signatures: signatures.mapped(|ty| OverloadSignature {
-                ty,
-                is_deprecated: false,
-            }),
+            signatures: signatures.mapped(|ty| OverloadSignature::new_from_type(ty)),
             metadata: Box::new(metadata),
         })))
     }
@@ -398,10 +395,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )),
         );
         ClassSynthesizedField::new(Type::Overload(Overload {
-            signatures: signatures.mapped(|ty| OverloadSignature {
-                ty,
-                is_deprecated: false,
-            }),
+            signatures: signatures.mapped(|ty| OverloadSignature::new_from_type(ty)),
             metadata: Box::new(metadata),
         }))
     }
@@ -469,10 +463,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let signatures = Vec1::try_from_vec(literal_signatures).ok()?;
 
         Some(ClassSynthesizedField::new(Type::Overload(Overload {
-            signatures: signatures.mapped(|ty| OverloadSignature {
-                ty,
-                is_deprecated: false,
-            }),
+            signatures: signatures.mapped(|ty| OverloadSignature::new_from_type(ty)),
             metadata: Box::new(metadata),
         })))
     }
@@ -510,10 +501,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let signatures = Vec1::try_from_vec(literal_signatures).ok()?;
 
         Some(ClassSynthesizedField::new(Type::Overload(Overload {
-            signatures: signatures.mapped(|ty| OverloadSignature {
-                ty,
-                is_deprecated: false,
-            }),
+            signatures: signatures.mapped(|ty| OverloadSignature::new_from_type(ty)),
             metadata: Box::new(metadata),
         })))
     }
@@ -552,10 +540,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(ClassSynthesizedField::new(Type::Overload(Overload {
             signatures: Vec1::try_from_vec(overloads)
                 .ok()?
-                .mapped(|ty| OverloadSignature {
-                    ty,
-                    is_deprecated: false,
-                }),
+                .mapped(|ty| OverloadSignature::new_from_type(ty)),
             metadata: Box::new(FuncMetadata::def(
                 self.module().name(),
                 cls.name().clone(),
