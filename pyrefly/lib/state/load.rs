@@ -49,6 +49,10 @@ impl Load {
                 x.load(path)
                     .ok_or_else(|| anyhow!("bundled typeshed problem"))
             }),
+            ModulePathDetails::CommandSnippet => memory_lookup
+                .get(path.as_path())
+                .duped()
+                .ok_or_else(|| anyhow!("command snippet not found in memory lookup")),
         };
         match res {
             Err(err) => (Arc::new(String::new()), Some(err)),

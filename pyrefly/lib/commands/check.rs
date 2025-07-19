@@ -13,6 +13,7 @@ use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -85,6 +86,39 @@ pub struct CheckArgs {
     /// Configuration override options
     #[command(flatten, next_help_heading = "Config Overrides")]
     pub config_override: ConfigOverrideArgs,
+}
+
+/// Arguments for snippet checking (excludes behavior args that don't apply to snippets)
+#[deny(clippy::missing_docs_in_private_items)]
+#[derive(Debug, Parser, Clone)]
+pub struct SnippetCheckArgs {
+    /// Output related configuration options
+    #[command(flatten, next_help_heading = "Output")]
+    output: OutputArgs,
+    /// Configuration override options
+    #[command(flatten, next_help_heading = "Config Overrides")]
+    pub config_override: ConfigOverrideArgs,
+}
+
+impl SnippetCheckArgs {
+    pub fn run_once_with_snippet(
+        self,
+        code: String,
+        config_finder: ConfigFinder,
+        allow_forget: bool,
+    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        let check_args = CheckArgs {
+            output: self.output,
+            behavior: BehaviorArgs {
+                check_all: false,
+                suppress_errors: false,
+                expectations: false,
+                remove_unused_ignores: false,
+            },
+            config_override: self.config_override,
+        };
+        check_args.run_once_with_snippet(code, config_finder, allow_forget)
+    }
 }
 
 /// how/what should Pyrefly output
@@ -413,6 +447,47 @@ impl CheckArgs {
             timings,
             transaction.as_mut(),
             &handles.all(require_levels.specified),
+        )
+    }
+
+    pub fn run_once_with_snippet(
+        self,
+        code: String,
+        config_finder: ConfigFinder,
+        allow_forget: bool,
+    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        // Create a virtual module path for the snippet
+        let module_path = ModulePath::command_snippet();
+        let module_name = ModuleName::from_str("__main__");
+
+        let holder = Forgetter::new(State::new(config_finder), allow_forget);
+
+        // Create a single handle for the virtual module
+        let sys_info = holder
+            .as_ref()
+            .config_finder()
+            .python_file(module_name, &module_path)
+            .get_sys_info();
+        let handle = Handle::new(module_name, module_path.clone(), sys_info);
+
+        let require_levels = self.get_required_levels();
+        let mut transaction = Forgetter::new(
+            holder
+                .as_ref()
+                .new_transaction(require_levels.default, None),
+            allow_forget,
+        );
+
+        // Add the snippet source to the transaction's memory
+        transaction.as_mut().set_memory(vec![(
+            PathBuf::from(module_path.as_path()),
+            Some(Arc::new(code)),
+        )]);
+
+        self.run_inner(
+            Timings::new(),
+            transaction.as_mut(),
+            &[(handle, require_levels.specified)],
         )
     }
 

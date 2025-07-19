@@ -20,6 +20,7 @@ use library::run::CommandExitStatus;
 use library::run::CommonGlobalArgs;
 use library::run::InitArgs;
 use library::run::LspArgs;
+use library::run::SnippetCheckArgs;
 use library::run::dump_config;
 use pyrefly::library::library::library::library;
 use pyrefly_util::args::get_args_expanded;
@@ -85,12 +86,33 @@ struct FullCheckArgs {
     args: CheckArgs,
 }
 
+#[deny(clippy::missing_docs_in_private_items)]
+#[derive(Debug, Clone, Parser)]
+struct SnippetArgs {
+    /// Python code to type check
+    code: String,
+
+    /// Explicitly set the Pyrefly configuration to use when type checking.
+    /// When not set, Pyrefly will perform an upward-filesystem-walk approach to find the nearest
+    /// pyrefly.toml or pyproject.toml with `tool.pyrefly` section'. If no config is found, Pyrefly exits with error.
+    /// If both a pyrefly.toml and valid pyproject.toml are found, pyrefly.toml takes precedence.
+    #[arg(long, short, value_name = "FILE")]
+    config: Option<PathBuf>,
+
+    /// Type checking arguments and configuration
+    #[command(flatten)]
+    args: SnippetCheckArgs,
+}
+
 /// Subcommands to run Pyrefly with.
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Subcommand)]
 enum Command {
     /// Full type checking on a file or a project
     Check(FullCheckArgs),
+
+    /// Full type checking on a Python code snippet
+    Snippet(SnippetArgs),
 
     /// Dump info about pyrefly's configuration. Use by replacing `check` with `dump-config` in your pyrefly invocation.
     DumpConfig(FullCheckArgs),
@@ -115,6 +137,19 @@ async fn run_autotype(
     config_finder: ConfigFinder,
 ) -> anyhow::Result<CommandExitStatus> {
     args.run(files_to_check, config_finder)
+}
+
+async fn run_snippet_check(
+    code: String,
+    config: Option<PathBuf>,
+    mut args: SnippetCheckArgs,
+) -> anyhow::Result<CommandExitStatus> {
+    let (_, config_finder) =
+        globs_and_config_getter::get(vec![], None, config, &mut args.config_override)?;
+    match args.run_once_with_snippet(code, config_finder, true) {
+        Ok((status, _)) => Ok(status),
+        Err(e) => Err(e),
+    }
 }
 
 async fn run_check(
@@ -153,6 +188,9 @@ async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<Com
                 &mut args.config_override,
             )?;
             run_check(args, watch, files_to_check, config_finder, allow_forget).await
+        }
+        Command::Snippet(SnippetArgs { code, config, args }) => {
+            run_snippet_check(code, config, args).await
         }
         Command::BuckCheck(args) => args.run(),
         Command::Lsp(args) => args.run(),
