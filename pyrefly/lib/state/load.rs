@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -51,7 +50,7 @@ impl Load {
                     .ok_or_else(|| anyhow!("bundled typeshed problem"))
             }),
             ModulePathDetails::CommandSnippet => memory_lookup
-                .get(Path::new("<string>"))
+                .get(path.as_path())
                 .duped()
                 .ok_or_else(|| anyhow!("command snippet not found in memory lookup")),
         };

@@ -462,9 +462,10 @@ impl CheckArgs {
         );
 
         // Add the snippet source to the transaction's memory
-        transaction
-            .as_mut()
-            .set_memory(vec![(PathBuf::from("<string>"), Some(Arc::new(code)))]);
+        transaction.as_mut().set_memory(vec![(
+            PathBuf::from(module_path.as_path()),
+            Some(Arc::new(code)),
+        )]);
 
         self.run_inner(
             timings,

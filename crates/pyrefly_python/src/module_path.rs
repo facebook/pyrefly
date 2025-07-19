@@ -21,6 +21,8 @@ use serde::Serializer;
 use crate::dunder;
 use crate::module_name::ModuleName;
 
+const COMMAND_SNIPPET_DISPLAY_PATH: &str = "<string>";
+
 #[derive(Debug, Clone, Dupe, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ModuleStyle {
     /// .py - executable code.
@@ -98,7 +100,7 @@ impl Display for ModulePath {
                 )
             }
             ModulePathDetails::CommandSnippet => {
-                write!(f, "<string>")
+                write!(f, "{}", COMMAND_SNIPPET_DISPLAY_PATH)
             }
         }
     }
@@ -207,7 +209,7 @@ impl ModulePath {
             | ModulePathDetails::BundledTypeshed(path)
             | ModulePathDetails::Memory(path)
             | ModulePathDetails::Namespace(path) => path,
-            ModulePathDetails::CommandSnippet => Path::new("<string>"),
+            ModulePathDetails::CommandSnippet => Path::new(COMMAND_SNIPPET_DISPLAY_PATH),
         }
     }
 
