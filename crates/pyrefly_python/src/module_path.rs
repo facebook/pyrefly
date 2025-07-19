@@ -100,7 +100,7 @@ impl Display for ModulePath {
                 )
             }
             ModulePathDetails::CommandSnippet => {
-                write!(f, "{}", COMMAND_SNIPPET_DISPLAY_PATH)
+                write!(f, "{COMMAND_SNIPPET_DISPLAY_PATH}")
             }
         }
     }
