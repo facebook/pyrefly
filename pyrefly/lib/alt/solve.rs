@@ -584,7 +584,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Union(ts) => ts
                 .iter()
-                .flat_map(|t| self.iterate(t, range, errors))
+                .filter_map(|t| {
+                    let is_iterable = self.unwrap_iterable(t).is_some()
+                        || matches!(t, Type::Tuple(_))
+                        || matches!(t, Type::ClassType(cls) if self.as_tuple(cls).is_some());
+
+                    if is_iterable {
+                        Some(self.iterate(t, range, errors))
+                    } else {
+                        None
+                    }
+                })
+                .flatten()
                 .collect(),
             _ => {
                 let ty = self
