@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::backtrace::Backtrace;
 use std::env::args_os;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -26,6 +25,7 @@ use pyrefly::library::library::library::library;
 use pyrefly_util::args::clap_env;
 use pyrefly_util::args::get_args_expanded;
 use pyrefly_util::globs::FilteredGlobs;
+use pyrefly_util::panic::exit_on_panic;
 use pyrefly_util::watcher::Watcher;
 
 // fbcode likes to set its own allocator in fbcode.default_allocator
@@ -110,14 +110,6 @@ enum Command {
     Autotype(FullCheckArgs),
 }
 
-fn exit_on_panic() {
-    std::panic::set_hook(Box::new(move |info| {
-        eprintln!("Thread panicked, shutting down: {}", info);
-        eprintln!("Backtrace:\n{}", Backtrace::force_capture());
-        std::process::exit(1);
-    }));
-}
-
 async fn run_autotype(
     args: library::run::AutotypeArgs,
     files_to_check: FilteredGlobs,
@@ -155,8 +147,12 @@ async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<Com
             config,
             mut args,
         }) => {
-            let (files_to_check, config_finder) =
-                globs_and_config_getter::get(files, project_excludes, config, &mut args)?;
+            let (files_to_check, config_finder) = globs_and_config_getter::get(
+                files,
+                project_excludes,
+                config,
+                &mut args.config_override,
+            )?;
             run_check(args, watch, files_to_check, config_finder, allow_forget).await
         }
         Command::BuckCheck(args) => args.run(),
@@ -169,8 +165,12 @@ async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<Com
             watch: _,
             mut args,
         }) => {
-            let (files_to_check, config_finder) =
-                globs_and_config_getter::get(files, project_excludes, config, &mut args)?;
+            let (files_to_check, config_finder) = globs_and_config_getter::get(
+                files,
+                project_excludes,
+                config,
+                &mut args.config_override,
+            )?;
             run_autotype(AutotypeArgs::new(), files_to_check, config_finder).await
         }
         // We intentionally make DumpConfig take the same arguments as Check so that dumping the
@@ -182,8 +182,12 @@ async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<Com
             mut args,
             ..
         }) => {
-            let (files_to_check, config_finder) =
-                globs_and_config_getter::get(files, project_excludes, config, &mut args)?;
+            let (files_to_check, config_finder) = globs_and_config_getter::get(
+                files,
+                project_excludes,
+                config,
+                &mut args.config_override,
+            )?;
             dump_config(files_to_check, config_finder, args)
         }
     }
@@ -192,7 +196,7 @@ async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<Com
 /// Run based on the command line arguments.
 async fn run() -> anyhow::Result<ExitCode> {
     let args = Args::parse_from(get_args_expanded(args_os())?);
-    args.common.init();
+    args.common.init(false);
     Ok(run_command(args.command, true).await?.to_exit_code())
 }
 

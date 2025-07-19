@@ -147,6 +147,21 @@ class MyEnum(Enum):
 );
 
 testcase!(
+    test_infer_value,
+    r#"
+from enum import Enum
+from typing import assert_type
+
+class MyEnum(Enum):
+    X = 1
+    Y = "foo"
+def test(e: MyEnum):
+    # the inferred type use promoted types, for performance reasons
+    assert_type(e.value, int | str)
+"#,
+);
+
+testcase!(
     test_value_annotation_irrelevant_for_getattr,
     r#"
 from enum import Enum

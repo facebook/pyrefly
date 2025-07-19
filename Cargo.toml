@@ -10,6 +10,7 @@ codegen-units = 1
 
 [workspace]
 members = [
+  "crates/pyrefly_bundled",
   "crates/pyrefly_derive",
   "crates/pyrefly_python",
   "crates/pyrefly_types",

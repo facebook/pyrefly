@@ -7,6 +7,7 @@
 
 use pyrefly_python::dunder;
 use ruff_python_ast::CmpOp;
+use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprUnaryOp;
@@ -25,6 +26,7 @@ use crate::alt::solve::Iterable;
 use crate::binding::binding::KeyAnnotation;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
@@ -108,8 +110,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorKind::MissingAttribute,
-                Some(&context),
+                ErrorInfo::Context(&context),
                 format!("Cannot find {dunders}"),
             )
         }
@@ -198,7 +199,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn binop_infer(&self, x: &ExprBinOp, errors: &ErrorCollector) -> Type {
+    pub fn binop_infer(&self, x: &ExprBinOp, hint: Option<&Type>, errors: &ErrorCollector) -> Type {
         let binop_call = |op: Operator, lhs: &Type, rhs: &Type, range: TextRange| -> Type {
             let context = || {
                 ErrorContext::BinaryOp(
@@ -216,8 +217,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ];
             self.try_binop_calls(&calls_to_try, range, errors, &context)
         };
-        let lhs = self.expr_infer(&x.left, errors);
-        let rhs = self.expr_infer(&x.right, errors);
+        // If the expression is of the form [X] * Y where Y is a number, pass down the contextual
+        // type hint when evaluating [X]
+        let lhs;
+        let rhs;
+        if matches!(&*x.left, Expr::List(_)) && x.op == Operator::Mult {
+            rhs = self.expr_infer(&x.right, errors);
+            if self.is_subset_eq(&rhs, &self.stdlib.int().clone().to_type()) {
+                lhs = self.expr_infer_with_hint_promote(&x.left, hint, errors);
+            } else {
+                lhs = self.expr_infer(&x.left, errors);
+            }
+        } else {
+            lhs = self.expr_infer(&x.left, errors);
+            rhs = self.expr_infer(&x.right, errors);
+        }
 
         // Optimisation: If we have `Union[a, b] | Union[c, d]`, instead of unioning
         // (a | c) | (a | d) | (b | c) | (b | d), we can just do one union.
@@ -310,8 +324,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     x.range(),
-                    ErrorKind::BadAssignment,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::BadAssignment),
                     format!("Cannot assign to {} because it is marked final", ann.target),
                 );
             }
@@ -374,8 +387,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                             self.error(
                                                 errors,
                                                 x.range,
-                                                ErrorKind::UnsupportedOperand,
-                                                None,
+                                                ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
                                                 context().format(),
                                             );
                                         }
@@ -439,8 +451,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => self.error(
                     errors,
                     x.range,
-                    ErrorKind::UnsupportedOperand,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
                     context().format(),
                 ),
             }

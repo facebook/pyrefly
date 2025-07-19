@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use dupe::OptionDupedExt;
+use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::DisplayWith;
@@ -47,7 +48,6 @@ use crate::graph::calculation::Calculation;
 use crate::graph::index::Idx;
 use crate::graph::index_map::IndexMap;
 use crate::module::module_info::ModuleInfo;
-use crate::module::module_info::TextRangeWithModule;
 use crate::solver::solver::Solver;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::key_to_intermediate_definition;

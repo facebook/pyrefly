@@ -321,7 +321,7 @@ fn test_did_change_workspace_folder() {
 
 fn get_diagnostics_result() -> serde_json::Value {
     serde_json::json!({"items": [
-            {"code":"bad-argument-type","message":"`+` is not supported between `Literal[1]` and `Literal['']`\n  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`",
+            {"code":"unsupported-operation","message":"`+` is not supported between `Literal[1]` and `Literal['']`\n  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`",
             "range":{"end":{"character":6,"line":5},"start":{"character":0,"line":5}},"severity":1,"source":"Pyrefly"}],"kind":"full"
     })
 }

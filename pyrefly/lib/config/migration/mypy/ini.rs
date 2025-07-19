@@ -24,6 +24,7 @@ use crate::config::migration::python_version::PythonVersionConfig;
 use crate::config::migration::replace_imports::ReplaceImports;
 use crate::config::migration::search_path::SearchPath;
 use crate::config::migration::sub_configs::SubConfigs;
+use crate::config::migration::untyped_def_behavior::UntypedDefBehaviorConfig;
 use crate::config::migration::use_untyped_imports::UseUntypedImports;
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
@@ -48,6 +49,7 @@ pub struct MypyConfig {
     use_untyped_imports: bool,
     disable_error_code: Option<Vec<String>>,
     enable_error_code: Option<Vec<String>>,
+    check_untyped_defs: Option<bool>,
 }
 
 impl MypyConfig {
@@ -76,6 +78,7 @@ impl MypyConfig {
             Box::new(SearchPath),
             Box::new(ErrorCodes),
             Box::new(SubConfigs),
+            Box::new(UntypedDefBehaviorConfig),
         ];
 
         // Iterate through all config options and apply them to the config

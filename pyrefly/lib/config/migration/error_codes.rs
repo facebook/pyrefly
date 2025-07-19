@@ -9,6 +9,7 @@ use configparser::ini::Ini;
 
 use crate::config::config::ConfigFile;
 use crate::config::migration::config_option_migrater::ConfigOptionMigrater;
+use crate::config::migration::pyright::PyrightConfig;
 use crate::config::migration::utils;
 
 /// Configuration option for error codes
@@ -30,11 +31,29 @@ impl ConfigOptionMigrater for ErrorCodes {
         pyrefly_cfg.root.errors = Some(error_config);
         Ok(())
     }
+
+    fn migrate_from_pyright(
+        &self,
+        pyright_cfg: &PyrightConfig,
+        pyrefly_cfg: &mut ConfigFile,
+    ) -> anyhow::Result<()> {
+        // In pyright, error settings are specified in various "report*" fields
+        // The PyrightConfig struct already has a method to convert these to an ErrorDisplayConfig
+        let error_config = pyright_cfg
+            .errors
+            .clone()
+            .to_config()
+            .ok_or_else(|| anyhow::anyhow!("No error settings found in pyright config"))?;
+
+        pyrefly_cfg.root.errors = Some(error_config);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::migration::test_utils::default_pyright_config;
     use crate::error::kind::ErrorKind;
     use crate::error::kind::Severity;
 
@@ -103,6 +122,39 @@ mod tests {
         let error_codes = ErrorCodes;
         let _ = error_codes.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
+        assert_eq!(pyrefly_cfg.root.errors, default_errors);
+    }
+
+    #[test]
+    fn test_migrate_from_pyright() {
+        let mut pyright_cfg = default_pyright_config();
+        pyright_cfg.errors.report_missing_module_source = Some(true);
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let error_codes = ErrorCodes;
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_ok());
+        assert!(pyrefly_cfg.root.errors.is_some());
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+
+        assert_eq!(errors.severity(ErrorKind::ImportError), Severity::Error);
+    }
+
+    #[test]
+    fn test_migrate_from_pyright_empty() {
+        let pyright_cfg = default_pyright_config();
+
+        let mut pyrefly_cfg = ConfigFile::default();
+        let default_errors = pyrefly_cfg.root.errors.clone();
+
+        let error_codes = ErrorCodes;
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        // If RuleOverrides.to_config() returns None when all fields are None,
+        // this should fail with an error
+        assert!(result.is_err());
         assert_eq!(pyrefly_cfg.root.errors, default_errors);
     }
 }

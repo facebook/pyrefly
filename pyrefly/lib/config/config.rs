@@ -38,10 +38,10 @@ use crate::config::environment::interpreters::Interpreters;
 use crate::config::error::ErrorConfig;
 use crate::config::error::ErrorDisplayConfig;
 use crate::config::finder::ConfigError;
-use crate::module::bundled::typeshed;
 use crate::module::finder::find_module_in_search_path;
 use crate::module::finder::find_module_in_site_package_path;
 use crate::module::finder::find_module_prefixes;
+use crate::module::typeshed::typeshed;
 use crate::module::wildcard::ModuleWildcard;
 use crate::state::loader::FindError;
 
@@ -354,10 +354,11 @@ impl ConfigFile {
     ) -> Result<ModulePath, FindError> {
         if let Some(path) = self.custom_module_paths.get(&module) {
             Ok(path.clone())
-        } else if self
-            .replace_imports_with_any(path)
-            .iter()
-            .any(|p| p.matches(module))
+        } else if module != ModuleName::builtins()
+            && self
+                .replace_imports_with_any(path)
+                .iter()
+                .any(|p| p.matches(module))
         {
             Err(FindError::Ignored)
         } else if let Some(path) = find_module_in_search_path(module, self.search_path())? {

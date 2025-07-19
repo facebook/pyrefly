@@ -1252,6 +1252,14 @@ impl Type {
         })
     }
 
+    pub fn sort_unions(self) -> Self {
+        self.transform(&mut |ty| {
+            if let Type::Union(ts) = ty {
+                ts.sort();
+            }
+        })
+    }
+
     /// Used prior to display to ensure unique variables don't leak out non-deterministically.
     pub fn deterministic_printing(self) -> Self {
         self.transform(&mut |ty| {

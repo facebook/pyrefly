@@ -8,6 +8,7 @@
 pub mod autotype;
 pub mod buck_check;
 pub mod check;
+pub mod config_args;
 pub mod config_finder;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod config_migration;

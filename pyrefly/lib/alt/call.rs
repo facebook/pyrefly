@@ -26,6 +26,7 @@ use crate::alt::callable::CallWithTypes;
 use crate::alt::expr::TypeOrExpr;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::error::context::ErrorInfo;
 use crate::error::kind::ErrorKind;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
@@ -124,7 +125,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         error_kind: ErrorKind,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> CallTarget {
-        self.error(errors, range, error_kind, context, msg);
+        self.error(errors, range, ErrorInfo::new(error_kind, context), msg);
         CallTarget::new(Target::Any(AnyStyle::Error))
     }
 
@@ -362,17 +363,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Option<Type> {
-        let dunder_call = match self.get_metaclass_dunder_call(cls)? {
-            Type::BoundMethod(box BoundMethod { func, .. }) => {
-                // This method was bound to a general instance of the metaclass, but we have more
-                // information about the particular instance that it should be bound to.
-                Type::BoundMethod(Box::new(BoundMethod {
-                    obj: Type::type_form(Type::ClassType(cls.clone())),
-                    func,
-                }))
-            }
-            dunder_call => dunder_call,
-        };
+        let dunder_call = self.get_metaclass_dunder_call(cls)?;
         Some(self.call_infer(
             self.as_call_target_or_error(
                 dunder_call,
@@ -531,11 +522,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-        hint: Option<Type>,
+        hint: Option<&Type>,
     ) -> Type {
+        let metadata = call_target.target.function_metadata();
+        if let Some(m) = metadata
+            && m.flags.is_deprecated
+        {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::new(ErrorKind::Deprecated, context),
+                format!(
+                    "Call to deprecated function `{}`",
+                    m.kind.as_func_id().format(self.module_info().name())
+                ),
+            );
+        }
         // Does this call target correspond to a function whose keyword arguments we should save?
         let kw_metadata = {
-            let metadata = call_target.target.function_metadata();
             if let Some(m) = metadata
                 && (matches!(
                     m.kind,
@@ -547,179 +551,143 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None
             }
         };
-        let res =
-            match call_target.target {
-                Target::Class(cls) => {
-                    if let Some(hint) = hint {
-                        // If a hint is provided, use it to bind any variables in the return type
-                        // We only care about the side effect here, not the result
-                        self.is_subset_eq(&Type::ClassType(cls.clone()), &hint);
-                    }
-                    if self
-                        .get_metadata_for_class(cls.class_object())
-                        .is_protocol()
-                    {
-                        self.error(
-                            errors,
-                            range,
-                            ErrorKind::BadInstantiation,
-                            context,
-                            format!(
-                                "Cannot instantiate `{}` because it is a protocol",
-                                cls.name()
-                            ),
-                        );
-                    }
-                    if cls.has_qname("builtins", "bool") {
-                        match self.first_arg_type(args, errors) {
-                            None => (),
-                            Some(ty) => self.check_dunder_bool_is_callable(&ty, range, errors),
-                        }
-                    };
-                    self.construct_class(cls, args, keywords, range, errors, context)
+        let res = match call_target.target {
+            Target::Class(cls) => {
+                if let Some(hint) = hint {
+                    // If a hint is provided, use it to bind any variables in the return type
+                    // We only care about the side effect here, not the result
+                    self.is_subset_eq(&Type::ClassType(cls.clone()), hint);
                 }
-                Target::TypedDict(td) => {
-                    self.construct_typed_dict(td, args, keywords, range, errors, context)
-                }
-                Target::BoundMethod(obj, func) => {
-                    if func.metadata.flags.is_abstract_method
-                        && !self.is_builtin_module(func.metadata.kind.as_func_id().module)
-                    {
-                        self.error(
+                if self
+                    .get_metadata_for_class(cls.class_object())
+                    .is_protocol()
+                {
+                    self.error(
                         errors,
                         range,
-                        ErrorKind::AbstractMethodCall,
-                        context,
+                        ErrorInfo::new(ErrorKind::BadInstantiation, context),
                         format!(
-                            "Cannot call abstract method `{}` - must be implemented in a subclass",
-                            func.metadata.kind.as_func_id().format(self.module_info().name())
+                            "Cannot instantiate `{}` because it is a protocol",
+                            cls.name()
                         ),
                     );
-                    }
-                    let first_arg = CallArg::ty(&obj, range);
-                    self.callable_infer(
-                        func.signature,
-                        Some(func.metadata.kind.as_func_id()),
-                        Some(first_arg),
-                        args,
-                        keywords,
-                        range,
-                        errors,
-                        errors,
-                        context,
-                    )
                 }
-                Target::Callable(callable) => self.callable_infer(
-                    callable, None, None, args, keywords, range, errors, errors, context,
-                ),
-                Target::Function(Function {
-                    signature: mut callable,
+                if cls.has_qname("builtins", "bool") {
+                    match self.first_arg_type(args, errors) {
+                        None => (),
+                        Some(ty) => self.check_dunder_bool_is_callable(&ty, range, errors),
+                    }
+                };
+                self.construct_class(cls, args, keywords, range, errors, context)
+            }
+            Target::TypedDict(td) => {
+                self.construct_typed_dict(td, args, keywords, range, errors, context)
+            }
+            Target::BoundMethod(
+                obj,
+                Function {
+                    signature,
                     metadata,
-                }) => {
-                    if metadata.flags.is_deprecated {
-                        self.error(
-                            errors,
-                            range,
-                            ErrorKind::Deprecated,
-                            context,
-                            format!(
-                                "Call to deprecated function `{}`",
-                                metadata.kind.as_func_id().format(self.module_info().name())
-                            ),
-                        );
+                },
+            ) => {
+                let first_arg = CallArg::ty(&obj, range);
+                self.callable_infer(
+                    signature,
+                    Some(metadata.kind.as_func_id()),
+                    Some(first_arg),
+                    args,
+                    keywords,
+                    range,
+                    errors,
+                    errors,
+                    context,
+                )
+            }
+            Target::Callable(callable) => self.callable_infer(
+                callable, None, None, args, keywords, range, errors, errors, context,
+            ),
+            Target::Function(Function {
+                signature: mut callable,
+                metadata,
+            }) => {
+                // Most instances of typing.Self are replaced in as_call_target, but __new__ is a
+                // staticmethod, so we don't have access to the first argument until we get here.
+                let id = metadata.kind.as_func_id();
+                let first_arg_type = if id.func == dunder::NEW {
+                    self.first_arg_type(args, errors)
+                } else {
+                    None
+                };
+                let self_obj = match first_arg_type {
+                    Some(Type::Type(box Type::ClassType(c))) => Some(c.to_type()),
+                    Some(Type::ClassDef(class)) => {
+                        Some(self.as_class_type_unchecked(&class).to_type())
                     }
-                    if metadata.flags.is_abstract_method
-                        && !self.is_builtin_module(metadata.kind.as_func_id().module)
-                    {
-                        self.error(
-                        errors,
+                    _ => None,
+                };
+                if let Some(self_obj) = self_obj {
+                    callable.subst_self_type_mut(&self_obj, &|a, b| self.is_subset_eq(a, b));
+                }
+                self.callable_infer(
+                    callable,
+                    Some(id),
+                    None,
+                    args,
+                    keywords,
+                    range,
+                    errors,
+                    errors,
+                    context,
+                )
+            }
+            Target::FunctionOverload(overloads, meta) => {
+                self.call_overloads(
+                    overloads, meta, None, args, keywords, range, errors, context,
+                )
+                .0
+            }
+            Target::BoundMethodOverload(obj, overloads, meta) => {
+                self.call_overloads(
+                    overloads,
+                    meta,
+                    Some(CallArg::ty(&obj, range)),
+                    args,
+                    keywords,
+                    range,
+                    errors,
+                    context,
+                )
+                .0
+            }
+            Target::Union(targets) => {
+                let call = CallWithTypes::new();
+                self.unions(targets.into_map(|t| {
+                    self.call_infer(
+                        CallTarget::new(t),
+                        &call.vec_call_arg(args, self, errors),
+                        &call.vec_call_keyword(keywords, self, errors),
                         range,
-                        ErrorKind::AbstractMethodCall,
+                        errors,
                         context,
-                        format!(
-                            "Cannot call abstract method `{}` - must be implemented in a subclass",
-                            metadata.kind.as_func_id().format(self.module_info().name())
-                        ),
-                    );
-                    }
-                    // Most instances of typing.Self are replaced in as_call_target, but __new__ is a
-                    // staticmethod, so we don't have access to the first argument until we get here.
-                    let id = metadata.kind.as_func_id();
-                    let first_arg_type = if id.func == dunder::NEW {
-                        self.first_arg_type(args, errors)
-                    } else {
-                        None
-                    };
-                    let self_obj = match first_arg_type {
-                        Some(Type::Type(box Type::ClassType(c))) => Some(c.to_type()),
-                        Some(Type::ClassDef(class)) => {
-                            Some(self.as_class_type_unchecked(&class).to_type())
-                        }
-                        _ => None,
-                    };
-                    if let Some(self_obj) = self_obj {
-                        callable.subst_self_type_mut(&self_obj, &|a, b| self.is_subset_eq(a, b));
-                    }
-                    self.callable_infer(
-                        callable,
-                        Some(id),
                         None,
-                        args,
-                        keywords,
-                        range,
-                        errors,
-                        errors,
-                        context,
                     )
-                }
-                Target::FunctionOverload(overloads, meta) => {
-                    self.call_overloads(
-                        overloads, meta, None, args, keywords, range, errors, context,
-                    )
-                    .0
-                }
-                Target::BoundMethodOverload(obj, overloads, meta) => {
-                    self.call_overloads(
-                        overloads,
-                        meta,
-                        Some(CallArg::ty(&obj, range)),
-                        args,
-                        keywords,
-                        range,
-                        errors,
-                        context,
-                    )
-                    .0
-                }
-                Target::Union(targets) => {
-                    let call = CallWithTypes::new();
-                    self.unions(targets.into_map(|t| {
-                        self.call_infer(
-                            CallTarget::new(t),
-                            &call.vec_call_arg(args, self, errors),
-                            &call.vec_call_keyword(keywords, self, errors),
-                            range,
-                            errors,
-                            context,
-                            None,
-                        )
-                    }))
-                }
-                Target::Any(style) => {
-                    // Make sure we still catch errors in the arguments.
-                    for arg in args {
-                        match arg {
-                            CallArg::Arg(e) | CallArg::Star(e, _) => {
-                                e.infer(self, errors);
-                            }
+                }))
+            }
+            Target::Any(style) => {
+                // Make sure we still catch errors in the arguments.
+                for arg in args {
+                    match arg {
+                        CallArg::Arg(e) | CallArg::Star(e, _) => {
+                            e.infer(self, errors);
                         }
                     }
-                    for kw in keywords {
-                        kw.value.infer(self, errors);
-                    }
-                    style.propagate()
                 }
-            };
+                for kw in keywords {
+                    kw.value.infer(self, errors);
+                }
+                style.propagate()
+            }
+        };
         self.solver().finish_quantified(&call_target.qs);
         if let Some(func_metadata) = kw_metadata {
             let mut kws = TypeMap::new();
@@ -861,7 +829,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // We intentionally discard closest_overload.call_errors. When no overload matches,
             // there's a high likelihood that the "closest" one by our heuristic isn't the right
             // one, in which case the call errors are just noise.
-            errors.add(range, ErrorKind::NoMatchingOverload, context, msg);
+            errors.add(
+                range,
+                ErrorInfo::new(ErrorKind::NoMatchingOverload, context),
+                msg,
+            );
             (Type::any_error(), closest_overload.signature)
         }
     }

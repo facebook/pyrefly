@@ -281,14 +281,6 @@ impl SysInfo {
         Some(self.evaluate(x)?.to_bool())
     }
 
-    /// Version of `evaluate_bool` where `None` means no test (thus always statically true).
-    pub fn evaluate_bool_opt(&self, x: Option<&Expr>) -> Option<bool> {
-        match x {
-            None => Some(true),
-            Some(x) => self.evaluate_bool(x),
-        }
-    }
-
     fn is_type_checking_constant_name(x: &str) -> bool {
         x == "TYPE_CHECKING" || x == "TYPE_CHECKING_WITH_PYREFLY"
     }
@@ -393,7 +385,10 @@ impl SysInfo {
     ) -> impl Iterator<Item = (Option<&'b Expr>, &'b [Stmt])> + 'a {
         Ast::if_branches(x)
             .map(|(test, body)| {
-                let b = self.evaluate_bool_opt(test);
+                let b = match test {
+                    None => Some(true),
+                    Some(x) => self.evaluate_bool(x),
+                };
                 (b, if b == Some(true) { None } else { test }, body)
             })
             .filter(|x| x.0 != Some(false))

@@ -9,11 +9,22 @@ use configparser::ini::Ini;
 
 use crate::config::config::ConfigFile;
 use crate::config::migration::config_option_migrater::ConfigOptionMigrater;
+use crate::config::migration::pyright::PyrightConfig;
 use crate::config::migration::utils;
 use crate::module::wildcard::ModuleWildcard;
 
 /// Configuration option for replacing imports with Any
 pub struct ReplaceImports;
+
+impl ReplaceImports {
+    /// Helper function to check if a section has ignore_missing_imports=true or follow_imports=skip
+    fn should_replace_imports(&self, ini: &Ini, section_name: &str) -> bool {
+        utils::get_bool_or_default(ini, section_name, "ignore_missing_imports")
+            || ini
+                .get(section_name, "follow_imports")
+                .is_some_and(|val| val == "skip")
+    }
+}
 
 impl ConfigOptionMigrater for ReplaceImports {
     fn migrate_from_mypy(
@@ -22,24 +33,31 @@ impl ConfigOptionMigrater for ReplaceImports {
         pyrefly_cfg: &mut ConfigFile,
     ) -> anyhow::Result<()> {
         let mut replace_imports: Vec<String> = Vec::new();
+        let mut replace_all_imports_with_any = false;
+
+        // Check if the default "mypy" section has ignore_missing_imports or follow_imports=skip
+        if self.should_replace_imports(mypy_cfg, "mypy") {
+            replace_all_imports_with_any = true;
+        }
 
         // Check all sections for ignore_missing_imports or follow_imports=skip
         utils::visit_ini_sections(
             mypy_cfg,
             |section_name| section_name.starts_with("mypy-"),
             |section_name, ini| {
-                if utils::get_bool_or_default(ini, section_name, "ignore_missing_imports")
-                    || ini
-                        .get(section_name, "follow_imports")
-                        .is_some_and(|val| val == "skip")
-                {
+                if self.should_replace_imports(ini, section_name) {
                     replace_imports.push(section_name.to_owned());
                 }
             },
         );
 
-        if replace_imports.is_empty() {
+        if replace_imports.is_empty() && !replace_all_imports_with_any {
             return Err(anyhow::anyhow!("No replace imports found in mypy config"));
+        }
+
+        // If we have a global ignore_missing_imports, add a wildcard for all
+        if replace_all_imports_with_any {
+            replace_imports.push("*".to_owned());
         }
 
         // Convert to ModuleWildcard objects
@@ -68,11 +86,22 @@ impl ConfigOptionMigrater for ReplaceImports {
         pyrefly_cfg.root.replace_imports_with_any = Some(result);
         Ok(())
     }
+
+    fn migrate_from_pyright(
+        &self,
+        _pyright_cfg: &PyrightConfig,
+        _pyrefly_cfg: &mut ConfigFile,
+    ) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!(
+            "Pyright does not have a direct equivalent for ignore_missing_imports or follow_imports=skip"
+        ))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::migration::test_utils::default_pyright_config;
 
     #[test]
     fn test_migrate_from_mypy_ignore_missing_imports() {
@@ -224,8 +253,102 @@ mod tests {
         let default_replace_imports = pyrefly_cfg.root.replace_imports_with_any.clone();
 
         let replace_imports = ReplaceImports;
+        let result = replace_imports.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_err());
+        assert_eq!(
+            pyrefly_cfg.root.replace_imports_with_any,
+            default_replace_imports
+        );
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_global_ignore_missing_imports() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set("mypy", "ignore_missing_imports", Some("True".to_owned()));
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let replace_imports = ReplaceImports;
         let _ = replace_imports.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
+        let expected = vec![ModuleWildcard::new("*").unwrap()];
+        assert_eq!(pyrefly_cfg.root.replace_imports_with_any, Some(expected));
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_global_follow_imports_skip() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set("mypy", "follow_imports", Some("skip".to_owned()));
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let replace_imports = ReplaceImports;
+        let _ = replace_imports.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+
+        let expected = vec![ModuleWildcard::new("*").unwrap()];
+        assert_eq!(pyrefly_cfg.root.replace_imports_with_any, Some(expected));
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_global_and_specific() {
+        let mut mypy_cfg = Ini::new();
+        // Global setting
+        mypy_cfg.set("mypy", "ignore_missing_imports", Some("True".to_owned()));
+        // Specific section
+        mypy_cfg.set(
+            "mypy-some.module",
+            "ignore_missing_imports",
+            Some("True".to_owned()),
+        );
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let replace_imports = ReplaceImports;
+        let _ = replace_imports.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+
+        // Should contain both the specific module and the global wildcard
+        let expected = [
+            ModuleWildcard::new("some.module").unwrap(),
+            ModuleWildcard::new("*").unwrap(),
+        ];
+        assert_eq!(
+            pyrefly_cfg
+                .root
+                .replace_imports_with_any
+                .as_ref()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            pyrefly_cfg
+                .root
+                .replace_imports_with_any
+                .as_ref()
+                .unwrap()
+                .contains(&expected[0])
+        );
+        assert!(
+            pyrefly_cfg
+                .root
+                .replace_imports_with_any
+                .as_ref()
+                .unwrap()
+                .contains(&expected[1])
+        );
+    }
+
+    #[test]
+    fn test_migrate_from_pyright() {
+        let pyright_cfg = default_pyright_config();
+        let mut pyrefly_cfg = ConfigFile::default();
+        let default_replace_imports = pyrefly_cfg.root.replace_imports_with_any.clone();
+
+        let replace_imports = ReplaceImports;
+        let result = replace_imports.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_err());
         assert_eq!(
             pyrefly_cfg.root.replace_imports_with_any,
             default_replace_imports

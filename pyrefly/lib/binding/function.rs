@@ -8,6 +8,7 @@
 use std::mem;
 
 use pyrefly_python::ast::Ast;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
@@ -50,9 +51,9 @@ use crate::binding::scope::InstanceAttribute;
 use crate::binding::scope::Scope;
 use crate::binding::scope::YieldsAndReturns;
 use crate::config::base::UntypedDefBehavior;
+use crate::export::docstring::Docstring;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
-use crate::module::short_identifier::ShortIdentifier;
 use crate::types::types::Type;
 
 struct Decorators {
@@ -521,6 +522,7 @@ impl<'a> BindingsBuilder<'a> {
 
         let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
 
+        let docstring = Docstring::from_stmts(x.body.as_slice());
         let (stub_or_impl, self_assignments) = self.function_body(
             &mut x.parameters,
             mem::take(&mut x.body),
@@ -547,6 +549,7 @@ impl<'a> BindingsBuilder<'a> {
                 decorators: decorators.decorators,
                 legacy_tparams: legacy_tparams.into_boxed_slice(),
                 successor: None,
+                docstring,
             },
         );
 

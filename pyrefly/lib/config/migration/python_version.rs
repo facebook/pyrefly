@@ -12,6 +12,7 @@ use pyrefly_python::sys_info::PythonVersion;
 
 use crate::config::config::ConfigFile;
 use crate::config::migration::config_option_migrater::ConfigOptionMigrater;
+use crate::config::migration::pyright::PyrightConfig;
 
 /// Configuration option for Python version
 pub struct PythonVersionConfig;
@@ -34,11 +35,26 @@ impl ConfigOptionMigrater for PythonVersionConfig {
         pyrefly_cfg.python_environment.python_version = PythonVersion::from_str(&version).ok();
         Ok(())
     }
-}
 
+    fn migrate_from_pyright(
+        &self,
+        pyright_cfg: &PyrightConfig,
+        pyrefly_cfg: &mut ConfigFile,
+    ) -> anyhow::Result<()> {
+        // In pyright, python version is specified in the "pythonVersion" field
+        let version = match &pyright_cfg.python_version {
+            Some(v) => v,
+            None => return Err(anyhow::anyhow!("No python_version found in pyright config")),
+        };
+
+        pyrefly_cfg.python_environment.python_version = Some(*version);
+        Ok(())
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::migration::test_utils::default_pyright_config;
 
     #[test]
     fn test_migrate_from_mypy() {
@@ -66,6 +82,40 @@ mod tests {
         let python_version_config = PythonVersionConfig;
         let _ = python_version_config.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
+        assert_eq!(
+            pyrefly_cfg.python_environment.python_version,
+            default_version
+        );
+    }
+
+    #[test]
+    fn test_migrate_from_pyright() {
+        let mut pyright_cfg = default_pyright_config();
+        pyright_cfg.python_version = Some(PythonVersion::new(3, 10, 0));
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let python_version_config = PythonVersionConfig;
+        let result = python_version_config.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_ok());
+        assert_eq!(
+            pyrefly_cfg.python_environment.python_version,
+            Some(PythonVersion::new(3, 10, 0))
+        );
+    }
+
+    #[test]
+    fn test_migrate_from_pyright_empty() {
+        let pyright_cfg = default_pyright_config();
+
+        let mut pyrefly_cfg = ConfigFile::default();
+        let default_version = pyrefly_cfg.python_environment.python_version;
+
+        let python_version_config = PythonVersionConfig;
+        let result = python_version_config.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_err());
         assert_eq!(
             pyrefly_cfg.python_environment.python_version,
             default_version

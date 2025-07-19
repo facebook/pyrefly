@@ -333,6 +333,47 @@ Completion Results:
 }
 
 #[test]
+fn from_import_relative() {
+    let foo_code = r#"
+imperial_guard = "cool"
+"#;
+    let main_code = r#"
+from .foo import imperial
+#                       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main_code), ("foo", foo_code)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from .foo import imperial
+                            ^
+Completion Results:
+- (Variable) imperial_guard
+- (Variable) __annotations__
+- (Variable) __builtins__
+- (Variable) __cached__
+- (Variable) __debug__
+- (Variable) __dict__
+- (Variable) __file__
+- (Variable) __loader__
+- (Variable) __name__
+- (Variable) __package__
+- (Variable) __path__
+- (Variable) __spec__
+- (Variable) __doc__
+
+
+# foo.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn kwargs_completion_basic() {
     let code = r#"
 def foo(a: int, b: str): ...

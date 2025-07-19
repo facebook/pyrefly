@@ -15,6 +15,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::solve::TypeFormContext;
 use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorInfo;
 use crate::error::kind::ErrorKind;
 use crate::types::special_form::SpecialForm;
 use crate::types::types::Type;
@@ -98,8 +99,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             x.range(),
-                            ErrorKind::InvalidInheritance,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                             "There cannot be more than one TypeVarTuple type parameter".to_owned(),
                         );
                     }

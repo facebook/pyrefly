@@ -87,14 +87,15 @@ use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorInfo;
 use crate::error::kind::ErrorKind;
-use crate::export::definitions::DocString;
+use crate::export::docstring::Docstring;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
-use crate::module::bundled::BundledTypeshed;
 use crate::module::module_info::ModuleInfo;
+use crate::module::typeshed::BundledTypeshed;
 use crate::state::dirty::Dirty;
 use crate::state::epoch::Epoch;
 use crate::state::epoch::Epochs;
@@ -786,7 +787,6 @@ impl<'a> Transaction<'a> {
                             module_data.handle.module(),
                         );
                         changed = true;
-                        writer.epochs.changed = self.data.now;
                     }
                     if !require.keep_bindings() && !require.keep_answers() {
                         // From now on we can use the answers directly, so evict the bindings/answers.
@@ -917,7 +917,7 @@ impl<'a> Transaction<'a> {
         kind: ErrorKind,
     ) {
         let load = module_data.state.read().steps.load.dupe().unwrap();
-        load.errors.add(range, kind, None, vec1![msg]);
+        load.errors.add(range, ErrorInfo::Kind(kind), vec1![msg]);
     }
 
     fn lookup<'b>(&'b self, module_data: ArcId<ModuleDataMut>) -> TransactionHandle<'b> {
@@ -1002,7 +1002,10 @@ impl<'a> Transaction<'a> {
         // Check; demand; check - the second check is guaranteed to work.
         for _ in 0..2 {
             let lock = module_data.state.read();
-            if let Some(solutions) = &lock.steps.solutions {
+            if let Some(solutions) = &lock.steps.solutions
+                && lock.epochs.checked == self.data.now
+                && lock.steps.last_step == Some(Step::Solutions)
+            {
                 return solutions.get_hashed_opt(key).duped();
             } else if let Some(answers) = &lock.steps.answers {
                 let load = lock.steps.load.dupe().unwrap();
@@ -1473,7 +1476,7 @@ impl<'a> Transaction<'a> {
             .exports(&self.lookup(module_data))
     }
 
-    pub fn get_module_docstring(&self, handle: &Handle) -> Option<DocString> {
+    pub fn get_module_docstring(&self, handle: &Handle) -> Option<Docstring> {
         let module_data = self.get_module(handle);
         self.lookup_export(&module_data).docstring().cloned()
     }

@@ -6,6 +6,7 @@
  */
 
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::gas::Gas;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
@@ -15,12 +16,13 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::binding::binding::Binding;
+use crate::binding::binding::BindingClass;
+use crate::binding::binding::ClassBinding;
 use crate::binding::binding::Key;
 use crate::binding::bindings::Bindings;
 use crate::binding::narrow::identifier_and_chain_for_expr;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::export::exports::Export;
-use crate::module::short_identifier::ShortIdentifier;
 use crate::state::handle::Handle;
 
 pub enum IntermediateDefinition {
@@ -113,6 +115,25 @@ fn binding_to_intermediate_definition(
             let expr = Expr::Attribute(attribute.clone());
             resolve_assign_to_expr(&expr)
         }
+        Binding::Function(idx, _prev_idx, _class_metadata) => {
+            let func = bindings.get(*idx);
+            Some(IntermediateDefinition::Local(Export {
+                location: func.def.name.range,
+                symbol_kind: binding.symbol_kind(),
+                docstring: func.docstring.clone(),
+            }))
+        }
+        Binding::ClassDef(idx, _decorators) => match bindings.get(*idx) {
+            BindingClass::FunctionalClassDef(..) => None,
+            BindingClass::ClassDef(ClassBinding { def, docstring, .. }) => {
+                Some(IntermediateDefinition::Local(Export {
+                    location: def.name.range,
+                    symbol_kind: binding.symbol_kind(),
+                    docstring: docstring.clone(),
+                }))
+            }
+        },
+
         _ => None,
     }
 }

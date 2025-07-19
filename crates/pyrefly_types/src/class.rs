@@ -152,8 +152,11 @@ impl ClassKind {
     fn from_qname(qname: &QName) -> Self {
         match (qname.module_name().as_str(), qname.id().as_str()) {
             ("builtins", "staticmethod") => Self::StaticMethod,
+            ("abc", "abstractstaticmethod") => Self::StaticMethod,
             ("builtins", "classmethod") => Self::ClassMethod,
+            ("abc", "abstractclassmethod") => Self::ClassMethod,
             ("builtins", "property") => Self::Property,
+            ("abc", "abstractproperty") => Self::Property,
             ("functools", "cached_property") => Self::Property,
             ("cached_property", "cached_property") => Self::Property,
             ("cinder", "cached_property") => Self::Property,

@@ -373,3 +373,21 @@ while True:
         report.trim(),
     );
 }
+
+// TODO(kylei): list comprehension document symbol
+#[test]
+fn list_comprehension_test() {
+    let code = r#"
+[x for x in list()]
+"#;
+    let report = get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+
+[]
+"#
+        .trim(),
+        report.trim(),
+    );
+}

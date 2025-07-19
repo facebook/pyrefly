@@ -26,8 +26,8 @@ use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::types::class_metadata::DataclassMetadata;
-use crate::error;
 use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
@@ -108,8 +108,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     cls.range(),
-                    ErrorKind::BadClassDefinition,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
                     "Cannot specify both `slots=True` and `__slots__`".to_owned(),
                 );
             } else {
@@ -155,8 +154,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         cls.range(),
-                        ErrorKind::InvalidInheritance,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                         format!(
                             "Cannot inherit {} dataclass `{}` from {} dataclass `{}`",
                             current_status,
@@ -408,8 +406,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                                 errors,
                                 range,
-                                error::kind::ErrorKind::BadClassDefinition,
-                                None,
+                                ErrorInfo::Kind(ErrorKind::BadClassDefinition),
                                 format!(
                                     "Dataclass field `{name}` without a default may not follow dataclass field with a default"
                                 ),

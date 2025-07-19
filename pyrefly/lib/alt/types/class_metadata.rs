@@ -25,6 +25,7 @@ use vec1::vec1;
 
 use crate::alt::class::class_field::ClassField;
 use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorInfo;
 use crate::error::kind::ErrorKind;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
@@ -511,8 +512,7 @@ impl Linearization {
                     let ctx = ClassDisplayContext::new(&[cls, base]);
                     errors.add(
                         cls.range(),
-                        ErrorKind::InvalidInheritance,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                         vec1![format!(
                             "Class `{}` inheriting from `{}` creates a cycle",
                             ctx.display(cls),
@@ -596,8 +596,7 @@ impl Linearization {
                 let ctx = ClassDisplayContext::new(&[cls, first_candidate]);
                 errors.add(
                     cls.range(),
-                    ErrorKind::InvalidInheritance,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                     vec1![format!(
                         "Class `{}` has a nonlinearizable inheritance chain detected at `{}`",
                         ctx.display(cls),
