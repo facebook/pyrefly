@@ -13,6 +13,7 @@ use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -421,26 +422,10 @@ impl CheckArgs {
         code: String,
         config_finder: ConfigFinder,
         allow_forget: bool,
-    ) -> anyhow::Result<(CommandExitStatus, usize)> {
-        use std::path::PathBuf;
-        use std::sync::Arc;
-
-        use pyrefly_python::module_name::ModuleName;
-
-        use crate::module::module_path::ModulePath;
-
-        let mut timings = Timings::new();
-        let list_files_start = Instant::now();
-
+    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
         // Create a virtual module path for the snippet
         let module_path = ModulePath::command_snippet();
         let module_name = ModuleName::from_str("__main__");
-
-        timings.list_files = list_files_start.elapsed();
-        debug!(
-            "Checking snippet (setup took {})",
-            Timings::show(timings.list_files)
-        );
 
         let holder = Forgetter::new(State::new(config_finder), allow_forget);
 
@@ -467,7 +452,7 @@ impl CheckArgs {
         )]);
 
         self.run_inner(
-            timings,
+            Timings::new(),
             transaction.as_mut(),
             &[(handle, require_levels.specified)],
         )
