@@ -179,7 +179,7 @@ fn on_class(
             Type::Overload(t) => {
                 let sigs = &t.signatures;
                 for sig in sigs {
-                    on_type(variance, inj, &sig.as_type(), on_edge, on_var);
+                    on_type(variance, inj, &sig.ty.as_type(), on_edge, on_var);
                 }
             }
             Type::Callable(t) => {

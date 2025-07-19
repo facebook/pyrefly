@@ -661,7 +661,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (l, Type::Overload(overload)) => overload
                 .signatures
                 .iter()
-                .all(|u| self.is_subset_eq(l, &u.as_type())),
+                .all(|u| self.is_subset_eq(l, &u.ty.as_type())),
             (l, Type::Union(us)) => us.iter().any(|u| self.is_subset_eq(l, u)),
             (Type::Intersect(ls), u) => ls.iter().any(|l| self.is_subset_eq(l, u)),
             (Type::Quantified(q), u) if let Restriction::Unrestricted = q.restriction() => {
@@ -685,7 +685,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::Overload(overload), u) => overload
                 .signatures
                 .iter()
-                .any(|l| self.is_subset_eq(&l.as_type(), u)),
+                .any(|l| self.is_subset_eq(&l.ty.as_type(), u)),
             (Type::BoundMethod(method), Type::Callable(_) | Type::Function(_))
                 if let Some(l_no_self) = method.to_callable() =>
             {
