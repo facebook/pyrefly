@@ -74,10 +74,10 @@ require("mason-lspconfig").setup {
         <details>
             <summary>mason.nvim</summary>
 
-            [mason.nvim](https://github.com/mason-org/mason.nvim) is our recommended approach, since it makes Pyrefly and other language servers, linters, and utilities available to Neovim, and makes configuring them easy.
+            [mason.nvim](https://github.com/mason-org/mason.nvim) is our recommended approach, since it makes Pyrefly and other language servers, linters, and utilities easily available to Neovim.
 
             :::note
-            Installing a binary with Mason will take precedence over other system installations. It might be worth using system installations (including installations in virtual environments) if you need to switch between different versions of Pyrefly between different projects.
+            Installing a binary with Mason will take precedence over other system installations. It might be worth using system installations (including installations in virtual environments) if you need to switch between different versions of Pyrefly for different projects.
             :::
 
             Install Mason using your Neovim plugin manager of choice, and make sure you call its setup function to make it available.
@@ -111,7 +111,7 @@ require("mason-lspconfig").setup {
         This section describes how to tell Neovim how Pyrefly can be run, as well as how to override those settings.
 
         You have two options on how to do this:
-        1. (recommended) Install the [`neovim/nvim-lspconfig`](https://github.com/neovim/nvim-lspconfig) plugin to get Pyrefly's (and other language servers') default configs. You can override specific settings if you'd like.
+        1. (recommended) Install or update the [`neovim/nvim-lspconfig`](https://github.com/neovim/nvim-lspconfig) plugin to get Pyrefly's (and other language servers') default configs. You can override specific settings if you'd like.
         2. Setup your language server manually without installing extra plugins.
 
         <details>
@@ -119,7 +119,7 @@ require("mason-lspconfig").setup {
 
             [`neovim/nvim-lspconfig`](https://github.com/neovim/nvim-lspconfig) is a Neovim plugin acting as a repository of language server settings (a repository of language server settings) installed and updated to get Pyrefly's default configuration.
 
-            We also recommend installing the [mason-org/mason-lspconfig.nvim](https://github.com/mason-org/mason-lspconfig.nvim) plugin if you're using Mason, which provides other nice functionality when using Mason with `lspconfig`. If you install `mason-org/mason-lspconfig.nvim`, be sure to source it in your Neovim config.
+            We also recommend installing or updating the [mason-org/mason-lspconfig.nvim](https://github.com/mason-org/mason-lspconfig.nvim) plugin if you're using Mason, which provides other nice functionality when using Mason with `lspconfig`. If you install `mason-org/mason-lspconfig.nvim`, be sure to source it in your Neovim config.
 
             To override specific settings, see `:h vim.lsp.config`. See `:h vim.lsp.Config` and `:h vim.lsp.ClientConfig` for values you can override, and the [`nvim-lspconfig` Pyrefly config](https://github.com/neovim/nvim-lspconfig/blob/master/lsp/pyrefly.lua) for default values.
 
@@ -160,11 +160,9 @@ require("mason-lspconfig").setup {
     <details>
         <summary>Enable Pyrefly for Neovim</summary>
 
-        :::note
         If you've installed Pyrefly with Mason and have `mason-org/mason-lspconfig.nvim` installed, then your language server should just work! You can check by opening a file your language server should cover and running `:checkhealth lsp` to see if it's started. You may need to restart Neovim for any changes made above to take effect.
-        :::
 
-        To make sure your language servers are activated, be sure to enable them with the syntax below.
+        Otherwise, to make sure your language servers are activated, be sure to enable them with the syntax below.
 
         ```lua
         vim.lsp.enable({"pyrefly"})
