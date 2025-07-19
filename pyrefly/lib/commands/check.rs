@@ -419,7 +419,6 @@ impl CheckArgs {
     pub fn run_once_with_snippet(
         self,
         code: String,
-        _files_to_check: FilteredGlobs,
         config_finder: ConfigFinder,
         allow_forget: bool,
     ) -> anyhow::Result<(CommandExitStatus, usize)> {

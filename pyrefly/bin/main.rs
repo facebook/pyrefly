@@ -125,10 +125,9 @@ async fn run_command_check(
     config: Option<PathBuf>,
     mut args: library::run::CheckArgs,
 ) -> anyhow::Result<CommandExitStatus> {
-    let (files_to_check, config_finder) =
-        globs_and_config_getter::get(vec![], None, config, &mut args)?;
-
-    match args.run_once_with_snippet(code, files_to_check, config_finder, true) {
+    let (_, config_finder) =
+        globs_and_config_getter::get(vec![], None, config, &mut args.config_override)?;
+    match args.run_once_with_snippet(code, config_finder, true) {
         Ok((status, _)) => Ok(status),
         Err(e) => Err(e),
     }
