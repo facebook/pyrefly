@@ -40,29 +40,6 @@ impl XRefsViaNameByTarget {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct XRefsViaName {
-    pub id: u64,
-    pub key: Box<XRefsViaName_key>,
-}
-
-impl XRefsViaName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.XRefsViaName.4")
-    }
-
-    pub fn new(xref: Name, file: src::File, span: src::ByteSpan) -> Self {
-        XRefsViaName {
-            id: 0,
-            key: Box::new(XRefsViaName_key {
-                xref,
-                file,
-                span
-            }),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct XRefsViaNameByFile {
     pub id: u64,
     pub key: Box<XRefsViaNameByFile_key>,
@@ -1559,13 +1536,6 @@ pub struct XRefsViaNameByTarget_key {
     pub target: Name,
     pub file: src::File,
     pub spans: Vec<src::ByteSpan>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct XRefsViaName_key {
-    pub xref: Name,
-    pub file: src::File,
-    pub span: src::ByteSpan,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]

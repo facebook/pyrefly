@@ -710,7 +710,7 @@ D(x=5)  # E: Missing argument `y`
 testcase!(
     test_cyclic_typed_dicts,
     r#"
-from typing import TypedDict, reveal_type
+from typing import TypedDict, assert_type
 class TD0(TypedDict):
     x: int
     y: TD1
@@ -718,12 +718,12 @@ class TD1(TypedDict):
     x: int
     y: TD0
 def foo(td0: TD0, td1: TD1) -> None:
-    reveal_type(td0)  # E: revealed type: TypedDict[TD0]
-    reveal_type(td0['x'])  # E: revealed type: int
-    reveal_type(td0['y'])  # E: revealed type: TypedDict[TD1]
-    reveal_type(td1)  # E: revealed type: TypedDict[TD1]
-    reveal_type(td1['x'])  # E: revealed type: int
-    reveal_type(td1['y'])  # E: revealed type: TypedDict[TD0]
+    assert_type(td0, TD0)
+    assert_type(td0['x'], int)
+    assert_type(td0['y'], TD1)
+    assert_type(td1, TD1)
+    assert_type(td1['x'], int)
+    assert_type(td1['y'], TD0)
     "#,
 );
 

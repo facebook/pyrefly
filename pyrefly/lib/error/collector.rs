@@ -15,9 +15,8 @@ use ruff_text_size::TextRange;
 use vec1::Vec1;
 
 use crate::config::error::ErrorConfig;
-use crate::error::context::ErrorContext;
+use crate::error::context::ErrorInfo;
 use crate::error::error::Error;
-use crate::error::kind::ErrorKind;
 use crate::error::kind::Severity;
 use crate::error::style::ErrorStyle;
 use crate::module::module_info::ModuleInfo;
@@ -119,18 +118,19 @@ impl ErrorCollector {
         }
     }
 
-    pub fn add(
-        &self,
-        range: TextRange,
-        kind: ErrorKind,
-        context: Option<&dyn Fn() -> ErrorContext>,
-        mut msg: Vec1<String>,
-    ) {
+    pub fn add(&self, range: TextRange, info: ErrorInfo, mut msg: Vec1<String>) {
         if self.style == ErrorStyle::Never {
             return;
         }
-        if let Some(ctx) = context {
-            msg.insert(0, ctx().format());
+        let (kind, ctx) = match info {
+            ErrorInfo::Context(ctx) => {
+                let ctx = ctx();
+                (ctx.as_error_kind(), Some(ctx))
+            }
+            ErrorInfo::Kind(kind) => (kind, None),
+        };
+        if let Some(ctx) = ctx {
+            msg.insert(0, ctx.format());
         }
         let err = Error::new(self.module_info.dupe(), range, msg, kind);
         self.errors.lock().push(err);
@@ -193,10 +193,11 @@ mod tests {
 
     use super::*;
     use crate::config::error::ErrorDisplayConfig;
+    use crate::error::kind::ErrorKind;
     use crate::error::kind::Severity;
 
     fn add(errors: &ErrorCollector, range: TextRange, kind: ErrorKind, msg: String) {
-        errors.add(range, kind, None, vec1![msg]);
+        errors.add(range, ErrorInfo::Kind(kind), vec1![msg]);
     }
 
     #[test]

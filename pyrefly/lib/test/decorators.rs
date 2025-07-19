@@ -146,6 +146,21 @@ assert_type(C.g(), int)
 );
 
 testcase!(
+    test_abstract_classmethod,
+    r#"
+from typing import assert_type
+import abc
+
+class C(abc.ABC):
+    @abc.abstractclassmethod
+    def f(cls) -> int:
+        return 42
+
+assert_type(C.f(), int)
+    "#,
+);
+
+testcase!(
     test_staticmethod_first_param,
     r#"
 from typing import assert_type, Any
@@ -161,6 +176,21 @@ class C:
 
 C.f(0)
 assert_type(C.g(0), int)
+    "#,
+);
+
+testcase!(
+    test_abstract_staticmethod,
+    r#"
+from typing import assert_type
+import abc
+
+class C(abc.ABC):
+    @abc.abstractstaticmethod
+    def f() -> int:
+        return 42
+
+assert_type(C.f(), int)
     "#,
 );
 

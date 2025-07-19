@@ -19,11 +19,11 @@ use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
 use starlark_map::small_map::SmallMap;
-use starlark_map::small_set::SmallSet;
 
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
+use crate::state::errors::Errors;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -40,14 +40,42 @@ struct Incremental {
     to_set: Vec<(String, String)>,
 }
 
+/// What happened when we ran an incremental check.
+struct IncrementalResult {
+    changed: Vec<String>,
+    errors: Errors,
+}
+
+impl IncrementalResult {
+    fn check_recompute(&self, want: &[&str]) {
+        let mut want = want.map(|x| (*x).to_owned());
+        want.sort();
+        assert_eq!(want, self.changed);
+    }
+
+    fn check_recompute_dedup(&self, want: &[&str]) {
+        let mut changed = self.changed.clone();
+        changed.dedup();
+        let mut want = want.map(|x| (*x).to_owned());
+        want.sort();
+        assert_eq!(want, changed);
+    }
+
+    fn check_errors(&self) {
+        self.errors.check_against_expectations().unwrap();
+    }
+}
+
 impl Incremental {
+    const USER_FILES: &[&str] = &["main", "foo", "bar", "baz"];
+
     fn new() -> Self {
         init_test();
         let data = IncrementalData::default();
 
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
-        for file in ["main", "foo", "bar", "baz"] {
+        for file in Self::USER_FILES {
             config.custom_module_paths.insert(
                 ModuleName::from_str(file),
                 ModulePath::memory(PathBuf::from(file)),
@@ -76,7 +104,7 @@ impl Incremental {
         )
     }
 
-    fn check_internal(&mut self, want: &[&str], recompute: &[&str], ignore_expectations: bool) {
+    fn unchecked(&mut self, want: &[&str]) -> IncrementalResult {
         let subscriber = TestSubscriber::new();
         let mut transaction = self
             .state
@@ -97,19 +125,9 @@ impl Incremental {
             transaction,
             &handles.map(|x| (x.dupe(), Require::Everything)),
         );
-        let loaded = want
-            .iter()
-            .chain(recompute)
-            .map(|x| self.handle(x))
-            .collect::<SmallSet<_>>();
-        let loads = self.state.transaction().get_errors(&loaded);
-        print_errors(&loads.collect_errors().shown);
-        if !ignore_expectations {
-            loads.check_against_expectations().unwrap();
-        }
-
-        let mut recompute = recompute.map(|x| (*x).to_owned());
-        recompute.sort();
+        let loaded = Self::USER_FILES.map(|x| self.handle(x));
+        let errors = self.state.transaction().get_errors(&loaded);
+        print_errors(&errors.collect_errors().shown);
 
         let mut changed = Vec::new();
         for (x, (count, _)) in subscriber.finish() {
@@ -121,17 +139,26 @@ impl Incremental {
             }
         }
         changed.sort();
-        assert_eq!(recompute, changed);
+        IncrementalResult { changed, errors }
     }
 
     /// Run a check. Expect to recompute things to have changed and errors from # E: <> comments.
-    fn check(&mut self, want: &[&str], recompute: &[&str]) {
-        self.check_internal(want, recompute, false)
+    fn check(&mut self, want: &[&str], recompute: &[&str]) -> IncrementalResult {
+        let res = self.unchecked(want);
+        res.check_errors();
+        res.check_recompute(recompute);
+        res
     }
 
     /// Run a check. Expect to recompute things to have changed, but ignore error comments.
-    fn check_ignoring_loads_expectations(&mut self, want: &[&str], recompute: &[&str]) {
-        self.check_internal(want, recompute, true)
+    fn check_ignoring_expectations(
+        &mut self,
+        want: &[&str],
+        recompute: &[&str],
+    ) -> IncrementalResult {
+        let res = self.unchecked(want);
+        res.check_recompute(recompute);
+        res
     }
 }
 
@@ -311,7 +338,7 @@ fn test_error_clearing_on_dependency() {
     );
 
     i.set("foo", "def x() -> int: ...");
-    i.check_ignoring_loads_expectations(&["main"], &["foo", "main"]);
+    i.check_ignoring_expectations(&["main"], &["foo", "main"]);
 
     let errors_after_fix = i
         .state
@@ -334,8 +361,34 @@ fn test_stale_class() {
 
     i.set("foo", "");
     i.set("main", "from bar import c; v = c.x # hello");
-    // This panics
-    // i.check(&["main", "foo"], &["main", "foo", "bar"]);
+    let res = i.unchecked(&["main", "foo"]);
+    res.check_recompute_dedup(&["main", "foo", "bar"]);
+    assert_eq!(res.errors.collect_errors().shown.len(), 1);
+}
+
+#[test]
+fn test_stale_typed_dict() {
+    let mut i = Incremental::new();
+
+    // We need to set up a dep chain of size 4 (i.e. main -> bar -> baz -> foo) to more reliably
+    // force `main` to see a stale TypedDict in `bar` during the recheck.
+    // It may still be possible to hide the staleness in certain circumstances, but that's fine since
+    // the test would still pass in those cases.
+    i.set(
+        "foo",
+        "from typing import TypedDict\nclass D(TypedDict):\n  x: int",
+    );
+    i.set("bar", "from foo import D\nclass D2:\n  y: D");
+    i.set("baz", "from bar import D2\nclass D3:\n  z: D2");
+    i.set(
+        "main",
+        "from baz import D3\ndef test(d: D3) -> None:\n  d.z.y[\'x\']",
+    );
+    i.check(&["main"], &["main", "foo", "bar", "baz"]);
+
+    i.set("foo", "class D: x: int");
+
+    i.check_ignoring_expectations(&["main"], &["main", "foo", "bar", "baz"]);
 }
 
 #[test]

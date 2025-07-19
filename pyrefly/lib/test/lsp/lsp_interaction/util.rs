@@ -39,8 +39,8 @@ use pretty_assertions::assert_eq;
 use pyrefly_util::fs_anyhow;
 use tempfile::TempDir;
 
-use crate::commands::lsp::Args;
 use crate::commands::lsp::IndexingMode;
+use crate::commands::lsp::LspArgs;
 use crate::commands::lsp::run_lsp;
 use crate::test::util::init_test;
 
@@ -60,7 +60,7 @@ pub struct TestCase {
 pub fn run_test_lsp(test_case: TestCase) {
     init_test();
     let timeout = Duration::from_secs(25);
-    let args = Args {
+    let args = LspArgs {
         indexing_mode: test_case.indexing_mode,
     };
     // language_client_sender is used to send messages to the language client

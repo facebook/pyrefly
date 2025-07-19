@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::env;
 use std::iter::once;
 
 use lsp_server::Message;
@@ -146,6 +147,8 @@ fn test_go_to_def_relative_path() {
 #[test]
 fn definition_in_builtins() {
     let root = get_test_files_root();
+    let pyrefly_typeshed_materialized = env::temp_dir().join("pyrefly_bundled_typeshed");
+    let result_file = pyrefly_typeshed_materialized.join("typing.pyi");
     run_test_lsp(TestCase {
         messages_from_language_client: vec![
             Message::from(build_did_open_notification(
@@ -168,9 +171,18 @@ fn definition_in_builtins() {
         expected_messages_from_language_server: vec![Message::Response(Response {
             id: RequestId::from(2),
             result: Some(serde_json::json!({
-                "range":{"end":{"character":4,"line":425},"start":{"character":0,"line":425}},"uri":format!("$$MATCH_EVERYTHING$$")})),
+                "range":{"end":{"character":4,"line":425},"start":{"character":0,"line":425}},"uri":Url::from_file_path(result_file.as_path()).unwrap().to_string()})),
             error: None,
         })],
         ..Default::default()
     });
+    assert!(
+        pyrefly_typeshed_materialized.join("pyrefly.toml").exists(),
+        "Expected pyrefly.toml to exist at {:?}",
+        pyrefly_typeshed_materialized.to_str()
+    );
+    assert!(
+        result_file.exists(),
+        "Expected pyrefly.toml to exist at {result_file:?}",
+    );
 }

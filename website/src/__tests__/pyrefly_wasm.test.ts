@@ -52,7 +52,7 @@ import
             expect(revealTypeError).toBeDefined();
             expect(revealTypeError.kind).toEqual('reveal-type');
             // The revealed type should be 'str'
-            const match = revealTypeError.message.match(
+            const match = revealTypeError.message_header.match(
                 /revealed type: ([^\s]+)/
             );
             const revealedType = match[1];

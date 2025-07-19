@@ -43,9 +43,8 @@ use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorContext;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
-use crate::error::kind::ErrorKind;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
 use crate::graph::calculation::Calculation;
@@ -818,11 +817,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         errors: &ErrorCollector,
         range: TextRange,
-        kind: ErrorKind,
-        context: Option<&dyn Fn() -> ErrorContext>,
+        info: ErrorInfo,
         msg: String,
     ) -> Type {
-        errors.add(range, kind, context, vec1![msg]);
+        errors.add(range, info, vec1![msg]);
         Type::any_error()
     }
 

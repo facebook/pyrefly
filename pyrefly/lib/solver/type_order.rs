@@ -117,8 +117,8 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         self.0.check_attr_subset(got, want, is_subset).is_ok()
     }
 
-    pub fn named_tuple_element_types(self, cls: &ClassType) -> Option<Vec<Type>> {
-        self.0.named_tuple_element_types(cls)
+    pub fn as_tuple_type(self, cls: &ClassType) -> Option<Type> {
+        self.0.as_tuple(cls).map(Type::Tuple)
     }
 
     pub fn extends_any(self, cls: &Class) -> bool {

@@ -18,8 +18,8 @@ use pyrefly_util::globs::Globs;
 use tracing::debug;
 use tracing::info;
 
+use crate::commands::config_args::ConfigOverrideArgs;
 use crate::commands::config_finder::standard_config_finder;
-use crate::commands::run::CheckArgs;
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
 use crate::config::config::ProjectLayout;
@@ -28,7 +28,7 @@ use crate::config::finder::ConfigFinder;
 use crate::config::finder::debug_log;
 use crate::error::kind::Severity;
 
-fn config_finder(args: CheckArgs) -> ConfigFinder {
+fn config_finder(args: ConfigOverrideArgs) -> ConfigFinder {
     standard_config_finder(Arc::new(move |_, x| args.override_config(x)))
 }
 
@@ -36,7 +36,10 @@ fn absolutize(globs: Globs) -> anyhow::Result<Globs> {
     Ok(globs.from_root(PathBuf::new().absolutize()?.as_ref()))
 }
 
-fn get_explicit_config(path: &Path, args: &CheckArgs) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
+fn get_explicit_config(
+    path: &Path,
+    args: &ConfigOverrideArgs,
+) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
     let (file_config, parse_errors) = ConfigFile::from_file(path);
     let (config, validation_errors) = args.override_config(file_config);
     (
@@ -61,7 +64,7 @@ fn add_config_errors(config_finder: &ConfigFinder, errors: Vec<ConfigError>) -> 
 fn get_globs_and_config_for_project(
     config: Option<PathBuf>,
     project_excludes: Option<Globs>,
-    args: &CheckArgs,
+    args: &ConfigOverrideArgs,
 ) -> anyhow::Result<(FilteredGlobs, ConfigFinder)> {
     let (config, errors) = match config {
         Some(explicit) => get_explicit_config(&explicit, args),
@@ -110,7 +113,7 @@ fn get_globs_and_config_for_files(
     config: Option<PathBuf>,
     files_to_check: Globs,
     project_excludes: Option<Globs>,
-    args: &CheckArgs,
+    args: &ConfigOverrideArgs,
 ) -> anyhow::Result<(FilteredGlobs, ConfigFinder)> {
     let project_excludes = project_excludes.unwrap_or_else(ConfigFile::default_project_excludes);
     let files_to_check = absolutize(files_to_check)?;
@@ -151,7 +154,7 @@ pub fn get(
     files: Vec<String>,
     project_excludes: Option<Vec<String>>,
     config: Option<PathBuf>,
-    args: &mut CheckArgs,
+    args: &mut ConfigOverrideArgs,
 ) -> anyhow::Result<(FilteredGlobs, ConfigFinder)> {
     args.absolute_search_path();
     args.validate()?;

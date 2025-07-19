@@ -12,6 +12,7 @@ use ruff_text_size::TextRange;
 use vec1::vec1;
 
 use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorInfo;
 use crate::error::kind::ErrorKind;
 
 pub fn module_parse(contents: &str, version: PythonVersion, errors: &ErrorCollector) -> ModModule {
@@ -19,8 +20,7 @@ pub fn module_parse(contents: &str, version: PythonVersion, errors: &ErrorCollec
     for err in parse_errors {
         errors.add(
             err.location,
-            ErrorKind::ParseError,
-            None,
+            ErrorInfo::Kind(ErrorKind::ParseError),
             vec1![format!("Parse error: {}", err.error)],
         );
     }
@@ -67,8 +67,7 @@ impl<'me> ruff_python_parser::semantic_errors::SemanticSyntaxContext
     ) {
         self.errors.add(
             error.range,
-            ErrorKind::InvalidSyntax,
-            None,
+            ErrorInfo::Kind(ErrorKind::InvalidSyntax),
             vec1![error.to_string()],
         );
     }

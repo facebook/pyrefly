@@ -2008,16 +2008,18 @@ dependencies = [
  "lsp-server",
  "lsp-types",
  "mimalloc",
- "num-bigint",
  "num-traits",
  "parse-display",
  "paste",
  "path-absolutize",
  "pretty_assertions",
  "pulldown-cmark",
+ "pyrefly_bundled",
  "pyrefly_derive",
  "pyrefly_python",
+ "pyrefly_types",
  "pyrefly_util",
+ "rayon",
  "regex",
  "regex-syntax 0.7.5",
  "ruff_annotate_snippets",
@@ -2031,7 +2033,6 @@ dependencies = [
  "serde_with",
  "starlark_map",
  "static_assertions",
- "tar",
  "tempfile",
  "thiserror 2.0.12",
  "tikv-jemallocator",
@@ -2043,6 +2044,15 @@ dependencies = [
  "walkdir",
  "which",
  "yansi 1.0.1",
+]
+
+[[package]]
+name = "pyrefly_bundled"
+version = "0.24.2"
+dependencies = [
+ "anyhow",
+ "starlark_map",
+ "tar",
  "zstd",
 ]
 
@@ -2075,6 +2085,25 @@ dependencies = [
  "static_interner",
  "thiserror 2.0.12",
  "toml",
+]
+
+[[package]]
+name = "pyrefly_types"
+version = "0.24.2"
+dependencies = [
+ "dupe",
+ "itertools 0.14.0",
+ "num-bigint",
+ "num-traits",
+ "parse-display",
+ "pyrefly_derive",
+ "pyrefly_python",
+ "pyrefly_util",
+ "ruff_python_ast",
+ "ruff_text_size",
+ "starlark_map",
+ "static_assertions",
+ "vec1",
 ]
 
 [[package]]
@@ -2475,9 +2504,9 @@ dependencies = [
 
 [[package]]
 name = "serde-wasm-bindgen"
-version = "0.5.0"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3b143e2833c57ab9ad3ea280d21fd34e285a42837aeb0ee301f4f41890fa00e"
+checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
 dependencies = [
  "js-sys",
  "serde",

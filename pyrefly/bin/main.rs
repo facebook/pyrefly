@@ -5,16 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::backtrace::Backtrace;
 use std::env::args_os;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
 use clap::Subcommand;
-use library::ConfigFile;
-use library::ConfigSource;
-use library::ModulePath;
 use library::finder::ConfigFinder;
 use library::globs_and_config_getter;
 use library::run::AutotypeArgs;
@@ -24,13 +20,13 @@ use library::run::CommandExitStatus;
 use library::run::CommonGlobalArgs;
 use library::run::InitArgs;
 use library::run::LspArgs;
+use library::run::dump_config;
 use pyrefly::library::library::library::library;
-use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::args::clap_env;
 use pyrefly_util::args::get_args_expanded;
 use pyrefly_util::globs::FilteredGlobs;
+use pyrefly_util::panic::exit_on_panic;
 use pyrefly_util::watcher::Watcher;
-use starlark_map::small_map::SmallMap;
 
 // fbcode likes to set its own allocator in fbcode.default_allocator
 // So when we set our own allocator, buck build buck2 or buck2 build buck2 often breaks.
@@ -50,11 +46,6 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[command(about = "A fast Python type checker", long_about = None)]
 #[command(version)]
 struct Args {
-    /// Set this to true to run profiling of fast jobs.
-    /// Will run the command repeatedly.
-    #[arg(long = "profiling", global = true, hide = true, env = clap_env("PROFILING"))]
-    profiling: bool,
-
     /// Common global arguments shared across commands.
     #[command(flatten)]
     common: CommonGlobalArgs,
@@ -119,14 +110,6 @@ enum Command {
     Autotype(FullCheckArgs),
 }
 
-fn exit_on_panic() {
-    std::panic::set_hook(Box::new(move |info| {
-        eprintln!("Thread panicked, shutting down: {}", info);
-        eprintln!("Backtrace:\n{}", Backtrace::force_capture());
-        std::process::exit(1);
-    }));
-}
-
 async fn run_autotype(
     args: library::run::AutotypeArgs,
     files_to_check: FilteredGlobs,
@@ -164,8 +147,12 @@ async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<Com
             config,
             mut args,
         }) => {
-            let (files_to_check, config_finder) =
-                globs_and_config_getter::get(files, project_excludes, config, &mut args)?;
+            let (files_to_check, config_finder) = globs_and_config_getter::get(
+                files,
+                project_excludes,
+                config,
+                &mut args.config_override,
+            )?;
             run_check(args, watch, files_to_check, config_finder, allow_forget).await
         }
         Command::BuckCheck(args) => args.run(),
@@ -178,8 +165,12 @@ async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<Com
             watch: _,
             mut args,
         }) => {
-            let (files_to_check, config_finder) =
-                globs_and_config_getter::get(files, project_excludes, config, &mut args)?;
+            let (files_to_check, config_finder) = globs_and_config_getter::get(
+                files,
+                project_excludes,
+                config,
+                &mut args.config_override,
+            )?;
             run_autotype(AutotypeArgs::new(), files_to_check, config_finder).await
         }
         // We intentionally make DumpConfig take the same arguments as Check so that dumping the
@@ -191,59 +182,13 @@ async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<Com
             mut args,
             ..
         }) => {
-            let mut configs_to_files: SmallMap<ArcId<ConfigFile>, Vec<ModulePath>> =
-                SmallMap::new();
-            let (files_to_check, config_finder) =
-                globs_and_config_getter::get(files, project_excludes, config, &mut args)?;
-            let mut handles = args
-                .get_handles(files_to_check, &config_finder)?
-                .into_iter()
-                .map(|(handle, _)| handle)
-                .collect::<Vec<_>>();
-            handles.sort_by(|a, b| a.path().cmp(b.path()));
-            for handle in handles {
-                let path = handle.path();
-                let config = config_finder.python_file(handle.module(), path);
-                configs_to_files
-                    .entry(config)
-                    .or_default()
-                    .push(path.clone());
-            }
-            for error in config_finder.errors() {
-                error.print();
-            }
-            for (config, files) in configs_to_files.into_iter() {
-                match &config.source {
-                    ConfigSource::Synthetic => {
-                        println!("Default configuration");
-                    }
-                    ConfigSource::Marker(path) => {
-                        println!(
-                            "Default configuration for project root marked by `{}`",
-                            path.display()
-                        );
-                    }
-                    ConfigSource::File(path) => {
-                        println!("Configuration at `{}`", path.display());
-                    }
-                }
-                println!("  Using interpreter: {}", config.interpreters);
-                println!("  Covered files:");
-                for (i, fi) in files.iter().enumerate() {
-                    if i < 10 {
-                        println!("    {fi}");
-                    } else {
-                        println!("    ...and {} more", files.len() - 10);
-                        break;
-                    }
-                }
-                for path_part in config.structured_import_lookup_path() {
-                    if !path_part.is_empty() {
-                        println!("  {path_part}");
-                    }
-                }
-            }
-            Ok(CommandExitStatus::Success)
+            let (files_to_check, config_finder) = globs_and_config_getter::get(
+                files,
+                project_excludes,
+                config,
+                &mut args.config_override,
+            )?;
+            dump_config(files_to_check, config_finder, args)
         }
     }
 }
@@ -251,14 +196,8 @@ async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<Com
 /// Run based on the command line arguments.
 async fn run() -> anyhow::Result<ExitCode> {
     let args = Args::parse_from(get_args_expanded(args_os())?);
-    args.common.init();
-    if args.profiling {
-        loop {
-            let _ = run_command(args.command.clone(), false).await;
-        }
-    } else {
-        Ok(run_command(args.command, true).await?.to_exit_code())
-    }
+    args.common.init(false);
+    Ok(run_command(args.command, true).await?.to_exit_code())
 }
 
 #[tokio::main(flavor = "current_thread")]

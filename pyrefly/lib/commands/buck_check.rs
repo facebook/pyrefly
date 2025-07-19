@@ -36,7 +36,7 @@ use crate::state::state::State;
 /// Arguments for Buck-powered type checking.
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Parser)]
-pub struct Args {
+pub struct BuckCheckArgs {
     /// Path to input JSON manifest.
     input_path: PathBuf,
 
@@ -107,7 +107,7 @@ fn write_output(errors: &[Error], path: Option<&Path>) -> anyhow::Result<()> {
     }
 }
 
-impl Args {
+impl BuckCheckArgs {
     pub fn run(self) -> anyhow::Result<CommandExitStatus> {
         let input_file = read_input_file(self.input_path.as_path())?;
         let python_version = PythonVersion::from_str(&input_file.py_version)?;

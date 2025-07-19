@@ -22,8 +22,8 @@ use starlark_map::small_set::SmallSet;
 
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
-use crate::export::definitions::DocString;
 use crate::export::definitions::DunderAllEntry;
+use crate::export::docstring::Docstring;
 use crate::graph::calculation::Calculation;
 use crate::module::module_info::ModuleInfo;
 use crate::state::loader::FindError;
@@ -38,7 +38,7 @@ pub trait LookupExport {
 pub struct Export {
     pub location: TextRange,
     pub symbol_kind: Option<SymbolKind>,
-    pub docstring: Option<DocString>,
+    pub docstring: Option<Docstring>,
 }
 
 /// Where is this export defined?
@@ -66,7 +66,7 @@ struct ExportsInner {
     /// Names that are available via `from <this_module> import <name>` along with their locations
     exports: Calculation<Arc<SmallMap<Name, ExportLocation>>>,
     /// If this module has a docstring, it's stored here. Docstrings for exports themselves are stored in exports.
-    docstring: Option<DocString>,
+    docstring: Option<Docstring>,
 }
 
 impl Display for Exports {
@@ -109,7 +109,7 @@ impl Exports {
             definitions,
             wildcard: Calculation::new(),
             exports: Calculation::new(),
-            docstring: DocString::from_stmts(x),
+            docstring: Docstring::from_stmts(x),
         }))
     }
 
@@ -143,7 +143,7 @@ impl Exports {
     }
 
     /// Get the docstring for this module.
-    pub fn docstring(&self) -> Option<&DocString> {
+    pub fn docstring(&self) -> Option<&Docstring> {
         self.0.docstring.as_ref()
     }
 

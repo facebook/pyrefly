@@ -38,6 +38,8 @@ mod config;
 mod error;
 mod export;
 mod graph;
+#[cfg(not(target_arch = "wasm32"))]
+mod lsp;
 mod module;
 pub mod playground;
 pub mod query;
@@ -45,7 +47,10 @@ mod report;
 mod solver;
 mod state;
 mod test;
-mod types;
+
+// TODO: Remove. For now, make things compatible.
+use pyrefly_types as types;
+use pyrefly_types::equality;
 
 /// This interface is NOT stable and should not be relied upon.
 /// It will change during minor version increments.

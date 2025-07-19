@@ -6,5 +6,6 @@
  */
 
 pub mod definitions;
+pub mod docstring;
 pub mod exports;
 pub mod special;

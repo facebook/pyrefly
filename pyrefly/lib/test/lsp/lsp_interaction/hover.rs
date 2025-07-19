@@ -78,7 +78,9 @@ fn test_hover() {
             id: RequestId::from(2),
             result: Some(serde_json::json!({"contents": {
                 "kind": "markdown",
-                "value": "```python\n(class) Bar: type[Bar]\n```",
+                "value": "```python\n(class) Bar: type[Bar]\n```\n---\nGo to [Bar](".to_owned()
+                    + Url::from_file_path(root.path().join("bar.py")).unwrap().as_str()
+                    + "#L7,7)",
             }})),
             error: None,
         })],

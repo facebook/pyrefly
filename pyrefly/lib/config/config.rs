@@ -12,6 +12,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Context;
+use anyhow::Result;
 use anyhow::anyhow;
 use itertools::Itertools;
 use path_absolutize::Absolutize;
@@ -37,10 +38,10 @@ use crate::config::environment::interpreters::Interpreters;
 use crate::config::error::ErrorConfig;
 use crate::config::error::ErrorDisplayConfig;
 use crate::config::finder::ConfigError;
-use crate::module::bundled::typeshed;
 use crate::module::finder::find_module_in_search_path;
 use crate::module::finder::find_module_in_site_package_path;
 use crate::module::finder::find_module_prefixes;
+use crate::module::typeshed::typeshed;
 use crate::module::wildcard::ModuleWildcard;
 use crate::state::loader::FindError;
 
@@ -353,10 +354,11 @@ impl ConfigFile {
     ) -> Result<ModulePath, FindError> {
         if let Some(path) = self.custom_module_paths.get(&module) {
             Ok(path.clone())
-        } else if self
-            .replace_imports_with_any(path)
-            .iter()
-            .any(|p| p.matches(module))
+        } else if module != ModuleName::builtins()
+            && self
+                .replace_imports_with_any(path)
+                .iter()
+                .any(|p| p.matches(module))
         {
             Err(FindError::Ignored)
         } else if let Some(path) = find_module_in_search_path(module, self.search_path())? {
@@ -403,6 +405,18 @@ impl ConfigFile {
     pub const PYREFLY_FILE_NAME: &str = "pyrefly.toml";
     pub const PYPROJECT_FILE_NAME: &str = "pyproject.toml";
     pub const CONFIG_FILE_NAMES: &[&str] = &[Self::PYREFLY_FILE_NAME, Self::PYPROJECT_FILE_NAME];
+
+    /// Writes the configuration to a file in the specified directory.
+    /// TODO(connernilsen) relative these paths to the config file's directory
+    pub fn write_to_toml_in_directory(&self, directory: &Path) -> Result<()> {
+        let config_str =
+            toml::to_string_pretty(&self).context("Failed to serialize config to TOML")?;
+
+        fs_anyhow::write(&directory.join("pyrefly.toml"), config_str.as_bytes())
+            .with_context(|| format!("Failed to write config to {}", directory.display()))?;
+
+        Ok(())
+    }
     /// Files that don't contain pyrefly-specific config information but indicate that we're at the
     /// root of a Python project, which should be added to the search path.
     pub const ADDITIONAL_ROOT_FILE_NAMES: &[&str] = &["setup.py", "mypy.ini", "pyrightconfig.json"];

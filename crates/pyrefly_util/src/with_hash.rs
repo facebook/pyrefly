@@ -8,8 +8,6 @@
 //! Represent a value that has already been hashed.
 //! Originally from the `starlark_map` crate, but modified to work with u64 hash.
 
-#![allow(dead_code)] // Complete API that was all useful at one point or another
-
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::hash::Hash;

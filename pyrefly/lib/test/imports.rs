@@ -339,7 +339,8 @@ testcase!(
 from typing import assert_type
 import foo
 assert_type(foo.x, str)
-foo.bar.x  # E: No attribute `bar` in module `foo`
+v = foo.bar.x  # E: Module `foo.bar` exists, but was not imported explicitly.
+assert_type(v, int)
 "#,
 );
 

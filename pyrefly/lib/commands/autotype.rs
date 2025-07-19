@@ -30,7 +30,7 @@ use crate::types::types::Type;
 /// Arguments for the autotype command which automatically adds type annotations to Python code
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
-pub struct Args {}
+pub struct AutotypeArgs {}
 
 impl ParameterAnnotation {
     fn to_inlay_hint(self) -> Option<(TextSize, Type, AnnotationKind)> {
@@ -104,7 +104,7 @@ fn hint_to_string(
     hint.to_string()
 }
 
-impl Args {
+impl AutotypeArgs {
     pub fn new() -> Self {
         Self {}
     }
@@ -197,7 +197,7 @@ mod test {
         let includes = Globs::new(vec![format!("{}/**/*", tdir.path().display()).to_owned()]);
         let f_globs = FilteredGlobs::new(includes, Globs::new(vec![]));
         let config_finder = t.config_finder();
-        let arg = Args::new();
+        let arg = AutotypeArgs::new();
         let result = arg.run(f_globs, config_finder);
         assert!(
             result.is_ok(),

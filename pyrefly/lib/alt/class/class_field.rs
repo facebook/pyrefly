@@ -30,11 +30,14 @@ use crate::alt::attr::Attribute;
 use crate::alt::attr::DescriptorBase;
 use crate::alt::attr::NoAccessReason;
 use crate::alt::types::class_metadata::ClassMetadata;
+use crate::binding::binding::Binding;
+use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassSynthesizedFields;
-use crate::binding::binding::RawClassFieldInitialization;
+use crate::binding::binding::MethodThatSetsAttr;
 use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::kind::ErrorKind;
@@ -62,6 +65,31 @@ use crate::types::types::OverloadType;
 use crate::types::types::SuperObj;
 use crate::types::types::TArgs;
 use crate::types::types::Type;
+
+/// Helper type for going from binding information to the calculated class field.
+///
+/// TODO(stroxler): This type is mostly an artifact of a refactor, it used to be
+/// used in `BindingClassField`. We probably can eliminate it.
+enum RawClassFieldInitialization {
+    /// At the point where the field is declared, it does not have an initial value. This includes
+    /// fields declared but not initialized in the class body, and instance-only fields of
+    /// synthesized classes.
+    Uninitialized,
+    /// The field is set in a method *and declared nowhere else*. Consider:
+    ///   class A:
+    ///     x: int
+    ///     def __init__(self):
+    ///         self.x = 42
+    ///         self.y = 42
+    /// `x`'s initialization type is `Uninitialized`, whereas y's is `Method('__init__')`.
+    Method(MethodThatSetsAttr),
+    /// The field is declared and initialized to a value in the class body.
+    ///
+    /// If the value is from an assignment, stores the expression that the field is assigned to,
+    /// which is needed for some cases like dataclass fields. The `None` case is for fields that
+    /// have values which don't come from assignment (e.g. function defs, imports in a class body)
+    ClassBody(Option<Expr>),
+}
 
 /// Correctly analyzing which attributes are visible on class objects, as well
 /// as handling method binding correctly, requires distinguishing which fields
@@ -281,7 +309,7 @@ impl ClassField {
 
     fn as_special_method_type(&self, instance: &Instance) -> Option<Type> {
         self.as_raw_special_method_type(instance)
-            .and_then(|ty| make_bound_method(instance, ty).ok())
+            .and_then(|ty| make_bound_method(instance.to_type(), ty).ok())
     }
 
     pub fn as_named_tuple_type(&self) -> Type {
@@ -375,6 +403,14 @@ impl ClassField {
             ClassFieldInner::Simple { annotation, ty, .. } => {
                 annotation.as_ref().is_some_and(|ann| ann.is_final()) || ty.has_final_decoration()
             }
+        }
+    }
+
+    pub fn read_only_reason(&self) -> &Option<ReadOnlyReason> {
+        match &self.0 {
+            ClassFieldInner::Simple {
+                read_only_reason, ..
+            } => read_only_reason,
         }
     }
 
@@ -485,8 +521,17 @@ impl<'a> Instance<'a> {
     }
 }
 
-fn bind_class_attribute(cls: &Class, attr: Type) -> Attribute {
-    Attribute::read_write(make_bound_classmethod(cls, attr).into_inner())
+fn bind_class_attribute(
+    cls: &Class,
+    attr: Type,
+    read_only_reason: &Option<ReadOnlyReason>,
+) -> Attribute {
+    let ty = make_bound_classmethod(cls, attr).into_inner();
+    if let Some(reason) = read_only_reason {
+        Attribute::read_only(ty, reason.clone())
+    } else {
+        Attribute::read_write(ty)
+    }
 }
 
 /// Return the type of making it bound, or if not,
@@ -517,10 +562,10 @@ fn make_bound_classmethod(cls: &Class, attr: Type) -> Result<Type, Type> {
     make_bound_method_helper(Type::ClassDef(cls.dupe()), attr, &should_bind)
 }
 
-fn make_bound_method(instance: &Instance, attr: Type) -> Result<Type, Type> {
+fn make_bound_method(obj: Type, attr: Type) -> Result<Type, Type> {
     let should_bind =
         |meta: &FuncMetadata| !meta.flags.is_staticmethod && !meta.flags.is_classmethod;
-    make_bound_method_helper(instance.to_type(), attr, &should_bind)
+    make_bound_method_helper(obj, attr, &should_bind)
 }
 
 fn bind_instance_attribute(
@@ -530,28 +575,33 @@ fn bind_instance_attribute(
     read_only: Option<ReadOnlyReason>,
 ) -> Attribute {
     // Decorated objects are methods, so they can't be ClassVars
-    match attr {
-        _ if attr.is_property_getter() => Attribute::property(
-            make_bound_method(instance, attr).into_inner(),
+    if attr.is_property_getter() {
+        Attribute::property(
+            make_bound_method(instance.to_type(), attr).into_inner(),
             None,
             instance.class.dupe(),
-        ),
-        _ if let Some(getter) = attr.is_property_setter_with_getter() => Attribute::property(
-            make_bound_method(instance, getter).into_inner(),
-            Some(make_bound_method(instance, attr).into_inner()),
+        )
+    } else if let Some(getter) = attr.is_property_setter_with_getter() {
+        Attribute::property(
+            make_bound_method(instance.to_type(), getter).into_inner(),
+            Some(make_bound_method(instance.to_type(), attr).into_inner()),
             instance.class.dupe(),
-        ),
-        attr if is_class_var => Attribute::read_only(
-            make_bound_method(instance, attr).into_inner(),
+        )
+    } else if is_class_var {
+        Attribute::read_only(
+            make_bound_method(instance.to_type(), attr).into_inner(),
             ReadOnlyReason::ClassVar,
-        ),
-        attr if let Some(reason) = read_only => {
-            Attribute::read_only(make_bound_method(instance, attr).into_inner(), reason)
-        }
-        attr => Attribute::read_write(
-            make_bound_method(instance, attr)
+        )
+    } else if let Some(reason) = read_only {
+        Attribute::read_only(
+            make_bound_method(instance.to_type(), attr).into_inner(),
+            reason,
+        )
+    } else {
+        Attribute::read_write(
+            make_bound_method(instance.to_type(), attr)
                 .unwrap_or_else(|attr| make_bound_classmethod(instance.class, attr).into_inner()),
-        ),
+        )
     }
 }
 
@@ -612,7 +662,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .is_subset_eq(value, annotation, self.type_order())
         {
             self.error(
-                errors, range, ErrorKind::BadAssignment, None,
+                errors, range, ErrorInfo::Kind(ErrorKind::BadAssignment),
                 format!(
                     "Enum member `{member}` has type `{}`, must match the `_value_` attribute annotation of `{}`",
                     self.for_display(value.clone()),
@@ -624,17 +674,87 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn calculate_class_field(
         &self,
-        name: &Name,
-        value: &ExprOrBinding,
-        // Type annotation that appears directly on the field declaration (vs. one inherited from a parent)
-        direct_annotation: Option<&Annotation>,
-        initial_value: &RawClassFieldInitialization,
         class: &Class,
-        is_function_without_return_annotation: bool,
-        implicit_def_method: Option<&Name>,
+        name: &Name,
         range: TextRange,
+        field_definition: &ClassFieldDefinition,
         errors: &ErrorCollector,
     ) -> ClassField {
+        // TODO(stroxler): Clean this up, as we convert more of the class field logic to using enums.
+        //
+        // It's a mess becasue we are relying on refs to fields that don't make sense for some cases,
+        // which requires us having a place to store synthesized dummy values until we've refactored more.
+        let value_storage = Owner::new();
+        let initial_value_storage = Owner::new();
+        let (value, direct_annotation, initial_value, is_function_without_return_annotation) =
+            match field_definition {
+                ClassFieldDefinition::DeclaredByAnnotation { annotation } => {
+                    let annotation = self.get_idx(*annotation).as_ref().annotation.clone();
+                    (
+                        value_storage
+                            .push(ExprOrBinding::Binding(Binding::Type(Type::any_implicit()))),
+                        Some(annotation),
+                        initial_value_storage.push(RawClassFieldInitialization::Uninitialized),
+                        false,
+                    )
+                }
+                ClassFieldDefinition::DeclaredWithoutAnnotation => (
+                    value_storage.push(ExprOrBinding::Binding(Binding::Type(Type::any_implicit()))),
+                    None,
+                    initial_value_storage.push(RawClassFieldInitialization::Uninitialized),
+                    false,
+                ),
+                ClassFieldDefinition::AssignedInBody { value, annotation } => {
+                    let annotation = annotation
+                        .map(|a| self.get_idx(a))
+                        .as_deref()
+                        .map(|annot| annot.annotation.clone());
+                    (
+                        value,
+                        annotation,
+                        initial_value_storage.push(RawClassFieldInitialization::ClassBody(
+                            match value {
+                                ExprOrBinding::Expr(e) => Some(e.clone()),
+                                ExprOrBinding::Binding(_) => None,
+                            },
+                        )),
+                        false,
+                    )
+                }
+                ClassFieldDefinition::MethodLike {
+                    definition,
+                    has_return_annotation,
+                } => (
+                    value_storage.push(ExprOrBinding::Binding(Binding::Forward(*definition))),
+                    None,
+                    initial_value_storage.push(RawClassFieldInitialization::ClassBody(None)),
+                    !has_return_annotation,
+                ),
+                ClassFieldDefinition::DefinedWithoutAssign { definition } => (
+                    value_storage.push(ExprOrBinding::Binding(Binding::Forward(*definition))),
+                    None,
+                    initial_value_storage.push(RawClassFieldInitialization::ClassBody(None)),
+                    false,
+                ),
+                ClassFieldDefinition::DefinedInMethod {
+                    value,
+                    annotation,
+                    method,
+                } => {
+                    let annotation = annotation
+                        .map(|a| self.get_idx(a))
+                        .as_deref()
+                        .map(|annot| annot.annotation.clone());
+                    (
+                        value,
+                        annotation,
+                        initial_value_storage
+                            .push(RawClassFieldInitialization::Method(method.clone())),
+                        false,
+                    )
+                }
+            };
+
         // Optimisation. If we can determine that the name definitely doesn't exist in the inheritance
         // then we can avoid a bunch of work with checking for override errors.
         let mut name_might_exist_in_inherited = true;
@@ -688,8 +808,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorKind::BadClassDefinition,
-                None,
+                ErrorInfo::Kind(ErrorKind::BadClassDefinition),
                 format!("TypedDict item `{name}` may not be initialized"),
             );
         }
@@ -699,12 +818,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .is_some_and(|m| m.elements.contains(name))
         {
             for q in &[Qualifier::Final, Qualifier::ClassVar] {
-                if direct_annotation.is_some_and(|ann| ann.has_qualifier(q)) {
+                if direct_annotation
+                    .as_ref()
+                    .is_some_and(|ann| ann.has_qualifier(q))
+                {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::InvalidAnnotation,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                         format!("`{q}` may not be used for TypedDict or NamedTuple members",),
                     );
                 }
@@ -716,12 +837,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Qualifier::NotRequired,
                 Qualifier::ReadOnly,
             ] {
-                if direct_annotation.is_some_and(|ann| ann.has_qualifier(q)) {
+                if direct_annotation
+                    .as_ref()
+                    .is_some_and(|ann| ann.has_qualifier(q))
+                {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::InvalidAnnotation,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                         format!("`{q}` may only be used for TypedDict members"),
                     );
                 }
@@ -731,9 +854,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Determine whether this is an explicit `@override`.
         let is_override = value_ty.is_override();
 
-        let annotation = direct_annotation.or(inherited_annotation.as_ref());
+        let annotation = direct_annotation.as_ref().or(inherited_annotation.as_ref());
         let read_only_reason =
-            self.determine_read_only_reason(class, name, &annotation.cloned(), &initialization);
+            self.determine_read_only_reason(class, name, annotation, &value_ty, &initialization);
         let is_namedtuple_member = metadata
             .named_tuple_metadata()
             .is_some_and(|nt| nt.elements.contains(name));
@@ -761,10 +884,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ty = match initial_value {
             RawClassFieldInitialization::ClassBody(_)
             | RawClassFieldInitialization::Uninitialized => ty,
-            RawClassFieldInitialization::Method(method_name) => self
+            RawClassFieldInitialization::Method(method) => self
                 .check_and_sanitize_method_scope_type_parameters(
                     class,
-                    method_name,
+                    &method.method_name,
                     ty,
                     name,
                     range,
@@ -787,7 +910,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             if direct_annotation.is_some() {
                 self.error(
-                    errors, range,ErrorKind::InvalidAnnotation, None,
+                    errors, range,ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                     format!("Enum member `{name}` may not be annotated directly. Instead, annotate the `_value_` attribute."),
                 );
             }
@@ -841,7 +964,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Create the resulting field and check for override inconsistencies before returning
         let class_field = ClassField::new(
             ty,
-            direct_annotation.cloned(),
+            direct_annotation,
             initialization,
             read_only_reason,
             descriptor_getter,
@@ -858,7 +981,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             );
         }
-        if let Some(method_name) = implicit_def_method {
+        if let RawClassFieldInitialization::Method(MethodThatSetsAttr {
+            method_name,
+            recognized_attribute_defining_method: false,
+        }) = initial_value
+        {
             let mut defined_in_parent = false;
             let parents = metadata.bases_with_metadata();
             for (parent, _) in parents {
@@ -871,8 +998,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                 errors,
                 range,
-                ErrorKind::ImplicitlyDefinedAttribute,
-                None,
+                ErrorInfo::Kind(ErrorKind::ImplicitlyDefinedAttribute,
+                ),
                 format!("Attribute `{}` is implicitly defined by assignment in method `{method_name}`, which is not a constructor", &name),
             );
             }
@@ -891,7 +1018,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         name: &Name,
-        annotation: &Option<Annotation>,
+        annotation: Option<&Annotation>,
+        ty: &Type,
         initialization: &ClassFieldInitialization,
     ) -> Option<ReadOnlyReason> {
         if let Some(ann) = annotation {
@@ -917,6 +1045,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && dm.fields.contains(name)
         {
             return Some(ReadOnlyReason::FrozenDataclass);
+        }
+        // A `type[X]` that is initialized on the class is assumed to be ReadOnly. This
+        // is partly because that's what nested class defs look like to Pyrefly. But even
+        // for assignments of class objects, this implies covariance and is probably more
+        // useful than allowing reassignment but forcing invariance.
+        //
+        // TODO(stroxler): We may need to revisit this if we find projects that require
+        // read-write behavior. Covariance is known to be strictly necessary for many
+        // projects, so the obvious alternative to read-only semantics is likely to
+        // allow covariance unsoundly.
+        let is_class_object_type = match ty {
+            Type::ClassDef(..) => true,
+            Type::Type(c) if matches!(**c, Type::ClassType(..)) => true,
+            _ => false,
+        };
+        if is_class_object_type && matches!(initialization, ClassFieldInitialization::ClassBody(..))
+        {
+            return Some(ReadOnlyReason::ClassObjectInitializedOnBody);
         }
         // Default: the field is read-write
         None
@@ -1043,8 +1189,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 self.error(
                                     errors,
                                     range,
-                                    ErrorKind::InvalidTypeVar,
-                            None,
+                                    ErrorInfo::Kind(ErrorKind::InvalidTypeVar,
+                            ),
                                 format!(
                                         "Cannot initialize attribute `{}` to a value that depends on method-scoped type variable `{}`",
                                         name,
@@ -1154,7 +1300,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ))
                         })
                 } else {
-                    bind_class_attribute(cls, ty.clone())
+                    bind_class_attribute(cls, ty.clone(), field.read_only_reason())
                 }
             }
         }
@@ -1221,7 +1367,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
         foralled.subst_self_type_mut(&self.instantiate(cls), &|a, b| self.is_subset_eq(a, b));
-        Some(bind_class_attribute(cls, foralled))
+        Some(bind_class_attribute(cls, foralled, &None))
     }
 
     fn check_class_field_for_override_mismatch(
@@ -1255,8 +1401,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::BadOverride,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::BadOverride),
                     format!("Cannot override named tuple element `{name}`"),
                 );
             }
@@ -1269,8 +1414,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::BadOverride,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::BadOverride),
                     format!(
                         "`{}` is declared as final in parent class `{}`",
                         name,
@@ -1286,8 +1430,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                             errors,
                             range,
-                            ErrorKind::BadOverride,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::BadOverride),
                             format!(
                                 "Instance variable `{}.{}` overrides ClassVar of the same name in parent class `{}`",
                                 class.name(),
@@ -1300,8 +1443,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                             errors,
                             range,
-                            ErrorKind::BadOverride,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::BadOverride),
                             format!(
                                 "ClassVar `{}.{}` overrides instance variable of the same name in parent class `{}`",
                                 class.name(),
@@ -1335,15 +1477,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                     error.to_error_msg(class.name(), parent.name(), name)
                 ];
-                errors.add(range, ErrorKind::BadOverride, None, msg);
+                errors.add(range, ErrorInfo::Kind(ErrorKind::BadOverride), msg);
             }
         }
         if is_override && !parent_attr_found && !parent_has_any {
             self.error(
                     errors,
                     range,
-                    ErrorKind::BadOverride,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::BadOverride),
                     format!(
                         "Class member `{}.{}` is marked as an override, but no parent class has a matching attribute",
                         class.name(),
@@ -1513,10 +1654,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .map(|member| self.as_class_attribute(Arc::unwrap_or_clone(member.value), cls))
     }
 
-    pub fn method_is_inherited_from_object(&self, cls: &ClassType, name: &Name) -> bool {
-        let member = self.get_class_member(cls.class_object(), name);
+    pub fn field_is_inherited_from_object(&self, cls: &Class, name: &Name) -> bool {
+        let member = self.get_class_member(cls, name);
         match member {
             Some(member) => member.defined_on("builtins", "object"),
+            None => false,
+        }
+    }
+
+    pub fn field_is_inherited_from_enum(&self, cls: &Class, name: &Name) -> bool {
+        let member = self.get_class_member(cls, name);
+        match member {
+            Some(member) => member.defined_on("enum", "Enum"),
             None => false,
         }
     }
@@ -1572,7 +1721,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // https://typing.python.org/en/latest/spec/constructors.html#converting-a-constructor-to-callable
             None
         } else {
-            Arc::unwrap_or_clone(attr.value).as_special_method_type(&Instance::of_class(metaclass))
+            Arc::unwrap_or_clone(attr.value)
+                .as_raw_special_method_type(&Instance::of_class(metaclass))
+                .and_then(|ty| make_bound_method(Type::type_form(cls.clone().to_type()), ty).ok())
         }
     }
 }

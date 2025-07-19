@@ -7,9 +7,9 @@
 
 use itertools::Itertools as _;
 use pretty_assertions::assert_eq;
+use pyrefly_python::module::TextRangeWithModule;
 use ruff_text_size::TextSize;
 
-use crate::module::module_info::TextRangeWithModuleInfo;
 use crate::state::handle::Handle;
 use crate::state::state::State;
 use crate::test::util::code_frame_of_source_at_range;
@@ -20,12 +20,17 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
     let defs = state.transaction().goto_definition(handle, position);
     if !defs.is_empty() {
         defs.into_iter()
-            .map(|TextRangeWithModuleInfo { module_info, range }| {
-                format!(
-                    "Definition Result:\n{}",
-                    code_frame_of_source_at_range(module_info.contents(), range)
-                )
-            })
+            .map(
+                |TextRangeWithModule {
+                     module: module_info,
+                     range,
+                 }| {
+                    format!(
+                        "Definition Result:\n{}",
+                        code_frame_of_source_at_range(module_info.contents(), range)
+                    )
+                },
+            )
             .join("\n")
     } else {
         "Definition Result: None".to_owned()
@@ -37,7 +42,10 @@ fn get_test_report_do_not_jump_through_renamed_import(
     handle: &Handle,
     position: TextSize,
 ) -> String {
-    if let Some(TextRangeWithModuleInfo { module_info, range }) = state
+    if let Some(TextRangeWithModule {
+        module: module_info,
+        range,
+    }) = state
         .transaction()
         .goto_definition_do_not_jump_through_renamed_import(handle, position)
     {

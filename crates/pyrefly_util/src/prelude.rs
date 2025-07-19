@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#![allow(dead_code)] // General utilities, not always used
-
 //! Originally copied from <https://crates.io/crates/gazebo>.
 //! Provide `map` and `try_map` methods for slices.
 

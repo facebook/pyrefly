@@ -12,8 +12,6 @@
 //! If we have a panic, we immediately terminate the program, so we should never encounter a poisoned lock.
 //! These wrappers just panic if we encounter a poisoned lock.
 
-#![allow(dead_code)] // A full API
-
 use std::sync;
 
 #[derive(Debug, Default)]

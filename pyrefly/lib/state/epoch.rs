@@ -7,7 +7,7 @@
 
 use dupe::Dupe;
 
-#[derive(Debug, Clone, Dupe, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Dupe, Copy, PartialEq, Eq)]
 pub struct Epoch(u32);
 
 impl Epoch {
@@ -33,14 +33,12 @@ pub struct Epochs {
     pub checked: Epoch,
     /// The point at which we last computed everything.
     pub computed: Epoch,
-    /// The last point at which something changed.
-    pub changed: Epoch,
 }
+
 impl Epochs {
     pub fn new(now: Epoch) -> Self {
         Self {
             checked: now,
-            changed: now,
             computed: now,
         }
     }

@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use num_traits::ToPrimitive;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Alias;
 use ruff_python_ast::ExceptHandler;
@@ -39,6 +40,7 @@ struct Facts {
     import_star_locations: Vec<python::ImportStarLocation>,
     file_calls: Vec<python::FileCall>,
     callee_to_callers: Vec<python::CalleeToCaller>,
+    containing_top_level_declarations: Vec<python::ContainingTopLevelDeclaration>,
 }
 
 fn to_span(range: TextRange) -> src::ByteSpan {
@@ -46,6 +48,13 @@ fn to_span(range: TextRange) -> src::ByteSpan {
         start: range.start().to_u32().into(),
         length: range.len().to_u32().into(),
     }
+}
+
+struct DeclarationInfo {
+    declaration: python::Declaration,
+    decl_span: src::ByteSpan,
+    definition: Option<python::Definition>,
+    def_span: Option<src::ByteSpan>,
 }
 
 impl Facts {
@@ -59,58 +68,73 @@ impl Facts {
             import_star_locations: vec![],
             file_calls: vec![],
             callee_to_callers: vec![],
+            containing_top_level_declarations: vec![],
         }
     }
 
-    fn decl_location_fact(
-        &self,
-        declaration: python::Declaration,
-        range: TextRange,
-    ) -> python::DeclarationLocation {
-        python::DeclarationLocation::new(declaration.to_owned(), self.file.clone(), to_span(range))
+    fn file_lines_fact(&self, module_info: &ModuleInfo) -> src::FileLines {
+        let lined_buffer = module_info.lined_buffer();
+        let lens: Vec<u64> = lined_buffer
+            .lines()
+            .map(|x| x.len().to_u64().unwrap() + 1)
+            .collect();
+        let ends_in_new_line = lens.len() < lined_buffer.line_count();
+        src::FileLines::new(
+            self.file.clone(),
+            lens,
+            ends_in_new_line,
+            !lined_buffer.is_ascii() || lined_buffer.contents().contains('\t'),
+        )
     }
 
-    fn def_location_fact(
-        &self,
-        definition: python::Definition,
-        range: TextRange,
-    ) -> python::DefinitionLocation {
-        python::DefinitionLocation::new(definition.to_owned(), self.file.clone(), to_span(range))
+    fn declaration_facts(
+        &mut self,
+        decl_info: DeclarationInfo,
+        top_level_decl: &python::Declaration,
+    ) {
+        self.containing_top_level_declarations
+            .push(python::ContainingTopLevelDeclaration::new(
+                decl_info.declaration.clone(),
+                top_level_decl.clone(),
+            ));
+
+        self.decl_locations.push(python::DeclarationLocation::new(
+            decl_info.declaration,
+            self.file.clone(),
+            decl_info.decl_span,
+        ));
+        if let Some(def_info) = decl_info.definition {
+            self.def_locations.push(python::DefinitionLocation::new(
+                def_info,
+                self.file.clone(),
+                decl_info.def_span.unwrap(),
+            ));
+        }
     }
 
-    fn make_fq_name(&self, name: &Name, module_name: Option<&str>) -> String {
+    fn make_fq_name(&self, name: &Name, module_name: Option<&str>) -> python::Name {
         // TODO(@rubmary) create fully qualified name
-        if let Some(module) = module_name {
+        let fq_name = if let Some(module) = module_name {
             module.to_owned() + "." + name
         } else {
             name.to_string()
-        }
+        };
+        python::Name::new(fq_name)
     }
 
-    fn module_facts(&mut self, module: &python::Module, range: TextRange) {
-        self.decl_locations
-            .push(self.decl_location_fact(python::Declaration::module(module.clone()), range));
-
-        self.def_locations.push(self.def_location_fact(
-            python::Definition::module(python::ModuleDefinition::new(module.clone())),
-            range,
-        ))
-    }
-
-    fn class_facts(&mut self, cls: &StmtClassDef) {
-        let fqname = python::Name::new(self.make_fq_name(&cls.name.id, None));
-        let cls_declaration = python::ClassDeclaration::new(fqname, None);
-
+    fn class_facts(
+        &mut self,
+        cls: &StmtClassDef,
+        cls_declaration: python::ClassDeclaration,
+        container: python::DeclarationContainer,
+    ) -> DeclarationInfo {
         let bases = if let Some(arguments) = &cls.arguments {
             arguments
                 .args
                 .iter()
                 .filter_map(|expr| expr.as_name_expr())
                 .map(|expr_name| {
-                    python::ClassDeclaration::new(
-                        python::Name::new(self.make_fq_name(&expr_name.id, None)),
-                        None,
-                    )
+                    python::ClassDeclaration::new(self.make_fq_name(&expr_name.id, None), None)
                 })
                 .collect()
         } else {
@@ -123,19 +147,23 @@ impl Facts {
             None,
             //TODO(@rubmary) Generate decorators and container for classes
             None,
-            None,
+            Some(container),
         );
 
-        self.decl_locations
-            .push(self.decl_location_fact(python::Declaration::cls(cls_declaration), cls.range));
-        self.def_locations
-            .push(self.def_location_fact(python::Definition::cls(cls_definition), cls.range));
+        DeclarationInfo {
+            declaration: python::Declaration::cls(cls_declaration),
+            decl_span: to_span(cls.range),
+            definition: Some(python::Definition::cls(cls_definition)),
+            def_span: Some(to_span(cls.range)),
+        }
     }
 
-    fn function_facts(&mut self, func: &StmtFunctionDef) {
-        let fqname = python::Name::new(self.make_fq_name(&func.name.id, None));
-        let func_declaration = python::FunctionDeclaration::new(fqname);
-
+    fn function_facts(
+        &mut self,
+        func: &StmtFunctionDef,
+        func_declaration: python::FunctionDeclaration,
+        container: python::DeclarationContainer,
+    ) -> DeclarationInfo {
         let func_definition = python::FunctionDefinition::new(
             func_declaration.clone(),
             func.is_async,
@@ -147,37 +175,52 @@ impl Facts {
             None,
             None,
             None,
-            None,
+            Some(container),
         );
 
-        self.decl_locations
-            .push(self.decl_location_fact(python::Declaration::func(func_declaration), func.range));
-
-        self.def_locations
-            .push(self.def_location_fact(python::Definition::func(func_definition), func.range));
+        DeclarationInfo {
+            declaration: python::Declaration::func(func_declaration),
+            decl_span: to_span(func.range),
+            definition: Some(python::Definition::func(func_definition)),
+            def_span: Some(to_span(func.range)),
+        }
     }
 
-    fn variable_facts(&mut self, expr: &Expr, _type_info: Option<&Expr>) {
+    fn variable_facts(
+        &mut self,
+        expr: &Expr,
+        _type_info: Option<&Expr>,
+        container: &python::DeclarationContainer,
+        def_infos: &mut Vec<DeclarationInfo>,
+    ) {
         // TODO(@rubmary) add type_info
         if let Some(name) = expr.as_name_expr() {
-            let fqname = python::Name::new(self.make_fq_name(&name.id, None));
+            let fqname = self.make_fq_name(&name.id, None);
             let variable_declaration = python::VariableDeclaration::new(fqname);
-            let variable_definition =
-                python::VariableDefinition::new(variable_declaration.clone(), None, None);
-            self.decl_locations.push(self.decl_location_fact(
-                python::Declaration::variable(variable_declaration),
-                name.range,
-            ));
-            self.def_locations.push(self.def_location_fact(
-                python::Definition::variable(variable_definition),
-                name.range,
-            ))
+            let variable_definition = python::VariableDefinition::new(
+                variable_declaration.clone(),
+                None,
+                Some(container.clone()),
+            );
+
+            def_infos.push(DeclarationInfo {
+                declaration: python::Declaration::variable(variable_declaration),
+                decl_span: to_span(name.range),
+                definition: Some(python::Definition::variable(variable_definition)),
+                def_span: Some(to_span(name.range)),
+            });
         }
-        expr.recurse(&mut |expr| self.variable_facts(expr, _type_info));
+        expr.recurse(&mut |expr| self.variable_facts(expr, _type_info, container, def_infos));
     }
 
-    fn import_facts(&mut self, imports: &Vec<Alias>, from_module_id: &Option<Identifier>) {
+    fn import_facts(
+        &mut self,
+        imports: &Vec<Alias>,
+        from_module_id: &Option<Identifier>,
+    ) -> Vec<DeclarationInfo> {
         //TODO(@rubmary) Handle level for imports. Ex from ..a import A
+
+        let mut decl_infos = vec![];
         for import in imports {
             let from_module = from_module_id.as_ref().map(|module| module.as_str());
             let from_name = &import.name.id;
@@ -198,14 +241,20 @@ impl Facts {
                 let as_name = import.asname.as_ref().map_or(from_name, |x| &x.id);
 
                 let import_fact = python::ImportStatement::new(
-                    python::Name::new(self.make_fq_name(from_name, from_module)),
-                    python::Name::new(self.make_fq_name(as_name, Some(&self.module_name))),
+                    self.make_fq_name(from_name, from_module),
+                    self.make_fq_name(as_name, Some(&self.module_name)),
                 );
-                self.decl_locations.push(
-                    self.decl_location_fact(python::Declaration::imp(import_fact), import.range()),
-                );
+
+                decl_infos.push(DeclarationInfo {
+                    declaration: python::Declaration::imp(import_fact),
+                    decl_span: to_span(import.range()),
+                    definition: None,
+                    def_span: None,
+                });
             }
         }
+
+        decl_infos
     }
 
     fn file_call_facts(&mut self, call: &ExprCall) {
@@ -230,7 +279,7 @@ impl Facts {
                 label: keyword
                     .arg
                     .as_ref()
-                    .map(|id| python::Name::new(self.make_fq_name(id.id(), None))),
+                    .map(|id| self.make_fq_name(id.id(), None)),
                 span: to_span(keyword.range()),
                 argument: None,
             });
@@ -244,73 +293,105 @@ impl Facts {
         ));
     }
 
-    fn callee_to_caller_facts(&mut self, call: &ExprCall, caller: &StmtFunctionDef) {
-        let caller_fact = python::Name::new(self.make_fq_name(&caller.name.id, None));
+    fn callee_to_caller_facts(&mut self, call: &ExprCall, caller: &python::FunctionDeclaration) {
+        let caller_fact = caller.key.name.clone();
         let callee_name = match call.func.as_ref() {
             Expr::Attribute(attr) => Some(attr.attr.id()),
             Expr::Name(expr_name) => Some(expr_name.id()),
             _ => None,
         };
         if let Some(name) = callee_name {
-            let callee_fact = python::Name::new(self.make_fq_name(name, None));
+            let callee_fact = self.make_fq_name(name, None);
             self.callee_to_callers
                 .push(python::CalleeToCaller::new(callee_fact, caller_fact));
         }
     }
 
-    fn generate_facts_from_exprs(&mut self, expr: &Expr, container: Option<&Stmt>) {
+    fn generate_facts_from_exprs(&mut self, expr: &Expr, container: &python::DeclarationContainer) {
         if let Some(call) = expr.as_call_expr() {
             self.file_call_facts(call);
-            if let Some(caller) = container.and_then(|p| p.as_function_def_stmt()) {
+            if let python::DeclarationContainer::func(caller) = container {
                 self.callee_to_caller_facts(call, caller);
             }
         }
         expr.recurse(&mut |s| self.generate_facts_from_exprs(s, container));
     }
 
-    fn visit_exprs(&mut self, node: &impl Visit<Expr>, container: Option<&Stmt>) {
+    fn visit_exprs(&mut self, node: &impl Visit<Expr>, container: &python::DeclarationContainer) {
         node.visit(&mut |expr| self.generate_facts_from_exprs(expr, container));
     }
 
-    fn generate_facts(&mut self, stmt: &Stmt, container: Option<&Stmt>) {
-        let mut new_container = container;
+    fn generate_facts(
+        &mut self,
+        stmt: &Stmt,
+        container: &python::DeclarationContainer,
+        top_level_decl: &python::Declaration,
+    ) {
+        let mut new_container = None;
+        let mut new_top_level_decl = None;
+        let mut decl_infos = vec![];
         match stmt {
             Stmt::ClassDef(cls) => {
-                self.class_facts(cls);
+                let cls_declaration =
+                    python::ClassDeclaration::new(self.make_fq_name(&cls.name.id, None), None);
+
+                let decl_info = self.class_facts(cls, cls_declaration.clone(), container.clone());
                 self.visit_exprs(&cls.decorator_list, container);
                 self.visit_exprs(&cls.type_params, container);
                 self.visit_exprs(&cls.arguments, container);
-                new_container = Some(stmt);
+                if let python::Declaration::module(_) = top_level_decl {
+                    new_top_level_decl = Some(decl_info.declaration.clone());
+                }
+                new_container = Some(python::DeclarationContainer::cls(cls_declaration));
+                decl_infos.push(decl_info);
             }
             Stmt::FunctionDef(func) => {
-                self.function_facts(func);
+                let func_declaration =
+                    python::FunctionDeclaration::new(self.make_fq_name(&func.name.id, None));
+                let decl_info =
+                    self.function_facts(func, func_declaration.clone(), container.clone());
                 self.visit_exprs(&func.decorator_list, container);
                 self.visit_exprs(&func.type_params, container);
                 self.visit_exprs(&func.parameters, container);
                 self.visit_exprs(&func.returns, container);
-                new_container = Some(stmt);
+                if let python::Declaration::module(_) = top_level_decl {
+                    new_top_level_decl = Some(decl_info.declaration.clone());
+                }
+                new_container = Some(python::DeclarationContainer::func(func_declaration));
+                decl_infos.push(decl_info);
             }
             Stmt::Assign(assign) => {
-                assign
-                    .targets
-                    .visit(&mut |target| self.variable_facts(target, None));
+                assign.targets.visit(&mut |target| {
+                    self.variable_facts(target, None, container, &mut decl_infos)
+                });
                 self.visit_exprs(&assign.value, container);
             }
             Stmt::AnnAssign(assign) => {
-                self.variable_facts(&assign.target, Some(&assign.annotation));
+                self.variable_facts(
+                    &assign.target,
+                    Some(&assign.annotation),
+                    container,
+                    &mut decl_infos,
+                );
                 self.visit_exprs(&assign.annotation, container);
                 self.visit_exprs(&assign.value, container);
             }
             Stmt::AugAssign(assign) => {
-                self.variable_facts(&assign.target, None);
+                self.variable_facts(&assign.target, None, container, &mut decl_infos);
                 self.visit_exprs(&assign.value, container);
             }
-            Stmt::Import(import) => self.import_facts(&import.names, &None),
-            Stmt::ImportFrom(import) => self.import_facts(&import.names, &import.module),
+            Stmt::Import(import) => {
+                let mut imp_decl_infos = self.import_facts(&import.names, &None);
+                decl_infos.append(&mut imp_decl_infos);
+            }
+            Stmt::ImportFrom(import) => {
+                let mut imp_decl_infos = self.import_facts(&import.names, &import.module);
+                decl_infos.append(&mut imp_decl_infos);
+            }
             Stmt::For(stmt_for) => {
-                stmt_for
-                    .target
-                    .visit(&mut |target| self.variable_facts(target, None));
+                stmt_for.target.visit(&mut |target| {
+                    self.variable_facts(target, None, container, &mut decl_infos)
+                });
                 self.visit_exprs(&stmt_for.iter, container);
             }
             Stmt::While(stmt_while) => self.visit_exprs(&stmt_while.test, container),
@@ -323,8 +404,9 @@ impl Facts {
             Stmt::With(stmt_with) => {
                 for item in &stmt_with.items {
                     self.visit_exprs(&item.context_expr, container);
-                    item.optional_vars
-                        .visit(&mut |target| self.variable_facts(target, None));
+                    item.optional_vars.visit(&mut |target| {
+                        self.variable_facts(target, None, container, &mut decl_infos)
+                    });
                 }
             }
             Stmt::Match(stmt_match) => {
@@ -341,7 +423,16 @@ impl Facts {
             }
             _ => self.visit_exprs(stmt, container),
         }
-        stmt.recurse(&mut |x| self.generate_facts(x, new_container));
+        for decl_info in decl_infos {
+            self.declaration_facts(decl_info, top_level_decl);
+        }
+        stmt.recurse(&mut |x| {
+            self.generate_facts(
+                x,
+                new_container.as_ref().unwrap_or(container),
+                new_top_level_decl.as_ref().unwrap_or(top_level_decl),
+            )
+        });
     }
 }
 
@@ -356,6 +447,9 @@ impl Glean {
         let module_name = python::Name::new(module_info.name().as_str().to_owned());
         let module_fact = python::Module::new(module_name);
         let file_fact = src::File::new(module_info.path().to_string());
+        let container = python::DeclarationContainer::module(module_fact.clone());
+        let top_level_decl = python::Declaration::module(module_fact.clone());
+        let file_language_fact = src::FileLanguage::new(file_fact.clone(), src::Language::Python);
 
         let mut facts = Facts::new(
             file_fact.clone(),
@@ -363,10 +457,21 @@ impl Glean {
             module_info.name().to_string(),
         );
 
-        facts.module_facts(&module_fact, ast.range);
+        let file_lines = facts.file_lines_fact(module_info);
+
+        let mod_decl_info = DeclarationInfo {
+            declaration: python::Declaration::module(module_fact.clone()),
+            decl_span: to_span(ast.range),
+            definition: Some(python::Definition::module(python::ModuleDefinition::new(
+                module_fact.clone(),
+            ))),
+            def_span: Some(to_span(ast.range)),
+        };
+
+        facts.declaration_facts(mod_decl_info, &top_level_decl);
 
         ast.body
-            .visit(&mut |stmt: &Stmt| facts.generate_facts(stmt, None));
+            .visit(&mut |stmt: &Stmt| facts.generate_facts(stmt, &container, &top_level_decl));
 
         let digest = digest::Digest {
             hash: hash(module_info.contents().as_bytes()),
@@ -385,6 +490,14 @@ impl Glean {
             GleanEntry::Predicate {
                 predicate: python::Module::GLEAN_name(),
                 facts: vec![json(module_fact)],
+            },
+            GleanEntry::Predicate {
+                predicate: src::FileLanguage::GLEAN_name(),
+                facts: vec![json(file_language_fact)],
+            },
+            GleanEntry::Predicate {
+                predicate: src::FileLines::GLEAN_name(),
+                facts: vec![json(file_lines)],
             },
             GleanEntry::Predicate {
                 predicate: digest::FileDigest::GLEAN_name(),
@@ -409,6 +522,14 @@ impl Glean {
             GleanEntry::Predicate {
                 predicate: python::CalleeToCaller::GLEAN_name(),
                 facts: facts.callee_to_callers.into_iter().map(json).collect(),
+            },
+            GleanEntry::Predicate {
+                predicate: python::ContainingTopLevelDeclaration::GLEAN_name(),
+                facts: facts
+                    .containing_top_level_declarations
+                    .into_iter()
+                    .map(json)
+                    .collect(),
             },
         ];
 

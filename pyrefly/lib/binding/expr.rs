@@ -6,6 +6,7 @@
  */
 
 use pyrefly_python::ast::Ast;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
@@ -46,10 +47,10 @@ use crate::binding::scope::Flow;
 use crate::binding::scope::Scope;
 use crate::binding::scope::ScopeClass;
 use crate::binding::scope::ScopeKind;
+use crate::error::context::ErrorInfo;
 use crate::error::kind::ErrorKind;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
-use crate::module::short_identifier::ShortIdentifier;
 use crate::types::callable::unexpected_keyword;
 use crate::types::types::Type;
 
@@ -238,7 +239,11 @@ impl<'a> BindingsBuilder<'a> {
                         .get_flow_style(&name.id)
                         .uninitialized_error_message(name)
                     {
-                        self.error(name.range, ErrorKind::UnboundName, None, error_message);
+                        self.error(
+                            name.range,
+                            ErrorInfo::Kind(ErrorKind::UnboundName),
+                            error_message,
+                        );
                     }
                 }
                 self.insert_binding(key, value)
@@ -247,8 +252,7 @@ impl<'a> BindingsBuilder<'a> {
                 // Record a type error and fall back to `Any`.
                 self.error(
                     name.range,
-                    ErrorKind::UnknownName,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::UnknownName),
                     error.message(name),
                 );
                 self.insert_binding(key, Binding::Type(Type::any_error()))
@@ -498,7 +502,9 @@ impl<'a> BindingsBuilder<'a> {
                 for kw in keywords {
                     self.ensure_expr(&mut kw.value, usage);
                     unexpected_keyword(
-                        &|msg| self.error(*range, ErrorKind::UnexpectedKeyword, None, msg),
+                        &|msg| {
+                            self.error(*range, ErrorInfo::Kind(ErrorKind::UnexpectedKeyword), msg)
+                        },
                         "super",
                         kw,
                     );
@@ -526,8 +532,7 @@ impl<'a> BindingsBuilder<'a> {
                         _ => {
                             self.error(
                                 *range,
-                                ErrorKind::InvalidSuperCall,
-                                None,
+                                ErrorInfo::Kind(ErrorKind::InvalidSuperCall),
                                 "`super` call with no arguments is valid only inside a method"
                                     .to_owned(),
                             );
@@ -551,8 +556,7 @@ impl<'a> BindingsBuilder<'a> {
                         // This is a very niche use case, and we don't support it aside from not erroring.
                         self.error(
                             *range,
-                            ErrorKind::InvalidSuperCall,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidSuperCall),
                             format!("`super` takes at most 2 arguments, got {nargs}"),
                         );
                     }
@@ -653,6 +657,7 @@ impl<'a> BindingsBuilder<'a> {
 
     /// Execute through the expr, ensuring every name has a binding.
     pub fn ensure_type(&mut self, x: &mut Expr, tparams_builder: &mut Option<LegacyTParamBuilder>) {
+        self.track_potential_typing_self(x);
         // We do not treat static types as usage for the purpose of first-usage-based type inference.
         let static_type_usage = &mut Usage::StaticTypeInformation;
         match x {
@@ -698,8 +703,7 @@ impl<'a> BindingsBuilder<'a> {
                     Err(e) => {
                         self.error(
                             literal.range,
-                            ErrorKind::ParseError,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::ParseError),
                             format!("Could not parse type string: {}, got {e}", literal.value),
                         );
                     }
@@ -712,6 +716,26 @@ impl<'a> BindingsBuilder<'a> {
             // binding that we crash looking for if we don't do this.
             Expr::Call(_) => self.ensure_expr(x, static_type_usage),
             _ => x.recurse_mut(&mut |x| self.ensure_type(x, tparams_builder)),
+        }
+    }
+
+    /// Whenever we see a use of `typing.Self` and we are inside a class body,
+    /// create a special binding that can be used to remap the special form to a proper
+    /// self type during answers solving.
+    ///
+    /// Note that this binding will only be present if we are in a class.
+    fn track_potential_typing_self(&mut self, x: &Expr) {
+        match self.as_special_export(x) {
+            Some(SpecialExport::SelfType) => {
+                if let Some((current_class_idx, _)) = self.scopes.current_class_and_metadata_keys()
+                {
+                    self.insert_binding(
+                        Key::SelfTypeLiteral(x.range()),
+                        Binding::SelfTypeLiteral(current_class_idx, x.range()),
+                    );
+                }
+            }
+            _ => {}
         }
     }
 

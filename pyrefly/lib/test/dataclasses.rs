@@ -292,7 +292,7 @@ from dataclasses import dataclass
 class C:
     x: int
 C(x=0)  # OK
-C(0)  # E: Missing argument `x`  # E: Expected 0 positional arguments
+C(0)  # E: Expected argument `x` to be passed by name
 assert_type(C.__match_args__, tuple[()])
     "#,
 );
@@ -309,7 +309,7 @@ class C:
     y: str
 C(0, y="1")  # OK
 C(x=0, y="1")  # OK
-C(0, "1")  # E: Missing argument `y`  # E: Expected 1 positional argument
+C(0, "1")  # E: Expected argument `y` to be passed by name
 assert_type(C.__match_args__, tuple[Literal["x"]])
     "#,
 );
@@ -411,7 +411,7 @@ from dataclasses import dataclass, field
 @dataclass
 class C:
     x: int = field(kw_only=True)
-C(1)  # E: Missing argument `x`  # E: Expected 0 positional arguments
+C(1)  # E: Expected argument `x` to be passed by name
 C(x=1)  # OK
     "#,
 );

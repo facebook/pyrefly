@@ -365,7 +365,7 @@ C().f(0)    # E: Argument `Literal[0]` is not assignable to parameter `x` with t
 testcase!(
     test_callable_instance_only_attribute,
     r#"
-from typing import Callable, assert_type, Literal, reveal_type
+from typing import Callable, assert_type, Literal
 class C:
     callable_attr: Callable[[int], int]
     def __init__(self):
@@ -1135,25 +1135,23 @@ class Backend:
         pass
 class Options2(Backend.Options):
     pass
-Backend.Options = Options2  # This probably should not be legal
+Backend.Options = Options2  # E: A class object initialized in the class body is considered read-only
     "#,
 );
 
 testcase!(
-    bug = "We should allow subtyping in nested class types",
     test_nested_class_inheritance,
     r#"
 class Backend:
     class Options:
         pass
 class ProcessGroupGloo(Backend):
-    class Options(Backend.Options): # E: `ProcessGroupGloo.Options` has type `type[Options]`, which is not consistent with `type[Options]` in `Backend.Options` (the type of read-write attributes cannot be changed)
+    class Options(Backend.Options):
         pass
     "#,
 );
 
 testcase!(
-    bug = "We should allow subtyping in nested class types via assignment",
     test_nested_class_inheritance_via_assignment,
     r#"
 class Backend:
@@ -1162,7 +1160,17 @@ class Backend:
 class Options2(Backend.Options):
     pass
 class ProcessGroupGloo(Backend):
-    Options = Options2  # E: `ProcessGroupGloo.Options` has type `type[Options2]`, which is not consistent with `type[Options]` in `Backend.Options` (the type of read-write attributes cannot be changed)
+    Options = Options2
+    "#,
+);
+
+testcase!(
+    test_read_only_class_var,
+    r#"
+from typing import ClassVar, Final
+class C:
+    x: ClassVar[Final[int]] = 42
+C.x = 43  # E: This field is marked as Final
     "#,
 );
 

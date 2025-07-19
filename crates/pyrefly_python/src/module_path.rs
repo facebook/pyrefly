@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::Ordering;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fmt::Display;
@@ -30,10 +31,10 @@ pub enum ModuleStyle {
 }
 
 /// Store information about where a module is sourced from.
-#[derive(Debug, Clone, Dupe, PartialOrd, Ord, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Dupe, PartialEq, Eq, Hash)]
 pub struct ModulePath(Arc<WithHash<ModulePathDetails>>);
 
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize)]
 pub enum ModulePathDetails {
     /// The module source comes from a file on disk. Probably a `.py` or `.pyi` file.
     FileSystem(PathBuf),
@@ -44,6 +45,24 @@ pub enum ModulePathDetails {
     /// The module source comes from typeshed bundled with Pyrefly (which gets stored in-memory).
     /// The path is relative to the root of the typeshed directory.
     BundledTypeshed(PathBuf),
+}
+
+impl PartialOrd for ModulePath {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ModulePath {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if Arc::ptr_eq(&self.0, &other.0) {
+            // In the common case of equality (as we usually just matched ModuleName),
+            // we can short circuit the comparison entirely.
+            Ordering::Equal
+        } else {
+            self.0.cmp(&other.0)
+        }
+    }
 }
 
 fn is_path_init(path: &Path) -> bool {
