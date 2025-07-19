@@ -20,6 +20,7 @@ use library::run::CommandExitStatus;
 use library::run::CommonGlobalArgs;
 use library::run::InitArgs;
 use library::run::LspArgs;
+use library::run::SnippetCheckArgs;
 use library::run::dump_config;
 use pyrefly::library::library::library::library;
 use pyrefly_util::args::get_args_expanded;
@@ -57,9 +58,6 @@ struct Args {
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Parser)]
 struct FullCheckArgs {
-    /// Type check a string of Python code directly
-    #[arg(long, value_name = "CODE", conflicts_with = "files")]
-    command: Option<String>,
     /// Files to check (glob supported).
     /// If no file is specified, switch to project-checking mode where the files to
     /// check are determined from the closest configuration file.
@@ -88,12 +86,33 @@ struct FullCheckArgs {
     args: CheckArgs,
 }
 
+#[deny(clippy::missing_docs_in_private_items)]
+#[derive(Debug, Clone, Parser)]
+struct SnippetArgs {
+    /// Python code to type check
+    code: String,
+
+    /// Explicitly set the Pyrefly configuration to use when type checking.
+    /// When not set, Pyrefly will perform an upward-filesystem-walk approach to find the nearest
+    /// pyrefly.toml or pyproject.toml with `tool.pyrefly` section'. If no config is found, Pyrefly exits with error.
+    /// If both a pyrefly.toml and valid pyproject.toml are found, pyrefly.toml takes precedence.
+    #[arg(long, short, value_name = "FILE")]
+    config: Option<PathBuf>,
+
+    /// Type checking arguments and configuration
+    #[command(flatten)]
+    args: SnippetCheckArgs,
+}
+
 /// Subcommands to run Pyrefly with.
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Subcommand)]
 enum Command {
     /// Full type checking on a file or a project
     Check(FullCheckArgs),
+
+    /// Full type checking on a Python code snippet
+    Snippet(SnippetArgs),
 
     /// Dump info about pyrefly's configuration. Use by replacing `check` with `dump-config` in your pyrefly invocation.
     DumpConfig(FullCheckArgs),
@@ -120,10 +139,10 @@ async fn run_autotype(
     args.run(files_to_check, config_finder)
 }
 
-async fn run_command_check(
+async fn run_snippet_check(
     code: String,
     config: Option<PathBuf>,
-    mut args: library::run::CheckArgs,
+    mut args: SnippetCheckArgs,
 ) -> anyhow::Result<CommandExitStatus> {
     let (_, config_finder) =
         globs_and_config_getter::get(vec![], None, config, &mut args.config_override)?;
@@ -156,32 +175,27 @@ async fn run_check(
 async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<CommandExitStatus> {
     match command {
         Command::Check(FullCheckArgs {
-            command,
             files,
             project_excludes,
             watch,
             config,
             mut args,
         }) => {
-            if let Some(code) = command {
-                // Handle command-line code snippet
-                run_command_check(code, config, args).await
-            } else {
-                // Handle files
-                let (files_to_check, config_finder) = globs_and_config_getter::get(
-                    files,
-                    project_excludes,
-                    config,
-                    &mut args.config_override,
-                )?;
-                run_check(args, watch, files_to_check, config_finder, allow_forget).await
-            }
+            let (files_to_check, config_finder) = globs_and_config_getter::get(
+                files,
+                project_excludes,
+                config,
+                &mut args.config_override,
+            )?;
+            run_check(args, watch, files_to_check, config_finder, allow_forget).await
+        }
+        Command::Snippet(SnippetArgs { code, config, args }) => {
+            run_snippet_check(code, config, args).await
         }
         Command::BuckCheck(args) => args.run(),
         Command::Lsp(args) => args.run(),
         Command::Init(args) => args.run(),
         Command::Autotype(FullCheckArgs {
-            command: _,
             files,
             project_excludes,
             config,
@@ -199,7 +213,6 @@ async fn run_command(command: Command, allow_forget: bool) -> anyhow::Result<Com
         // We intentionally make DumpConfig take the same arguments as Check so that dumping the
         // config is as easy as changing the command name.
         Command::DumpConfig(FullCheckArgs {
-            command: _,
             files,
             project_excludes,
             config,

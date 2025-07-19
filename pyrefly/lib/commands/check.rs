@@ -88,6 +88,39 @@ pub struct CheckArgs {
     pub config_override: ConfigOverrideArgs,
 }
 
+/// Arguments for snippet checking (excludes behavior args that don't apply to snippets)
+#[deny(clippy::missing_docs_in_private_items)]
+#[derive(Debug, Parser, Clone)]
+pub struct SnippetCheckArgs {
+    /// Output related configuration options
+    #[command(flatten, next_help_heading = "Output")]
+    output: OutputArgs,
+    /// Configuration override options
+    #[command(flatten, next_help_heading = "Config Overrides")]
+    pub config_override: ConfigOverrideArgs,
+}
+
+impl SnippetCheckArgs {
+    pub fn run_once_with_snippet(
+        self,
+        code: String,
+        config_finder: ConfigFinder,
+        allow_forget: bool,
+    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        let check_args = CheckArgs {
+            output: self.output,
+            behavior: BehaviorArgs {
+                check_all: false,
+                suppress_errors: false,
+                expectations: false,
+                remove_unused_ignores: false,
+            },
+            config_override: self.config_override,
+        };
+        check_args.run_once_with_snippet(code, config_finder, allow_forget)
+    }
+}
+
 /// how/what should Pyrefly output
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
