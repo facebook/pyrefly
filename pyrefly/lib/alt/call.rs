@@ -117,6 +117,16 @@ pub struct OverloadTarget {
     pub is_deprecated: bool,
 }
 
+impl OverloadTarget {
+    /// Create a new overload target from a callable signature, marking it as not deprecated.
+    pub fn new_from_signature(signature: Callable) -> Self {
+        Self {
+            signature,
+            is_deprecated: false,
+        }
+    }
+}
+
 struct CalledOverload {
     signature: Callable,
     arg_errors: ErrorCollector,

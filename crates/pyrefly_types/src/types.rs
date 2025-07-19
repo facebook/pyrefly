@@ -471,6 +471,15 @@ impl OverloadSignature {
             is_deprecated: self.is_deprecated,
         }
     }
+
+    /// Create a new `OverloadSignature` from an `OverloadType`, not marked as
+    /// deprecated.
+    pub fn new_from_type(ty: OverloadType) -> Self {
+        Self {
+            ty,
+            is_deprecated: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -932,14 +941,14 @@ impl Type {
                     _ => Err(()),
                 })
                 .ok()
-                .map(|signatures| {
+                .map(|signatures_and_deprecation_flags| {
                     Type::Overload(Overload {
-                        signatures: signatures.mapped(|(callable, is_deprecated)| {
-                            OverloadSignature {
+                        signatures: signatures_and_deprecation_flags.mapped(
+                            |(callable, is_deprecated)| OverloadSignature {
                                 ty: OverloadType::Callable(callable),
                                 is_deprecated,
-                            }
-                        }),
+                            },
+                        ),
                         metadata: overload.metadata.clone(),
                     })
                 }),
