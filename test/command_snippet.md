@@ -2,10 +2,8 @@
 
 ## Basic command snippet with type error
 
-```scrut {output_stream: stderr}
+```scrut
 $ $PYREFLY check --command "x: int = 'hello'"
- INFO * (glob)
-
 ERROR `Literal['hello']` is not assignable to `int` [bad-assignment]
  --> <string>:1:10
   |
@@ -19,7 +17,8 @@ ERROR `Literal['hello']` is not assignable to `int` [bad-assignment]
 
 ```scrut {output_stream: stderr}
 $ $PYREFLY check --command "x: int = 42"
- INFO * (glob)
+ INFO Checking current directory with default configuration
+ INFO errors shown: 0* (glob)
 [0]
 ```
 
@@ -27,18 +26,17 @@ $ $PYREFLY check --command "x: int = 42"
 
 ```scrut {output_stream: stderr}
 $ $PYREFLY check --command "import sys; print(sys.version)"
- INFO * (glob)
+ INFO Checking current directory with default configuration
+ INFO errors shown: 0* (glob)
 [0]
 ```
 
 ## Command snippet with typing imports and error
 
-```scrut {output_stream: stderr}
+```scrut
 $ $PYREFLY check --command "from typing import List; x: List[str] = [1, 2, 3]"
- INFO * (glob)
-
 ERROR `list[int]` is not assignable to `list[str]` [bad-assignment]
- --> <string>:1:49
+ --> <string>:1:41
   |
 1 | from typing import List; x: List[str] = [1, 2, 3]
   |                                         ^^^^^^^^^
@@ -48,24 +46,20 @@ ERROR `list[int]` is not assignable to `list[str]` [bad-assignment]
 
 ## Command snippet with multiple errors
 
-```scrut {output_stream: stderr}
+```scrut
 $ $PYREFLY check --command "def foo(x: str) -> int: return len(x); y: str = foo(42)"
- INFO * (glob)
-
 ERROR Function declared to return `int`, but one or more paths are missing an explicit `return` [bad-return]
  --> <string>:1:20
   |
 1 | def foo(x: str) -> int: return len(x); y: str = foo(42)
   |                    ^^^
   |
-
 ERROR `int` is not assignable to `str` [bad-assignment]
  --> <string>:1:49
   |
 1 | def foo(x: str) -> int: return len(x); y: str = foo(42)
   |                                                 ^^^^^^^
   |
-
 ERROR Argument `Literal[42]` is not assignable to parameter `x` with type `str` in function `foo` [bad-argument-type]
  --> <string>:1:53
   |
@@ -83,7 +77,7 @@ error: the argument '--command <CODE>' cannot be used with '[FILES]...'
 
 Usage: pyrefly check --command <CODE> [FILES]...
 
-For more information, try '--help'
+For more information, try '--help'.
 [2]
 ```
 
@@ -91,20 +85,21 @@ For more information, try '--help'
 
 ```scrut
 $ $PYREFLY check --command "x: int = 'hello'" --output-format=json
-[
-  {
-    "path": "<string>",
-    "line": 1,
-    "column": 10,
-    "stop_line": 1,
-    "stop_column": 17,
-    "code": "bad-assignment",
-    "message": "`Literal['hello']` is not assignable to `int`",
-    "concise_description": "`Literal['hello']` is not assignable to `int`",
-    "inference": {},
-    "name": "bad-assignment"
-  }
-]
+{
+  "errors": [
+    {
+      "line": 1,
+      "column": 10,
+      "stop_line": 1,
+      "stop_column": 17,
+      "path": "<string>",
+      "code": -2,
+      "name": "bad-assignment",
+      "description": "`Literal['hello']` is not assignable to `int`",
+      "concise_description": "`Literal['hello']` is not assignable to `int`"
+    }
+  ]
+} (no-eol)
 [1]
 ```
 
