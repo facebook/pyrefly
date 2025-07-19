@@ -1,9 +1,9 @@
-# Tests for pyrefly check --command option
+# Tests for pyrefly snippet command
 
-## Basic command snippet with type error
+## Basic snippet with type error
 
 ```scrut
-$ $PYREFLY check --command "x: int = 'hello'"
+$ $PYREFLY snippet "x: int = 'hello'"
 ERROR `Literal['hello']` is not assignable to `int` [bad-assignment]
  --> <string>:1:10
   |
@@ -13,41 +13,47 @@ ERROR `Literal['hello']` is not assignable to `int` [bad-assignment]
 [1]
 ```
 
-## Valid command snippet (no errors)
+## Valid snippet (no errors)
 
 ```scrut {output_stream: stderr}
-$ $PYREFLY check --command "x: int = 42"
+$ $PYREFLY snippet "x: int = 42"
  INFO Checking current directory with default configuration
  INFO errors shown: 0* (glob)
 [0]
 ```
 
-## Command snippet with built-in module import
+## Snippet with built-in module import
 
 ```scrut {output_stream: stderr}
-$ $PYREFLY check --command "import sys; print(sys.version)"
+$ $PYREFLY snippet "import sys; print(sys.version)"
  INFO Checking current directory with default configuration
  INFO errors shown: 0* (glob)
 [0]
 ```
 
-## Command snippet with local file import
+## Snippet with local file import
 
 ```scrut
-$ echo "x: int = 5" > $TEST_PY && $PYREFLY check --command "import test; from typing import reveal_type; reveal_type(test.x)"
+$ echo "x: int = 5" > $TEST_PY && $PYREFLY snippet "import test; reveal_type(test.x)"
+ERROR Could not find name `reveal_type` [unknown-name]
+ --> <string>:1:14
+  |
+1 | import test; reveal_type(test.x)
+  |              ^^^^^^^^^^^
+  |
  INFO revealed type: int [reveal-type]
- --> <string>:1:57
+ --> <string>:1:25
   |
-1 | import test; from typing import reveal_type; reveal_type(test.x)
-  |                                                         --------
+1 | import test; reveal_type(test.x)
+  |                         --------
   |
-[0]
+[1]
 ```
 
-## Command snippet with typing imports and error
+## Snippet with typing imports and error
 
 ```scrut
-$ $PYREFLY check --command "from typing import List; x: List[str] = [1, 2, 3]"
+$ $PYREFLY snippet "from typing import List; x: List[str] = [1, 2, 3]"
 ERROR `list[int]` is not assignable to `list[str]` [bad-assignment]
  --> <string>:1:41
   |
@@ -57,10 +63,10 @@ ERROR `list[int]` is not assignable to `list[str]` [bad-assignment]
 [1]
 ```
 
-## Command snippet with multiple errors
+## Snippet with multiple errors
 
 ```scrut
-$ $PYREFLY check --command "def foo(x: str) -> int: return len(x); y: str = foo(42)"
+$ $PYREFLY snippet "def foo(x: str) -> int: return len(x); y: str = foo(42)"
 ERROR Function declared to return `int`, but one or more paths are missing an explicit `return` [bad-return]
  --> <string>:1:20
   |
@@ -82,22 +88,10 @@ ERROR Argument `Literal[42]` is not assignable to parameter `x` with type `str` 
 [1]
 ```
 
-## Command option conflicts with files
-
-```scrut {output_stream: stderr}
-$ echo "x: int = 42" > $TMPDIR/test.py && $PYREFLY check --command "x: int = 42" $TMPDIR/test.py
-error: the argument '--command <CODE>' cannot be used with '[FILES]...'
-
-Usage: pyrefly check --command <CODE> [FILES]...
-
-For more information, try '--help'.
-[2]
-```
-
-## Command snippet with JSON output format
+## Snippet with JSON output format
 
 ```scrut
-$ $PYREFLY check --command "x: int = 'hello'" --output-format=json
+$ $PYREFLY snippet "x: int = 'hello'" --output-format=json
 {
   "errors": [
     {
@@ -116,11 +110,29 @@ $ $PYREFLY check --command "x: int = 'hello'" --output-format=json
 [1]
 ```
 
-## Help text shows command option
+## Snippet with config file
+
+```scrut {output_stream: stderr}
+$ echo "python_version = \"3.11\"" > pyrefly.toml && $PYREFLY snippet "x: int = 42" --config pyrefly.toml
+ INFO Checking project configured at `*/pyrefly.toml` (glob)
+ INFO errors shown: 0* (glob)
+[0]
+```
+
+## Help text shows snippet command
 
 ```scrut
-$ $PYREFLY check --help | grep -A 1 "command"
-      --command <CODE>
-          Type check a string of Python code directly
+$ $PYREFLY snippet --help | head -3
+Full type checking on a Python code snippet
+
+Usage: pyrefly snippet [OPTIONS] <CODE>
+[0]
+```
+
+## Main help shows snippet command
+
+```scrut
+$ $PYREFLY --help | grep "snippet"
+  snippet      Full type checking on a Python code snippet
 [0]
 ```
