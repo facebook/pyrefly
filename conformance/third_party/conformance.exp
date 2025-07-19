@@ -4012,6 +4012,16 @@
     },
     {
       "code": -2,
+      "column": 12,
+      "concise_description": "Call to deprecated overload `foo`",
+      "description": "Call to deprecated overload `foo`",
+      "line": 30,
+      "name": "deprecated",
+      "stop_column": 15,
+      "stop_line": 30
+    },
+    {
+      "code": -2,
       "column": 5,
       "concise_description": "`+` is not supported between `Spam` and `Literal[1]`",
       "description": "`+` is not supported between `Spam` and `Literal[1]`\n  Call to deprecated function `_directives_deprecated_library.Spam.__add__`",
