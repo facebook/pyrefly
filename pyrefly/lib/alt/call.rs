@@ -9,6 +9,7 @@ use std::iter;
 
 use dupe::Dupe;
 use pyrefly_python::dunder;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -1027,5 +1028,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Only if neither are overridden, use the `__new__` and `__init__` from object
             self.unions(vec![new_attr_ty, init_attr_ty])
         }
+    }
+
+    /// Check if a module is a built-in module (like builtins, typing, etc.)
+    /// Built-in modules should not be subject to abstract method validation
+    fn is_builtin_module(&self, module: ModuleName) -> bool {
+        module == ModuleName::from_str("builtins")
+            || module == ModuleName::from_str("typing")
+            || module == ModuleName::from_str("abc")
+            || module == ModuleName::from_str("collections.abc")
+            || module.as_str().starts_with("typing_extensions")
     }
 }

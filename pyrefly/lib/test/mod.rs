@@ -7,6 +7,7 @@
 
 #![cfg(test)]
 
+mod abstract_method_calls;
 mod assign;
 mod attribute_narrow;
 mod attributes;

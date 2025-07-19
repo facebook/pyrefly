@@ -12,6 +12,53 @@ that an error is related to. Every error has exactly one kind.
 The main use of error kinds is as short names ("slugs") that can be used in
 error suppression comments.
 
+## abstract-method-call
+
+This error occurs when attempting to call an abstract method directly. Abstract methods are defined using `@abc.abstractmethod` and must be implemented in subclasses before they can be called.
+
+```python
+import abc
+
+class AbstractClass:
+    @abc.abstractmethod
+    def abstract_method(self) -> str:
+        pass
+
+obj = AbstractClass()
+obj.abstract_method()  # Cannot call abstract method - must be implemented in a subclass [abstract-method-call]
+```
+
+This error also applies to abstract static methods and abstract class methods:
+
+```python
+import abc
+
+class AbstractClass:
+    @abc.abstractmethod
+    @staticmethod
+    def abstract_static_method() -> str:
+        pass
+    
+    @abc.abstractmethod
+    @classmethod
+    def abstract_class_method(cls) -> str:
+        pass
+
+AbstractClass.abstract_static_method()  # Cannot call abstract method [abstract-method-call]
+AbstractClass.abstract_class_method()   # Cannot call abstract method [abstract-method-call]
+```
+
+To fix this error, implement the abstract method in a concrete subclass:
+
+```python
+class ConcreteClass(AbstractClass):
+    def abstract_method(self) -> str:
+        return "implemented"
+
+obj = ConcreteClass()
+obj.abstract_method()  # No error - concrete implementation
+```
+
 ## annotation-mismatch
 
 This error indicates a mismatch between multiple annotations for a single
