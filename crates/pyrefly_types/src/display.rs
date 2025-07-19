@@ -244,10 +244,10 @@ impl<'a> TypeDisplayContext<'a> {
                 write!(
                     f,
                     "Overload[{}",
-                    self.display(&overload.signatures.first().as_type())
+                    self.display(&overload.signatures.first().ty.as_type())
                 )?;
                 for sig in overload.signatures.iter().skip(1) {
-                    write!(f, ", {}", self.display(&sig.as_type()))?;
+                    write!(f, ", {}", self.display(&sig.ty.as_type()))?;
                 }
                 write!(f, "]")
             }

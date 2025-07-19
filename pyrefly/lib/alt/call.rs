@@ -9,6 +9,7 @@ use std::iter;
 
 use dupe::Dupe;
 use pyrefly_python::dunder;
+use pyrefly_types::types::OverloadSignature;
 use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -87,9 +88,9 @@ enum Target {
     /// A TypedDict.
     TypedDict(TypedDict),
     /// An overloaded function.
-    FunctionOverload(Vec1<Callable>, FuncMetadata),
+    FunctionOverload(Vec1<OverloadTarget>, FuncMetadata),
     /// An overloaded method.
-    BoundMethodOverload(Type, Vec1<Callable>, FuncMetadata),
+    BoundMethodOverload(Type, Vec1<OverloadTarget>, FuncMetadata),
     /// A union of call targets.
     Union(Vec<Target>),
     /// Any, as a call target.
@@ -108,11 +109,20 @@ impl Target {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OverloadTarget {
+    /// The callable signature.
+    pub signature: Callable,
+    /// Whether this overload is deprecated.
+    pub is_deprecated: bool,
+}
+
 struct CalledOverload {
     signature: Callable,
     arg_errors: ErrorCollector,
     call_errors: ErrorCollector,
     return_type: Type,
+    is_deprecated: bool,
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -146,15 +156,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Function(func) => Some(CallTarget::new(Target::Function(*func))),
             Type::Overload(overload) => {
                 let mut qs = Vec::new();
-                let sigs = overload.signatures.mapped(|ty| match ty {
-                    OverloadType::Callable(signature) => signature,
-                    OverloadType::Forall(forall) => {
-                        let (qs2, func) =
-                            self.fresh_quantified_function(&forall.tparams, forall.body);
-                        qs.extend(qs2);
-                        func.signature
-                    }
-                });
+                let sigs = overload
+                    .signatures
+                    .mapped(|OverloadSignature { ty, is_deprecated }| OverloadTarget {
+                        signature: match ty {
+                            OverloadType::Callable(signature) => signature,
+                            OverloadType::Forall(forall) => {
+                                let (qs2, func) =
+                                    self.fresh_quantified_function(&forall.tparams, forall.body);
+                                qs.extend(qs2);
+                                func.signature
+                            }
+                        },
+                        is_deprecated,
+                    });
                 Some(CallTarget::forall(
                     qs,
                     Target::FunctionOverload(sigs, *overload.metadata),
@@ -708,7 +723,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Calls an overloaded function, returning the return type and the closest matching overload signature.
     pub fn call_overloads(
         &self,
-        overloads: Vec1<Callable>,
+        overloads: Vec1<OverloadTarget>,
         metadata: FuncMetadata,
         self_arg: Option<CallArg>,
         args: &[CallArg],
@@ -743,7 +758,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let arg_errors = self.error_collector();
             let call_errors = self.error_collector();
             let res = self.callable_infer(
-                callable.clone(),
+                callable.signature.clone(),
                 Some(metadata.kind.as_func_id()),
                 self_arg.clone(),
                 args,
@@ -758,18 +773,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             if arg_errors.is_empty() && call_errors.is_empty() {
                 // An overload is chosen, we should record it to power IDE services.
-                self.record_overload_trace(range, overloads.as_slice(), callable, true);
+                self.record_overload_trace(range, overloads.as_slice(), &callable.signature, true);
                 // It's only safe to return immediately if both arg_errors and call_errors are
                 // empty, as parameter types from the overload signature may be used as hints when
                 // evaluating arguments, producing arg_errors for some overloads but not others.
                 // See test::overload::test_pass_generic_class_to_overload for an example.
-                return (res, callable.clone());
+                if callable.is_deprecated {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::new(ErrorKind::Deprecated, context),
+                        format!("Call to deprecated overload `{}`", method_name,),
+                    );
+                }
+                return (res, callable.signature.clone());
             }
             let called_overload = CalledOverload {
-                signature: callable.clone(),
+                signature: callable.signature.clone(),
                 arg_errors,
                 call_errors,
                 return_type: res,
+                is_deprecated: callable.is_deprecated,
             };
             match &closest_overload {
                 Some(overload)
@@ -801,6 +825,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             //
             // the call to f should match the first overload, even though `1 + "2"` generates an
             // arg error for both overloads.
+            if closest_overload.is_deprecated {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::new(ErrorKind::Deprecated, context),
+                    format!("Call to deprecated overload `{}`", method_name,),
+                );
+            }
             (closest_overload.return_type, closest_overload.signature)
         } else {
             let mut msg = vec1![
@@ -811,14 +843,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 "Possible overloads:".to_owned(),
             ];
             for overload in overloads {
-                let suffix = if overload == closest_overload.signature {
+                let suffix = if overload.signature == closest_overload.signature {
                     " [closest match]"
                 } else {
                     ""
                 };
                 let signature = match self_arg {
-                    Some(_) => overload.drop_first_param().unwrap_or(overload),
-                    None => overload,
+                    Some(_) => overload
+                        .signature
+                        .drop_first_param()
+                        .unwrap_or(overload.signature),
+                    None => overload.signature,
                 };
                 let signature = self
                     .solver()

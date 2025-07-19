@@ -93,6 +93,25 @@ f(0)  # E: Call to deprecated function `f`
 );
 
 testcase!(
+    test_deprecated_overloaded_signature,
+    r#"
+from typing import overload
+from warnings import deprecated
+
+@deprecated("DEPRECATED")
+@overload
+def f(x: int) -> int: ...
+@overload
+def f(x: str) -> str: ...
+def f(x: int | str) -> int | str:
+    return x
+
+f(0)  # E: Call to deprecated overload `f`
+f("foo") # No error
+    "#,
+);
+
+testcase!(
     test_reduce_call,
     r#"
 from functools import reduce

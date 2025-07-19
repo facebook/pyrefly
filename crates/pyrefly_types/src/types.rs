@@ -404,7 +404,7 @@ impl BoundMethodType {
                 .subst_self_type_mut(replacement, is_subset),
             Self::Overload(overload) => {
                 for sig in overload.signatures.iter_mut() {
-                    sig.subst_self_type_mut(replacement, is_subset)
+                    sig.ty.subst_self_type_mut(replacement, is_subset)
                 }
             }
         }
@@ -438,17 +438,38 @@ impl BoundMethodType {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct Overload {
-    pub signatures: Vec1<OverloadType>,
+    pub signatures: Vec1<OverloadSignature>,
     pub metadata: Box<FuncMetadata>,
 }
 
 impl Overload {
     fn is_typeguard(&self) -> bool {
-        self.signatures.iter().any(|t| t.is_typeguard())
+        self.signatures.iter().any(|t| t.ty.is_typeguard())
     }
 
     fn is_typeis(&self) -> bool {
-        self.signatures.iter().any(|t| t.is_typeis())
+        self.signatures.iter().any(|t| t.ty.is_typeis())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, VisitMut, TypeEq)]
+pub struct OverloadSignature {
+    /// Type of the overloaded function
+    pub ty: OverloadType,
+    /// Whether the overloaded function is marked deprecated
+    pub is_deprecated: bool,
+}
+
+impl OverloadSignature {
+    pub fn map_ty<F>(&self, f: F) -> Self
+    where
+        F: FnOnce(OverloadType) -> OverloadType,
+    {
+        Self {
+            ty: f(self.ty.clone()),
+            is_deprecated: self.is_deprecated,
+        }
     }
 }
 
@@ -903,14 +924,22 @@ impl Type {
             }),
             Type::Overload(overload) => overload
                 .signatures
-                .try_mapped_ref(|x| match x {
-                    OverloadType::Callable(c) => c.drop_first_param().ok_or(()),
+                .try_mapped_ref(|OverloadSignature { ty, is_deprecated }| match ty {
+                    OverloadType::Callable(c) => c
+                        .drop_first_param()
+                        .ok_or(())
+                        .map(|param| (param, *is_deprecated)),
                     _ => Err(()),
                 })
                 .ok()
                 .map(|signatures| {
                     Type::Overload(Overload {
-                        signatures: signatures.mapped(OverloadType::Callable),
+                        signatures: signatures.mapped(|(callable, is_deprecated)| {
+                            OverloadSignature {
+                                ty: OverloadType::Callable(callable),
+                                is_deprecated,
+                            }
+                        }),
                         metadata: overload.metadata.clone(),
                     })
                 }),
@@ -1095,7 +1124,7 @@ impl Type {
                 ..
             }) => {
                 for x in overload.signatures.iter() {
-                    match x {
+                    match &x.ty {
                         OverloadType::Callable(callable) => f(callable),
                         OverloadType::Forall(forall) => f(&forall.body.signature),
                     }
@@ -1129,7 +1158,7 @@ impl Type {
                 ..
             }) => {
                 for x in overload.signatures.iter_mut() {
-                    match x {
+                    match &mut x.ty {
                         OverloadType::Callable(callable) => f(callable),
                         OverloadType::Forall(forall) => f(&mut forall.body.signature),
                     }
