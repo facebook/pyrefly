@@ -35,6 +35,7 @@ use crate::binding::binding::KeyExpect;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::RaisedException;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::bindings::LookupKind;
 use crate::binding::bindings::MutableCaptureLookupKind;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
@@ -735,14 +736,14 @@ impl<'a> BindingsBuilder<'a> {
                     base = self.scopes.clone_current_flow();
                     let range = h.range();
                     let h = h.except_handler().unwrap(); // Only one variant for now
-                    if let Some(name) = h.name
+                    if let Some(ref name) = h.name
                         && let Some(mut type_) = h.type_
                     {
                         let mut handler =
-                            self.declare_current_idx(Key::Definition(ShortIdentifier::new(&name)));
+                            self.declare_current_idx(Key::Definition(ShortIdentifier::new(name)));
                         self.ensure_expr(&mut type_, handler.usage());
                         self.bind_definition_current(
-                            &name,
+                            name,
                             handler,
                             Binding::ExceptionHandler(type_, x.is_star),
                             FlowStyle::Other,
@@ -755,7 +756,32 @@ impl<'a> BindingsBuilder<'a> {
                             Binding::ExceptionHandler(type_, x.is_star),
                         );
                     }
+
                     self.stmts(h.body);
+
+                    if let Some(ref name) = h.name {
+                        // Mark the current caught exception name as
+                        // uninitialized in the current scope, so that it cannot
+                        // be used later.
+                        // https://docs.python.org/3/reference/compound_stmts.html#except-clause
+                        let idx = self.lookup_name(
+                            Hashed::new(&name.id),
+                            LookupKind::Regular,
+                            &mut Usage::MutableLookup,
+                        );
+                        if let Ok(idx) = idx {
+                            self.scopes.upsert_flow_info(
+                                Hashed::new(&name.id),
+                                idx,
+                                Some(FlowStyle::Uninitialized),
+                            );
+                        } else {
+                            panic!(
+                                "Should have found the exception name `{name}` in the current scope"
+                            );
+                        }
+                    }
+
                     self.scopes.swap_current_flow_with(&mut base);
                     branches.push(base);
                 }
