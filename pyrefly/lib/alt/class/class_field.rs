@@ -1340,24 +1340,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 signatures,
                 metadata,
             }) => {
-                let new_signatures = signatures.clone().mapped(|sig| {
-                    sig.map_ty(|ty| match ty {
-                        OverloadType::Callable(callable) => OverloadType::Forall(Forall {
-                            tparams: self.get_class_tparams(cls),
-                            body: Function {
-                                signature: callable,
-                                metadata: (**metadata).clone(),
-                            },
-                        }),
-                        OverloadType::Forall(Forall { tparams, body }) => {
-                            let mut new_tparams = tparams.as_ref().clone();
-                            new_tparams.extend(&self.get_class_tparams(cls));
-                            OverloadType::Forall(Forall {
-                                tparams: Arc::new(new_tparams),
-                                body,
-                            })
-                        }
-                    })
+                let new_signatures = signatures.clone().mapped(|sig| match sig {
+                    OverloadType::Callable(function) => OverloadType::Forall(Forall {
+                        tparams: self.get_class_tparams(cls),
+                        body: Function {
+                            signature: function.signature,
+                            metadata: (**metadata).clone(),
+                        },
+                    }),
+                    OverloadType::Forall(Forall { tparams, body }) => {
+                        let mut new_tparams = tparams.as_ref().clone();
+                        new_tparams.extend(&self.get_class_tparams(cls));
+                        OverloadType::Forall(Forall {
+                            tparams: Arc::new(new_tparams),
+                            body,
+                        })
+                    }
                 });
                 Type::Overload(Overload {
                     signatures: new_signatures,

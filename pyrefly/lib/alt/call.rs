@@ -9,7 +9,6 @@ use std::iter;
 
 use dupe::Dupe;
 use pyrefly_python::dunder;
-use pyrefly_types::types::OverloadSignature;
 use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -166,20 +165,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Function(func) => Some(CallTarget::new(Target::Function(*func))),
             Type::Overload(overload) => {
                 let mut qs = Vec::new();
-                let sigs = overload
-                    .signatures
-                    .mapped(|OverloadSignature { ty, is_deprecated }| OverloadTarget {
-                        signature: match ty {
-                            OverloadType::Callable(signature) => signature,
-                            OverloadType::Forall(forall) => {
-                                let (qs2, func) =
-                                    self.fresh_quantified_function(&forall.tparams, forall.body);
-                                qs.extend(qs2);
-                                func.signature
-                            }
-                        },
+                let sigs = overload.signatures.mapped(|ty| {
+                    let (signature, is_deprecated) = match ty {
+                        OverloadType::Callable(function) => {
+                            (function.signature, function.metadata.flags.is_deprecated)
+                        }
+                        OverloadType::Forall(forall) => {
+                            let (qs2, func) =
+                                self.fresh_quantified_function(&forall.tparams, forall.body);
+                            qs.extend(qs2);
+                            (func.signature, func.metadata.flags.is_deprecated)
+                        }
+                    };
+                    OverloadTarget {
+                        signature,
                         is_deprecated,
-                    });
+                    }
+                });
                 Some(CallTarget::forall(
                     qs,
                     Target::FunctionOverload(sigs, *overload.metadata),

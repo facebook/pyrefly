@@ -13,7 +13,6 @@ use itertools::Either;
 use pyrefly_python::dunder;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_types::types::OverloadSignature;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::StmtFunctionDef;
@@ -75,16 +74,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // This is the last definition in the chain. We should produce an overload type.
                 let last_range = def.id_range;
                 let has_impl = def.stub_or_impl == FunctionStubOrImpl::Impl;
-                let mut acc = Vec1::new((last_range, ty, def.metadata.flags.is_deprecated));
+                let mut acc = Vec1::new((last_range, ty, def.metadata.clone()));
                 let mut first = def;
                 let mut impl_before_overload_range = None;
                 while let Some(def) = self.step_pred(predecessor) {
                     if def.metadata.flags.is_overload {
-                        acc.push((
-                            def.id_range,
-                            def.ty.clone(),
-                            def.metadata.flags.is_deprecated,
-                        ));
+                        acc.push((def.id_range, def.ty.clone(), def.metadata.clone()));
                         first = def;
                     } else {
                         impl_before_overload_range = Some(def.id_range);
@@ -146,11 +141,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             while let Some(def) = self.step_pred(predecessor)
                 && def.metadata.flags.is_overload
             {
-                acc.push((
-                    def.id_range,
-                    def.ty.clone(),
-                    def.metadata.flags.is_deprecated,
-                ));
+                acc.push((def.id_range, def.ty.clone(), def.metadata.clone()));
                 first = def;
             }
             acc.reverse();
@@ -660,38 +651,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn extract_signatures(
         &self,
         func: Name,
-        ts: Vec1<(TextRange, Type, bool /* is_deprecated */)>,
+        ts: Vec1<(TextRange, Type, FuncMetadata /* is_deprecated */)>,
         errors: &ErrorCollector,
-    ) -> Vec1<OverloadSignature> {
-        ts.mapped(|(range, t, is_deprecated)| {
-            let ty = match t {
-                Type::Callable(callable) => OverloadType::Callable(*callable),
-                Type::Function(function) => OverloadType::Callable(function.signature),
-                Type::Forall(box Forall {
-                    tparams,
-                    body: Forallable::Function(func),
-                }) => OverloadType::Forall(Forall {
-                    tparams,
-                    body: func,
-                }),
-                Type::Any(any_style) => {
-                    OverloadType::Callable(Callable::ellipsis(any_style.propagate()))
-                }
-                _ => {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::InvalidOverload),
-                        format!(
-                            "`{}` has type `{}` after decorator application, which is not callable",
-                            func,
-                            self.for_display(t)
-                        ),
-                    );
-                    OverloadType::Callable(Callable::ellipsis(Type::any_error()))
-                }
-            };
-            OverloadSignature { ty, is_deprecated }
+    ) -> Vec1<OverloadType> {
+        ts.mapped(|(range, t, metadata)| match t {
+            Type::Callable(callable) => OverloadType::Callable(Function {
+                signature: *callable,
+                metadata,
+            }),
+            Type::Function(function) => OverloadType::Callable(*function),
+            Type::Forall(box Forall {
+                tparams,
+                body: Forallable::Function(func),
+            }) => OverloadType::Forall(Forall {
+                tparams,
+                body: func,
+            }),
+            Type::Any(any_style) => OverloadType::Callable(Function {
+                signature: Callable::ellipsis(any_style.propagate()),
+                metadata,
+            }),
+            _ => {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::InvalidOverload),
+                    format!(
+                        "`{}` has type `{}` after decorator application, which is not callable",
+                        func,
+                        self.for_display(t)
+                    ),
+                );
+                OverloadType::Callable(Function {
+                    signature: Callable::ellipsis(Type::any_error()),
+                    metadata,
+                })
+            }
         })
     }
 }

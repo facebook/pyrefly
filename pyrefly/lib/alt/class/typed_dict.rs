@@ -8,7 +8,6 @@
 use std::sync::Arc;
 
 use pyrefly_python::dunder;
-use pyrefly_types::types::OverloadSignature;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -242,17 +241,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let full_typed_dict = self.as_typed_dict_unchecked(cls);
         let partial_typed_dict_ty = Type::PartialTypedDict(full_typed_dict);
 
-        let partial_overload = OverloadType::Callable(Callable::list(
-            ParamList::new(vec![
-                self_param.clone(),
-                Param::PosOnly(
-                    Some(Name::new_static("__m")),
-                    partial_typed_dict_ty,
-                    Required::Required,
-                ),
-            ]),
-            Type::None,
-        ));
+        let partial_overload = OverloadType::Callable(Function {
+            signature: Callable::list(
+                ParamList::new(vec![
+                    self_param.clone(),
+                    Param::PosOnly(
+                        Some(Name::new_static("__m")),
+                        partial_typed_dict_ty,
+                        Required::Required,
+                    ),
+                ]),
+                Type::None,
+            ),
+            metadata: metadata.clone(),
+        });
 
         // ---- Overload: update(__m: Iterable[tuple[Literal["key"], value]])
         let tuple_types: Vec<Type> = self
@@ -268,17 +270,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let iterable_ty = self.stdlib.iterable(self.unions(tuple_types)).to_type();
 
-        let tuple_overload = OverloadType::Callable(Callable::list(
-            ParamList::new(vec![
-                self_param.clone(),
-                Param::PosOnly(
-                    Some(Name::new_static("__m")),
-                    iterable_ty,
-                    Required::Required,
-                ),
-            ]),
-            Type::None,
-        ));
+        let tuple_overload = OverloadType::Callable(Function {
+            signature: Callable::list(
+                ParamList::new(vec![
+                    self_param.clone(),
+                    Param::PosOnly(
+                        Some(Name::new_static("__m")),
+                        iterable_ty,
+                        Required::Required,
+                    ),
+                ]),
+                Type::None,
+            ),
+            metadata: metadata.clone(),
+        });
 
         // ---- Overload: update(*, x=..., y=...)
         let keyword_params: Vec<_> = self
@@ -289,19 +294,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
             .collect();
 
-        let overload_kwargs = OverloadType::Callable(Callable::list(
-            ParamList::new(
-                std::iter::once(self_param.clone())
-                    .chain(keyword_params)
-                    .collect(),
+        let overload_kwargs = OverloadType::Callable(Function {
+            signature: Callable::list(
+                ParamList::new(
+                    std::iter::once(self_param.clone())
+                        .chain(keyword_params)
+                        .collect(),
+                ),
+                Type::None,
             ),
-            Type::None,
-        ));
+            metadata: metadata.clone(),
+        });
 
         let signatures = vec1![partial_overload, tuple_overload, overload_kwargs];
 
         Some(ClassSynthesizedField::new(Type::Overload(Overload {
-            signatures: signatures.mapped(OverloadSignature::new_from_type),
+            signatures,
             metadata: Box::new(metadata),
         })))
     }
@@ -324,24 +332,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             if field.required {
                 // (self, key: Literal["key"], default: object = ...) -> ValueType
-                literal_signatures.push(OverloadType::Callable(Callable::list(
-                    ParamList::new(vec![
-                        self_param.clone(),
-                        key_param,
-                        Param::PosOnly(
-                            Some(DEFAULT_PARAM.clone()),
-                            object_ty.clone(),
-                            Required::Optional(None),
-                        ),
-                    ]),
-                    field.ty.clone(),
-                )));
+                literal_signatures.push(OverloadType::Callable(Function {
+                    signature: Callable::list(
+                        ParamList::new(vec![
+                            self_param.clone(),
+                            key_param,
+                            Param::PosOnly(
+                                Some(DEFAULT_PARAM.clone()),
+                                object_ty.clone(),
+                                Required::Optional(None),
+                            ),
+                        ]),
+                        field.ty.clone(),
+                    ),
+                    metadata: metadata.clone(),
+                }));
             } else {
                 // (self, key: Literal["key"]) -> ValueType | None
-                literal_signatures.push(OverloadType::Callable(Callable::list(
-                    ParamList::new(vec![self_param.clone(), key_param.clone()]),
-                    Type::optional(field.ty.clone()),
-                )));
+                literal_signatures.push(OverloadType::Callable(Function {
+                    signature: Callable::list(
+                        ParamList::new(vec![self_param.clone(), key_param.clone()]),
+                        Type::optional(field.ty.clone()),
+                    ),
+                    metadata: metadata.clone(),
+                }));
                 // (self, key: Literal["key"], default: T) -> ValueType | T
                 let q = Quantified::type_var(
                     Name::new("_T"),
@@ -377,25 +391,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let signatures = Vec1::from_vec_push(
             literal_signatures,
-            OverloadType::Callable(Callable::list(
-                ParamList::new(vec![
-                    self_param.clone(),
-                    Param::PosOnly(
-                        Some(KEY_PARAM.clone()),
-                        self.stdlib.str().clone().to_type(),
-                        Required::Required,
-                    ),
-                    Param::PosOnly(
-                        Some(DEFAULT_PARAM.clone()),
-                        object_ty.clone(),
-                        Required::Optional(None),
-                    ),
-                ]),
-                object_ty.clone(),
-            )),
+            OverloadType::Callable(Function {
+                signature: Callable::list(
+                    ParamList::new(vec![
+                        self_param.clone(),
+                        Param::PosOnly(
+                            Some(KEY_PARAM.clone()),
+                            self.stdlib.str().clone().to_type(),
+                            Required::Required,
+                        ),
+                        Param::PosOnly(
+                            Some(DEFAULT_PARAM.clone()),
+                            object_ty.clone(),
+                            Required::Optional(None),
+                        ),
+                    ]),
+                    object_ty.clone(),
+                ),
+                metadata: metadata.clone(),
+            }),
         );
         ClassSynthesizedField::new(Type::Overload(Overload {
-            signatures: signatures.mapped(OverloadSignature::new_from_type),
+            signatures,
             metadata: Box::new(metadata),
         }))
     }
@@ -433,10 +450,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }];
 
                 // 1) no default: (self, key: Literal["field_name"]) -> Optional[FieldType]
-                literal_signatures.push(OverloadType::Callable(Callable::list(
-                    ParamList::new(vec![self_param.clone(), key_param.clone()]),
-                    Type::optional(field.ty.clone()),
-                )));
+                literal_signatures.push(OverloadType::Callable(Function {
+                    signature: Callable::list(
+                        ParamList::new(vec![self_param.clone(), key_param.clone()]),
+                        Type::optional(field.ty.clone()),
+                    ),
+                    metadata: metadata.clone(),
+                }));
 
                 // 2) default: (self, key: Literal["field_name"], default: _T) -> Union[FieldType, _T]
                 literal_signatures.push(OverloadType::Forall(Forall {
@@ -463,7 +483,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let signatures = Vec1::try_from_vec(literal_signatures).ok()?;
 
         Some(ClassSynthesizedField::new(Type::Overload(Overload {
-            signatures: signatures.mapped(OverloadSignature::new_from_type),
+            signatures,
             metadata: Box::new(metadata),
         })))
     }
@@ -492,16 +512,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
 
             // Construct an an overload of the form: (self, key: Literal["field_name"]) -> None
-            literal_signatures.push(OverloadType::Callable(Callable::list(
-                ParamList::new(vec![self_param.clone(), key_param]),
-                Type::None,
-            )));
+            literal_signatures.push(OverloadType::Callable(Function {
+                signature: Callable::list(
+                    ParamList::new(vec![self_param.clone(), key_param]),
+                    Type::None,
+                ),
+                metadata: metadata.clone(),
+            }));
         }
 
         let signatures = Vec1::try_from_vec(literal_signatures).ok()?;
 
         Some(ClassSynthesizedField::new(Type::Overload(Overload {
-            signatures: signatures.mapped(OverloadSignature::new_from_type),
+            signatures,
             metadata: Box::new(metadata),
         })))
     }
@@ -514,38 +537,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Synthesizes a `(self, k: Literal["key"], default: ValueType) -> ValueType` signature for each field.
         let fields_iter = self.names_to_fields(cls, fields);
         let self_param = self.class_self_param(cls, true);
+        let metadata =
+            FuncMetadata::def(self.module().name(), cls.name().clone(), SETDEFAULT_METHOD);
         let make_overload = |(name, field): (&Name, TypedDictField)| {
             if field.is_read_only() {
                 None
             } else {
-                Some(OverloadType::Callable(Callable::list(
-                    ParamList::new(vec![
-                        self_param.clone(),
-                        Param::PosOnly(
-                            Some(KEY_PARAM.clone()),
-                            name_to_literal_type(name),
-                            Required::Required,
-                        ),
-                        Param::PosOnly(
-                            Some(DEFAULT_PARAM.clone()),
-                            field.ty.clone(),
-                            Required::Required,
-                        ),
-                    ]),
-                    field.ty.clone(),
-                )))
+                Some(OverloadType::Callable(Function {
+                    signature: Callable::list(
+                        ParamList::new(vec![
+                            self_param.clone(),
+                            Param::PosOnly(
+                                Some(KEY_PARAM.clone()),
+                                name_to_literal_type(name),
+                                Required::Required,
+                            ),
+                            Param::PosOnly(
+                                Some(DEFAULT_PARAM.clone()),
+                                field.ty.clone(),
+                                Required::Required,
+                            ),
+                        ]),
+                        field.ty.clone(),
+                    ),
+                    metadata: metadata.clone(),
+                }))
             }
         };
         let overloads = fields_iter.filter_map(make_overload).collect::<Vec<_>>();
         Some(ClassSynthesizedField::new(Type::Overload(Overload {
-            signatures: Vec1::try_from_vec(overloads)
-                .ok()?
-                .mapped(OverloadSignature::new_from_type),
-            metadata: Box::new(FuncMetadata::def(
-                self.module().name(),
-                cls.name().clone(),
-                SETDEFAULT_METHOD,
-            )),
+            signatures: Vec1::try_from_vec(overloads).ok()?,
+            metadata: Box::new(metadata),
         })))
     }
 
