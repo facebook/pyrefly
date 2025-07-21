@@ -111,6 +111,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
       - name: save platform name
         run: echo "platform=${{ matrix.platform }}-${{ matrix.arch }}" >> ${{ matrix.github_env }}
       - run: npm ci
