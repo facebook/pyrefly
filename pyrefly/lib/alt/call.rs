@@ -9,6 +9,7 @@ use std::iter;
 
 use dupe::Dupe;
 use pyrefly_python::dunder;
+use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -87,9 +88,9 @@ enum Target {
     /// A TypedDict.
     TypedDict(TypedDict),
     /// An overloaded function.
-    FunctionOverload(Vec1<OverloadTarget>, FuncMetadata),
+    FunctionOverload(Vec1<Function>, FuncMetadata),
     /// An overloaded method.
-    BoundMethodOverload(Type, Vec1<OverloadTarget>, FuncMetadata),
+    BoundMethodOverload(Type, Vec1<Function>, FuncMetadata),
     /// A union of call targets.
     Union(Vec<Target>),
     /// Any, as a call target.
@@ -104,24 +105,6 @@ impl Target {
                 Some(metadata)
             }
             _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct OverloadTarget {
-    /// The callable signature.
-    pub signature: Callable,
-    /// Whether this overload is deprecated.
-    pub is_deprecated: bool,
-}
-
-impl OverloadTarget {
-    /// Create a new overload target from a callable signature, marking it as not deprecated.
-    pub fn new_from_signature(signature: Callable) -> Self {
-        Self {
-            signature,
-            is_deprecated: false,
         }
     }
 }
@@ -165,26 +148,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Function(func) => Some(CallTarget::new(Target::Function(*func))),
             Type::Overload(overload) => {
                 let mut qs = Vec::new();
-                let sigs = overload.signatures.mapped(|ty| {
-                    let (signature, is_deprecated) = match ty {
-                        OverloadType::Callable(function) => {
-                            (function.signature, function.metadata.flags.is_deprecated)
-                        }
-                        OverloadType::Forall(forall) => {
-                            let (qs2, func) =
-                                self.fresh_quantified_function(&forall.tparams, forall.body);
-                            qs.extend(qs2);
-                            (func.signature, func.metadata.flags.is_deprecated)
-                        }
-                    };
-                    OverloadTarget {
-                        signature,
-                        is_deprecated,
+                let funcs = overload.signatures.mapped(|ty| match ty {
+                    OverloadType::Callable(function) => function,
+                    OverloadType::Forall(forall) => {
+                        let (qs2, func) =
+                            self.fresh_quantified_function(&forall.tparams, forall.body);
+                        qs.extend(qs2);
+                        func
                     }
                 });
                 Some(CallTarget::forall(
                     qs,
-                    Target::FunctionOverload(sigs, *overload.metadata),
+                    Target::FunctionOverload(funcs, *overload.metadata),
                 ))
             }
             Type::BoundMethod(box BoundMethod { obj, mut func }) => {
@@ -735,7 +710,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Calls an overloaded function, returning the return type and the closest matching overload signature.
     pub fn call_overloads(
         &self,
-        overloads: Vec1<OverloadTarget>,
+        overloads: Vec1<Function>,
         metadata: FuncMetadata,
         self_arg: Option<CallArg>,
         args: &[CallArg],
@@ -785,14 +760,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             if arg_errors.is_empty() && call_errors.is_empty() {
                 // An overload is chosen, we should record it to power IDE services.
-                self.record_overload_trace(range, overloads.as_slice(), &callable.signature, true);
+                self.record_overload_trace(
+                    range,
+                    overloads.map(|Function { signature, .. }| signature),
+                    &callable.signature,
+                    true,
+                );
                 // It's only safe to return immediately if both arg_errors and call_errors are
                 // empty, as parameter types from the overload signature may be used as hints when
                 // evaluating arguments, producing arg_errors for some overloads but not others.
                 // See test::overload::test_pass_generic_class_to_overload for an example.
 
                 // If the selected overload is deprecated, we log a deprecation error.
-                if callable.is_deprecated {
+                if callable.metadata.flags.is_deprecated {
                     self.error(
                         errors,
                         range,
@@ -807,7 +787,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 arg_errors,
                 call_errors,
                 return_type: res,
-                is_deprecated: callable.is_deprecated,
+                is_deprecated: callable.metadata.flags.is_deprecated,
             };
             match &closest_overload {
                 Some(overload)
@@ -821,7 +801,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let closest_overload = closest_overload.unwrap();
         self.record_overload_trace(
             range,
-            overloads.as_slice(),
+            overloads.map(|Function { signature, .. }| signature),
             &closest_overload.signature,
             false,
         );

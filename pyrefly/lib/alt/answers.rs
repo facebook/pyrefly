@@ -33,7 +33,6 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::ThreadState;
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
-use crate::alt::call::OverloadTarget;
 use crate::alt::traits::Solve;
 use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
@@ -623,7 +622,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn record_overload_trace(
         &self,
         loc: TextRange,
-        all_overloads: &[OverloadTarget],
+        all_overloads: Vec<&Callable>,
         closest_overload: &Callable,
         is_closest_overload_chosen: bool,
     ) {
@@ -632,8 +631,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 loc,
                 OverloadedCallee {
                     all_overloads: all_overloads
-                        .iter()
-                        .map(|overload| overload.signature.clone())
+                        .into_iter()
+                        .map(|func| (*func).clone())
                         .collect(),
                     closest_overload: closest_overload.clone(),
                     is_closest_overload_chosen,
