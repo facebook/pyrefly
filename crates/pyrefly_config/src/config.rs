@@ -1104,19 +1104,30 @@ mod tests {
             typeshed_path: None,
         };
 
+        let current_dir = std::env::current_dir().unwrap();
         let path_str = with_sep("path/to/my/config");
-        let test_path = PathBuf::from(path_str.clone());
+        let test_path = current_dir.join(&path_str);
 
         let project_includes_vec = vec![
-            path_str.clone() + &with_sep("/path1/**"),
-            path_str.clone() + &with_sep("/path2/path3"),
+            test_path.join("path1/**").to_string_lossy().into_owned(),
+            test_path.join("path2/path3").to_string_lossy().into_owned(),
         ];
-        let project_excludes_vec = vec![path_str.clone() + &with_sep("/tests/untyped/**")];
+        let project_excludes_vec = vec![
+            test_path
+                .join("tests/untyped/**")
+                .to_string_lossy()
+                .into_owned(),
+        ];
         let search_path = vec![test_path.join("../..")];
         python_environment.site_package_path =
             Some(vec![test_path.join("venv/lib/python1.2.3/site-packages")]);
 
-        let sub_config_matches = Glob::new(path_str.clone() + &with_sep("/sub/project/**"));
+        let sub_config_matches = Glob::new(
+            test_path
+                .join("sub/project/**")
+                .to_string_lossy()
+                .into_owned(),
+        );
 
         config.rewrite_with_path_to_config(&test_path);
 
