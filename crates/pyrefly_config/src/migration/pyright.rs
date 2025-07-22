@@ -119,10 +119,7 @@ pub enum DiagnosticLevel {
 
 impl DiagnosticLevel {
     fn to_bool(&self) -> bool {
-        match self {
-            Self::None => false,
-            _ => true,
-        }
+        !matches!(self, Self::None)
     }
 }
 

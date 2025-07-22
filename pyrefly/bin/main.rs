@@ -58,7 +58,7 @@ async fn main() -> ExitCode {
         Err(e) => {
             // If you return a Result from main, and RUST_BACKTRACE=1 is set, then
             // it will print a backtrace - which is not what we want.
-            eprintln!("{:#}", e);
+            eprintln!("{e:#}");
             ExitCode::FAILURE
         }
     }

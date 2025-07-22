@@ -67,7 +67,7 @@ pub enum ConfigSource {
 }
 
 impl ConfigSource {
-    pub fn root<'a>(&'a self) -> Option<&'a Path> {
+    pub fn root(&self) -> Option<&Path> {
         match &self {
             Self::File(path) | Self::Marker(path) => path.parent(),
             Self::Synthetic => None,
@@ -387,14 +387,14 @@ impl ConfigFile {
         self.python_environment.python_platform.as_ref().unwrap()
     }
 
-    pub fn search_path<'a>(&'a self) -> impl Iterator<Item = &'a PathBuf> + Clone {
+    pub fn search_path(&self) -> impl Iterator<Item = &PathBuf> + Clone {
         self.search_path_from_args
             .iter()
             .chain(self.search_path_from_file.iter())
             .chain(self.import_root.iter())
     }
 
-    pub fn site_package_path<'a>(&'a self) -> impl Iterator<Item = &'a PathBuf> + Clone {
+    pub fn site_package_path(&self) -> impl Iterator<Item = &PathBuf> + Clone {
         // we can use unwrap here, because the value in the root config must
         // be set in `ConfigFile::configure()`.
         self.python_environment
