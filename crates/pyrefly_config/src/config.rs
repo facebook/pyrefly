@@ -610,33 +610,36 @@ impl ConfigFile {
     fn rewrite_with_path_to_config(&mut self, config_root: &Path) -> anyhow::Result<()> {
         self.project_includes = self.project_includes.clone().from_root(config_root)?;
         self.project_excludes = self.project_excludes.clone().from_root(config_root)?;
-        self.search_path_from_file
-            .iter_mut()
-            .for_each(|search_root| {
-                let mut base = config_root.to_path_buf();
-                base.push(search_root.as_path());
-                *search_root = base;
-            });
+        self.search_path_from_file.iter_mut().try_for_each(
+            |search_root| -> anyhow::Result<()> {
+                *search_root = search_root.absolutize_from(config_root)?.to_path_buf();
+                Ok(())
+            },
+        )?;
         if let Some(import_root) = &self.import_root {
-            let mut base = config_root.to_path_buf();
-            base.push(import_root);
-            self.import_root = Some(base);
+            self.import_root = Some(import_root.absolutize_from(config_root)?.to_path_buf());
         }
         self.python_environment
             .site_package_path
             .iter_mut()
-            .for_each(|v| {
-                v.iter_mut().for_each(|site_package_path| {
-                    let mut with_base = config_root.to_path_buf();
-                    with_base.push(site_package_path.as_path());
-                    *site_package_path = with_base;
-                });
-            });
-        self.interpreters.python_interpreter = self
-            .interpreters
-            .python_interpreter
-            .take()
-            .map(|s| s.map(|i| config_root.join(i)));
+            .try_for_each(|v| -> anyhow::Result<()> {
+                v.iter_mut()
+                    .try_for_each(|site_package_path| -> anyhow::Result<()> {
+                        *site_package_path = site_package_path
+                            .absolutize_from(config_root)?
+                            .to_path_buf();
+                        Ok(())
+                    })
+            })?;
+        if let Some(interpreter) = self.interpreters.python_interpreter.take() {
+            self.interpreters.python_interpreter = Some(
+                interpreter
+                    .map(|i| -> anyhow::Result<PathBuf> {
+                        Ok(i.absolutize_from(config_root)?.to_path_buf())
+                    })
+                    .transpose_err()?,
+            );
+        }
         self.sub_configs
             .iter_mut()
             .try_for_each(|c| c.rewrite_with_path_to_config(config_root))?;
@@ -1128,7 +1131,7 @@ mod tests {
                 .to_string_lossy()
                 .into_owned(),
         ];
-        let search_path = vec![test_path.join("../..")];
+        let search_path = vec![test_path.parent().unwrap().parent().unwrap().to_path_buf()];
         python_environment.site_package_path =
             Some(vec![test_path.join("venv/lib/python1.2.3/site-packages")]);
 
