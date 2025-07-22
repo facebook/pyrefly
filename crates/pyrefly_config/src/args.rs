@@ -44,6 +44,13 @@ pub struct ConfigOverrideArgs {
     #[arg(long, value_parser = absolute_path_parser)]
     search_path: Option<Vec<PathBuf>>,
 
+    /// Disable Pyrefly default heuristics, specifically those around
+    /// constructing a modified search path. Setting this flag will instruct
+    /// Pyrefly to use the exact `search_path` you give it through your config
+    /// file and CLI args.
+    #[arg(long)]
+    disable_search_path_heuristics: Option<bool>,
+
     /// The Python version any `sys.version` checks should evaluate against.
     #[arg(long)]
     python_version: Option<PythonVersion>,
@@ -156,6 +163,9 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.search_path {
             config.search_path_from_args = x.clone();
+        }
+        if let Some(x) = &self.disable_search_path_heuristics {
+            config.disable_search_path_heuristics = *x;
         }
         if let Some(x) = &self.site_package_path {
             config.python_environment.site_package_path = Some(x.clone());
