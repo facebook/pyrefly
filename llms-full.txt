@@ -8,13 +8,238 @@ description: Pyrefly in the IDE
 Pyrefly seamlessly integrates into IDEs with our [VSCode](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly) and [OpenVSX](https://open-vsx.org/extension/meta/pyrefly) extensions. For other editors like vim/emacs, see [other editors](#other-editors).
 
 ## Quick start
-1. Install the Pyrefly extension from the [VSCode marketplace](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly) or [OpenVSX](https://open-vsx.org/extension/meta/pyrefly)
-2. Open a python file and the extension will activate
 
-## Features
-The Pyrefly extension:
-- Adds inline type errors matching the Pyrefly command-line to your editor
-- Adds language features from Pyrefly's analysis like go-to definition, hover, etc. (full list [here](https://github.com/facebook/pyrefly/issues/344)) and disables Pylance completely (VSCode's built-in Python extension)
+1. Install the Pyrefly extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly) or [Open VSX](https://open-vsx.org/extension/meta/pyrefly).
+2. Open any Python file and the extension will activate automatically.
+
+## Supported features
+
+Pyrefly’s language server powers a complete editing experience while **fully disabling Pylance**, ensuring no interference between checkers.
+
+> Each feature below links to the [official LSP specification](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/) and shows what’s currently supported by Pyrefly.
+
+---
+
+### [Go to definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_definition)
+
+Jump to where a symbol is declared with a click or <kbd>F12</kbd>.
+<video
+  src="/videos/go-to-definition.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+<!-- ### [Go to type definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_typeDefinition)
+
+Navigate to the underlying type of any expression.
+<video
+  src="/videos/go-to-type-definition.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+-->
+
+### [Find references](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_references)
+
+List all usages of a symbol across your codebase.
+<video
+  src="/videos/find-all-references.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Document symbols](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_documentSymbol)
+
+See an outline of all top-level items in the current file.
+<video
+  src="/videos/document-symbols.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Workspace symbols](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#workspace_symbol)
+
+Search globally for functions, classes, and variables.
+<!-- <video
+  src="/videos/workspace-symbols.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/> -->
+
+---
+
+### [Hover](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_hover)
+
+See type info and docstrings when hovering over code.
+<video
+  src="/videos/hover.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Document highlights](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_documentHighlight)
+
+Highlights all other instances of the symbol under your cursor.
+<video
+  src="/videos/document-highlights.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Signature help](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_signatureHelp)
+
+Live function signatures as you type, with parameter hints.
+<video
+  src="/videos/signature-help.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Completion](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_completion)
+
+Autocomplete suggestions for project-specific symbols and imports.
+<video
+  src="/videos/autocomplete.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Rename](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_rename)
+
+Safely rename symbols project-wide.
+<video
+  src="/videos/rename.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+<!-- ### [Call hierarchy](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#callHierarchy_prepare)
+
+Explore callers and callees of a method or function.
+![Call hierarchy](../gifs/call-hierarchy.gif)
+
+---
+ -->
+
+### [Diagnostics](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_publishDiagnostics)
+
+Type errors and warnings from Pyrefly’s checker appear in the diagnostics pane ("Problems" pane in VSCode).
+<video
+  src="/videos/diagnostics.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Semantic tokens](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_semanticTokens)
+
+Rich syntax highlighting based on token type and origin.
+<video
+  src="/videos/semantic-highlighting.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Inlay hints](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_inlayHint)
+
+Inline hints for types, parameter names, and return values.
+<video
+  src="/videos/inlay-hints.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Notebook support](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#notebookDocument)
+
+Works with Jupyter and notebook-style cells.
+<!-- <video
+  src="/videos/jupyter-notebooks.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/> -->
+
+---
+
+See [planned features and request your own](https://github.com/facebook/pyrefly/issues/344) on GitHub.
 
 ## Customization
 By default, Pyrefly should work in the IDE with no configuration necessary. But to ensure your project is set up properly, see [configurations](../configuration).
@@ -677,7 +902,18 @@ type stubs could be found. See
 How should Pyrefly treat function definitions with no parameter or return type annotations?
 
 By default, Pyrefly uses the `"check-and-infer-return-type"` behavior and will
-check all function bodies inferring the return type.
+check all function bodies, inferring the return type.
+
+:::info
+To provide inferred return types with `check-and-infer-return-type`, especially for
+site-package paths (third-party packages), Pyrefly may need to load and analyze
+more modules than you might otherwise see from mypy.
+
+This may result in increased type check durations or an output showing more modules
+analyzed than you expect. If this behavior is not preferred, you should set
+`untyped-def-behavior` to `skip-and-infer-return-any` in your config or pass it in
+as a flag.
+:::
 
 If this option is set to `"check-and-infer-return-any"`, then Pyrefly will still
 check the function body but will treat the return type as `Any`.
@@ -689,6 +925,12 @@ on this function body. This behavior is what PEP 484 specifies, although we do
 not recommend it for most users today; since Pyrefly will not analyze the bodies
 of untyped functions, language server functionality like showing types on hover
 and finding definitions will not be available there.
+
+:::info
+`skip-and-infer-return-any` is mypy's default inference behavior, and how we will
+attempt to migrate your existing mypy configuration when running `pyrefly init`.
+See [Migrating from Mypy](migrating-from-mypy.mdx#mypy-config-migration) for more information on config migration.
+:::
 
 - Type: one of `"check-and-infer-return-type"`, `"check-and-infer-return-any"`,
   `"skip-and-infer-return-any"`
@@ -2346,7 +2588,7 @@ Add this to your `.pre-commit-config.yaml`:
 -->
 ```yaml
 - repo: https://github.com/facebook/pyrefly
-  rev: 0.24.2
+  rev: 0.25.0
   hooks:
     - id: pyrefly-typecheck
 ```
@@ -2473,10 +2715,17 @@ If you run into any issues with config migration, please [let us know](https://g
 The following config options make Pyrefly behave more like Mypy:
 
 ```toml
-# Ignore inferred return types and use `Any` if not specified
+# By default, mypy does not check unannotated function bodies. The following flag will configure Pyrefly to match mypy's behavior:
+untyped_def_behavior = "skip-and-infer-return-any"
+```
+```toml
+# If mypy is configured with `--check-untyped-defs` or `--strict` it will check function bodies where the function signature is unannotated.
+# The following flag will enable this behavior:
 untyped_def_behavior = "check-and-infer-return-any"
+```
 
-# Ignore based on `mypy: ignore` and `mypy: ignore-errors` comments
+```toml
+# Direct Pyrefly to respect `# mypy: ignore` and `# mypy: ignore-errors` comments
 permissive-ignores = true
 ```
 

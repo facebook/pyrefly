@@ -28,8 +28,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.50a07098.css">
-<script src="/assets/js/runtime~main.c52dba46.js" defer="defer"></script>
-<script src="/assets/js/main.25bc9283.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.20c92355.js" defer="defer"></script>
+<script src="/assets/js/main.7ecaf571.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -400,7 +400,13 @@ type stubs could be found. See
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="untyped-def-behavior"><code>untyped-def-behavior</code><a href="#untyped-def-behavior" class="hash-link" aria-label="Direct link to untyped-def-behavior" title="Direct link to untyped-def-behavior">​</a></h3>
 <p>How should Pyrefly treat function definitions with no parameter or return type annotations?</p>
 <p>By default, Pyrefly uses the <code>&quot;check-and-infer-return-type&quot;</code> behavior and will
-check all function bodies inferring the return type.</p>
+check all function bodies, inferring the return type.</p>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>To provide inferred return types with <code>check-and-infer-return-type</code>, especially for
+site-package paths (third-party packages), Pyrefly may need to load and analyze
+more modules than you might otherwise see from mypy.</p><p>This may result in increased type check durations or an output showing more modules
+analyzed than you expect. If this behavior is not preferred, you should set
+<code>untyped-def-behavior</code> to <code>skip-and-infer-return-any</code> in your config or pass it in
+as a flag.</p></div></div>
 <p>If this option is set to <code>&quot;check-and-infer-return-any&quot;</code>, then Pyrefly will still
 check the function body but will treat the return type as <code>Any</code>.</p>
 <p>If this option is set to <code>&quot;skip-and-infer-return-any&quot;</code>, Pyrefly will again treat
@@ -410,6 +416,9 @@ on this function body. This behavior is what PEP 484 specifies, although we do
 not recommend it for most users today; since Pyrefly will not analyze the bodies
 of untyped functions, language server functionality like showing types on hover
 and finding definitions will not be available there.</p>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p><code>skip-and-infer-return-any</code> is mypy&#x27;s default inference behavior, and how we will
+attempt to migrate your existing mypy configuration when running <code>pyrefly init</code>.
+See <a href="/en/docs/migrating-from-mypy/#mypy-config-migration">Migrating from Mypy</a> for more information on config migration.</p></div></div>
 <ul>
 <li>Type: one of <code>&quot;check-and-infer-return-type&quot;</code>, <code>&quot;check-and-infer-return-any&quot;</code>,
 <code>&quot;skip-and-infer-return-any&quot;</code></li>

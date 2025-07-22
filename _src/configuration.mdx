@@ -407,7 +407,18 @@ type stubs could be found. See
 How should Pyrefly treat function definitions with no parameter or return type annotations?
 
 By default, Pyrefly uses the `"check-and-infer-return-type"` behavior and will
-check all function bodies inferring the return type.
+check all function bodies, inferring the return type.
+
+:::info
+To provide inferred return types with `check-and-infer-return-type`, especially for
+site-package paths (third-party packages), Pyrefly may need to load and analyze
+more modules than you might otherwise see from mypy.
+
+This may result in increased type check durations or an output showing more modules
+analyzed than you expect. If this behavior is not preferred, you should set
+`untyped-def-behavior` to `skip-and-infer-return-any` in your config or pass it in
+as a flag.
+:::
 
 If this option is set to `"check-and-infer-return-any"`, then Pyrefly will still
 check the function body but will treat the return type as `Any`.
@@ -419,6 +430,12 @@ on this function body. This behavior is what PEP 484 specifies, although we do
 not recommend it for most users today; since Pyrefly will not analyze the bodies
 of untyped functions, language server functionality like showing types on hover
 and finding definitions will not be available there.
+
+:::info
+`skip-and-infer-return-any` is mypy's default inference behavior, and how we will
+attempt to migrate your existing mypy configuration when running `pyrefly init`.
+See [Migrating from Mypy](migrating-from-mypy.mdx#mypy-config-migration) for more information on config migration.
+:::
 
 - Type: one of `"check-and-infer-return-type"`, `"check-and-infer-return-any"`,
   `"skip-and-infer-return-any"`

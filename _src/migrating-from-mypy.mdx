@@ -42,10 +42,17 @@ If you run into any issues with config migration, please [let us know](https://g
 The following config options make Pyrefly behave more like Mypy:
 
 ```toml
-# Ignore inferred return types and use `Any` if not specified
+# By default, mypy does not check unannotated function bodies. The following flag will configure Pyrefly to match mypy's behavior:
+untyped_def_behavior = "skip-and-infer-return-any"
+```
+```toml
+# If mypy is configured with `--check-untyped-defs` or `--strict` it will check function bodies where the function signature is unannotated.
+# The following flag will enable this behavior:
 untyped_def_behavior = "check-and-infer-return-any"
+```
 
-# Ignore based on `mypy: ignore` and `mypy: ignore-errors` comments
+```toml
+# Direct Pyrefly to respect `# mypy: ignore` and `# mypy: ignore-errors` comments
 permissive-ignores = true
 ```
 
