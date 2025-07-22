@@ -431,8 +431,8 @@ pub fn find_import(
         .find(module)
     {
         Ok(path)
-    } else if let Some(path) =
-        find_module_in_search_path(module, config.fallback_search_path.iter())?
+    } else if !config.disable_search_path_heuristics
+        && let Some(path) = find_module_in_search_path(module, config.fallback_search_path.iter())?
     {
         Ok(path)
     } else if let Some(path) = find_module_in_site_package_path(

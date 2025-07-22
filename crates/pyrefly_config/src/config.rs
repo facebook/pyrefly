@@ -399,7 +399,11 @@ impl ConfigFile {
         self.search_path_from_args
             .iter()
             .chain(self.search_path_from_file.iter())
-            .chain(self.import_root.iter())
+            .chain(if self.disable_search_path_heuristics {
+                None.iter()
+            } else {
+                self.import_root.iter()
+            })
     }
 
     pub fn site_package_path<'a>(&'a self) -> impl Iterator<Item = &'a PathBuf> + Clone {
@@ -415,18 +419,23 @@ impl ConfigFile {
 
     /// Gets the full, ordered path used for import lookup. Used for pretty-printing.
     pub fn structured_import_lookup_path(&self) -> Vec<ImportLookupPathPart> {
-        vec![
+        let mut result = vec![
             ImportLookupPathPart::SearchPathFromArgs(&self.search_path_from_args),
             ImportLookupPathPart::SearchPathFromFile(&self.search_path_from_file),
-            ImportLookupPathPart::ImportRoot(self.import_root.as_ref()),
-            ImportLookupPathPart::FallbackSearchPath(&self.fallback_search_path),
-            ImportLookupPathPart::SitePackagePath(
-                self.python_environment.site_package_path.as_ref().unwrap(),
-            ),
-            ImportLookupPathPart::InterpreterSitePackagePath(
-                &self.python_environment.interpreter_site_package_path,
-            ),
-        ]
+        ];
+        if !self.disable_search_path_heuristics {
+            result.push(ImportLookupPathPart::ImportRoot(self.import_root.as_ref()));
+            result.push(ImportLookupPathPart::FallbackSearchPath(
+                &self.fallback_search_path,
+            ));
+        }
+        result.push(ImportLookupPathPart::SitePackagePath(
+            self.python_environment.site_package_path.as_ref().unwrap(),
+        ));
+        result.push(ImportLookupPathPart::InterpreterSitePackagePath(
+            &self.python_environment.interpreter_site_package_path,
+        ));
+        result
     }
 
     pub fn get_sys_info(&self) -> SysInfo {
