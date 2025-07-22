@@ -12,7 +12,6 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use clap::Parser;
 use dupe::Dupe;
-use path_absolutize::Absolutize;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::globs::FilteredGlobs;
@@ -59,7 +58,7 @@ fn config_finder(args: ConfigOverrideArgs) -> ConfigFinder {
 }
 
 fn absolutize(globs: Globs) -> anyhow::Result<Globs> {
-    Ok(globs.from_root(PathBuf::new().absolutize()?.as_ref()))
+    globs.from_root(PathBuf::new().as_ref())
 }
 
 fn get_explicit_config(
@@ -98,10 +97,12 @@ fn get_globs_and_config_for_project(
             let current_dir = std::env::current_dir().context("cannot identify current dir")?;
             let config_finder = config_finder(args.clone());
             let config = config_finder.directory(&current_dir).unwrap_or_else(|| {
-                let (config, errors) = args.override_config(ConfigFile::init_at_root(
-                    &current_dir,
-                    &ProjectLayout::new(&current_dir),
-                ));
+                let (default_config, default_errors) =
+                    ConfigFile::init_at_root(&current_dir, &ProjectLayout::new(&current_dir));
+                if let Err(error) = default_errors {
+                    debug_log(vec![ConfigError::error(error)]);
+                }
+                let (config, errors) = args.override_config(default_config);
                 // Since this is a config we generated, these are likely internal errors.
                 debug_log(errors);
                 config
