@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use itertools::Itertools;
+use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::arc_id::WeakArcId;
 use pyrefly_util::lock::Mutex;
@@ -21,12 +22,10 @@ use starlark_map::small_set::SmallSet;
 use tracing::error;
 
 use crate::commands::config_finder::standard_config_finder;
-use crate::common::files::PYTHON_FILE_SUFFIXES_TO_WATCH;
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
 use crate::config::environment::environment::PythonEnvironment;
 use crate::config::finder::ConfigFinder;
-use crate::config::util::ConfigOrigin;
 
 /// Information about the Python environment p
 #[derive(Debug, Clone)]
@@ -135,7 +134,7 @@ impl WeakConfigCache {
         config
             .search_path()
             .chain(config.site_package_path())
-            .cartesian_product(PYTHON_FILE_SUFFIXES_TO_WATCH)
+            .cartesian_product(PYTHON_EXTENSIONS)
             .for_each(|(s, suffix)| {
                 result.push((s.to_owned(), format!("**/*.{suffix}")));
             });
@@ -189,8 +188,7 @@ impl Workspaces {
         let workspaces = workspaces.dupe();
         standard_config_finder(Arc::new(move |dir, mut config| {
             if let Some(dir) = dir
-                && config.interpreters.python_interpreter.is_none()
-                && config.interpreters.conda_environment.is_none()
+                && config.interpreters.is_empty()
             {
                 workspaces.get_with(dir.to_owned(), |w| {
                     if let Some(search_path) = w.search_path.clone() {
@@ -203,8 +201,7 @@ impl Workspaces {
                     {
                         let site_package_path = config.python_environment.site_package_path.take();
                         env.site_package_path = site_package_path;
-                        config.interpreters.python_interpreter =
-                            Some(ConfigOrigin::auto(interpreter));
+                        config.interpreters.set_python_interpreter(interpreter);
                         config.python_environment = env;
                     }
                 })

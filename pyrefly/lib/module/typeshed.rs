@@ -26,8 +26,8 @@ use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
 use crate::config::error::ErrorDisplayConfig;
-use crate::error::kind::ErrorKind;
-use crate::error::kind::Severity;
+use crate::config::error_kind::ErrorKind;
+use crate::config::error_kind::Severity;
 
 #[derive(Debug, Clone)]
 pub struct BundledTypeshed {
@@ -105,7 +105,7 @@ impl BundledTypeshed {
                 fs_anyhow::create_dir_all(parent)?;
             }
 
-            fs_anyhow::write(&file_path, (*contents).as_bytes())?;
+            fs_anyhow::write(&file_path, contents.as_bytes())?;
         }
 
         BundledTypeshed::config()

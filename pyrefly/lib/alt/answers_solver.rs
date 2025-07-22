@@ -43,9 +43,8 @@ use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorContext;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
-use crate::error::kind::ErrorKind;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
 use crate::graph::calculation::Calculation;
@@ -66,7 +65,7 @@ pub struct CalcId(pub Bindings, pub AnyIdx);
 
 impl Debug for CalcId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CalcId({}, {:?})", self.0.module_info().name(), self.1)
+        write!(f, "CalcId({}, {:?})", self.0.module().name(), self.1)
     }
 }
 
@@ -75,7 +74,7 @@ impl Display for CalcId {
         write!(
             f,
             "CalcId({}, {})",
-            self.0.module_info().name(),
+            self.0.module().name(),
             self.1.display_with(&self.0),
         )
     }
@@ -83,7 +82,7 @@ impl Display for CalcId {
 
 impl PartialEq for CalcId {
     fn eq(&self, other: &Self) -> bool {
-        (self.0.module_info(), &self.1) == (other.0.module_info(), &other.1)
+        (self.0.module(), &self.1) == (other.0.module(), &other.1)
     }
 }
 
@@ -92,11 +91,7 @@ impl Eq for CalcId {}
 impl Ord for CalcId {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.1.cmp(&other.1) {
-            Ordering::Equal => self
-                .0
-                .module_info()
-                .name()
-                .cmp(&other.0.module_info().name()),
+            Ordering::Equal => self.0.module().name().cmp(&other.0.module().name()),
             not_equal => not_equal,
         }
     }
@@ -442,8 +437,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.base_errors
     }
 
-    pub fn module_info(&self) -> &ModuleInfo {
-        self.bindings.module_info()
+    pub fn module(&self) -> &ModuleInfo {
+        self.bindings.module()
     }
 
     pub fn stack(&self) -> &CalcStack {
@@ -620,9 +615,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        if module == self.module_info().name()
-            && path.is_none_or(|path| path == self.module_info().path())
-        {
+        if module == self.module().name() && path.is_none_or(|path| path == self.module().path()) {
             Some(self.get(k))
         } else {
             self.answers.get(module, path, k, self.thread_state)
@@ -818,23 +811,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         errors: &ErrorCollector,
         range: TextRange,
-        kind: ErrorKind,
-        context: Option<&dyn Fn() -> ErrorContext>,
+        info: ErrorInfo,
         msg: String,
     ) -> Type {
-        errors.add(range, kind, context, vec1![msg]);
+        errors.add(range, info, vec1![msg]);
         Type::any_error()
     }
 
     /// Create a new error collector. Useful when a caller wants to decide whether or not to report
     /// errors from an operation.
     pub fn error_collector(&self) -> ErrorCollector {
-        ErrorCollector::new(self.module_info().dupe(), ErrorStyle::Delayed)
+        ErrorCollector::new(self.module().dupe(), ErrorStyle::Delayed)
     }
 
     /// Create an error collector that simply swallows errors. Useful when a caller wants to try an
     /// operation that may error but never report errors from it.
     pub fn error_swallower(&self) -> ErrorCollector {
-        ErrorCollector::new(self.module_info().dupe(), ErrorStyle::Never)
+        ErrorCollector::new(self.module().dupe(), ErrorStyle::Never)
     }
 }

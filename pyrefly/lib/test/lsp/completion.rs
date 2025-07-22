@@ -6,6 +6,7 @@
  */
 
 use lsp_types::CompletionItem;
+use lsp_types::CompletionItemKind;
 use pretty_assertions::assert_eq;
 use ruff_text_size::TextSize;
 
@@ -23,18 +24,20 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
         ..
     } in state.transaction().completion(handle, position)
     {
-        report.push_str("\n- (");
-        report.push_str(&format!("{:?}", kind.unwrap()));
-        report.push_str(") ");
-        report.push_str(&label);
-        if let Some(detail) = detail {
-            report.push_str(": ");
-            report.push_str(&detail);
-        }
-        if let Some(insert_text) = insert_text {
-            report.push_str(" inserting `");
-            report.push_str(&insert_text);
-            report.push('`');
+        if kind != Some(CompletionItemKind::KEYWORD) {
+            report.push_str("\n- (");
+            report.push_str(&format!("{:?}", kind.unwrap()));
+            report.push_str(") ");
+            report.push_str(&label);
+            if let Some(detail) = detail {
+                report.push_str(": ");
+                report.push_str(&detail);
+            }
+            if let Some(insert_text) = insert_text {
+                report.push_str(" inserting `");
+                report.push_str(&insert_text);
+                report.push('`');
+            }
         }
     }
     report

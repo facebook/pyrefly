@@ -68,7 +68,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Class::new(
             def_index,
             x.name.clone(),
-            self.module_info().dupe(),
+            self.module().dupe(),
             precomputed_tparams,
             fields,
         )
@@ -83,7 +83,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Class::new(
             def_index,
             name.clone(),
-            self.module_info().dupe(),
+            self.module().dupe(),
             Some(Arc::new(TParams::default())),
             fields.clone(),
         )

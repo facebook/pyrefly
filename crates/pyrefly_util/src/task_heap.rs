@@ -206,7 +206,6 @@ impl<K: Ord, V> TaskHeap<K, V> {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn work_without_cancellation(&self, f: impl FnMut(K, V)) {
         let _ = self.work(f);
     }

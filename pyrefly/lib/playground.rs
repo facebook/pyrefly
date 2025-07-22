@@ -24,8 +24,8 @@ use ruff_text_size::TextSize;
 use serde::Serialize;
 
 use crate::config::config::ConfigFile;
+use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
-use crate::error::kind::Severity;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -258,7 +258,7 @@ impl Playground {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::kind::ErrorKind;
+    use crate::config::error_kind::ErrorKind;
 
     #[test]
     fn test_regular_import() {

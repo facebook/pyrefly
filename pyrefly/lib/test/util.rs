@@ -42,6 +42,7 @@ use crate::config::base::UntypedDefBehavior;
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
+use crate::module::finder::find_import;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -222,7 +223,7 @@ impl TestEnv {
             let name = ModuleName::from_str(module);
             Handle::new(
                 name,
-                config_file.find_import(name, None).unwrap(),
+                find_import(&config_file, name, None).unwrap(),
                 config.dupe(),
             )
         })

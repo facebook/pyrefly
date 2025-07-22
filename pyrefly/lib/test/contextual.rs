@@ -351,6 +351,21 @@ x: C[list[A]] = C([B()])
 );
 
 testcase!(
+    test_context_typeddict_ctor_return,
+    r#"
+from typing import TypedDict
+
+class A: ...
+class B(A): ...
+
+class TD[T](TypedDict):
+    x: list[T]
+
+x: TD[A] = TD(x = [B()])
+"#,
+);
+
+testcase!(
     test_context_in_multi_target_assign,
     r#"
 class A: ...
@@ -451,5 +466,16 @@ class B(A):
 class C(B):
     def __init__(self):
         self.x = ["hello world"]
+    "#,
+);
+
+testcase!(
+    test_context_special_methods,
+    r#"
+from typing import assert_type, reveal_type
+class A: ...
+class B(A): ...
+x1: list[A] = reveal_type([B()]) # E: revealed type: list[A]
+x2: list[A] = assert_type([B()], list[A])
     "#,
 );

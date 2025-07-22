@@ -41,7 +41,7 @@ del p[0]  # E: Cannot delete item in `Pair`
 );
 
 testcase!(
-    test_named_tuple_functional,
+    test_named_tuple_functional_attr_types,
     r#"
 from typing import NamedTuple, Any, assert_type
 from collections import namedtuple
@@ -58,6 +58,25 @@ assert_type(Point4(1, 2).x, Any)
 assert_type(Point5(1, 2).x, int)
 assert_type(Point5(x=1, y=2).x, int)
 assert_type(Point6(1, 2).x, int)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_functional_defaults_and_constructor,
+    r#"
+from typing import NamedTuple
+from collections import namedtuple
+Point1 = namedtuple("Point1", ["x", "y"])
+p1_1 = Point1(x=1, y=1)
+p1_2 = Point1(2.3, "")
+p1_3 = Point1(2.3)  # E: Missing argument `y` in function `Point1.__new__`
+Point2 = namedtuple("Point2", ["x", "y"], defaults=(1, 2))
+p1_1 = Point2(x=1, y=1)
+p1_2 = Point2(1, 1)
+p1_3 = Point2()  # Okay
+Point3 = NamedTuple('Point3', [('x', int), ('y', int)])
+Point3(1, 2)
+Point3(1)  # E: Missing argument `y` in function `Point3.__new__`
     "#,
 );
 
@@ -273,5 +292,39 @@ class B(A):
 
 class C(B):
     y: int  # OK
+"#,
+);
+
+testcase!(
+    test_named_tuple_invalid_field,
+    r#"
+# Used to crash, see https://github.com/facebook/pyrefly/issues/701
+from dataclasses import InitVar
+from typing import NamedTuple
+
+class Cls(NamedTuple):
+    fld: InitVar # E: Expected a type argument for `InitVar`
+"#,
+);
+
+testcase!(
+    bug = "Raise an error on InitVar, or allow it fully",
+    test_named_tuple_initvar,
+    r#"
+# InitVar isn't meant to be used with NamedTuple.
+# Pyright/Python treat this field as int, Mypy as InitVar, Pyrefly as Any.
+
+from dataclasses import InitVar
+from typing import Any, assert_type, NamedTuple
+
+class Cls(NamedTuple):
+    fld: InitVar[int]
+
+v = Cls(1)
+v = Cls("no")
+assert_type(v[0], Any)
+
+for y in v:
+    print(assert_type(y, Any))
 "#,
 );

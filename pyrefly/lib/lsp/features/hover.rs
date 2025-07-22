@@ -5,18 +5,17 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use export::docstring::Docstring;
 use lsp_types::Hover;
 use lsp_types::HoverContents;
 use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::Url;
+use pyrefly_python::docstring::Docstring;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::types::Type;
 use ruff_text_size::TextSize;
 use starlark_map::small_set::SmallSet;
 
-use crate::export;
 use crate::state::handle::Handle;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::state::Transaction;
@@ -58,9 +57,14 @@ impl HoverValue {
     }
 
     pub fn format(&self) -> Hover {
-        let docstring_formatted = self.docstring.clone().map_or("".to_owned(), |docstring| {
-            format!("\n---\n{}", docstring.as_string().trim())
-        });
+        let docstring_formatted = self
+            .docstring
+            .as_ref()
+            .map(|docstring| docstring.resolve())
+            .map_or_else(
+                || "".to_owned(),
+                |content| format!("\n---\n{}", content.trim()),
+            );
         let kind_formatted = self.kind.map_or("".to_owned(), |kind| {
             format!("{} ", kind.display_for_hover())
         });
@@ -94,10 +98,11 @@ pub fn get_hover(
     position: TextSize,
 ) -> Option<Hover> {
     let type_ = transaction.get_type_at(handle, position)?;
-    let (kind, name, docstring) = if let Some(FindDefinitionItemWithDocstring {
+    let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
         metadata,
-        location,
-        docstring,
+        definition_range: definition_location,
+        module,
+        docstring_range,
     }) = transaction
         .find_definition(handle, position, true)
         // TODO: handle more than 1 definition
@@ -106,11 +111,18 @@ pub fn get_hover(
     {
         (
             metadata.symbol_kind(),
-            Some(location.module.code_at(location.range).to_owned()),
-            docstring,
+            Some(module.code_at(definition_location).to_owned()),
+            docstring_range,
+            Some(module),
         )
     } else {
-        (None, None, None)
+        (None, None, None, None)
+    };
+
+    let docstring = if let (Some(docstring), Some(module)) = (docstring_range, module) {
+        Some(Docstring(docstring, module))
+    } else {
+        None
     };
 
     Some(

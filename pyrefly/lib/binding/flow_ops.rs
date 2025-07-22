@@ -25,7 +25,8 @@ use crate::binding::scope::FlowInfo;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::Loop;
 use crate::binding::scope::LoopExit;
-use crate::error::kind::ErrorKind;
+use crate::config::error_kind::ErrorKind;
+use crate::error::context::ErrorInfo;
 use crate::graph::index::Idx;
 
 impl<'a> BindingsBuilder<'a> {
@@ -178,8 +179,7 @@ impl<'a> BindingsBuilder<'a> {
             // Python treats break and continue outside of a loop as a syntax error.
             self.error(
                 range,
-                ErrorKind::ParseError,
-                None,
+                ErrorInfo::Kind(ErrorKind::ParseError),
                 format!("Cannot `{exit}` outside loop"),
             );
         }

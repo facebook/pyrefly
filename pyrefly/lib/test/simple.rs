@@ -1658,3 +1658,35 @@ def f(x:float, y:bool) -> float:
     return x * y 
 "#,
 );
+
+testcase!(
+    test_assert_type_class_union,
+    r#"
+from typing import assert_type
+
+class A: pass
+
+def f(condition: bool):
+    if condition:
+        x = A()
+    else:
+        x = A
+    assert_type(x, A | type[A])
+    "#,
+);
+
+testcase!(test_panic_docstring, "\"\"\" F\n\u{85}\"\"\"",);
+
+testcase!(
+    test_nested_list_comp,
+    r#"from typing import assert_type
+assert_type([a for a in [b for b in ["a", "b"]]], list[str])
+"#,
+);
+
+testcase!(
+    test_incomplete_nested_list_comp,
+    r#"# Issue https://github.com/facebook/pyrefly/issues/455
+[a for [a for # E: Could # E: Parse # E: Could # E: Parse # E: Parse
+"#,
+);

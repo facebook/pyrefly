@@ -9,6 +9,7 @@ use std::iter;
 
 use dupe::Dupe;
 use pyrefly_python::dunder;
+use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -23,13 +24,13 @@ use crate::alt::expr::TypeOrExpr;
 use crate::alt::types::class_metadata::EnumMetadata;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::KeyExport;
+use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
-use crate::error::kind::ErrorKind;
 use crate::export::exports::Exports;
-use crate::module::module_info::TextRangeWithModule;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
@@ -530,8 +531,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Err(msg) => results.push(self.error(
                     errors,
                     range,
-                    ErrorKind::MissingAttribute,
-                    context,
+                    ErrorInfo::new(ErrorKind::MissingAttribute, context),
                     msg,
                 )),
             }
@@ -581,8 +581,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 range,
-                                ErrorKind::MissingAttribute,
-                                context,
+                                ErrorInfo::new(ErrorKind::MissingAttribute, context),
                                 e.to_error_msg(attr_name),
                             )
                         }),
@@ -590,8 +589,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 LookupResult::InternalError(e) => attr_tys.push(self.error(
                     errors,
                     range,
-                    ErrorKind::InternalError,
-                    context,
+                    ErrorInfo::new(ErrorKind::InternalError, context),
                     e.to_error_msg(attr_name, todo_ctx),
                 )),
                 LookupResult::NotFound(_) => {
@@ -672,8 +670,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::MissingAttribute,
-                    context,
+                    ErrorInfo::new(ErrorKind::MissingAttribute, context),
                     not_found.to_error_msg(attr_name),
                 );
             }
@@ -696,8 +693,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorKind::MissingAttribute,
-                            context,
+                            ErrorInfo::new(ErrorKind::MissingAttribute, context),
                             no_access.to_error_msg(attr_name),
                         );
                     }
@@ -721,8 +717,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::MissingAttribute,
-                    context,
+                    ErrorInfo::new(ErrorKind::MissingAttribute, context),
                     not_found.to_error_msg(attr_name),
                 );
             }
@@ -744,8 +739,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorKind::MissingAttribute,
-                            context,
+                            ErrorInfo::new(ErrorKind::MissingAttribute, context),
                             no_access.to_error_msg(attr_name),
                         );
                     }
@@ -771,8 +765,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::InternalError,
-                    context,
+                    ErrorInfo::new(ErrorKind::InternalError, context),
                     InternalError::AttributeBaseUndefined(base.clone())
                         .to_error_msg(attr_name, todo_ctx),
                 );
@@ -834,8 +827,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::NoAccess,
-                        context,
+                        ErrorInfo::new(ErrorKind::NoAccess, context),
                         e.to_error_msg(attr_name),
                     );
                 }
@@ -846,7 +838,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         format!("Cannot set field `{attr_name}`"),
                         reason.error_message()
                     ];
-                    errors.add(range, ErrorKind::ReadOnly, None, msg);
+                    errors.add(range, ErrorInfo::Kind(ErrorKind::ReadOnly), msg);
                 }
                 LookupResult::Found(Attribute {
                     inner: AttributeInner::Property(_, None, cls),
@@ -855,8 +847,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::ReadOnly,
-                        context,
+                        ErrorInfo::new(ErrorKind::ReadOnly, context),
                         e.to_error_msg(attr_name),
                     );
                 }
@@ -883,8 +874,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 range,
-                                ErrorKind::ReadOnly,
-                                context,
+                                ErrorInfo::new(ErrorKind::ReadOnly, context),
                                 e.to_error_msg(attr_name),
                             );
                         }
@@ -893,8 +883,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 range,
-                                ErrorKind::NoAccess,
-                                context,
+                                ErrorInfo::new(ErrorKind::NoAccess, context),
                                 e.to_error_msg(attr_name),
                             );
                         }
@@ -904,8 +893,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::InternalError,
-                        context,
+                        ErrorInfo::new(ErrorKind::InternalError, context),
                         e.to_error_msg(attr_name, todo_ctx),
                     );
                 }
@@ -932,8 +920,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::InternalError,
-                    context,
+                    ErrorInfo::new(ErrorKind::InternalError, context),
                     InternalError::AttributeBaseUndefined(base.clone())
                         .to_error_msg(attr_name, todo_ctx),
                 );
@@ -964,8 +951,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::NoAccess,
-                        context,
+                        ErrorInfo::new(ErrorKind::NoAccess, context),
                         e.to_error_msg(attr_name),
                     );
                 }
@@ -976,14 +962,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         format!("Cannot delete field `{attr_name}`"),
                         reason.error_message()
                     ];
-                    errors.add(range, ErrorKind::ReadOnly, None, msg);
+                    errors.add(range, ErrorInfo::Kind(ErrorKind::ReadOnly), msg);
                 }
                 LookupResult::InternalError(e) => {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::InternalError,
-                        context,
+                        ErrorInfo::new(ErrorKind::InternalError, context),
                         e.to_error_msg(attr_name, todo_ctx),
                     );
                 }
@@ -1197,8 +1182,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::ImplicitImport,
-                    context,
+                    ErrorInfo::new(ErrorKind::ImplicitImport, context),
                     format!("Module `{name}` exists, but was not imported explicitly. You are relying on other modules to load it."),
                 );
                 Ok(ty)
@@ -1849,6 +1833,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
     }
+
+    // When coercing an instance of condition_type to bool, check that either it does not override
+    // __bool__, or that condition_type.__bool__ is callable.
+    pub fn check_dunder_bool_is_callable(
+        &self,
+        condition_type: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let cond_bool_ty = self.type_of_magic_dunder_attr(
+            condition_type,
+            &dunder::BOOL,
+            range,
+            errors,
+            None,
+            "__bool__",
+        );
+
+        // test::narrow::test_walrus_value is an example of a valid union type that
+        // as_call_target() does not handle.
+        if let Some(ty) = cond_bool_ty
+            && !matches!(ty, Type::Union(_) | Type::Never(_))
+            && self.as_call_target(ty.clone()).is_none()
+        {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                format!(
+                    "`{}.__bool__` has type `{}`, which is not callable",
+                    self.for_display(condition_type.clone()),
+                    self.for_display(ty.clone()),
+                ),
+            );
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -2040,44 +2060,5 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // - If `base` is a union, expose only attributes shared by all members
         // - If `base` is an intersection, expose all possible attributes for any members
         self.completions_no_union_intersection(base, expected_attribute_name, include_types)
-    }
-}
-
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    // When coercing an instance of condition_type to bool, check that either it does not override
-    // __bool__, or that condition_type.__bool__ is callable.
-    pub fn check_dunder_bool_is_callable(
-        &self,
-        condition_type: &Type,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) {
-        let cond_bool_ty = self.type_of_magic_dunder_attr(
-            condition_type,
-            &dunder::BOOL,
-            range,
-            errors,
-            None,
-            "__bool__",
-        );
-
-        // test::narrow::test_walrus_value is an example of a valid union type that
-        // as_call_target() does not handle.
-        if let Some(ty) = cond_bool_ty
-            && !matches!(ty, Type::Union(_) | Type::Never(_))
-            && self.as_call_target(ty.clone()).is_none()
-        {
-            self.error(
-                errors,
-                range,
-                ErrorKind::InvalidArgument,
-                None,
-                format!(
-                    "`{}.__bool__` has type `{}`, which is not callable",
-                    self.for_display(condition_type.clone()),
-                    self.for_display(ty.clone()),
-                ),
-            );
-        }
     }
 }

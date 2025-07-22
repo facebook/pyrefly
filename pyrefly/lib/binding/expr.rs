@@ -6,6 +6,7 @@
  */
 
 use pyrefly_python::ast::Ast;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
@@ -17,6 +18,7 @@ use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprBoolOp;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprLambda;
+use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNoneLiteral;
 use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::ExprYield;
@@ -46,10 +48,10 @@ use crate::binding::scope::Flow;
 use crate::binding::scope::Scope;
 use crate::binding::scope::ScopeClass;
 use crate::binding::scope::ScopeKind;
-use crate::error::kind::ErrorKind;
+use crate::config::error_kind::ErrorKind;
+use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
-use crate::module::short_identifier::ShortIdentifier;
 use crate::types::callable::unexpected_keyword;
 use crate::types::types::Type;
 
@@ -74,6 +76,9 @@ pub enum Usage {
     /// a cast, etc) where we are dealing with static types. I will not pin
     /// any placeholder types.
     StaticTypeInformation,
+    /// I'm a usage in a mutable lookup (a reassignment or delete). I will not
+    /// pin any placeholder types.
+    MutableLookup,
 }
 
 enum TestAssertion {
@@ -211,11 +216,12 @@ impl<'a> BindingsBuilder<'a> {
     /// the type if we found that name in scope; if we do not find the name we
     /// record an error and fall back to `Any`.
     ///
-    /// This function is the the core scope lookup logic for binding creation.
+    /// This function is the core scope lookup logic for binding creation.
     pub fn ensure_name(
         &mut self,
         name: &Identifier,
         value: Result<Binding, LookupError>,
+        used_in_static_type: bool,
     ) -> Idx<Key> {
         let key = Key::BoundName(ShortIdentifier::new(name));
         if name.is_empty() {
@@ -235,10 +241,14 @@ impl<'a> BindingsBuilder<'a> {
                     // Don't check flow for global/nonlocal lookups
                     if let Some(error_message) = self
                         .scopes
-                        .get_flow_style(&name.id)
+                        .get_flow_style(&name.id, used_in_static_type)
                         .uninitialized_error_message(name)
                     {
-                        self.error(name.range, ErrorKind::UnboundName, None, error_message);
+                        self.error(
+                            name.range,
+                            ErrorInfo::Kind(ErrorKind::UnboundName),
+                            error_message,
+                        );
                     }
                 }
                 self.insert_binding(key, value)
@@ -247,13 +257,24 @@ impl<'a> BindingsBuilder<'a> {
                 // Record a type error and fall back to `Any`.
                 self.error(
                     name.range,
-                    ErrorKind::UnknownName,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::UnknownName),
                     error.message(name),
                 );
                 self.insert_binding(key, Binding::Type(Type::any_error()))
             }
         }
+    }
+
+    pub fn ensure_mutable_name(&mut self, x: &ExprName, usage: &mut Usage) -> Idx<Key> {
+        let name = Ast::expr_name_identifier(x.clone());
+        let binding = self
+            .lookup_name(Hashed::new(&name.id), LookupKind::Mutable)
+            .map(Binding::Forward);
+        self.ensure_name(
+            &name,
+            binding,
+            matches!(usage, Usage::StaticTypeInformation),
+        )
     }
 
     fn bind_comprehensions(
@@ -268,7 +289,9 @@ impl<'a> BindingsBuilder<'a> {
             // This is necessary so that, e.g. `[x for x in x]` correctly uses the outer scope for
             // the `in x` lookup.
             self.ensure_expr(&mut comp.iter, usage);
-            let iterable_value_idx = self.insert_binding(
+            // Incomplete nested comprehensions can have identical iterators
+            // for inner and outer loops. It is safe to overwrite it because it literally the same.
+            let iterable_value_idx = self.insert_binding_overwrite(
                 Key::Anon(comp.iter.range()),
                 Binding::IterableValue(None, comp.iter.clone(), IsAsync::new(comp.is_async)),
             );
@@ -498,7 +521,9 @@ impl<'a> BindingsBuilder<'a> {
                 for kw in keywords {
                     self.ensure_expr(&mut kw.value, usage);
                     unexpected_keyword(
-                        &|msg| self.error(*range, ErrorKind::UnexpectedKeyword, None, msg),
+                        &|msg| {
+                            self.error(*range, ErrorInfo::Kind(ErrorKind::UnexpectedKeyword), msg)
+                        },
                         "super",
                         kw,
                     );
@@ -526,8 +551,7 @@ impl<'a> BindingsBuilder<'a> {
                         _ => {
                             self.error(
                                 *range,
-                                ErrorKind::InvalidSuperCall,
-                                None,
+                                ErrorInfo::Kind(ErrorKind::InvalidSuperCall),
                                 "`super` call with no arguments is valid only inside a method"
                                     .to_owned(),
                             );
@@ -551,8 +575,7 @@ impl<'a> BindingsBuilder<'a> {
                         // This is a very niche use case, and we don't support it aside from not erroring.
                         self.error(
                             *range,
-                            ErrorKind::InvalidSuperCall,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidSuperCall),
                             format!("`super` takes at most 2 arguments, got {nargs}"),
                         );
                     }
@@ -630,7 +653,11 @@ impl<'a> BindingsBuilder<'a> {
                 let binding = self
                     .lookup_name_usage(Hashed::new(&name.id), usage)
                     .map(Binding::Forward);
-                self.ensure_name(&name, binding);
+                self.ensure_name(
+                    &name,
+                    binding,
+                    matches!(usage, Usage::StaticTypeInformation),
+                );
             }
             Expr::Yield(x) => {
                 self.record_yield(x.clone());
@@ -667,7 +694,7 @@ impl<'a> BindingsBuilder<'a> {
                         .lookup_name(Hashed::new(&name.id), LookupKind::Regular)
                         .map(Binding::Forward),
                 };
-                self.ensure_name(&name, binding);
+                self.ensure_name(&name, binding, true);
             }
             Expr::Subscript(ExprSubscript { value, .. })
                 if self.as_special_export(value) == Some(SpecialExport::Literal) =>
@@ -699,8 +726,7 @@ impl<'a> BindingsBuilder<'a> {
                     Err(e) => {
                         self.error(
                             literal.range,
-                            ErrorKind::ParseError,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::ParseError),
                             format!("Could not parse type string: {}, got {e}", literal.value),
                         );
                     }

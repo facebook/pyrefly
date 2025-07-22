@@ -24,11 +24,12 @@ use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
 use crate::alt::solve::Iterable;
 use crate::binding::binding::KeyAnnotation;
+use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
-use crate::error::kind::ErrorKind;
 use crate::graph::index::Idx;
 use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
@@ -109,8 +110,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorKind::MissingAttribute,
-                Some(&context),
+                ErrorInfo::Context(&context),
                 format!("Cannot find {dunders}"),
             )
         }
@@ -224,7 +224,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if matches!(&*x.left, Expr::List(_)) && x.op == Operator::Mult {
             rhs = self.expr_infer(&x.right, errors);
             if self.is_subset_eq(&rhs, &self.stdlib.int().clone().to_type()) {
-                lhs = self.expr_infer_with_hint_promote(&x.left, hint, errors);
+                lhs = self.expr_infer_with_hint(&x.left, hint, errors);
             } else {
                 lhs = self.expr_infer(&x.left, errors);
             }
@@ -324,8 +324,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     x.range(),
-                    ErrorKind::BadAssignment,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::BadAssignment),
                     format!("Cannot assign to {} because it is marked final", ann.target),
                 );
             }
@@ -388,8 +387,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                             self.error(
                                                 errors,
                                                 x.range,
-                                                ErrorKind::UnsupportedOperand,
-                                                None,
+                                                ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
                                                 context().format(),
                                             );
                                         }
@@ -453,8 +451,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => self.error(
                     errors,
                     x.range,
-                    ErrorKind::UnsupportedOperand,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
                     context().format(),
                 ),
             }

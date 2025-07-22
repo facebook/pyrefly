@@ -111,6 +111,7 @@ pub fn binding_memory(transaction: &Transaction) -> String {
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_python::short_identifier::ShortIdentifier;
     use ruff_python_ast::Identifier;
     use ruff_text_size::TextRange;
 
@@ -119,7 +120,6 @@ mod tests {
     use crate::binding::binding::BindingClassMetadata;
     use crate::binding::binding::Key;
     use crate::graph::index::Idx;
-    use crate::module::short_identifier::ShortIdentifier;
     use crate::types::class::ClassDefIndex;
 
     #[test]

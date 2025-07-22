@@ -14,6 +14,7 @@ use dupe::Dupe;
 use itertools::Either;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::display::DisplayWithCtx;
@@ -60,9 +61,9 @@ use crate::binding::scope::ScopeTrace;
 use crate::binding::scope::Scopes;
 use crate::binding::table::TableKeyed;
 use crate::config::base::UntypedDefBehavior;
+use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorContext;
-use crate::error::kind::ErrorKind;
+use crate::error::context::ErrorInfo;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::export::special::SpecialExport;
@@ -70,7 +71,6 @@ use crate::graph::index::Idx;
 use crate::graph::index::Index;
 use crate::graph::index_map::IndexMap;
 use crate::module::module_info::ModuleInfo;
-use crate::module::short_identifier::ShortIdentifier;
 use crate::solver::solver::Solver;
 use crate::state::loader::FindError;
 use crate::table;
@@ -108,7 +108,7 @@ impl Display for Bindings {
                 writeln!(
                     f,
                     "{} = {}",
-                    me.module_info().display(k),
+                    me.module().display(k),
                     items.1.get_exists(idx).display_with(me)
                 )?;
             }
@@ -145,10 +145,10 @@ impl Bindings {
     where
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        self.module_info().display(self.idx_to_key(idx))
+        self.module().display(self.idx_to_key(idx))
     }
 
-    pub fn module_info(&self) -> &ModuleInfo {
+    pub fn module(&self) -> &ModuleInfo {
         &self.0.module_info
     }
 
@@ -209,9 +209,9 @@ impl Bindings {
             let key = self.idx_to_key(idx);
             panic!(
                 "Internal error: key lacking binding, module={}, path={}, key={}, key-debug={key:?}",
-                self.module_info().name(),
-                self.module_info().path(),
-                self.module_info().display(key),
+                self.module().name(),
+                self.module().path(),
+                self.module().display(key),
             )
         })
     }
@@ -240,8 +240,8 @@ impl Bindings {
                 &name.id,
                 name.range,
                 b.display_with(self),
-                self.module_info().name(),
-                self.module_info().path(),
+                self.module().name(),
+                self.module().path(),
             )
         }
     }
@@ -259,8 +259,8 @@ impl Bindings {
                 &name.id,
                 name.range,
                 b.display_with(self),
-                self.module_info().name(),
-                self.module_info().path(),
+                self.module().name(),
+                self.module().path(),
             )
         }
     }
@@ -645,8 +645,7 @@ impl<'a> BindingsBuilder<'a> {
                 let (ctx, msg) = err.display();
                 self.error_multiline(
                     TextRange::default(),
-                    ErrorKind::InternalError,
-                    ctx.as_deref(),
+                    ErrorInfo::new(ErrorKind::InternalError, ctx.as_deref()),
                     msg,
                 );
             }
@@ -673,24 +672,12 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    pub fn error(
-        &self,
-        range: TextRange,
-        error_kind: ErrorKind,
-        context: Option<&dyn Fn() -> ErrorContext>,
-        msg: String,
-    ) {
-        self.errors.add(range, error_kind, context, vec1![msg]);
+    pub fn error(&self, range: TextRange, info: ErrorInfo, msg: String) {
+        self.errors.add(range, info, vec1![msg]);
     }
 
-    pub fn error_multiline(
-        &self,
-        range: TextRange,
-        error_kind: ErrorKind,
-        context: Option<&dyn Fn() -> ErrorContext>,
-        msg: Vec1<String>,
-    ) {
-        self.errors.add(range, error_kind, context, msg);
+    pub fn error_multiline(&self, range: TextRange, info: ErrorInfo, msg: Vec1<String>) {
+        self.errors.add(range, info, msg);
     }
 
     pub fn lookup_mutable_captured_name(
@@ -774,7 +761,7 @@ impl<'a> BindingsBuilder<'a> {
         name: Hashed<&Name>,
         kind: LookupKind,
     ) -> Result<Idx<Key>, LookupError> {
-        self.lookup_name_impl(name, kind, &mut Usage::StaticTypeInformation)
+        self.lookup_name_impl(name, kind, &mut Usage::MutableLookup)
     }
 
     pub fn lookup_name_usage(
@@ -866,13 +853,17 @@ impl<'a> BindingsBuilder<'a> {
     ) -> (Idx<Key>, Option<Idx<Key>>) {
         match self.table.types.1.get(flow_idx) {
             Some(Binding::Pin(unpinned_idx, FirstUse::Undetermined)) => match usage {
-                Usage::StaticTypeInformation | Usage::Narrowing => (flow_idx, Some(flow_idx)),
+                Usage::StaticTypeInformation | Usage::Narrowing | Usage::MutableLookup => {
+                    (flow_idx, Some(flow_idx))
+                }
                 Usage::CurrentIdx(..) => (*unpinned_idx, Some(flow_idx)),
             },
             Some(Binding::Pin(unpinned_idx, first_use)) => match first_use {
                 FirstUse::DoesNotPin => (flow_idx, None),
                 FirstUse::Undetermined => match usage {
-                    Usage::StaticTypeInformation | Usage::Narrowing => (flow_idx, Some(flow_idx)),
+                    Usage::StaticTypeInformation | Usage::Narrowing | Usage::MutableLookup => {
+                        (flow_idx, Some(flow_idx))
+                    }
                     Usage::CurrentIdx(..) => (*unpinned_idx, Some(flow_idx)),
                 },
                 FirstUse::UsedBy(usage_idx) => {
@@ -880,7 +871,9 @@ impl<'a> BindingsBuilder<'a> {
                     // sure they all use the raw binding rather than the `Pin`.
                     let currently_in_first_use = match usage {
                         Usage::CurrentIdx(idx, ..) => idx == usage_idx,
-                        Usage::Narrowing | Usage::StaticTypeInformation => false,
+                        Usage::Narrowing | Usage::StaticTypeInformation | Usage::MutableLookup => {
+                            false
+                        }
                     };
                     if currently_in_first_use {
                         (*unpinned_idx, None)
@@ -902,7 +895,9 @@ impl<'a> BindingsBuilder<'a> {
                         first_uses_of.insert(used);
                         FirstUse::UsedBy(*use_idx)
                     }
-                    Usage::StaticTypeInformation | Usage::Narrowing => FirstUse::DoesNotPin,
+                    Usage::StaticTypeInformation | Usage::Narrowing | Usage::MutableLookup => {
+                        FirstUse::DoesNotPin
+                    }
                 };
             }
             b => {

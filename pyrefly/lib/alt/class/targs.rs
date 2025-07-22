@@ -16,8 +16,9 @@ use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::kind::ErrorKind;
+use crate::error::context::ErrorInfo;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
@@ -280,8 +281,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorKind::BadSpecialization,
-                None,
+                ErrorInfo::Kind(ErrorKind::BadSpecialization),
                 format!(
                     "Expected {} for `{}`, got {}",
                     count(nparams, "type argument"),
@@ -355,8 +355,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorKind::InvalidTypeVarTuple,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidTypeVarTuple),
                             "`TypeVarTuple` must be unpacked".to_owned(),
                         )
                     } else {
@@ -409,8 +408,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorKind::InvalidParamSpec,
-                None,
+                ErrorInfo::Kind(ErrorKind::InvalidParamSpec),
                 format!(
                     "Expected a valid ParamSpec expression, got `{}`",
                     self.for_display(arg.clone())
@@ -431,8 +429,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Unpack(_) => self.error(
                 errors,
                 range,
-                ErrorKind::BadUnpacking,
-                None,
+                ErrorInfo::Kind(ErrorKind::BadUnpacking),
                 format!(
                     "Unpacked argument cannot be used for type parameter {}",
                     param.name()
@@ -443,16 +440,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::InvalidTypeVarTuple,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidTypeVarTuple),
                         "`TypeVarTuple` must be unpacked".to_owned(),
                     )
                 } else if arg.is_kind_param_spec() {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::InvalidParamSpec,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidParamSpec),
                         "`ParamSpec` cannot be used for type parameter".to_owned(),
                     )
                 } else {
@@ -513,8 +508,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorKind::BadSpecialization,
-                None,
+                ErrorInfo::Kind(ErrorKind::BadSpecialization),
                 format!(
                     "Expected {} for `{}`, got {}",
                     count(tparams.len(), "type argument"),

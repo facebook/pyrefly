@@ -5,28 +5,50 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use clap::Parser;
+use dupe::Dupe;
+use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
-use pyrefly_util::globs::FilteredGlobs;
+use pyrefly_util::prelude::SliceExt;
 use starlark_map::small_map::SmallMap;
 
-use crate::commands::check::CheckArgs;
-use crate::commands::run::CommandExitStatus;
+use crate::commands::check::FullCheckArgs;
+use crate::commands::check::Handles;
+use crate::commands::files::FilesArgs;
+use crate::commands::util::CommandExitStatus;
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
-use crate::config::finder::ConfigFinder;
+use crate::state::require::Require;
 
-pub fn dump_config(
-    files_to_check: FilteredGlobs,
-    config_finder: ConfigFinder,
-    args: CheckArgs,
+// We intentionally make DumpConfig take the same arguments as Check so that dumping the
+// config is as easy as changing the command name.
+#[derive(Debug, Clone, Parser)]
+pub struct DumpConfigArgs {
+    #[command(flatten)]
+    args: FullCheckArgs,
+}
+
+impl DumpConfigArgs {
+    pub fn run(self) -> anyhow::Result<CommandExitStatus> {
+        // Pass on just the subset of args we use, the rest are irrelevant
+        dump_config(self.args.files, self.args.args.config_override)
+    }
+}
+
+fn dump_config(
+    files: FilesArgs,
+    config_override: ConfigOverrideArgs,
 ) -> anyhow::Result<CommandExitStatus> {
+    config_override.validate()?;
+    let (files_to_check, config_finder) = files.resolve(&config_override)?;
+
     let mut configs_to_files: SmallMap<ArcId<ConfigFile>, Vec<ModulePath>> = SmallMap::new();
-    let mut handles = args
-        .get_handles(files_to_check, &config_finder)?
-        .into_iter()
-        .map(|(handle, _)| handle)
-        .collect::<Vec<_>>();
+    let handles = Handles::new(
+        config_finder.checkpoint(files_to_check.files())?,
+        &config_finder,
+    );
+    let mut handles = handles.all(Require::Everything).map(|x| x.0.dupe());
     handles.sort_by(|a, b| a.path().cmp(b.path()));
     for handle in handles {
         let path = handle.path();

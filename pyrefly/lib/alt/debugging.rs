@@ -48,9 +48,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     {
         format!(
             "{}",
-            bindings
-                .idx_to_key(idx)
-                .display_with(bindings.module_info())
+            bindings.idx_to_key(idx).display_with(bindings.module())
         )
     }
 
@@ -81,7 +79,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn show_current_module(&self) -> String {
-        format!("{}", self.module_info().name())
+        format!("{}", self.module().name())
     }
 
     pub fn show_current_idx(&self) -> String {

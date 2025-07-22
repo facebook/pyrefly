@@ -6,6 +6,7 @@
  */
 
 pub mod features;
+pub mod module_helpers;
 pub mod server;
 pub mod transaction_manager;
 pub mod workspace;

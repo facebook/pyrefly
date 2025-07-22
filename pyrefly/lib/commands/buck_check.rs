@@ -17,18 +17,17 @@ use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
-use pyrefly_util::args::clap_env;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::prelude::VecExt;
 use serde::Deserialize;
 use tracing::info;
 
-use crate::commands::run::CommandExitStatus;
+use crate::buck::source_db::BuckSourceDatabase;
+use crate::commands::util::CommandExitStatus;
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
 use crate::error::legacy::LegacyErrors;
-use crate::module::source_db::BuckSourceDatabase;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -41,7 +40,7 @@ pub struct BuckCheckArgs {
     input_path: PathBuf,
 
     /// Path to output JSON file containing Pyrefly Pyrefly type check results.
-    #[arg(long = "output", short = 'o', env = clap_env("OUTPUT_PATH"), value_name = "FILE")]
+    #[arg(long = "output", short = 'o', value_name = "FILE")]
     output_path: Option<PathBuf>,
 }
 

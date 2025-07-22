@@ -24,6 +24,7 @@ use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::solver::type_order::TypeOrder;
@@ -402,15 +403,14 @@ impl Solver {
         let msg = tcc.kind.format_error(
             &self.for_display(got.clone()),
             &self.for_display(want.clone()),
-            errors.module_info().name(),
+            errors.module().name(),
         );
-        let kind = tcc.kind.as_error_kind();
         match tcc.context {
             Some(ctx) => {
-                errors.add(loc, kind, Some(&|| ctx.clone()), vec1![msg]);
+                errors.add(loc, ErrorInfo::Context(&|| ctx.clone()), vec1![msg]);
             }
             None => {
-                errors.add(loc, kind, None, vec1![msg]);
+                errors.add(loc, ErrorInfo::Kind(tcc.kind.as_error_kind()), vec1![msg]);
             }
         }
     }
@@ -436,7 +436,7 @@ impl Solver {
         let mut modules: SmallMap<Vec<Name>, ModuleType> = SmallMap::new();
         let mut branches = branches
             .into_iter()
-            .flat_map(|x| match x {
+            .filter_map(|x| match x {
                 // Maybe we should force x before looking at it, but that causes issues with
                 // recursive variables that we can't examine.
                 // In practice unlikely anyone has a recursive variable which evaluates to a module.

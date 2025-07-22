@@ -185,7 +185,6 @@ determine how to import it.
 - Type: list of directories specifying the root
 - Default: import root
 - Flag equivalent: `--search-path`
-- ENV equivalent: `PYREFLY_SEARCH_PATH`
 - Equivalent configs: `extraPaths` in Pyright, `mypy_path` in mypy
 - Notes:
   - We automatically append an import root (typically the directory containing the
@@ -214,7 +213,6 @@ that behavior.
 - Default: result from [Environment Autoconfiguration](#environment-autoconfiguration), or
   `[]` if the Python interpreter cannot be queried
 - Flag equivalent: `--site-package-path`
-- ENV equivalent: `PYREFLY_SITE_PACKAGE_PATH`
 - Equivalent configs: none
 
 NOTE: Ideally, this should not be set manually, unless you're using a venv, running one-off tests,
@@ -233,7 +231,6 @@ values.
 - Default: result from [Environment Autoconfiguration](#environment-autoconfiguration), or
   "linux" if the Python interpreter cannot be queried
 - Flag equivalent: `--python-platform`
-- ENV equivalent: `PYREFLY_PYTHON_PLATFORM`
 - Equivalent configs: `pythonPlatform` in Pyright, `platform` in mypy
 
 ### `python-version`
@@ -248,7 +245,6 @@ micro can be omitted to take the default positional value.
 - Default: result from [Environment Autoconfiguration](#environment-autoconfiguration), or
   `3.13.0` if the Python interpreter cannot be queried
 - Flag equivalent: `--python-version`
-- ENV equivalent: `PYREFLY_PYTHON_VERSION`
 - Equivalent configs: `pythonVersion` in Pyright, `python_version` in mypy
 
 ### `conda-environment`
@@ -267,7 +263,6 @@ This configuration option **is mutually exclusive with `python-interpreter` and 
 - Type: string of existing Conda environment name
 - Default: none
 - Flag equivalent: `--conda-environment`
-- ENV equivalent: `PYREFLY_CONDA_ENVIRONMENT`
 - Equivalent configs: none
 - Notes:
     - This enables the use of a non-local but customizable global environment without having to hard-code a path, which is not preferable on a shared project.
@@ -283,7 +278,6 @@ This configuration option **is mutually exclusive with `conda-environment` and `
 - Type: path to executable
 - Default: `$(which python3)`, then `$(which python)`, or none
 - Flag equivalent: `--python-interpreter`
-- ENV equivalent: `PYREFLY_PYTHON_INTERPRETER`
 - Equivalent configs: `python_executable` in mypy
 - Notes:
   - This executes the value present in the `python-interpreter` field without any checks. It could
@@ -311,7 +305,6 @@ This configuration option **is mutually exclusive with `python-interpreter` and 
 - Type: bool
 - Default: `false`
 - Flag equivalent: `--skip-interpreter-query`
-- ENV equivalent: `PYREFLY_SKIP_INTERPRETER_QUERY`
 
 ### `errors`
 
@@ -320,7 +313,6 @@ Configure the severity for each kind of error that Pyrefly emits: `error`, `warn
 - Type: Table of [error code](./error-kinds.mdx) to boolean representing enabled status
 - Default: `errors = {}`/`[errors]`
 - Flag equivalent: `--error`, `--warn`, `--ignore`
-- ENV equivalent: `PYREFLY_ERROR`, `PYREFLY_IGNORE`, `PYREFLY_WARN`
 - Equivalent configs:
   [type check rule overrides](https://microsoft.github.io/pyright/#/configuration?id=type-check-rule-overrides)
   and [type evaluation settings](https://microsoft.github.io/pyright/#/configuration?id=type-evaluation-settings)
@@ -333,20 +325,40 @@ Configure the severity for each kind of error that Pyrefly emits: `error`, `warn
 
 ### `replace-imports-with-any`
 
-[`ModuleGlob`](#module-globbing)s of modules from which import errors should be
-ignored, and the module should be replaced with `typing.Any`. For example, with
-`from x.y import z` in a file, adding `x.*`, `*.y`, or `x.y` to this config will
-silence those import errors and replace the module with `typing.Any`. If the module can be found, its type
-information will still be replaced with `typing.Any`.
+Instruct Pyrefly to unconditionally replace the given [`ModuleGlob`](#module-globbing)s
+with `typing.Any` and ignore import errors for the module. For example,
+with `from x.y import z` in a file, adding `x.*`, `*.y`, or `x.y` to this config will
+silence those import errors and replace the module with `typing.Any`. If the module
+can be found, its type information will still be replaced with `typing.Any`.
+
+This is different from [`ignore-missing-imports`](#ignore-missing-imports), which only
+replaces the import with `typing.Any` if it can't be found.
 
 - Type: list of regex
 - Default: `[]`
 - Flag equivalent: `--replace-imports-with-any`
-- ENV equivalent: `PYREFLY_REPLACE_IMPORTS_WITH_ANY`
-- Equivalent configs: `ignore_missing_imports` or `follow_imports = skip` in mypy
+- Equivalent configs: `follow_imports = skip` in mypy
+
+### `ignore-missing-imports`
+
+Instruct Pyrefly to replace the given [`ModuleGlob`](#module-globbing)s
+with `typing.Any` and ignore import errors for the module *only when the module
+can't be found*.
+
+For example, with `from x.y import z` in a file, adding `x.*`, `*.y`, or `x.y` to
+this config will silence those import errors and replace the module with `typing.Any`
+if `x.y` can't be found. If `x.y` can be found, then `z`'s type will be used.
+
+This is different from [`replace-imports-with-any`](#replace-imports-with-any), which
+will always, unconditionally replace the import with `typing.Any`.
+
+- Type: list of regex
+- Default: `[]`
+- Flag equivalent: `--ignore-missing-imports`
+- Equivalent configs: `ignore_missing_imports` in mypy
 - Notes:
   - `errors = {import-error = false}` (TOML inline table for `errors`) has similar behavior in Pyrefly, but ignores
-    *all* import errors instead of import errors from specific modules, and won't replace findable modules with `typing.Any`.
+    *all* import errors instead of import errors from specific modules.
 
 ### `ignore-errors-in-generated-code`
 
@@ -358,7 +370,6 @@ the substring '<span>&#64;</span>generated'.
 - Type: bool
 - Default: `false`
 - Flag equivalent: `--ignore-errors-in-generated-code`
-- ENV equivalent: `PYREFLY_IGNORE_ERRORS_IN_GENERATED_CODE`
 - Equivalent configs: none
 
 ### `use-untyped-imports`
@@ -372,7 +383,6 @@ more information on when a `site-package-path` cannot be used for typing informa
 - Type: bool
 - Default: `true`
 - Flag equivalent: `--use-untyped-imports`
-- ENV equivalent: `PYREFLY_USE_UNTYPED_IMPORTS`
 - Equivalent configs: `useLibraryCodeForTypes` in Pyright, `follow_untyped_imports` in mypy
 
 ### `ignore-missing-source`
@@ -390,7 +400,6 @@ type stubs could be found. See
 - Type: bool
 - Default: `true`
 - Flag equivalent: `--ignore-missing-source`
-- ENV equivalent: `PYREFLY_IGNORE_MISSING_SOURCE`
 - Equivalent configs: `reportMissingModuleSource` in Pyright
 
 ### `untyped-def-behavior`
@@ -398,7 +407,18 @@ type stubs could be found. See
 How should Pyrefly treat function definitions with no parameter or return type annotations?
 
 By default, Pyrefly uses the `"check-and-infer-return-type"` behavior and will
-check all function bodies inferring the return type.
+check all function bodies, inferring the return type.
+
+:::info
+To provide inferred return types with `check-and-infer-return-type`, especially for
+site-package paths (third-party packages), Pyrefly may need to load and analyze
+more modules than you might otherwise see from mypy.
+
+This may result in increased type check durations or an output showing more modules
+analyzed than you expect. If this behavior is not preferred, you should set
+`untyped-def-behavior` to `skip-and-infer-return-any` in your config or pass it in
+as a flag.
+:::
 
 If this option is set to `"check-and-infer-return-any"`, then Pyrefly will still
 check the function body but will treat the return type as `Any`.
@@ -411,11 +431,16 @@ not recommend it for most users today; since Pyrefly will not analyze the bodies
 of untyped functions, language server functionality like showing types on hover
 and finding definitions will not be available there.
 
+:::info
+`skip-and-infer-return-any` is mypy's default inference behavior, and how we will
+attempt to migrate your existing mypy configuration when running `pyrefly init`.
+See [Migrating from Mypy](migrating-from-mypy.mdx#mypy-config-migration) for more information on config migration.
+:::
+
 - Type: one of `"check-and-infer-return-type"`, `"check-and-infer-return-any"`,
   `"skip-and-infer-return-any"`
 - Default: `"check-and-infer-return-type"
 - Flag equivalent: `--untyped-def-behavior`
-- ENV equivalent: `PYREFLY_UNTYPED_DEF_BEHAVIOR`
 - Equivalent configs:
   - The `"check-and-infer-return-type"` behavior emulates Pyright's default
     behavior.
@@ -432,7 +457,6 @@ By default, respects `# pyrefly: ignore` and `# type: ignore`.
 - Type: `bool`
 - Default: `false`
 - Flag equivalent: `--permissive-ignores`
-- ENV equivalent: `PYREFLY_PERMISSIVE_IGNORES`
 
 ### `sub-config`
 
@@ -443,7 +467,6 @@ and values that can be overridden here.
 - Type: [TOML array of tables](https://toml.io/en/v1.0.0#array-of-tables) with a [`SubConfig` structure](#subconfigs)
 - Default: `[]`
 - Flag equivalent: none
-- ENV equivalent: none
 - Equivalent configs: `executionEnvironments` in Pyright, per-module config options in mypy
 
 ## Configuration Details

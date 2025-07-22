@@ -140,12 +140,12 @@ mod tests {
     use std::ops::Deref as _;
 
     use pretty_assertions::assert_eq;
+    use pyrefly_config::args::ConfigOverrideArgs;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
-    use crate::commands::config_args::ConfigOverrideArgs;
     use crate::config::config::ConfigSource;
     use crate::config::environment::environment::PythonEnvironment;
 

@@ -18,6 +18,8 @@ use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 
+use crate::config::config::ConfigFile;
+use crate::module::typeshed::typeshed;
 use crate::state::loader::FindError;
 
 static PY_TYPED_CACHE: LazyLock<Mutex<SmallMap<PathBuf, PyTyped>>> =
@@ -248,7 +250,7 @@ fn continue_find_module(
 ///    should be third-party imports
 /// 2. import resolution: `site_package_path` has extra checks that can occur, while `search_path`
 ///    is just a 'find and return the first result' search.
-pub fn find_module_in_search_path<'a, I>(
+fn find_module_in_search_path<'a, I>(
     module: ModuleName,
     include: I,
 ) -> Result<Option<ModulePath>, FindError>
@@ -288,7 +290,7 @@ where
 ///    should be third-party imports
 /// 2. import resolution: `site_package_path` has extra checks that can occur, while `search_path`
 ///    is just a 'find and return the first result' search.
-pub fn find_module_in_site_package_path<'a, I>(
+fn find_module_in_site_package_path<'a, I>(
     module: ModuleName,
     include: I,
     use_untyped_imports: bool,
@@ -359,7 +361,7 @@ where
     Ok(None)
 }
 
-pub fn find_module_prefixes<'a>(
+fn find_module_prefixes<'a>(
     prefix: ModuleName,
     include: impl Iterator<Item = &'a PathBuf>,
 ) -> Vec<ModuleName> {
@@ -400,6 +402,63 @@ pub fn find_module_prefixes<'a>(
         }
     }
     results.iter().map(|(_, name)| *name).collect::<Vec<_>>()
+}
+
+/// Get the given [`ModuleName`] from this config's search and site package paths.
+/// We take the `path` of the file we're searching for the module from to determine if
+/// we should replace imports with `typing.Any`.
+/// Return `Err` when indicating the module could not be found.
+pub fn find_import(
+    config: &ConfigFile,
+    module: ModuleName,
+    path: Option<&Path>,
+) -> Result<ModulePath, FindError> {
+    if let Some(path) = config.custom_module_paths.get(&module) {
+        Ok(path.clone())
+    } else if module != ModuleName::builtins() && config.replace_imports_with_any(path, module) {
+        Err(FindError::Ignored)
+    } else if let Some(path) = find_module_in_search_path(module, config.search_path())? {
+        Ok(path)
+    } else if let Some(custom_typeshed_path) = &config.typeshed_path
+        && let Some(path) = find_module_in_search_path(
+            module,
+            std::iter::once(&custom_typeshed_path.join("stdlib")),
+        )?
+    {
+        Ok(path)
+    } else if let Some(path) = typeshed()
+        .map_err(|err| FindError::not_found(err, module))?
+        .find(module)
+    {
+        Ok(path)
+    } else if let Some(path) =
+        find_module_in_search_path(module, config.fallback_search_path.iter())?
+    {
+        Ok(path)
+    } else if let Some(path) = find_module_in_site_package_path(
+        module,
+        config.site_package_path(),
+        config.use_untyped_imports,
+        config.ignore_missing_source,
+    )? {
+        Ok(path)
+    } else if config.ignore_missing_imports(path, module) {
+        Err(FindError::Ignored)
+    } else {
+        Err(FindError::import_lookup_path(
+            config.structured_import_lookup_path(),
+            module,
+            &config.source,
+        ))
+    }
+}
+
+/// Find all legitimate imports that start with `module`
+pub fn find_import_prefixes(config: &ConfigFile, module: ModuleName) -> Vec<ModuleName> {
+    find_module_prefixes(
+        module,
+        config.search_path().chain(config.site_package_path()),
+    )
 }
 
 #[cfg(test)]

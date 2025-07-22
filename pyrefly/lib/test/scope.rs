@@ -75,7 +75,7 @@ def f():
     x += "a"  # E: `x` is not mutable from the current scope
 def g():
     global x
-    x += "a"  
+    x += "a"
 def h0():
     global x
     def h1():
@@ -173,12 +173,12 @@ def f():
     global c1
     global c2
     # Should be permitted, the resulting operation is in-place
-    c0 += C()  
+    c0 += C()
     # Should be permitted, the resulting operation returns a new C which is okay
-    c1 -= C()  
+    c1 -= C()
     # Should *not* be permitted, this changes the type of the global in a way
     # that is incompatible with static analysis of the global scope
-    c2 *= C()  
+    c2 *= C()
 f()
 # This shows what would go wrong if we allow the aug assign on `c2`
 assert_type(c2, C)
@@ -234,7 +234,7 @@ def outer():
         x += "a"  # E: `x` is not mutable from the current scope
     def g():
         nonlocal x
-        x += "a"  
+        x += "a"
     def h0():
         nonlocal x
         def h1():
@@ -258,7 +258,7 @@ def outer():
     # A minor variation on f(), relevant to specific implementation bugs in our scope analysis
     def g():
         nonlocal x
-        del x  
+        del x
     f()
     f()  # This will crash at runtime!
 "#,
@@ -435,5 +435,15 @@ def f(arg: int) -> None:
     assert_type(w, list[int])
     lambd = lambda x: (z := x) + 1
     z  # E: Could not find name `z`
+"#,
+);
+
+testcase!(
+    test_forward_reference_ok,
+    r#"
+def foo():
+    x = y
+
+y = 42
 "#,
 );

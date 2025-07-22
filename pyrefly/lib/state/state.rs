@@ -84,15 +84,16 @@ use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
 use crate::config::config::ConfigFile;
+use crate::config::error_kind::ErrorKind;
 use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::error::collector::ErrorCollector;
-use crate::error::kind::ErrorKind;
-use crate::export::docstring::Docstring;
+use crate::error::context::ErrorInfo;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
+use crate::module::finder::find_import_prefixes;
 use crate::module::module_info::ModuleInfo;
 use crate::module::typeshed::BundledTypeshed;
 use crate::state::dirty::Dirty;
@@ -576,10 +577,7 @@ impl<'a> Transaction<'a> {
 
     /// Create a handle for import `module` within the handle `handle`
     pub fn import_prefixes(&self, handle: &Handle, module: ModuleName) -> Vec<ModuleName> {
-        self.get_module(handle)
-            .config
-            .read()
-            .find_import_prefixes(module)
+        find_import_prefixes(&self.get_module(handle).config.read(), module)
     }
 
     fn clean(
@@ -916,7 +914,7 @@ impl<'a> Transaction<'a> {
         kind: ErrorKind,
     ) {
         let load = module_data.state.read().steps.load.dupe().unwrap();
-        load.errors.add(range, kind, None, vec1![msg]);
+        load.errors.add(range, ErrorInfo::Kind(kind), vec1![msg]);
     }
 
     fn lookup<'b>(&'b self, module_data: ArcId<ModuleDataMut>) -> TransactionHandle<'b> {
@@ -1461,7 +1459,7 @@ impl<'a> Transaction<'a> {
         let mut lines = contents.lines().collect::<Vec<_>>();
         lines.sort_by_cached_key(|x| line_key(x));
         lines.reverse();
-        fs_anyhow::write(path, (lines.join("\n") + "\n").as_bytes())?;
+        fs_anyhow::write(path, lines.join("\n") + "\n")?;
 
         for (step, duration) in timings {
             info!("Step {step} took {duration:.3} seconds");
@@ -1475,9 +1473,9 @@ impl<'a> Transaction<'a> {
             .exports(&self.lookup(module_data))
     }
 
-    pub fn get_module_docstring(&self, handle: &Handle) -> Option<Docstring> {
+    pub fn get_module_docstring_range(&self, handle: &Handle) -> Option<TextRange> {
         let module_data = self.get_module(handle);
-        self.lookup_export(&module_data).docstring().cloned()
+        self.lookup_export(&module_data).docstring_range()
     }
 }
 

@@ -91,7 +91,7 @@ impl Display for ModulePath {
             ModulePathDetails::BundledTypeshed(relative_path) => {
                 write!(
                     f,
-                    "bundled /pyrefly/third_party/typeshed/stdlib/{}",
+                    "bundled /crates/pyrefly_bundled/third_party/typeshed/stdlib/{}",
                     relative_path.display()
                 )
             }
