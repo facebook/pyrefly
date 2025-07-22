@@ -67,7 +67,7 @@ pub enum ConfigSource {
 }
 
 impl ConfigSource {
-    pub fn root<'a>(&'a self) -> Option<&'a Path> {
+    pub fn root(&self) -> Option<&Path> {
         match &self {
             Self::File(path) | Self::Marker(path) => path.parent(),
             Self::Synthetic => None,
@@ -224,6 +224,13 @@ pub struct ConfigFile {
          )]
     pub fallback_search_path: Vec<PathBuf>,
 
+    /// Disable Pyrefly default heuristics, specifically those around
+    /// constructing a modified search path. Setting this flag will instruct
+    /// Pyrefly to use the exact `search_path` you give it through your config
+    /// file and CLI args.
+    #[serde(default, skip_serializing_if = "crate::util::skip_default_false")]
+    pub disable_search_path_heuristics: bool,
+
     /// Override the bundled typeshed with a custom path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typeshed_path: Option<PathBuf>,
@@ -295,6 +302,7 @@ impl Default for ConfigFile {
             },
             search_path_from_args: Vec::new(),
             search_path_from_file: Vec::new(),
+            disable_search_path_heuristics: false,
             import_root: None,
             fallback_search_path: Vec::new(),
             python_environment: Default::default(),
@@ -814,6 +822,7 @@ mod tests {
                 project_excludes: Globs::new(vec!["tests/untyped/**".to_owned()]),
                 search_path_from_args: Vec::new(),
                 search_path_from_file: vec![PathBuf::from("../..")],
+                disable_search_path_heuristics: false,
                 import_root: None,
                 fallback_search_path: Vec::new(),
                 python_environment: PythonEnvironment {
@@ -1066,6 +1075,7 @@ mod tests {
             project_excludes: Globs::new(vec!["tests/untyped/**".to_owned()]),
             search_path_from_args: Vec::new(),
             search_path_from_file: vec![PathBuf::from("../..")],
+            disable_search_path_heuristics: false,
             import_root: None,
             fallback_search_path: Vec::new(),
             python_environment: python_environment.clone(),
@@ -1112,6 +1122,7 @@ mod tests {
             },
             search_path_from_args: Vec::new(),
             search_path_from_file: search_path,
+            disable_search_path_heuristics: false,
             import_root: None,
             fallback_search_path: Vec::new(),
             python_environment,
