@@ -81,10 +81,12 @@ pub fn standard_config_finder(
                 .lock()
                 .entry(path.clone())
                 .or_insert_with(|| {
-                    let (config, errors) = configure2(
-                        path.parent(),
-                        ConfigFile::init_at_root(&path, &ProjectLayout::Flat),
-                    );
+                    let (default_config, default_error) =
+                        ConfigFile::init_at_root(&path, &ProjectLayout::Flat);
+                    if let Err(error) = default_error {
+                        debug_log(vec![ConfigError::error(error)]);
+                    }
+                    let (config, errors) = configure2(path.parent(), default_config);
                     // Since this is a config we generated, these are likely internal errors.
                     debug_log(errors);
                     config

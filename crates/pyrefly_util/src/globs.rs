@@ -54,14 +54,14 @@ impl Glob {
 
     /// Create a new `Glob`, with the pattern relative to `root`.
     /// `root` should be an absolute path.
-    pub fn new_with_root(root: &Path, pattern: String) -> Self {
+    pub fn new_with_root(root: &Path, pattern: String) -> anyhow::Result<Self> {
         Self::new(pattern).from_root(root)
     }
 
     /// Rewrite the current `Glob` relative to `root`.
     /// `root` should be an absolute path.
-    pub fn from_root(self, root: &Path) -> Self {
-        Self(Self::pattern_relative_to_root(root, &self.0))
+    pub fn from_root(self, root: &Path) -> anyhow::Result<Self> {
+        Ok(Self(Self::pattern_relative_to_root(root, &self.0)?))
     }
 
     fn contains_glob_char(part: &OsStr) -> bool {
@@ -69,12 +69,17 @@ impl Glob {
         bytes.contains(&b'*') || bytes.contains(&b'?') || bytes.contains(&b'[')
     }
 
-    fn pattern_relative_to_root(root: &Path, pattern: &Path) -> PathBuf {
-        // absolutize_from always returns `Ok()`
-        pattern
+    fn pattern_relative_to_root(root: &Path, pattern: &Path) -> anyhow::Result<PathBuf> {
+        Ok(pattern
             .absolutize_from(Pattern::escape(root.to_string_lossy().as_ref()))
-            .unwrap()
-            .into_owned()
+            .with_context(|| {
+                format!(
+                    "Absolutizing `{}` (from root {}) while trying to turn it into a glob",
+                    pattern.display(),
+                    root.display()
+                )
+            })?
+            .into_owned())
     }
 
     fn get_glob_root(&self) -> PathBuf {
@@ -255,22 +260,30 @@ impl Globs {
 
     /// Create a new `Globs`, rewriting all patterns to be relative to `root`.
     /// `root` should be an absolute path.
-    pub fn new_with_root(root: &Path, patterns: Vec<String>) -> Self {
+    pub fn new_with_root(root: &Path, patterns: Vec<String>) -> anyhow::Result<Self> {
         Self::rewrite_with_root(root, patterns.into_map(Glob::new))
     }
 
-    fn rewrite_with_root(root: &Path, patterns: Vec<Glob>) -> Self {
-        Self(
+    fn rewrite_with_root(root: &Path, patterns: Vec<Glob>) -> anyhow::Result<Self> {
+        Ok(Self(
             patterns
                 .into_iter()
-                .map(|pattern| pattern.from_root(root))
-                .collect(),
-        )
+                .map(|pattern| {
+                    pattern.from_root(
+                        root.absolutize()
+                            .with_context(|| {
+                                format!("Absoultizing root `{}` for glob rewriting", root.display())
+                            })?
+                            .as_ref(),
+                    )
+                })
+                .process_results(|i| i.collect())?,
+        ))
     }
 
     /// Rewrite the existing `Globs` to be relative to `root`.
     /// `root` should be an absolute path.
-    pub fn from_root(self, root: &Path) -> Self {
+    pub fn from_root(self, root: &Path) -> anyhow::Result<Self> {
         // TODO(connernilsen): store root as part of globs to make it easier to rewrite later on
         Self::rewrite_with_root(root, self.0)
     }
@@ -525,6 +538,7 @@ mod tests {
                 );
             }
             let globs: Vec<PathBuf> = Globs::new_with_root(Path::new(&root), inputs)
+                .unwrap()
                 .0
                 .into_iter()
                 .map(|g| g.0)
@@ -681,7 +695,7 @@ mod tests {
 
             let file_to_match = escaped_root.join("path/to/my/file.py");
 
-            let glob = Glob::new_with_root(&root, pattern.to_owned());
+            let glob = Glob::new_with_root(&root, pattern.to_owned()).unwrap();
             assert!(
                 glob.matches(file_to_match.as_ref()).unwrap() == equal,
                 "glob `{}` failed (`{}` expanded, `{}` file)",
@@ -763,7 +777,9 @@ mod tests {
         );
 
         let glob_files_match = |pattern: &str, expected: &[&str]| -> anyhow::Result<()> {
-            let glob_files = Glob::new_with_root(root, pattern.to_owned()).files(&Globs::empty())?;
+            let glob_files = Glob::new_with_root(root, pattern.to_owned())
+                .unwrap()
+                .files(&Globs::empty())?;
             let mut glob_files = glob_files
                 .iter()
                 .map(|p| p.strip_prefix(root))
@@ -928,6 +944,7 @@ mod tests {
         // Helper function to assert that a glob pattern returns no files
         let assert_empty_glob = |pattern_str: &str, description: &str| {
             let found_files = Glob::new_with_root(root, pattern_str.to_owned())
+                .unwrap()
                 .files(&Globs::empty())
                 .unwrap_or_else(|_| Vec::new());
             assert!(
@@ -945,6 +962,7 @@ mod tests {
 
         // Verify that normal files are still found
         let normal_files = Glob::new_with_root(root, "**/*.py".to_owned())
+            .unwrap()
             .files(&Globs::empty())
             .unwrap();
         assert!(

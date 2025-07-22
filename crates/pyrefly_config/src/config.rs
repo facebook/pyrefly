@@ -48,8 +48,9 @@ pub struct SubConfig {
 }
 
 impl SubConfig {
-    fn rewrite_with_path_to_config(&mut self, config_root: &Path) {
-        self.matches = self.matches.clone().from_root(config_root);
+    fn rewrite_with_path_to_config(&mut self, config_root: &Path) -> anyhow::Result<()> {
+        self.matches = self.matches.clone().from_root(config_root)?;
+        Ok(())
     }
 }
 
@@ -318,7 +319,7 @@ impl Default for ConfigFile {
 
 impl ConfigFile {
     /// Gets a ConfigFile for a project directory.
-    pub fn init_at_root(root: &Path, layout: &ProjectLayout) -> Self {
+    pub fn init_at_root(root: &Path, layout: &ProjectLayout) -> (Self, anyhow::Result<()>) {
         let mut result = Self {
             project_includes: Self::default_project_includes(),
             project_excludes: Self::default_project_excludes(),
@@ -326,8 +327,8 @@ impl ConfigFile {
             import_root: Some(layout.get_import_root(Path::new(""))),
             ..Default::default()
         };
-        result.rewrite_with_path_to_config(root);
-        result
+        let err = result.rewrite_with_path_to_config(root);
+        (result, err)
     }
 
     /// Gets a [`FilteredGlobs`] from the optional `custom_excludes` or this
@@ -606,8 +607,9 @@ impl ConfigFile {
     /// We do this as a step separate from `configure()` because CLI args may override some of these
     /// values, but CLI args will always be relative to CWD, whereas config values should be relative
     /// to the config root.
-    fn rewrite_with_path_to_config(&mut self, config_root: &Path) {
-        self.project_includes = self.project_includes.clone().from_root(config_root);
+    fn rewrite_with_path_to_config(&mut self, config_root: &Path) -> anyhow::Result<()> {
+        self.project_includes = self.project_includes.clone().from_root(config_root)?;
+        self.project_excludes = self.project_excludes.clone().from_root(config_root)?;
         self.search_path_from_file
             .iter_mut()
             .for_each(|search_root| {
@@ -630,7 +632,6 @@ impl ConfigFile {
                     *site_package_path = with_base;
                 });
             });
-        self.project_excludes = self.project_excludes.clone().from_root(config_root);
         self.interpreters.python_interpreter = self
             .interpreters
             .python_interpreter
@@ -638,7 +639,9 @@ impl ConfigFile {
             .map(|s| s.map(|i| config_root.join(i)));
         self.sub_configs
             .iter_mut()
-            .for_each(|c| c.rewrite_with_path_to_config(config_root));
+            .try_for_each(|c| c.rewrite_with_path_to_config(config_root))?;
+
+        Ok(())
     }
 
     pub fn from_file(config_path: &Path) -> (ConfigFile, Vec<ConfigError>) {
@@ -670,11 +673,18 @@ impl ConfigFile {
                 Some(config_root) => {
                     let layout = ProjectLayout::new(config_root);
                     if let Some(mut config) = maybe_config {
-                        config.rewrite_with_path_to_config(config_root);
+                        let error = config.rewrite_with_path_to_config(config_root);
+                        if let Err(error) = error {
+                            errors.push(ConfigError::error(error));
+                        }
                         config.import_root = Some(layout.get_import_root(config_root));
                         config
                     } else {
-                        ConfigFile::init_at_root(config_root, &layout)
+                        let (config, error) = ConfigFile::init_at_root(config_root, &layout);
+                        if let Err(error) = error {
+                            errors.push(ConfigError::error(error))
+                        }
+                        config
                     }
                 }
                 None => {
@@ -1129,7 +1139,7 @@ mod tests {
                 .into_owned(),
         );
 
-        config.rewrite_with_path_to_config(&test_path);
+        config.rewrite_with_path_to_config(&test_path).unwrap();
 
         let expected_config = ConfigFile {
             source: ConfigSource::Synthetic,
@@ -1184,7 +1194,7 @@ mod tests {
     #[test]
     fn test_expect_all_fields_set_in_root_config() {
         let root = TempDir::new().unwrap();
-        let mut config = ConfigFile::init_at_root(root.path(), &ProjectLayout::default());
+        let mut config = ConfigFile::init_at_root(root.path(), &ProjectLayout::default()).0;
         config.configure();
 
         let table: serde_json::Map<String, serde_json::Value> =
@@ -1281,7 +1291,7 @@ mod tests {
     #[test]
     fn test_default_search_path() {
         let tempdir = TempDir::new().unwrap();
-        let config = ConfigFile::init_at_root(tempdir.path(), &ProjectLayout::default());
+        let config = ConfigFile::init_at_root(tempdir.path(), &ProjectLayout::default()).0;
         assert_eq!(
             config.search_path().cloned().collect::<Vec<_>>(),
             vec![tempdir.path().to_path_buf()]
