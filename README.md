@@ -147,3 +147,28 @@ When solving `x@3` we encounter recursion. Operationally:
   can take the upper reachable bound of that and conclude that
   `?1 = Literal[1]`.
 - We simplify `x@3` to just `Literal[1]`.
+
+## Troubleshooting Test Failures
+
+### 1. Set TEST_FILES_PATH
+Some tests require the `TEST_FILES_PATH` environment variable to be set to the directory containing test files. On Windows PowerShell, run:
+
+```
+$env:TEST_FILES_PATH="path\to\test\files"
+cargo test --all
+```
+
+### 2. Debugging Timeouts
+- If tests are timing out, try increasing the timeout in `pyrefly/lib/test/lsp/lsp_interaction/util.rs` (already set to 60 seconds).
+- Add more logging (e.g., `eprintln!`) to see where the test is getting stuck.
+
+### 3. Debugging Panics
+- Run a single failing test with `--nocapture` to get more details:
+  ```
+  cargo test test_workspace_symbol -- --nocapture
+  ```
+- Check that all required test files exist and are up to date.
+
+### 4. General Tips
+- Ensure all dependencies are installed.
+- Check for channel disconnections or deadlocks in multi-threaded tests.
