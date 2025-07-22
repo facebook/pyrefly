@@ -38,11 +38,21 @@ fn get_all_builtin_completions() -> Vec<CompletionItem> {
     .collect()
 }
 
-/// Creates a completion response message
+/// Creates a completion response message sorting the completion_items.
 /// completion_items is a Vec of CompletionItem to include in the response
-pub fn make_completion_result(request_id: i32, completion_items: Vec<CompletionItem>) -> Message {
+pub fn make_and_sort_completion_result(
+    request_id: i32,
+    completion_items: Vec<CompletionItem>,
+) -> Message {
     let mut all_items = get_all_builtin_completions();
     all_items.extend(completion_items);
+    all_items.sort_by(|item1, item2| {
+        item1
+            .sort_text
+            .cmp(&item2.sort_text)
+            .then_with(|| item1.label.cmp(&item2.label))
+            .then_with(|| item1.detail.cmp(&item2.detail))
+    });
 
     let items_json: Vec<serde_json::Value> = all_items
         .into_iter()
@@ -124,7 +134,7 @@ fn test_completion() {
             }),
         ],
         expected_messages_from_language_server: vec![
-            make_completion_result(
+            make_and_sort_completion_result(
                 2,
                 vec![CompletionItem {
                     label: "Bar".to_owned(),
@@ -134,7 +144,7 @@ fn test_completion() {
                     ..Default::default()
                 }],
             ),
-            make_completion_result(
+            make_and_sort_completion_result(
                 3,
                 vec![CompletionItem {
                     label: "Bar".to_owned(),
@@ -185,7 +195,7 @@ fn test_completion_with_autoimport() {
                 }),
             }),
         ],
-        expected_messages_from_language_server: vec![make_completion_result(
+        expected_messages_from_language_server: vec![make_and_sort_completion_result(
             2,
             vec![
                 CompletionItem {
@@ -261,7 +271,7 @@ fn test_completion_with_autoimport_in_defined_module() {
             }),
         ],
         // This response should contain no textedits because it's defined locally in the module
-        expected_messages_from_language_server: vec![make_completion_result(
+        expected_messages_from_language_server: vec![make_and_sort_completion_result(
             2,
             vec![
                 CompletionItem {
@@ -269,6 +279,100 @@ fn test_completion_with_autoimport_in_defined_module() {
                     detail: Some("() -> None".to_owned()),
                     kind: Some(CompletionItemKind::FUNCTION),
                     sort_text: Some("0".to_owned()),
+                    ..Default::default()
+                },
+            ],
+        )],
+        indexing_mode: IndexingMode::LazyBlocking,
+        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+        ..Default::default()
+    });
+}
+
+#[test]
+fn test_completion_with_autoimport_duplicates() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("duplicate_export_test");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+
+    run_test_lsp(TestCase {
+        messages_from_language_client: vec![
+            Message::from(build_did_open_notification(root_path.join("foo.py"))),
+            Message::from(Request {
+                id: RequestId::from(2),
+                method: "textDocument/completion".to_owned(),
+                params: serde_json::json!({
+                    "textDocument": {
+                        "uri": Url::from_file_path(root_path.join("foo.py")).unwrap().to_string()
+                    },
+                    "position": {
+                        "line": 5,
+                        "character": 14
+                    }
+                }),
+            }),
+        ],
+        expected_messages_from_language_server: vec![make_and_sort_completion_result(
+            2,
+            vec![
+                CompletionItem {
+                    label: "MutableMappingUnrelatedAfter".to_owned(),
+                    detail: Some("from typing import MutableMappingUnrelatedAfter\n".to_owned()),
+                    kind: Some(CompletionItemKind::CLASS),
+                    sort_text: Some("3".to_owned()),
+                    additional_text_edits: Some(vec![lsp_types::TextEdit {
+                        range: lsp_types::Range {
+                            start: lsp_types::Position {
+                                line: 5,
+                                character: 0,
+                            },
+                            end: lsp_types::Position {
+                                line: 5,
+                                character: 0,
+                            },
+                        },
+                        new_text: "from typing import MutableMappingUnrelatedAfter\n".to_owned(),
+                    }]),
+                    ..Default::default()
+                },
+                CompletionItem {
+                    label: "MutableMapping".to_owned(),
+                    detail: Some("from typing import MutableMapping\n".to_owned()),
+                    kind: Some(CompletionItemKind::CLASS),
+                    sort_text: Some("3".to_owned()),
+                    additional_text_edits: Some(vec![lsp_types::TextEdit {
+                        range: lsp_types::Range {
+                            start: lsp_types::Position {
+                                line: 5,
+                                character: 0,
+                            },
+                            end: lsp_types::Position {
+                                line: 5,
+                                character: 0,
+                            },
+                        },
+                        new_text: "from typing import MutableMapping\n".to_owned(),
+                    }]),
+                    ..Default::default()
+                },
+                CompletionItem {
+                    label: "MutableMappingUnrelatedBefore".to_owned(),
+                    detail: Some("from typing import MutableMappingUnrelatedBefore\n".to_owned()),
+                    kind: Some(CompletionItemKind::CLASS),
+                    sort_text: Some("3".to_owned()),
+                    additional_text_edits: Some(vec![lsp_types::TextEdit {
+                        range: lsp_types::Range {
+                            start: lsp_types::Position {
+                                line: 5,
+                                character: 0,
+                            },
+                            end: lsp_types::Position {
+                                line: 5,
+                                character: 0,
+                            },
+                        },
+                        new_text: "from typing import MutableMappingUnrelatedBefore\n".to_owned(),
+                    }]),
                     ..Default::default()
                 },
             ],
@@ -301,7 +405,7 @@ fn test_module_completion() {
                 }),
             }),
         ],
-        expected_messages_from_language_server: vec![make_completion_result(
+        expected_messages_from_language_server: vec![make_and_sort_completion_result(
             2,
             vec![CompletionItem {
                 label: "bar".to_owned(),
@@ -338,7 +442,7 @@ fn test_relative_module_completion() {
                 }),
             }),
         ],
-        expected_messages_from_language_server: vec![make_completion_result(2, vec![])],
+        expected_messages_from_language_server: vec![make_and_sort_completion_result(2, vec![])],
         ..Default::default()
     });
 }
@@ -415,7 +519,7 @@ fn test_empty_filepath_file_completion() {
             }),
         ],
         expected_messages_from_language_server: vec![
-            make_completion_result(
+            make_and_sort_completion_result(
                 2,
                 vec![CompletionItem {
                     label: "tear".to_owned(),
@@ -425,7 +529,7 @@ fn test_empty_filepath_file_completion() {
                     ..Default::default()
                 }],
             ),
-            make_completion_result(
+            make_and_sort_completion_result(
                 3,
                 vec![CompletionItem {
                     label: "tear".to_owned(),

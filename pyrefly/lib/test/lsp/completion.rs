@@ -69,8 +69,8 @@ Completion Results:
 10 | bar.
          ^
 Completion Results:
-- (Field) y: int
 - (Field) x: int
+- (Field) y: int
 "#
         .trim(),
         report.trim(),
@@ -98,10 +98,10 @@ foo.
 10 | foo.
          ^
 Completion Results:
-- (Field) x: int
+- (Method) class_method: BoundMethod[type[Foo], (cls: type[Self@Foo]) -> None]
 - (Method) method: BoundMethod[Foo, (self: Self@Foo) -> None]
 - (Function) static_method: () -> None
-- (Method) class_method: BoundMethod[type[Foo], (cls: type[Self@Foo]) -> None]
+- (Field) x: int
 "#
         .trim(),
         report.trim(),
@@ -128,8 +128,8 @@ foo.
 9 | foo.
         ^
 Completion Results:
-- (Field) y: int
 - (Field) x: int
+- (Field) y: int
 - (Field) _private: bool
 - (Field) __special__: str
 "#
@@ -158,16 +158,16 @@ def foo():
       ^
 Completion Results:
 - (Function) bar: () -> None
-- (Variable) xxxx: Literal[3]
 - (Function) foo: () -> None
+- (Variable) xxxx: Literal[3]
 
 8 |     y
         ^
 Completion Results:
-- (Variable) yyyy: Literal[4]
-- (Variable) xxxx: Literal[3]
 - (Function) bar: () -> None
 - (Function) foo: () -> None
+- (Variable) xxxx: Literal[3]
+- (Variable) yyyy: Literal[4]
 "#
         .trim(),
         report.trim(),
@@ -246,13 +246,13 @@ Completion Results:
 - (Variable) __cached__
 - (Variable) __debug__
 - (Variable) __dict__
+- (Variable) __doc__
 - (Variable) __file__
 - (Variable) __loader__
 - (Variable) __name__
 - (Variable) __package__
 - (Variable) __path__
 - (Variable) __spec__
-- (Variable) __doc__
 
 
 # foo.py
@@ -319,13 +319,13 @@ Completion Results:
 - (Variable) __cached__
 - (Variable) __debug__
 - (Variable) __dict__
+- (Variable) __doc__
 - (Variable) __file__
 - (Variable) __loader__
 - (Variable) __name__
 - (Variable) __package__
 - (Variable) __path__
 - (Variable) __spec__
-- (Variable) __doc__
 
 
 # foo.py
@@ -360,13 +360,13 @@ Completion Results:
 - (Variable) __cached__
 - (Variable) __debug__
 - (Variable) __dict__
+- (Variable) __doc__
 - (Variable) __file__
 - (Variable) __loader__
 - (Variable) __name__
 - (Variable) __package__
 - (Variable) __path__
 - (Variable) __spec__
-- (Variable) __doc__
 
 
 # foo.py
@@ -599,17 +599,17 @@ isins
          ^
 Completion Results:
 - (Function) isinstance
-- (Function) timerfd_settime_ns: from os import timerfd_settime_ns
-
-- (Function) distributions: from importlib.metadata import distributions
-
-- (Function) packages_distributions: from importlib.metadata import packages_distributions
+- (Class) FirstHeaderLineIsContinuationDefect: from email.errors import FirstHeaderLineIsContinuationDefect
 
 - (Class) MissingHeaderBodySeparatorDefect: from email.errors import MissingHeaderBodySeparatorDefect
 
+- (Function) distributions: from importlib.metadata import distributions
+
 - (Function) fix_missing_locations: from ast import fix_missing_locations
 
-- (Class) FirstHeaderLineIsContinuationDefect: from email.errors import FirstHeaderLineIsContinuationDefect
+- (Function) packages_distributions: from importlib.metadata import packages_distributions
+
+- (Function) timerfd_settime_ns: from os import timerfd_settime_ns
 "#
         .trim(),
         report.trim(),
