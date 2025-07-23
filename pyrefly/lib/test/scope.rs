@@ -506,6 +506,8 @@ def try_except_else():
     else:
         e6 # E: `e6` is uninitialized
 
+    e6 # E: `e6` is uninitialized
+
 def try_except_else_finally():
     try:
         1 / 0
@@ -517,5 +519,7 @@ def try_except_else_finally():
         e7 # E: `e7` is uninitialized
     finally:
         e7 # E: `e7` is uninitialized
+
+    e7 # E: `e7` is uninitialized
 "#,
 );
