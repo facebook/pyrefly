@@ -139,7 +139,7 @@ impl InitArgs {
                 "--suppress-errors",
                 "--output-format",
                 "omit-errors",
-                "--no-summary",
+                "--summary=none",
             ]);
 
             // Use get to get the filtered globs and config finder
@@ -296,7 +296,7 @@ impl InitArgs {
             "--suppress-errors",
             "--output-format",
             "omit-errors",
-            "--no-summary",
+            "--summary=none",
         ]);
 
         // Collect file paths from errors in selected directories
