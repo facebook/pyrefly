@@ -418,7 +418,7 @@ impl<'a> BindingsBuilder<'a> {
                             _ => Initialized::Yes,
                         },
                     );
-                    let cannonical_ann_idx = match value {
+                    let canonical_ann_idx = match value {
                         Some(value) => self.bind_single_name_assign(
                             &name,
                             value,
@@ -435,14 +435,19 @@ impl<'a> BindingsBuilder<'a> {
                                     initial_value: maybe_ellipses,
                                 }
                             } else {
-                                FlowStyle::Uninitialized
+                                // A flow style might be already set for the
+                                // name, e.g. if it was defined previously.
+                                // If so, we use that style; otherwise, the flow
+                                // style lookup would return an uninitialized
+                                // flow style, which is what we want here.
+                                self.scopes.get_flow_style(&name.id, false).clone()
                             },
                         ),
                     };
                     // This assignment gets checked with the provided annotation. But if there exists a prior
                     // annotation, we might be invalidating it unless the annotations are the same. Insert a
                     // check that in that case the annotations match.
-                    if let Some(ann) = cannonical_ann_idx {
+                    if let Some(ann) = canonical_ann_idx {
                         self.insert_binding(
                             KeyExpect(name.range),
                             BindingExpect::Redefinition {
