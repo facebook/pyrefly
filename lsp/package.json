@@ -1,5 +1,5 @@
 {
-    "name": "pyrefly",
+    "name": "Pyrefly - Python Language Server",
     "description": "A Python language server, powered by pyrefly",
     "icon": "images/pyrefly-symbol.png",
     "extensionKind": [
@@ -19,7 +19,8 @@
         "Other"
     ],
     "keywords": [
-        "multi-root ready"
+        "multi-root ready",
+        "python"
     ],
     "engines": {
         "vscode": "^1.94.0"
