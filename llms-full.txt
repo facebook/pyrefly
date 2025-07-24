@@ -553,11 +553,9 @@ bad-return = false
 
 1. CLI flags
     * Examples: `--project-excludes <value>`, `--python-version <value>`
-2. Environment variable overrides -- this is the same as `PYREFLY_<config option name>`
-    * Examples: `export PROJECT_EXCLUDES=<value>`, `PYTHON_VERSION=<value> pyrefly ...`
-3. Configuration options
+2. Configuration options
     * Examples: (in a `pyrefly.toml`) `project-excludes = <value>`, `python-version = <value>`
-4. Pyrefly defaults
+3. Pyrefly defaults
     * See [Default `pyrefly.toml`](#default-pyreflytoml) for the default values used
 
 ## Type Checking Modes
@@ -634,9 +632,15 @@ import should be resolved from. See [`search-path`](#search-path) instead.
   mypy
 - Notes:
   - When overridden by passing in `FILES...`, we do not consult the
-    relevant config file for what to use for `project-excludes`. If
-    `project-excludes` should not use the default value, override it with the flag as
-    well.
+    relevant config file for what to use for `project-excludes`. 
+    If `project-excludes` should not use the default value, override it with the flag as
+    well. This is because
+    if multiple configs are loaded that conflict with `project-includes`, determining
+    how to resolve checkable files gets complicated, and might become confusing to
+    anyone attempting a type check if they're unaware of all the configs that will be
+    used in the type check. Also, we get into a chicken-and-egg problem, where we
+    don't know which files to exclude until we load all the configs we'll need,
+    which requires loading all files, and imposes a large performance burden.
   - When a `project-includes` pattern does not match any files, we will return
     an error.
   - If you get an error about no matches for a directory when passing a glob as a CLI
@@ -649,18 +653,24 @@ type checking as way to filter files that match `project-includes`,
 but we don't want to type check.
 
 - Type: list of [filesystem glob patterns](#filesystem-globbing)
-- Default: `["**/.[!/.]*", "**/*venv/**"]`
+- Default: `["**/*venv/**"]`
 - Flag equivalent: `--project-excludes`
 - Equivalent configs: `exclude` in Pyright and mypy
 - Notes:
+  - While not explicitly part of `project-excludes`, there are several patterns that are
+    filtered out of type checked files at our glob-implementation layer.
+    - Dotfiles (any files that begin with a dot (`.<stuff>`)
+    - Any files that don't end in `.py` or `.pyi`
+    - Your [`site-package-path`](#site-package-path) (including paths queried from 
+      the interpreter)
   - It is an error if no files are returned from any `project-includes` because
     they are filtered out by `project-excludes` entries. We differentiate between
     an error from a `project-includes` that doesn't match any files, and an error
     from all `project-includes` getting filtered by `project-excludes`.
-  - When passing in `FILES...`, we also do not consult the config file for
-    what to use for `project-excludes`. If `project-excludes` should not use
-    the default value, override it with a flag as well. When no `FILES...` are passed,
-    `project-excludes` overrides the config's value.
+  - When overridden by passing in `FILES...`, we do not consult the
+    relevant config file for what to use for `project-excludes`. 
+    If `project-excludes` should not use the default value, override it with the flag as
+    well. See reasoning in [`project-includes` notes](#project-includes).
   - Your [`site-package-path`](#site-package-path) is added to your `project-excludes`
     automatically. If you are trying to perform type checking on a dependency in your
     `site-package-path` (i.e. `cd <site-package-path>/some_dependency && pyrefly check`),
@@ -682,14 +692,51 @@ determine how to import it.
 - Flag equivalent: `--search-path`
 - Equivalent configs: `extraPaths` in Pyright, `mypy_path` in mypy
 - Notes:
-  - We automatically append an import root (typically the directory containing the
-    configuration file) to the `search-roots` when type checking as a sensible
-    default and last attempt at an import.
+  - We automatically apply some heuristics to improve your experience, especially
+    when no configuration is provided. See
+    [`disable-search-path-heuristics`](#disable-search-path-heuristics) to disable
+    this behavior, and [Search Path Heuristics](#search-path-heuristics) for the
+    additional paths we add to your `search-path`.
   - Libraries should not be listed here, since they may override `typeshed`
     values for your whole project, and have different import semantics with
     respect to typing. See
     [Import Resolution](./import-resolution.mdx)
     for more information about how modules are imported.
+
+### `disable-search-path-heuristics`
+
+Disable any search path heuristics/additional search path behavior that Pyrefly will
+attempt to do for you. This can be useful if Pyrefly is picking up the wrong import
+paths for your project, for example, if you have multiple projects in the same
+directory or use a monorepo setup with the import root outside of the directory
+your configuration is defined in.
+
+See [Search Path Heuristics](#search-path-heuristics) for more information on the
+search paths that are automatically added, and are affected by this flag.
+
+- Type: bool
+- Default: false
+- Flag equivalent: `--disable-search-path-heuristics`
+- Equivalent configs: none
+- Notes
+    - To see what search path we find for your a given file in your project, or 
+      your project overall, you can run `pyrefly dump-config [<file>...]`.
+
+#### **Search Path Heuristics**
+
+Pyrefly adds extra search paths to your configuration behind-the-scenes to handle
+the most common ways of setting up and configuring your project, on top of any
+[`search-path`](#search-path) entries you may pass in through the CLI or
+set in your config.
+
+The two heuristics that are currently supported are:
+1. Adding your import root to the end of your search path. Your import root is
+   a `src/` directory in the same directory as a config file *or* the
+   config file's directory itself if no `src/` directory can be found.
+   See [Configuration Finding](#configuration-finding) for more information on
+   what we'll find as a config file.
+2. If no config can be found, each directory from the given file to `/` will be
+   added as a fallback search path.
 
 ### `site-package-path`
 
@@ -1072,7 +1119,7 @@ to override other configs means you likely need to use a separate config file fo
 You can have as many `SubConfigs` as you want in a project, and even multiple separate `SubConfigs`
 that can apply to a given file when the `matches` glob pattern matches.
 
-#### `SubConfig` Allowed Overrides
+#### **`SubConfig` Allowed Overrides**
 
 We currently allow the following config options to be overridden in a `SubConfig`:
 - `errors`
@@ -1089,14 +1136,14 @@ we think they make it difficult to reason about your project type checks, but yo
 [open an issue](https://github.com/facebook/pyrefly/issues) or make a pull request if you disagree
 and would like to see the option supported.
 
-#### `SubConfig` Table Structure
+#### **`SubConfig` Table Structure**
 
 A `SubConfig` has two or more entries:
 - a `matches` key, with a [Filesystem Glob](#filesystem-globbing) detailing which files the config
   applies to.
 - at least one of the [`SubConfig` allowed overrides](#subconfig-allowed-overrides)
 
-#### `SubConfig` Option Selection
+#### **`SubConfig` Option Selection**
 
 Since you can have more than one `SubConfig` matching a file, we need to define a resolution order
 to determine which `SubConfig`'s option should be selected. Pyrefly does this by filtering
@@ -2048,6 +2095,22 @@ class Ex:
 
 x = Ex()
 x.meaning = 0
+```
+
+## redundant-condition
+
+This error is used to indicate a type that's equivalent to True or False is used as a boolean condition (e.g. an uncalled function)
+
+```python
+def f() -> bool:
+  ...
+
+# This will throw error, as it's likely that the function needs to be invoked.
+if f:
+  ...
+# This will throw error, as it's equivalent to `if True`.
+if "abc":
+  ...
 ```
 
 ## reveal-type
