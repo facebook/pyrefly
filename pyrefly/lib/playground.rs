@@ -7,6 +7,7 @@
 
 use std::num::NonZeroU32;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -14,6 +15,8 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::sys_info::PythonPlatform;
+use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lined_buffer::DisplayPos;
@@ -131,10 +134,21 @@ pub struct Playground {
 }
 
 impl Playground {
-    pub fn new() -> Self {
+    pub fn new(python_version: Option<&str>) -> Result<Self, String> {
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
         config.interpreters.skip_interpreter_query = true;
+
+        let sys_info = match python_version {
+            Some(version_str) => {
+                let parsed_version = PythonVersion::from_str(version_str)
+                    .map_err(|e| format!("Invalid Python version '{}': {}", version_str, e))?;
+                config.python_environment.python_version = Some(parsed_version);
+                SysInfo::new(parsed_version, PythonPlatform::linux())
+            }
+            None => SysInfo::default(),
+        };
+
         config.configure();
         let config = ArcId::new(config);
 
@@ -142,11 +156,11 @@ impl Playground {
         let handle = Handle::new(
             ModuleName::from_str("test"),
             ModulePath::memory(PathBuf::from("test.py")),
-            SysInfo::default(),
+            sys_info,
         );
         let mut me = Self { state, handle };
         me.update_source("".to_owned());
-        me
+        Ok(me)
     }
 
     pub fn update_source(&mut self, source: String) {
@@ -262,7 +276,7 @@ mod tests {
 
     #[test]
     fn test_regular_import() {
-        let mut state = Playground::new();
+        let mut state = Playground::new(None).unwrap();
         let expected_errors: Vec<String> = Vec::new();
 
         state.update_source("from typing import *".to_owned());
@@ -279,7 +293,7 @@ mod tests {
 
     #[test]
     fn test_invalid_import() {
-        let mut state = Playground::new();
+        let mut state = Playground::new(None).unwrap();
         state.update_source("from t".to_owned());
         let expected_headers = &[
             "Could not find import of `t`",
