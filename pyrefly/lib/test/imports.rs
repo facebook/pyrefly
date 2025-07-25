@@ -18,6 +18,29 @@ x: X = X()
     )
 }
 
+fn env_class_x_deprecated() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+from warnings import deprecated
+@deprecated("Don't use this")
+class X: ...
+x: X = X()
+"#,
+    )
+}
+
+fn env_func_x_deprecated() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+from warnings import deprecated
+@deprecated("Don't use this")
+def x(): ...
+"#,
+    )
+}
+
 fn env_class_x_deeper() -> TestEnv {
     let mut t = TestEnv::new();
     t.add_with_path("foo", "foo/__init__.pyi", "");
@@ -762,4 +785,44 @@ testcase!(
     r#"
 from . import foo  # E: Could not find import of `.`
     "#,
+);
+
+testcase!(
+    test_import_deprecated_class_warn,
+    env_class_x_deprecated(),
+    r#"
+from foo import X # E: Import of deprecated name `X`
+
+x = X()
+"#,
+);
+
+testcase!(
+    test_import_star_deprecated_class_warn,
+    env_class_x_deprecated(),
+    r#"
+from foo import * # E: Import of deprecated name `X`
+
+x = X()
+"#,
+);
+
+testcase!(
+    test_import_deprecated_func_warn,
+    env_func_x_deprecated(),
+    r#"
+from foo import x # E: Import of deprecated name `x`
+
+x()  # E: Call to deprecated function `foo.x`
+"#,
+);
+
+testcase!(
+    test_import_star_deprecated_func_warn,
+    env_func_x_deprecated(),
+    r#"
+from foo import * # E: Import of deprecated name `x`
+
+x()  # E: Call to deprecated function `foo.x`
+"#,
 );
