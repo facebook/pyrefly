@@ -155,7 +155,7 @@ export default function Sandbox({
         setHoverFunctionForMonaco(model, (l: number, c: number) =>
             pyreService.queryType(l, c)
         );
-        setInlayHintFunctionForMonaco(model, () => pyreService.inlayHint());
+        setInlayHintFunctionForMonaco(model, () => pyreService?.inlayHint() || []);
 
         // typecheck on edit
         try {
@@ -270,7 +270,9 @@ export default function Sandbox({
         setPyodideStatus,
         forceRecheck,
         codeSample,
-        pythonVersion
+        pythonVersion,
+        handleVersionChange,
+        loading
     );
     return (
         <div
@@ -318,15 +320,6 @@ export default function Sandbox({
                     </div>
                 }
             </div>
-            {!isCodeSnippet && (
-                <div {...stylex.props(styles.versionSelectorContainer)}>
-                    <PythonVersionSelector
-                        selectedVersion={pythonVersion}
-                        onVersionChange={handleVersionChange}
-                        disabled={loading}
-                    />
-                </div>
-            )}
             {!isCodeSnippet && (
                 <SandboxResults
                     loading={loading}
@@ -475,7 +468,9 @@ function getMonacoButtons(
     setPyodideStatus: React.Dispatch<React.SetStateAction<PyodideStatus>>,
     forceRecheck: () => void,
     codeSample: string,
-    pythonVersion: string
+    pythonVersion: string,
+    handleVersionChange: (version: string) => void,
+    loading: boolean
 ): ReadonlyArray<React.ReactElement> {
     let buttons: ReadonlyArray<React.ReactElement> = [];
     if (isCodeSnippet) {
@@ -489,6 +484,11 @@ function getMonacoButtons(
         ].filter(Boolean);
     } else {
         buttons = [
+            <PythonVersionSelector
+                selectedVersion={pythonVersion}
+                onVersionChange={handleVersionChange}
+                loading={loading}
+            />,
             getRunPythonButton(
                 runPythonCodeCallback,
                 pyodideStatus,
@@ -737,20 +737,6 @@ const styles = stylex.create({
         '@media (max-width: 768px)': {
             margin: '0', // No margin needed as gap is handled by the container
             width: '100%', // Make buttons full width on mobile for sandbox
-        },
-    },
-    // Style for version selector container
-    versionSelectorContainer: {
-        padding: '12px 16px',
-        borderBottom: '1px solid var(--color-background-secondary)',
-        backgroundColor: 'var(--color-background)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        fontSize: '14px',
-        color: 'var(--color-text-secondary)',
-        ':before': {
-            content: '"Python Version:"',
         },
     },
 });

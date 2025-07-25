@@ -10,25 +10,25 @@
 import React from 'react';
 import * as stylex from '@stylexjs/stylex';
 
-const SUPPORTED_VERSIONS = ['3.8', '3.9', '3.10', '3.11', '3.12'] as const;
+const SUPPORTED_VERSIONS = ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13', '3.14'] as const;
 
 export interface PythonVersionSelectorProps {
     selectedVersion: string;
     onVersionChange: (version: string) => void;
-    disabled?: boolean;
+    loading: boolean;
 }
 
 export default function PythonVersionSelector({
     selectedVersion,
     onVersionChange,
-    disabled = false,
+    loading,
 }: PythonVersionSelectorProps): React.ReactElement {
     return (
         <select
             {...stylex.props(styles.versionSelector)}
             value={selectedVersion}
             onChange={(e) => onVersionChange(e.target.value)}
-            disabled={disabled}
+            disabled={loading}
             aria-label="Select Python version"
         >
             {SUPPORTED_VERSIONS.map((version) => (
