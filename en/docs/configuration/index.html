@@ -28,8 +28,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.50a07098.css">
-<script src="/assets/js/runtime~main.719965eb.js" defer="defer"></script>
-<script src="/assets/js/main.9f4027fe.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.8b9b4ef3.js" defer="defer"></script>
+<script src="/assets/js/main.4d9adf75.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -130,7 +130,7 @@ check, typically understood as user-space files.</p>
 import should be resolved from. See <a href="#search-path"><code>search-path</code></a> instead.</p>
 <ul>
 <li>Type: list of <a href="#filesystem-globbing">filesystem glob patterns</a></li>
-<li>Default: <code>[&quot;**/*.py&quot;, &quot;**/*.pyi&quot;]</code></li>
+<li>Default: <code>[&quot;**/*&quot;]</code></li>
 <li>Flag equivalent: <code>FILES...</code> argument</li>
 <li>Equivalent configs: <code>include</code> in Pyright, <code>files</code>/<code>modules</code>/<code>packages</code> in
 mypy</li>
@@ -540,7 +540,7 @@ with <code>pyrefly check</code> to see what Pyrefly finds for your Python interp
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="filesystem-globbing">Filesystem Globbing<a href="#filesystem-globbing" class="hash-link" aria-label="Direct link to Filesystem Globbing" title="Direct link to Filesystem Globbing">​</a></h3>
 <p>We use a standard Unix-style glob, which allows for wildcard matching when specifying a fileset. It is similar
 to regex, but more restricted given the subset of allowed syntax for paths on a filesystem. We currently only
-allow matching files with a <code>.py</code> or <code>.pyi</code> suffix.</p>
+allow matching files with a <code>.py</code>, <code>.pyi</code>, or <code>.pyw</code> suffix.</p>
 <p>The globs provided are relative to the config, if one is found, or the current working directory otherwise.
 Absolute path globs can also be provided, though this is generally not recommended, since it may not
 be compatible with other systems type checking your project.</p>

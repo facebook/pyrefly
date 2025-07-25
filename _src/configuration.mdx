@@ -131,7 +131,7 @@ This does not specify
 import should be resolved from. See [`search-path`](#search-path) instead.
 
 - Type: list of [filesystem glob patterns](#filesystem-globbing)
-- Default: `["**/*.py", "**/*.pyi"]`
+- Default: `["**/*"]`
 - Flag equivalent: `FILES...` argument
 - Equivalent configs: `include` in Pyright, `files`/`modules`/`packages` in
   mypy
@@ -563,7 +563,7 @@ with `pyrefly check` to see what Pyrefly finds for your Python interpreter and
 
 We use a standard Unix-style glob, which allows for wildcard matching when specifying a fileset. It is similar
 to regex, but more restricted given the subset of allowed syntax for paths on a filesystem. We currently only
-allow matching files with a `.py` or `.pyi` suffix.
+allow matching files with a `.py`, `.pyi`, or `.pyw` suffix.
 
 The globs provided are relative to the config, if one is found, or the current working directory otherwise.
 Absolute path globs can also be provided, though this is generally not recommended, since it may not
