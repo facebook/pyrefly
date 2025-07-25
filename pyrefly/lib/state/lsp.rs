@@ -915,6 +915,7 @@ impl<'a> Transaction<'a> {
                         location: TextRange::default(),
                         symbol_kind: Some(SymbolKind::Module),
                         docstring_range,
+                        is_deprecated: false,
                     },
                 ))
             }
@@ -1010,6 +1011,7 @@ impl<'a> Transaction<'a> {
                 location,
                 symbol_kind,
                 docstring_range,
+                ..
             },
         ) = self.key_to_export(handle, &def_key, jump_through_renamed_import)?;
         let module_info = self.get_module_info(&handle)?;
@@ -1038,6 +1040,7 @@ impl<'a> Transaction<'a> {
                 location,
                 symbol_kind,
                 docstring_range,
+                ..
             },
         ) = self.key_to_export(handle, &use_key, jump_through_renamed_import)?;
         Some(FindDefinitionItemWithDocstring {
@@ -2340,16 +2343,16 @@ impl<'a> CancellableTransaction<'a> {
                 // file systems don't contain in-memory files.
                 ModulePathDetails::Memory(path_buf)
                     // Why do exclude the case of finding references within the same in-memory file?
-                    // If we are finding references within the same in-memory file, 
+                    // If we are finding references within the same in-memory file,
                     // then there is no problem for us to use the in-memory definition location.
                     if handle.path() != definition.module.path() =>
                 {
                     // Below, we try to patch the definition location to be at the same offset, but
                     // making the path to be filesystem path instead. In this way, in the happy case
                     // where the in-memory content is exactly the same as the filesystem content,
-                    // we can successfully find all the references. However, if the content diverge, 
+                    // we can successfully find all the references. However, if the content diverge,
                     // then we will miss definitions from other files.
-                    // 
+                    //
                     // In general, other than checking the reverse dependency against the in-memory
                     // content, there is not much we can do: the in-memory content can diverge from
                     // the filesystem content in arbitrary ways.

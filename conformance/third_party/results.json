@@ -100,7 +100,7 @@
     "constructors_callable.py": 11,
     "dataclasses_final.py": 1,
     "dataclasses_slots.py": 2,
-    "directives_deprecated.py": 2,
+    "directives_deprecated.py": 1,
     "enums_behaviors.py": 3,
     "enums_members.py": 3,
     "exceptions_context_managers.py": 2,

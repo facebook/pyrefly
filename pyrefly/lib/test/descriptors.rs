@@ -105,7 +105,7 @@ testcase!(
     test_abstract_property,
     r#"
 from typing import assert_type
-from abc import ABC, abstractproperty
+from abc import ABC, abstractproperty # E: Import of deprecated name `abstractproperty`
 class C(ABC):
     @abstractproperty
     def foo(self) -> int:

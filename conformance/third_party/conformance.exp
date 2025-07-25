@@ -3951,6 +3951,16 @@
   "directives_deprecated.py": [
     {
       "code": -2,
+      "column": 44,
+      "concise_description": "Import of deprecated name `Ham`",
+      "description": "Import of deprecated name `Ham`",
+      "line": 18,
+      "name": "deprecated",
+      "stop_column": 47,
+      "stop_line": 18
+    },
+    {
+      "code": -2,
       "column": 23,
       "concise_description": "Call to deprecated function `_directives_deprecated_library.norwegian_blue`",
       "description": "Call to deprecated function `_directives_deprecated_library.norwegian_blue`",
