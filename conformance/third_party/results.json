@@ -3,7 +3,7 @@
   "pass": 79,
   "fail": 57,
   "pass_rate": 0.58,
-  "differences": 261,
+  "differences": 260,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -100,7 +100,7 @@
     "constructors_callable.py": 11,
     "dataclasses_final.py": 1,
     "dataclasses_slots.py": 2,
-    "directives_deprecated.py": 2,
+    "directives_deprecated.py": 1,
     "enums_behaviors.py": 3,
     "enums_members.py": 3,
     "exceptions_context_managers.py": 2,
