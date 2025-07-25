@@ -112,7 +112,17 @@ def foo(c: Coord) -> None:
 );
 
 testcase!(
-    bug = "a1.update(a2) should be an error and a.update(b) should not be",
+    test_setitem_union,
+    r#"
+from typing import Any, TypedDict
+class C(TypedDict):
+    x: int
+def f(c: C | Any):
+    c["x"] = 0
+    "#,
+);
+
+testcase!(
     test_typed_dict_readonly_partial_update,
     r#"
 from typing import Never, NotRequired, TypedDict, ReadOnly
@@ -124,14 +134,25 @@ class A(TypedDict):
 
 a1: A = {"x": 1, "y": 2}
 a2: A = {"x": 3, "y": 4}
-a1.update(a2) 
+a1.update(a2) # E: No matching overload 
 
 class B(TypedDict):
     x: NotRequired[Never]
     y: ReadOnly[int]
 
 def update_a(a: A, b: B) -> None:
-    a.update(b) # E: No matching overload found for function `A.update` 
+    a.update(b)
+    "#,
+);
+
+testcase!(
+    test_update_with_readonly_key,
+    r#"
+from typing import ReadOnly, TypedDict
+class A(TypedDict):
+    x: ReadOnly[int]
+a: A = {'x': 1}
+a.update({'x': 2})  # E: Cannot update read-only field `x`
     "#,
 );
 
@@ -710,7 +731,7 @@ D(x=5)  # E: Missing argument `y`
 testcase!(
     test_cyclic_typed_dicts,
     r#"
-from typing import TypedDict, reveal_type
+from typing import TypedDict, assert_type
 class TD0(TypedDict):
     x: int
     y: TD1
@@ -718,12 +739,12 @@ class TD1(TypedDict):
     x: int
     y: TD0
 def foo(td0: TD0, td1: TD1) -> None:
-    reveal_type(td0)  # E: revealed type: TypedDict[TD0]
-    reveal_type(td0['x'])  # E: revealed type: int
-    reveal_type(td0['y'])  # E: revealed type: TypedDict[TD1]
-    reveal_type(td1)  # E: revealed type: TypedDict[TD1]
-    reveal_type(td1['x'])  # E: revealed type: int
-    reveal_type(td1['y'])  # E: revealed type: TypedDict[TD0]
+    assert_type(td0, TD0)
+    assert_type(td0['x'], int)
+    assert_type(td0['y'], TD1)
+    assert_type(td1, TD1)
+    assert_type(td1['x'], int)
+    assert_type(td1['y'], TD0)
     "#,
 );
 
@@ -898,6 +919,26 @@ def f(c: C):
 );
 
 testcase!(
+    test_kwonly_params_init,
+    r#"
+from typing import TypedDict
+class C(TypedDict):
+    x: int
+C(0)  # E: Expected argument `x` to be passed by name in function `C.__init__`
+    "#,
+);
+
+testcase!(
+    test_attribute_named_self,
+    r#"
+from typing import TypedDict
+class C(TypedDict):
+    self: int
+C(self=0)
+    "#,
+);
+
+testcase!(
     test_required_and_notrequired_conflict,
     r#"
 from typing import TypedDict, Required, NotRequired
@@ -961,4 +1002,17 @@ class TD2(TypedDict, foo=1):  # E: TypedDict does not support keyword argument `
 class TD3(TypedDict, bar="test", baz=False):  # E: TypedDict does not support keyword argument `bar`  # E: TypedDict does not support keyword argument `baz`
     x: int
 "#,
+);
+
+testcase!(
+    test_nonrequired_readonly,
+    r#"
+from typing import NotRequired, ReadOnly, Required, TypedDict
+class A(TypedDict):
+    x: NotRequired[ReadOnly[str]]
+class B(TypedDict):
+    x: Required[str]
+b: B = {'x': ''}
+a: A = b
+    "#,
 );

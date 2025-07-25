@@ -54,6 +54,29 @@ class A:
 );
 
 testcase!(
+    test_super_object_bad_assignment,
+    r#"
+class A:
+    a: int = 3
+
+class B(A): pass
+
+super(B, B()).a = 3  # E: Cannot set field `a`
+    "#,
+);
+
+testcase!(
+    test_super_object_delete_error,
+    r#"
+class A:
+    a: int = 3
+
+class B(A): pass
+del super(B, B()).a # E: Cannot delete field `a`
+    "#,
+);
+
+testcase!(
     test_self_attribute_assign_twice,
     r#"
 from typing import assert_type
@@ -89,16 +112,20 @@ class B(A):
     "#,
 );
 
+// Ref https://github.com/facebook/pyrefly/issues/370
+// Ref https://github.com/facebook/pyrefly/issues/522
 testcase!(
+    bug =
+        "Attributes initialized in `__new__` and `__init_subclass__` should not be instance-only.",
     test_cls_attribute_in_constructor,
     r#"
 from typing import ClassVar
 class A:
     def __new__(cls, x: int):
-        cls.x = x
+        cls.x = x # E: Instance-only attribute `x` of class `A` is not visible on the class
 class B:
     def __init_subclass__(cls, x: int):
-        cls.x = x
+        cls.x = x # E: Instance-only attribute `x` of class `B` is not visible on the class
 class C:
     x: ClassVar[int]
     def __new__(cls, x: int):
@@ -245,8 +272,8 @@ class A:
     x: int
     y: str
     def __init__(self):
-        self.x: Literal[1] = 1  
-        self.y: Final = "y"  
+        self.x: Literal[1] = 1
+        self.y: Final = "y"
 def f(a: A):
     assert_type(a.x, int)
     "#,
@@ -365,7 +392,7 @@ C().f(0)    # E: Argument `Literal[0]` is not assignable to parameter `x` with t
 testcase!(
     test_callable_instance_only_attribute,
     r#"
-from typing import Callable, assert_type, Literal, reveal_type
+from typing import Callable, assert_type, Literal
 class C:
     callable_attr: Callable[[int], int]
     def __init__(self):
@@ -842,7 +869,7 @@ class C:
         self.prev = False
     def __new__(cls, orig_func=None):
         if orig_func is None:
-            return super().__new__(cls) 
+            return super().__new__(cls)
 def f():
     with C():  # E: `NoneType` has no attribute `__enter__`  # E: `NoneType` has no attribute `__exit__`
         pass
@@ -1135,25 +1162,23 @@ class Backend:
         pass
 class Options2(Backend.Options):
     pass
-Backend.Options = Options2  # This probably should not be legal
+Backend.Options = Options2  # E: A class object initialized in the class body is considered read-only
     "#,
 );
 
 testcase!(
-    bug = "We should allow subtyping in nested class types",
     test_nested_class_inheritance,
     r#"
 class Backend:
     class Options:
         pass
 class ProcessGroupGloo(Backend):
-    class Options(Backend.Options): # E: `ProcessGroupGloo.Options` has type `type[Options]`, which is not consistent with `type[Options]` in `Backend.Options` (the type of read-write attributes cannot be changed)
+    class Options(Backend.Options):
         pass
     "#,
 );
 
 testcase!(
-    bug = "We should allow subtyping in nested class types via assignment",
     test_nested_class_inheritance_via_assignment,
     r#"
 class Backend:
@@ -1162,7 +1187,17 @@ class Backend:
 class Options2(Backend.Options):
     pass
 class ProcessGroupGloo(Backend):
-    Options = Options2  # E: `ProcessGroupGloo.Options` has type `type[Options2]`, which is not consistent with `type[Options]` in `Backend.Options` (the type of read-write attributes cannot be changed)
+    Options = Options2
+    "#,
+);
+
+testcase!(
+    test_read_only_class_var,
+    r#"
+from typing import ClassVar, Final
+class C:
+    x: ClassVar[Final[int]] = 42
+C.x = 43  # E: This field is marked as Final
     "#,
 );
 
@@ -1175,10 +1210,10 @@ from typing import Self, cast, Any, assert_type
 class C:
     outputs: list[Any]
     def f(self, other):
-        other = cast(Self, other)  
+        other = cast(Self, other)
         assert_type(other, Self)
         assert_type(other.outputs, Any) # E: TODO: Expr::attr_infer_for_type
-        len(self.outputs) == len(other.outputs) # E: TODO: Expr::attr_infer_for_type attribute base undefined for type: Self 
+        len(self.outputs) == len(other.outputs) # E: TODO: Expr::attr_infer_for_type attribute base undefined for type: Self
     "#,
 );
 
@@ -1200,7 +1235,7 @@ testcase!(
     r#"
 def f(obj, g, field_type, my_type,):
     assert issubclass(obj, tuple) and hasattr(obj, "_fields")
-    for f in obj._fields: # E: TODO: Expr::attr_infer_for_type attribute base undefined for type: type[tuple[Unknown, ...]] 
+    for f in obj._fields: # E: TODO: Expr::attr_infer_for_type attribute base undefined for type: type[tuple[Unknown, ...]]
         if isinstance(field_type, my_type) and g is not None:
             if g is None:
                 raise ValueError(

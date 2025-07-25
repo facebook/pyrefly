@@ -8,22 +8,249 @@ description: Pyrefly in the IDE
 Pyrefly seamlessly integrates into IDEs with our [VSCode](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly) and [OpenVSX](https://open-vsx.org/extension/meta/pyrefly) extensions. For other editors like vim/emacs, see [other editors](#other-editors).
 
 ## Quick start
-1. Install the Pyrefly extension from the [VSCode marketplace](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly) or [OpenVSX](https://open-vsx.org/extension/meta/pyrefly)
-2. Open a python file and the extension will activate
 
-## Features
-The Pyrefly extension:
-- Adds inline type errors matching the Pyrefly command-line to your editor
-- Adds language features from Pyrefly's analysis like go-to definition, hover, etc. (full list [here](https://github.com/facebook/pyrefly/issues/344)) and disables Pylance completely (VSCode's built-in Python extension)
+1. Install the Pyrefly extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly) or [Open VSX](https://open-vsx.org/extension/meta/pyrefly).
+2. Open any Python file and the extension will activate automatically.
+
+## Supported features
+
+Pyrefly’s language server powers a complete editing experience while **fully disabling Pylance**, ensuring no interference between checkers.
+
+> Each feature below links to the [official LSP specification](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/) and shows what’s currently supported by Pyrefly.
+
+---
+
+### [Go to definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_definition)
+
+Jump to where a symbol is declared with a click or <kbd>F12</kbd>.
+<video
+  src="/videos/go-to-definition.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+<!-- ### [Go to type definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_typeDefinition)
+
+Navigate to the underlying type of any expression.
+<video
+  src="/videos/go-to-type-definition.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+-->
+
+### [Find references](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_references)
+
+List all usages of a symbol across your codebase.
+<video
+  src="/videos/find-all-references.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Document symbols](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_documentSymbol)
+
+See an outline of all top-level items in the current file.
+<video
+  src="/videos/document-symbols.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Workspace symbols](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#workspace_symbol)
+
+Search globally for functions, classes, and variables.
+<video
+  src="/videos/workspace-symbols.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Hover](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_hover)
+
+See type info and docstrings when hovering over code.
+<video
+  src="/videos/hover.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Document highlights](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_documentHighlight)
+
+Highlights all other instances of the symbol under your cursor.
+<video
+  src="/videos/document-highlights.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Signature help](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_signatureHelp)
+
+Live function signatures as you type, with parameter hints.
+<video
+  src="/videos/signature-help.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Completion](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_completion)
+
+Autocomplete suggestions for project-specific symbols and imports.
+<video
+  src="/videos/autocomplete.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Rename](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_rename)
+
+Safely rename symbols project-wide.
+<video
+  src="/videos/rename.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+<!-- ### [Call hierarchy](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#callHierarchy_prepare)
+
+Explore callers and callees of a method or function.
+![Call hierarchy](../gifs/call-hierarchy.gif)
+
+---
+ -->
+
+### [Diagnostics](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_publishDiagnostics)
+
+Type errors and warnings from Pyrefly’s checker appear in the diagnostics pane ("Problems" pane in VSCode).
+<video
+  src="/videos/diagnostics.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Semantic tokens](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_semanticTokens)
+
+Rich syntax highlighting based on token type and origin.
+<video
+  src="/videos/semantic-highlighting.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Inlay hints](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_inlayHint)
+
+Inline hints for types, parameter names, and return values.
+<video
+  src="/videos/inlay-hints.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Notebook support](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#notebookDocument)
+
+Works with Jupyter and notebook-style cells.
+<!-- <video
+  src="/videos/jupyter-notebooks.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/> -->
+
+---
+
+See [planned features and request your own](https://github.com/facebook/pyrefly/issues/344) on GitHub.
 
 ## Customization
 By default, Pyrefly should work in the IDE with no configuration necessary. But to ensure your project is set up properly, see [configurations](../configuration).
 
 The following configuration options are IDE-specific and exposed as VSCode settings:
-- `python.pyrefly.disableLanguageServices` [boolean: false]: by default, Pyrefly will provide both type errors and other language features like go-to definition, intellisense, hover, etc. Enable this option to keep type errors from Pyrefly unchanged but use VSCode's Python extension for everything else.
-- `python.pyrefly.disableTypeErrors` [boolean: false]: by default, Pyrefly will provide type errors in your project. Enable this setting to disable type error squiggles appearing in the editor.
-- `pyrefly.lspPath` [string: '']: if your platform is not supported, you can build pyrefly from source and specify the binary here.
-
+- Disable language services
+  - `python.pyrefly.disableLanguageServices` [boolean: false]: By default, Pyrefly will provide both type errors and other language features like go-to definition, intellisense, hover, etc. Set `disableLanguageServices` to `true` to keep type errors from Pyrefly unchanged but use VSCode's Python extension for everything else.
+- Disable type errors
+  - `python.pyrefly.disableTypeErrors` [boolean: false]: By default, Pyrefly will provide type errors in your project. Set `disableTypeErrors` to `true` to prevent type error diagnostics (squiggles) from appearing in the editor.
+- Specify a custom Pyrefly Binary (lspPath)
+  - `pyrefly.lspPath` [string: '']: If your platform is not supported, you can build pyrefly from source and specify the binary path with the `lspPath` config.
 If the project configuration does not specify the Python interpreter, Pyrefly will use the [interpreter selected in VSCode](https://code.visualstudio.com/docs/python/environments).
 
 ## Issues?
@@ -72,10 +299,10 @@ require("mason-lspconfig").setup {
         <details>
             <summary>mason.nvim</summary>
 
-            [mason.nvim](https://github.com/mason-org/mason.nvim) is our recommended approach, since it makes Pyrefly and other language servers, linters, and utilities available to Neovim, and makes configuring them easy.
+            [mason.nvim](https://github.com/mason-org/mason.nvim) is our recommended approach, since it makes Pyrefly and other language servers, linters, and utilities easily available to Neovim.
 
             :::note
-            Installing a binary with Mason will take precedence over other system installations. It might be worth using system installations (including installations in virtual environments) if you need to switch between different versions of Pyrefly between different projects.
+            Installing a binary with Mason will take precedence over other system installations. It might be worth using system installations (including installations in virtual environments) if you need to switch between different versions of Pyrefly for different projects.
             :::
 
             Install Mason using your Neovim plugin manager of choice, and make sure you call its setup function to make it available.
@@ -109,7 +336,7 @@ require("mason-lspconfig").setup {
         This section describes how to tell Neovim how Pyrefly can be run, as well as how to override those settings.
 
         You have two options on how to do this:
-        1. (recommended) Install the [`neovim/nvim-lspconfig`](https://github.com/neovim/nvim-lspconfig) plugin to get Pyrefly's (and other language servers') default configs. You can override specific settings if you'd like.
+        1. (recommended) Install or update the [`neovim/nvim-lspconfig`](https://github.com/neovim/nvim-lspconfig) plugin to get Pyrefly's (and other language servers') default configs. You can override specific settings if you'd like.
         2. Setup your language server manually without installing extra plugins.
 
         <details>
@@ -117,7 +344,7 @@ require("mason-lspconfig").setup {
 
             [`neovim/nvim-lspconfig`](https://github.com/neovim/nvim-lspconfig) is a Neovim plugin acting as a repository of language server settings (a repository of language server settings) installed and updated to get Pyrefly's default configuration.
 
-            We also recommend installing the [mason-org/mason-lspconfig.nvim](https://github.com/mason-org/mason-lspconfig.nvim) plugin if you're using Mason, which provides other nice functionality when using Mason with `lspconfig`. If you install `mason-org/mason-lspconfig.nvim`, be sure to source it in your Neovim config.
+            We also recommend installing or updating the [mason-org/mason-lspconfig.nvim](https://github.com/mason-org/mason-lspconfig.nvim) plugin if you're using Mason, which provides other nice functionality when using Mason with `lspconfig`. If you install `mason-org/mason-lspconfig.nvim`, be sure to source it in your Neovim config.
 
             To override specific settings, see `:h vim.lsp.config`. See `:h vim.lsp.Config` and `:h vim.lsp.ClientConfig` for values you can override, and the [`nvim-lspconfig` Pyrefly config](https://github.com/neovim/nvim-lspconfig/blob/master/lsp/pyrefly.lua) for default values.
 
@@ -158,11 +385,9 @@ require("mason-lspconfig").setup {
     <details>
         <summary>Enable Pyrefly for Neovim</summary>
 
-        :::note
         If you've installed Pyrefly with Mason and have `mason-org/mason-lspconfig.nvim` installed, then your language server should just work! You can check by opening a file your language server should cover and running `:checkhealth lsp` to see if it's started. You may need to restart Neovim for any changes made above to take effect.
-        :::
 
-        To make sure your language servers are activated, be sure to enable them with the syntax below.
+        Otherwise, to make sure your language servers are activated, be sure to enable them with the syntax below.
 
         ```lua
         vim.lsp.enable({"pyrefly"})

@@ -6,6 +6,7 @@
  */
 
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::gas::Gas;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
@@ -15,13 +16,16 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::binding::binding::Binding;
+use crate::binding::binding::BindingClass;
+use crate::binding::binding::ClassBinding;
 use crate::binding::binding::Key;
 use crate::binding::bindings::Bindings;
 use crate::binding::narrow::identifier_and_chain_for_expr;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::export::exports::Export;
-use crate::module::short_identifier::ShortIdentifier;
 use crate::state::handle::Handle;
+
+const KEY_TO_DEFINITION_INITIAL_GAS: Gas = Gas::new(100);
 
 pub enum IntermediateDefinition {
     Local(Export),
@@ -30,6 +34,14 @@ pub enum IntermediateDefinition {
 }
 
 pub fn key_to_intermediate_definition(
+    bindings: &Bindings,
+    key: &Key,
+) -> Option<IntermediateDefinition> {
+    let mut gas = KEY_TO_DEFINITION_INITIAL_GAS;
+    key_to_intermediate_definition_inner(bindings, key, &mut gas)
+}
+
+fn key_to_intermediate_definition_inner(
     bindings: &Bindings,
     key: &Key,
     gas: &mut Gas,
@@ -46,7 +58,7 @@ pub fn key_to_intermediate_definition(
                 Some(IntermediateDefinition::Local(Export {
                     location: x.range(),
                     symbol_kind: binding.symbol_kind(),
-                    docstring: None,
+                    docstring_range: None,
                 }))
             } else {
                 None
@@ -67,13 +79,13 @@ fn binding_to_intermediate_definition(
 
     let mut resolve_assign_to_expr = |expr: &Expr| {
         if let Some((id, _)) = identifier_and_chain_for_expr(expr) {
-            key_to_intermediate_definition(
+            key_to_intermediate_definition_inner(
                 bindings,
                 &Key::BoundName(ShortIdentifier::new(&id)),
                 gas,
             )
         } else if let Some((id, _)) = identifier_and_chain_prefix_for_expr(expr) {
-            key_to_intermediate_definition(
+            key_to_intermediate_definition_inner(
                 bindings,
                 &Key::BoundName(ShortIdentifier::new(&id)),
                 gas,
@@ -84,12 +96,12 @@ fn binding_to_intermediate_definition(
     };
     match binding {
         Binding::Forward(k) | Binding::Narrow(k, _, _) | Binding::Pin(k, ..) => {
-            key_to_intermediate_definition(bindings, bindings.idx_to_key(*k), gas)
+            key_to_intermediate_definition_inner(bindings, bindings.idx_to_key(*k), gas)
         }
         Binding::Default(k, m) => {
             binding_to_intermediate_definition(bindings, m, bindings.idx_to_key(*k), gas)
         }
-        Binding::Phi(ks) if !ks.is_empty() => key_to_intermediate_definition(
+        Binding::Phi(ks) if !ks.is_empty() => key_to_intermediate_definition_inner(
             bindings,
             bindings.idx_to_key(*ks.iter().next().unwrap()),
             gas,
@@ -103,7 +115,7 @@ fn binding_to_intermediate_definition(
         Binding::Module(name, _, _) => Some(IntermediateDefinition::Module(*name)),
         Binding::CheckLegacyTypeParam(k, _) => {
             let binding = bindings.get(*k);
-            key_to_intermediate_definition(bindings, bindings.idx_to_key(binding.0), gas)
+            key_to_intermediate_definition_inner(bindings, bindings.idx_to_key(binding.0), gas)
         }
         Binding::AssignToSubscript(subscript, _) => {
             let expr = Expr::Subscript(subscript.clone());
@@ -113,6 +125,27 @@ fn binding_to_intermediate_definition(
             let expr = Expr::Attribute(attribute.clone());
             resolve_assign_to_expr(&expr)
         }
+        Binding::Function(idx, _prev_idx, _class_metadata) => {
+            let func = bindings.get(*idx);
+            Some(IntermediateDefinition::Local(Export {
+                location: func.def.name.range,
+                symbol_kind: binding.symbol_kind(),
+                docstring_range: func.docstring_range,
+            }))
+        }
+        Binding::ClassDef(idx, _decorators) => match bindings.get(*idx) {
+            BindingClass::FunctionalClassDef(..) => None,
+            BindingClass::ClassDef(ClassBinding {
+                def,
+                docstring_range,
+                ..
+            }) => Some(IntermediateDefinition::Local(Export {
+                location: def.name.range,
+                symbol_kind: binding.symbol_kind(),
+                docstring_range: *docstring_range,
+            })),
+        },
+
         _ => None,
     }
 }

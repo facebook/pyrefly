@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use anyhow::Context as _;
 use notify::Event;
+use notify::RecommendedWatcher;
 use notify::RecursiveMode;
 use notify::Watcher as _;
 use notify::recommended_watcher;
@@ -54,6 +55,9 @@ impl Watcher {
 }
 
 struct NotifyWatcher {
+    /// We need to keep the watcher alive, so it sends to the receiver.
+    #[allow(dead_code)]
+    watcher: RecommendedWatcher,
     receiver: Receiver<notify::Result<Event>>,
 }
 
@@ -64,7 +68,7 @@ impl NotifyWatcher {
         for path in paths {
             watcher.watch(path, RecursiveMode::Recursive)?;
         }
-        Ok(Self { receiver })
+        Ok(Self { watcher, receiver })
     }
 
     async fn wait(&mut self) -> anyhow::Result<Vec<Event>> {

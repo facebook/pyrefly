@@ -6,7 +6,6 @@
  */
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Display;
 use std::fs::File;
@@ -14,6 +13,8 @@ use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -23,16 +24,13 @@ use anyhow::Context as _;
 use clap::Parser;
 use clap::ValueEnum;
 use dupe::Dupe;
-use path_absolutize::Absolutize;
+use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
-use pyrefly_python::sys_info::PythonPlatform;
-use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_util::arc_id::ArcId;
-use pyrefly_util::args::clap_env;
 use pyrefly_util::display;
+use pyrefly_util::display::count;
 use pyrefly_util::display::number_thousands;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::forgetter::Forgetter;
@@ -45,31 +43,82 @@ use pyrefly_util::watcher::Watcher;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
+use tracing::info;
 
-use crate::commands::run::CommandExitStatus;
-use crate::commands::suppress;
-use crate::commands::util::module_from_path;
-use crate::config::base::UntypedDefBehavior;
-use crate::config::config::ConfigFile;
-use crate::config::config::validate_path;
-use crate::config::error::ErrorDisplayConfig;
-use crate::config::finder::ConfigError;
+use crate::commands::files::FilesArgs;
+use crate::commands::util::CommandExitStatus;
+use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
-use crate::config::util::ConfigOrigin;
 use crate::error::error::Error;
 use crate::error::error::print_error_counts;
-use crate::error::kind::ErrorKind;
-use crate::error::kind::Severity;
 use crate::error::legacy::LegacyErrors;
 use crate::error::summarise::print_error_summary;
-use crate::module::bundled::stdlib_search_path;
-use crate::module::wildcard::ModuleWildcard;
+use crate::error::suppress;
+use crate::module::from_path::module_from_path;
+use crate::module::typeshed::stdlib_search_path;
 use crate::report;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::subscriber::ProgressBarSubscriber;
+
+/// Check the given files.
+#[deny(clippy::missing_docs_in_private_items)]
+#[derive(Debug, Clone, Parser)]
+pub struct FullCheckArgs {
+    /// Which files to check.
+    #[command(flatten)]
+    pub files: FilesArgs,
+
+    /// Watch for file changes and re-check them.
+    #[arg(long, conflicts_with = "check_all")]
+    watch: bool,
+
+    /// Type checking arguments and configuration
+    #[command(flatten)]
+    pub args: CheckArgs,
+}
+
+impl FullCheckArgs {
+    pub async fn run(self, allow_forget: bool) -> anyhow::Result<CommandExitStatus> {
+        self.args.config_override.validate()?;
+        let (files_to_check, config_finder) = self.files.resolve(&self.args.config_override)?;
+        run_check(
+            self.args,
+            self.watch,
+            files_to_check,
+            config_finder,
+            allow_forget,
+        )
+        .await
+    }
+}
+
+async fn run_check(
+    args: CheckArgs,
+    watch: bool,
+    files_to_check: FilteredGlobs,
+    config_finder: ConfigFinder,
+    allow_forget: bool,
+) -> anyhow::Result<CommandExitStatus> {
+    if watch {
+        let roots = files_to_check.roots();
+        info!(
+            "Watching for files in {}",
+            display::intersperse_iter(";", || roots.iter().map(|p| p.display()))
+        );
+        let watcher = Watcher::notify(&roots)?;
+        args.run_watch(watcher, files_to_check, config_finder)
+            .await?;
+        Ok(CommandExitStatus::Success)
+    } else {
+        match args.run_once(files_to_check, config_finder, allow_forget) {
+            Ok((status, _)) => Ok(status),
+            Err(e) => Err(e),
+        }
+    }
+}
 
 #[derive(Debug, Clone, ValueEnum, Default)]
 enum OutputFormat {
@@ -87,7 +136,7 @@ enum OutputFormat {
 /// Main arguments for Pyrefly type checker
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
-pub struct Args {
+pub struct CheckArgs {
     /// Output related configuration options
     #[command(flatten, next_help_heading = "Output")]
     output: OutputArgs,
@@ -96,7 +145,49 @@ pub struct Args {
     behavior: BehaviorArgs,
     /// Configuration override options
     #[command(flatten, next_help_heading = "Config Overrides")]
-    config_override: ConfigOverrideArgs,
+    pub config_override: ConfigOverrideArgs,
+}
+
+/// Arguments for snippet checking (excludes behavior args that don't apply to snippets)
+#[deny(clippy::missing_docs_in_private_items)]
+#[derive(Debug, Parser, Clone)]
+pub struct SnippetCheckArgs {
+    /// Python code to type check
+    code: String,
+
+    /// Explicitly set the Pyrefly configuration to use when type checking.
+    /// When not set, Pyrefly will perform an upward-filesystem-walk approach to find the nearest
+    /// pyrefly.toml or pyproject.toml with `tool.pyrefly` section'. If no config is found, Pyrefly exits with error.
+    /// If both a pyrefly.toml and valid pyproject.toml are found, pyrefly.toml takes precedence.
+    #[arg(long, short, value_name = "FILE")]
+    config: Option<PathBuf>,
+
+    /// Output related configuration options
+    #[command(flatten, next_help_heading = "Output")]
+    output: OutputArgs,
+    /// Configuration override options
+    #[command(flatten, next_help_heading = "Config Overrides")]
+    pub config_override: ConfigOverrideArgs,
+}
+
+impl SnippetCheckArgs {
+    pub async fn run(self, allow_forget: bool) -> anyhow::Result<CommandExitStatus> {
+        let (_, config_finder) = FilesArgs::get(vec![], self.config, &self.config_override)?;
+        let check_args = CheckArgs {
+            output: self.output,
+            behavior: BehaviorArgs {
+                check_all: false,
+                suppress_errors: false,
+                expectations: false,
+                remove_unused_ignores: false,
+            },
+            config_override: self.config_override,
+        };
+        match check_args.run_once_with_snippet(self.code, config_finder, allow_forget) {
+            Ok((status, _)) => Ok(status),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 /// how/what should Pyrefly output
@@ -104,33 +195,35 @@ pub struct Args {
 #[derive(Debug, Parser, Clone)]
 struct OutputArgs {
     /// Write the errors to a file, instead of printing them.
-    #[arg(long, short = 'o', env = clap_env("OUTPUT"), value_name = "OUTPUT_FILE")]
+    #[arg(long, short = 'o', value_name = "OUTPUT_FILE")]
     output: Option<PathBuf>,
     /// Set the error output format.
-    #[arg(long, value_enum, default_value_t, env = clap_env("OUTPUT_FORMAT"))]
+    #[arg(long, value_enum, default_value_t)]
     output_format: OutputFormat,
     /// Produce debugging information about the type checking process.
-    #[arg(long, env = clap_env("DEBUG_INFO"), value_name = "OUTPUT_FILE")]
+    #[arg(long, value_name = "OUTPUT_FILE")]
     debug_info: Option<PathBuf>,
     /// Report the memory usage of bindings.
-    #[arg(long, env = clap_env("REPORT_BINDING_MEMORY"), value_name = "OUTPUT_FILE")]
+    #[arg(long, value_name = "OUTPUT_FILE")]
     report_binding_memory: Option<PathBuf>,
     /// Report type traces.
-    #[arg(long, env = clap_env("REPORT_TRACE"), value_name = "OUTPUT_FILE")]
+    #[arg(long, value_name = "OUTPUT_FILE")]
     report_trace: Option<PathBuf>,
     /// Process each module individually to figure out how long each step takes.
-    #[arg(long, env = clap_env("REPORT_TIMINGS"), value_name = "OUTPUT_FILE")]
+    #[arg(long, value_name = "OUTPUT_FILE")]
     report_timings: Option<PathBuf>,
     /// Generate a Glean-compatible JSON file for each module
-    #[arg(long, env = clap_env("REPORT_GLEAN"), value_name = "OUTPUT_FILE")]
+    #[arg(long, value_name = "OUTPUT_FILE")]
     report_glean: Option<PathBuf>,
+    /// Generate a Pysa-compatible JSON file for each module
+    #[arg(long, value_name = "OUTPUT_FILE")]
+    report_pysa: Option<PathBuf>,
     /// Count the number of each error kind. Prints the top N [default=5] errors, sorted by count, or all errors if N is 0.
     #[arg(
         long,
         default_missing_value = "5",
         require_equals = true,
         num_args = 0..=1,
-        env = clap_env("COUNT_ERRORS"),
         value_name = "N",
     )]
     count_errors: Option<usize>,
@@ -142,13 +235,34 @@ struct OutputArgs {
         default_missing_value = "0",
         require_equals = true,
         num_args = 0..=1,
-        env = clap_env("SUMMARIZE_ERRORS"),
         value_name = "INDEX",
     )]
     summarize_errors: Option<usize>,
+
+    /// By default show the number of errors. Pass `--summary` to show information about lines checked and time/memory,
+    /// or `--summary=none` to hide the summary line entirely.
+    #[arg(
+        long,
+        default_missing_value = "full",
+        require_equals = true,
+        num_args = 0..=1,
+        value_enum,
+        default_value_t
+    )]
+    summary: Summary,
+
     /// Omit the summary in the last line of the output.
-    #[arg(long, env = clap_env("NO_SUMMARY"))]
+    /// Deprecated: will be removed in the next release. Use `--summary=none` instead.
+    #[arg(long)]
     no_summary: bool,
+}
+
+#[derive(Clone, Debug, ValueEnum, Default, PartialEq, Eq)]
+enum Summary {
+    None,
+    #[default]
+    Default,
+    Full,
 }
 
 /// non-config type checker behavior
@@ -156,86 +270,17 @@ struct OutputArgs {
 #[derive(Debug, Parser, Clone)]
 struct BehaviorArgs {
     /// Check all reachable modules, not just the ones that are passed in explicitly on CLI positional arguments.
-    #[arg(long, short = 'a', env = clap_env("CHECK_ALL"))]
+    #[arg(long, short = 'a')]
     check_all: bool,
     /// Suppress errors found in the input files.
-    #[arg(long, env = clap_env("SUPPRESS_ERRORS"))]
+    #[arg(long)]
     suppress_errors: bool,
     /// Check against any `E:` lines in the file.
-    #[arg(long, env = clap_env("EXPECTATIONS"))]
+    #[arg(long)]
     expectations: bool,
     /// Remove unused ignores from the input files.
-    #[arg(long, env = clap_env("REMOVE_UNUSED_IGNORES"))]
+    #[arg(long)]
     remove_unused_ignores: bool,
-}
-
-/// config overrides
-#[deny(clippy::missing_docs_in_private_items)]
-#[derive(Debug, Parser, Clone)]
-struct ConfigOverrideArgs {
-    /// The list of directories where imports are imported from, including
-    /// type checked files.
-    #[arg(long, env = clap_env("SEARCH_PATH"))]
-    search_path: Option<Vec<PathBuf>>,
-
-    /// The Python version any `sys.version` checks should evaluate against.
-    #[arg(long, env = clap_env("PYTHON_VERSION"))]
-    python_version: Option<PythonVersion>,
-
-    /// The platform any `sys.platform` checks should evaluate against.
-    #[arg(long, env = clap_env("PLATFORM"))]
-    python_platform: Option<PythonPlatform>,
-
-    /// Directories containing third-party package imports, searched
-    /// after first checking `search_path` and `typeshed`.
-    #[arg(long, env = clap_env("SITE_PACKAGE_PATH"))]
-    site_package_path: Option<Vec<PathBuf>>,
-
-    /// Use a specific Conda environment to query Python environment information,
-    /// even if it isn't activated.
-    #[arg(long, env = clap_env("CONDA_ENVIRONMENT"), group = "env_source")]
-    conda_environment: Option<String>,
-
-    /// The Python executable that will be queried for `python_version`
-    /// `python_platform`, or `site_package_path` if any of the values are missing.
-    #[arg(long, env = clap_env("PYTHON_INTERPRETER"), value_name = "EXE_PATH", group = "env_source")]
-    python_interpreter: Option<PathBuf>,
-
-    /// Skip doing any automatic querying for `python-interpreter` or `conda-environment`
-    #[arg(long, env = clap_env("SKIP_INTERPRETER_QUERY"), group = "env_source")]
-    skip_interpreter_query: bool,
-
-    /// Override the bundled typeshed with a custom path.
-    #[arg(long, env = clap_env("TYPESHED_PATH"))]
-    typeshed_path: Option<PathBuf>,
-
-    /// Whether to search imports in `site-package-path` that do not have a `py.typed` file unconditionally.
-    #[arg(long, env = clap_env("USE_UNTYPED_IMPORTS"))]
-    use_untyped_imports: Option<bool>,
-    /// Replace specified imports with typing.Any, suppressing related import errors even if the module is found.
-    #[arg(long, env = clap_env("REPLACE_IMPORTS_WITH_ANY"))]
-    replace_imports_with_any: Option<Vec<String>>,
-    /// Ignore missing source packages when only type stubs are available, allowing imports to proceed without source validation.
-    #[arg(long, env = clap_env("IGNORE_MISSING_SOURCE"))]
-    ignore_missing_source: Option<bool>,
-    /// Whether to ignore type errors in generated code.
-    #[arg(long, env = clap_env("IGNORE_ERRORS_IN_GENERATED_CODE"))]
-    ignore_errors_in_generated_code: Option<bool>,
-    /// Controls how Pyrefly analyzes function definitions that lack type annotations on parameters and return values.
-    #[arg(long, env = clap_env("UNTYPED_DEF_BEHAVIOR"))]
-    untyped_def_behavior: Option<UntypedDefBehavior>,
-    /// Whether Pyrefly will respect ignore statements for other tools, e.g. `# mypy: ignore`.
-    #[arg(long, env = clap_env("PERMISSIVE_IGNORES"))]
-    permissive_ignores: Option<bool>,
-    /// Force this rule to emit an error. Can be used multiple times.
-    #[arg(long, env = clap_env("ERROR"))]
-    error: Vec<ErrorKind>,
-    /// Force this rule to emit a warning. Can be used multiple times.
-    #[arg(long, env = clap_env("WARN"))]
-    warn: Vec<ErrorKind>,
-    /// Do not emit diagnostics for this rule. Can be used multiple times.
-    #[arg(long, env = clap_env("IGNORE"))]
-    ignore: Vec<ErrorKind>,
 }
 
 impl OutputFormat {
@@ -377,7 +422,12 @@ struct RequireLevels {
 
 async fn get_watcher_events(watcher: &mut Watcher) -> anyhow::Result<CategorizedEvents> {
     loop {
-        let events = CategorizedEvents::new(watcher.wait().await?);
+        let events = CategorizedEvents::new(
+            watcher
+                .wait()
+                .await
+                .context("When waiting for watched files")?,
+        );
         if !events.is_empty() {
             return Ok(events);
         }
@@ -401,7 +451,7 @@ struct Timings {
 
 impl Display for Timings {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        const THRESHOLD: Duration = Duration::from_millis(300);
+        const THRESHOLD: Duration = Duration::from_millis(100);
         let total = self.start.elapsed();
         write!(f, "{}", Self::show(total))?;
 
@@ -423,7 +473,7 @@ impl Display for Timings {
             write!(
                 f,
                 " ({})",
-                display::intersperse_iter("; ", || steps
+                display::intersperse_iter(", ", || steps
                     .iter()
                     .rev()
                     .map(|(lbl, dur)| format!("{lbl} {}", Self::show(*dur))))
@@ -448,24 +498,14 @@ impl Timings {
     }
 }
 
-impl Args {
-    pub fn absolute_search_path(&mut self) {
-        if let Some(paths) = self.config_override.search_path.as_mut() {
-            for x in paths.iter_mut() {
-                if let Ok(v) = x.absolutize() {
-                    *x = v.into_owned();
-                }
-            }
-        }
-    }
-
+impl CheckArgs {
     pub fn get_handles(
         self,
         files_to_check: FilteredGlobs,
         config_finder: &ConfigFinder,
     ) -> anyhow::Result<Vec<(Handle, Require)>> {
         let handles = Handles::new(
-            checkpoint(files_to_check.files(), config_finder)?,
+            config_finder.checkpoint(files_to_check.files())?,
             config_finder,
         );
         Ok(handles.all(self.get_required_levels().specified))
@@ -479,7 +519,7 @@ impl Args {
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
         let mut timings = Timings::new();
         let list_files_start = Instant::now();
-        let expanded_file_list = checkpoint(files_to_check.files(), &config_finder)?;
+        let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
         timings.list_files = list_files_start.elapsed();
         debug!(
             "Checking {} files (listing took {})",
@@ -506,6 +546,48 @@ impl Args {
         )
     }
 
+    pub fn run_once_with_snippet(
+        self,
+        code: String,
+        config_finder: ConfigFinder,
+        allow_forget: bool,
+    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        // Create a virtual module path for the snippet
+        let path = PathBuf::from_str("snippet")?;
+        let module_path = ModulePath::memory(path);
+        let module_name = ModuleName::from_str("__main__");
+
+        let holder = Forgetter::new(State::new(config_finder), allow_forget);
+
+        // Create a single handle for the virtual module
+        let sys_info = holder
+            .as_ref()
+            .config_finder()
+            .python_file(module_name, &module_path)
+            .get_sys_info();
+        let handle = Handle::new(module_name, module_path.clone(), sys_info);
+
+        let require_levels = self.get_required_levels();
+        let mut transaction = Forgetter::new(
+            holder
+                .as_ref()
+                .new_transaction(require_levels.default, None),
+            allow_forget,
+        );
+
+        // Add the snippet source to the transaction's memory
+        transaction.as_mut().set_memory(vec![(
+            PathBuf::from(module_path.as_path()),
+            Some(Arc::new(code)),
+        )]);
+
+        self.run_inner(
+            Timings::new(),
+            transaction.as_mut(),
+            &[(handle, require_levels.specified)],
+        )
+    }
+
     pub async fn run_watch(
         self,
         mut watcher: Watcher,
@@ -514,7 +596,7 @@ impl Args {
     ) -> anyhow::Result<()> {
         // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:
         // - Config search is stable across incremental runs.
-        let expanded_file_list = checkpoint(files_to_check.files(), &config_finder)?;
+        let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
         let require_levels = self.get_required_levels();
         let mut handles = Handles::new(expanded_file_list, &config_finder);
         let state = State::new(config_finder);
@@ -547,128 +629,12 @@ impl Args {
         }
     }
 
-    pub fn validate(&self) -> anyhow::Result<()> {
-        fn validate_arg(arg_name: &str, paths: Option<&[PathBuf]>) -> anyhow::Result<()> {
-            if let Some(paths) = paths {
-                for path in paths {
-                    validate_path(path).with_context(|| format!("Invalid {arg_name}"))?;
-                }
-            }
-            Ok(())
-        }
-        validate_arg(
-            "--site-package-path",
-            self.config_override.site_package_path.as_deref(),
-        )?;
-        validate_arg("--search-path", self.config_override.search_path.as_deref())?;
-        let ignored_errors = &self.config_override.ignore.iter().collect::<HashSet<_>>();
-        let warn_errors = &self.config_override.warn.iter().collect::<HashSet<_>>();
-        let error_errors = self.config_override.error.iter().collect::<HashSet<_>>();
-        let error_ignore_conflicts: Vec<_> = error_errors.intersection(ignored_errors).collect();
-        if !error_ignore_conflicts.is_empty() {
-            return Err(anyhow::anyhow!(
-                "Error types are specified for both --ignore and --error: [{}]",
-                display::commas_iter(|| error_ignore_conflicts.iter().map(|&&s| s))
-            ));
-        }
-        let error_warn_conflicts: Vec<_> = error_errors.intersection(warn_errors).collect();
-        if !error_warn_conflicts.is_empty() {
-            return Err(anyhow::anyhow!(
-                "Error types are specified for both --warn and --error: [{}]",
-                display::commas_iter(|| error_warn_conflicts.iter().map(|&&s| s))
-            ));
-        }
-        let ignore_warn_conflicts: Vec<_> = ignored_errors.intersection(warn_errors).collect();
-        if !ignore_warn_conflicts.is_empty() {
-            return Err(anyhow::anyhow!(
-                "Error types are specified for both --warn and --ignore: [{}]",
-                display::commas_iter(|| ignore_warn_conflicts.iter().map(|&&s| s))
-            ));
-        }
-        Ok(())
-    }
-
-    pub fn override_config(&self, mut config: ConfigFile) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
-        if let Some(x) = &self.config_override.python_platform {
-            config.python_environment.python_platform = Some(x.clone());
-        }
-        if let Some(x) = &self.config_override.python_version {
-            config.python_environment.python_version = Some(*x);
-        }
-        if let Some(x) = &self.config_override.search_path {
-            config.search_path_from_args = x.clone();
-        }
-        if let Some(x) = &self.config_override.site_package_path {
-            config.python_environment.site_package_path = Some(x.clone());
-        }
-
-        if self.config_override.skip_interpreter_query || config.interpreters.skip_interpreter_query
-        {
-            config.interpreters.skip_interpreter_query = true;
-            config.interpreters.python_interpreter = None;
-            config.interpreters.conda_environment = None;
-        }
-        if let Some(conda_environment) = &self.config_override.conda_environment {
-            config.interpreters.conda_environment =
-                Some(ConfigOrigin::cli(conda_environment.clone()));
-            config.interpreters.python_interpreter = None;
-        }
-        if let Some(x) = &self.config_override.typeshed_path {
-            config.typeshed_path = Some(x.clone());
-        }
-        if let Some(x) = &self.config_override.python_interpreter {
-            config.interpreters.python_interpreter = Some(ConfigOrigin::cli(x.clone()));
-            config.interpreters.conda_environment = None;
-        }
-        if let Some(x) = &self.config_override.use_untyped_imports {
-            config.use_untyped_imports = *x;
-        }
-        if let Some(x) = &self.config_override.ignore_missing_source {
-            config.ignore_missing_source = *x;
-        }
-        if let Some(x) = &self.config_override.untyped_def_behavior {
-            config.root.untyped_def_behavior = Some(*x);
-        }
-        if let Some(x) = self.config_override.permissive_ignores {
-            config.root.permissive_ignores = Some(x);
-        }
-        if let Some(wildcards) = &self.config_override.replace_imports_with_any {
-            config.root.replace_imports_with_any = Some(
-                wildcards
-                    .iter()
-                    .filter_map(|x| ModuleWildcard::new(x).ok())
-                    .collect(),
-            );
-        }
-        if let Some(x) = &self.config_override.ignore_errors_in_generated_code {
-            config.root.ignore_errors_in_generated_code = Some(*x);
-        }
-        let apply_error_settings = |error_config: &mut ErrorDisplayConfig| {
-            for error_kind in &self.config_override.error {
-                error_config.with_error_setting(*error_kind, Severity::Error);
-            }
-            for error_kind in &self.config_override.warn {
-                error_config.with_error_setting(*error_kind, Severity::Warn);
-            }
-            for error_kind in &self.config_override.ignore {
-                error_config.with_error_setting(*error_kind, Severity::Ignore);
-            }
-        };
-        let root_errors = config.root.errors.get_or_insert_default();
-        apply_error_settings(root_errors);
-        for sub_config in config.sub_configs.iter_mut() {
-            let sub_config_errors = sub_config.settings.errors.get_or_insert_default();
-            apply_error_settings(sub_config_errors);
-        }
-        let errors = config.configure();
-        (ArcId::new(config), errors)
-    }
-
     fn get_required_levels(&self) -> RequireLevels {
         let retain = self.output.report_binding_memory.is_some()
             || self.output.debug_info.is_some()
             || self.output.report_trace.is_some()
-            || self.output.report_glean.is_some();
+            || self.output.report_glean.is_some()
+            || self.output.report_pysa.is_some();
         RequireLevels {
             specified: if retain {
                 Require::Everything
@@ -731,21 +697,33 @@ impl Args {
         }
         let mut shown_errors_count = config_errors_count;
         for error in &errors.shown {
-            if error.severity() >= Severity::Warn {
+            if error.severity() >= Severity::Error {
                 shown_errors_count += 1;
             }
         }
         timings.report_errors = report_errors_start.elapsed();
 
-        if !self.output.no_summary {
-            anstream::eprintln!(
-                "{} errors shown: {}, errors ignored: {}, modules: {}, transitive dependencies: {}, lines: {}, time: {timings}, peak memory: {}",
-                Severity::Info.painted(),
-                number_thousands(shown_errors_count),
-                number_thousands(errors.disabled.len() + errors.suppressed.len()),
-                number_thousands(handles.len()),
-                number_thousands(transaction.module_count() - handles.len()),
-                number_thousands(transaction.line_count()),
+        if self.output.summary != Summary::None && !self.output.no_summary {
+            let ignored = errors.disabled.len() + errors.suppressed.len();
+            if ignored == 0 {
+                info!("{}", count(shown_errors_count, "error"))
+            } else {
+                info!(
+                    "{} ({} ignored)",
+                    count(shown_errors_count, "error"),
+                    number_thousands(ignored)
+                )
+            };
+        }
+        if self.output.summary == Summary::Full {
+            info!(
+                "{} ({}, {}); took {timings}; memory ({})",
+                count(handles.len(), "module"),
+                count(
+                    transaction.module_count() - handles.len(),
+                    "dependent module"
+                ),
+                count(transaction.line_count(), "line"),
                 memory_trace.peak()
             );
         }
@@ -763,8 +741,7 @@ impl Args {
                     transaction,
                     &handles.map(|x| x.0.dupe()),
                     is_javascript,
-                )
-                .as_bytes(),
+                ),
             )?;
         }
         if let Some(glean) = &self.output.report_glean {
@@ -772,18 +749,18 @@ impl Args {
             for (handle, _) in handles {
                 fs_anyhow::write(
                     &glean.join(format!("{}.json", handle.module())),
-                    report::glean::glean(transaction, handle).as_bytes(),
+                    report::glean::glean(transaction, handle),
                 )?;
             }
         }
+        if let Some(pysa_directory) = &self.output.report_pysa {
+            report::pysa::write_results(pysa_directory, transaction)?;
+        }
         if let Some(path) = &self.output.report_binding_memory {
-            fs_anyhow::write(
-                path,
-                report::binding_memory::binding_memory(transaction).as_bytes(),
-            )?;
+            fs_anyhow::write(path, report::binding_memory::binding_memory(transaction))?;
         }
         if let Some(path) = &self.output.report_trace {
-            fs_anyhow::write(path, report::trace::trace(transaction).as_bytes())?;
+            fs_anyhow::write(path, report::trace::trace(transaction))?;
         }
         if self.behavior.suppress_errors {
             let mut errors_to_suppress: SmallMap<PathBuf, Vec<Error>> = SmallMap::new();
@@ -829,15 +806,4 @@ impl Args {
             Ok((CommandExitStatus::Success, errors.shown))
         }
     }
-}
-
-/// If we have an error, print all the errors that the config finder has accumulated. This is used
-/// to ensure that config errors are still surfaced if we exit early.
-pub fn checkpoint<T>(result: anyhow::Result<T>, config_finder: &ConfigFinder) -> anyhow::Result<T> {
-    if result.is_err() {
-        for error in config_finder.errors() {
-            error.print();
-        }
-    }
-    result
 }

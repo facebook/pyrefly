@@ -7,30 +7,62 @@
 
 use itertools::Itertools as _;
 use pretty_assertions::assert_eq;
+use pyrefly_python::docstring::Docstring;
 use ruff_text_size::TextSize;
 
 use crate::state::handle::Handle;
 use crate::state::state::State;
 use crate::test::util::get_batched_lsp_operations_report;
 
-fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
-    let docstrings = state
-        .transaction()
-        .find_definition(handle, position, true)
-        .into_iter()
-        .filter_map(|item| item.docstring)
-        .collect::<Vec<_>>();
-    if !docstrings.is_empty() {
-        docstrings
+fn test_report_factory(
+    // File content for the file the docstring is found in
+    file_content: &'static str,
+) -> impl Fn(&State, &Handle, ruff_text_size::TextSize) -> std::string::String {
+    move |state: &State, handle: &Handle, position: TextSize| -> String {
+        let results = state
+            .transaction()
+            .find_definition(handle, position, true)
             .into_iter()
-            .map(|t| format!("Docstring Result: `{}`", t.as_string()))
-            .join("\n")
-    } else {
-        "Docstring Result: None".to_owned()
+            .filter_map(|t| {
+                let docstring_range = t.docstring_range?;
+                Some(docstring_range)
+            })
+            .collect::<Vec<_>>();
+        if !results.is_empty() {
+            results
+                .into_iter()
+                .map(|d| {
+                    let content = &file_content[d.start().to_usize()..d.end().to_usize()];
+                    format!("Docstring Result: `{}`", Docstring::clean(content))
+                })
+                .join("\n")
+        } else {
+            "Docstring Result: None".to_owned()
+        }
     }
 }
 
-// TODO(kylei) same-module docstrings
+#[test]
+fn class_test() {
+    let code = r#"
+class F:
+    """Test docstring"""
+print(F)
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
+    assert_eq!(
+        r#"
+# main.py
+4 | print(F)
+          ^
+Docstring Result: `Test docstring`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
 #[test]
 fn function_test() {
     let code = r#"
@@ -39,20 +71,59 @@ def f():
 print(f())
 #     ^
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
     assert_eq!(
         r#"
 # main.py
 4 | print(f())
           ^
-Docstring Result: None
+Docstring Result: `Test docstring`
 "#
         .trim(),
         report.trim(),
     );
 }
 
-// TODO(kylei) same-module docstrings
+#[test]
+fn raw_quotes_test() {
+    let code = r#"
+def f():
+#   ^
+    r"""Test docstring"""
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
+    assert_eq!(
+        r#"
+# main.py
+2 | def f():
+        ^
+Docstring Result: `Test docstring`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn class_itself_test() {
+    let code = r#"
+class Foo:
+#     ^
+    """Test docstring"""
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
+    assert_eq!(
+        r#"
+# main.py
+2 | class Foo:
+          ^
+Docstring Result: `Test docstring`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
 #[test]
 fn function_itself_test() {
     let code = r#"
@@ -60,13 +131,34 @@ def f():
 #   ^
     """Test docstring"""
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
     assert_eq!(
         r#"
 # main.py
 2 | def f():
         ^
-Docstring Result: None
+Docstring Result: `Test docstring`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn attribute_itself_test() {
+    let code = r#"
+class Foo:
+    def f():
+#       ^
+        """Test docstring"""
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
+    assert_eq!(
+        r#"
+# main.py
+3 |     def f():
+            ^
+Docstring Result: `Test docstring`
 "#
         .trim(),
         report.trim(),
@@ -83,7 +175,7 @@ class Foo:
 print(Foo().f())
 #           ^
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
     assert_eq!(
         r#"
 # main.py
@@ -106,7 +198,7 @@ class Foo:
 print(Foo.f())
 #         ^
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
     assert_eq!(
         r#"
 # main.py
@@ -130,8 +222,10 @@ from lib import f
 print(f())
 #     ^
 "#;
-    let report =
-        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("lib", lib)],
+        test_report_factory(lib),
+    );
     assert_eq!(
         r#"
 # main.py
@@ -160,8 +254,10 @@ from lib import Foo
 print(Foo().f())
 #           ^
 "#;
-    let report =
-        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("lib", lib)],
+        test_report_factory(lib),
+    );
     assert_eq!(
         r#"
 # main.py
@@ -188,8 +284,10 @@ from lib import Foo
 Foo()
 # ^
 "#;
-    let report =
-        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("lib", lib)],
+        test_report_factory(lib),
+    );
     assert_eq!(
         r#"
 # main.py
@@ -214,8 +312,10 @@ print("test")"#;
 import lib
 #      ^
 "#;
-    let report =
-        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("lib", lib)],
+        test_report_factory(lib),
+    );
     assert_eq!(
         r#"
 # main.py
@@ -241,8 +341,10 @@ import lib
 print(lib)
 #     ^
 "#;
-    let report =
-        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("lib", lib)],
+        test_report_factory(lib),
+    );
     assert_eq!(
         r#"
 # main.py

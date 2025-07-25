@@ -11,10 +11,10 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use dupe::Dupe;
-use path_absolutize::Absolutize;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 
+use crate::absolutize::Absolutize as _;
 use crate::lock::RwLock;
 
 /// A cached way to search the file system upwards for specific files.
@@ -48,7 +48,7 @@ impl<T: Dupe + Debug> UpwardSearch<T> {
 
     /// Get the config file associated with a directory.
     pub fn directory(&self, dir: &Path) -> Option<T> {
-        self.directory_absolute(dir.absolutize().as_deref().unwrap_or(dir))
+        self.directory_absolute(&dir.absolutize())
     }
 
     /// Given an already-absolute directory, return the value `T` for it, or `None` if there is not one.

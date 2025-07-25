@@ -1001,7 +1001,7 @@ testcase!(
 def f(x: None):
     if x.nonsense:  # E: Object of class `NoneType` has no attribute `nonsense`
         pass
-    while x['nonsense']:  # E: Can't apply arguments to non-class
+    while x['nonsense']:  # E: `None` is not subscriptable
         pass
     "#,
 );
@@ -1177,7 +1177,7 @@ def foo() -> list[int]:
     results: list[int] = [1, 2, 3]
     for i, x in enumerate(results):
         results[i] = x * 10
-    return results  
+    return results
 "#,
 );
 
@@ -1201,7 +1201,7 @@ bar: str = "bar"
 
 def func():
     foo: str | None = None
-    
+
     for x in []:
         for y in []:
             pass
@@ -1226,7 +1226,7 @@ from typing import assert_type, Literal
 if 0.1:
     vari = "test"
     raise SystemExit
-assert_type(vari, Literal["test"])
+assert_type(vari, Literal["test"]) # E: `vari` is uninitialized
 "#,
 );
 
@@ -1262,8 +1262,8 @@ def f():
     class X:
         pass
 
-    while 3:
-        z = "" if 3 else ""
+    while True:
+        z = "" if True else ""
         break
     else:
         exit(1)
@@ -1280,10 +1280,75 @@ from typing import *
 
 x = 1
 
-while 3:
+while True:
     reveal_type(x) # E: revealed type: Literal[1]
     break
 else:
     exit(1)
 "#,
+);
+
+testcase!(
+    test_redundant_condition_func,
+    r#"
+def foo() -> bool: ...
+
+if foo:  # E: Function object `foo` used as condition
+    ...
+while foo:  # E: Function object `foo` used as condition
+    ...
+[x for x in range(42) if foo]  # E: Function object `foo` used as condition
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_class,
+    r#"
+class Foo:
+    def __bool__(self) -> bool: ...
+
+if Foo:  # E: Class name `Foo` used as condition
+    ...
+while Foo:  # E: Class name `Foo` used as condition
+    ...
+[x for x in range(42) if Foo]  # E: Class name `Foo` used as condition
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_int,
+    r#"
+if 42:  # E: Integer literal used as condition. It's equivalent to `True`
+    ...
+while 0:  # E: Integer literal used as condition. It's equivalent to `False`
+    ...
+[x for x in range(42) if 42]  # E: Integer literal used as condition
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_str_bytes,
+    r#"
+if "test":  # E: String literal used as condition. It's equivalent to `True`
+    ...
+while "":  # E: String literal used as condition. It's equivalent to `False`
+    ...
+[x for x in range(42) if b"test"]  # E: Bytes literal used as condition
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_enum,
+    r#"
+import enum
+class E(enum.Enum):
+    A = 1
+    B = 2
+    C = 3
+if E.A:  # E: Enum literal `E.A` used as condition
+    ...
+while E.B:  # E: Enum literal `E.B` used as condition
+    ...
+[x for x in range(42) if E.C]  # E: Enum literal `E.C` used as condition
+    "#,
 );

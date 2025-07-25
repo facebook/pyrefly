@@ -32,8 +32,9 @@ use crate::alt::types::class_metadata::ProtocolMetadata;
 use crate::alt::types::class_metadata::TotalOrderingMetadata;
 use crate::alt::types::class_metadata::TypedDictMetadata;
 use crate::binding::binding::Key;
+use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::kind::ErrorKind;
+use crate::error::context::ErrorInfo;
 use crate::graph::index::Idx;
 use crate::types::callable::FunctionKind;
 use crate::types::class::Class;
@@ -43,6 +44,7 @@ use crate::types::keywords::DataclassKeywords;
 use crate::types::keywords::DataclassTransformKeywords;
 use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
+use crate::types::tuple::Tuple;
 use crate::types::types::CalleeKind;
 use crate::types::types::Type;
 
@@ -62,8 +64,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::InvalidArgument,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
                         "Second argument to NewType cannot be a protocol".to_owned(),
                     );
                 }
@@ -78,8 +79,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorKind::InvalidArgument,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
                         "Second argument to NewType cannot be an unbound generic".to_owned(),
                     );
                 }
@@ -95,8 +95,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::InvalidArgument,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
                     "Second argument to NewType is invalid".to_owned(),
                 );
                 None
@@ -105,8 +104,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     fallback_range,
-                    ErrorKind::InvalidArgument,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
                     "Second argument to NewType is invalid".to_owned(),
                 );
                 None
@@ -139,6 +137,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut named_tuple_metadata = None;
         let mut enum_metadata = None;
         let mut dataclass_metadata = None;
+        let mut tuple_base: Option<Tuple> = None;
         let mut bases: Vec<BaseClass> = bases.map(|x| self.base_class_of(x, errors));
         if let Some(special_base) = special_base {
             bases.push((**special_base).clone());
@@ -190,8 +189,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             if base_class_metadata.is_final() {
                                 self.error(errors,
                                     range,
-                                    ErrorKind::InvalidInheritance,
-                                    None,
+                                    ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                                     format!("Cannot extend final class `{}`", base_cls.name()),
                                 );
                             }
@@ -199,8 +197,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 self.error(
                                     errors,
                                     range,
-                                    ErrorKind::InvalidInheritance,
-                                    None,
+                                    ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                                     "Subclassing a NewType not allowed".to_owned(),
                                 );
                             }
@@ -215,6 +212,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 named_tuple_metadata.is_none() {
                                     named_tuple_metadata = Some(base_named_tuple.clone());
                             }
+                            if let Some(base_class_tuple_base) = base_class_metadata.tuple_base() {
+                                if let Some(existing_tuple_base) = &tuple_base {
+                                    if existing_tuple_base.is_any_tuple() {
+                                        tuple_base = Some(base_class_tuple_base.clone());
+                                    } else if !base_class_tuple_base.is_any_tuple()
+                                        && base_class_tuple_base != existing_tuple_base {
+                                            self.error(errors,
+                                                range,
+                                                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                                                format!("Cannot extend multiple incompatible tuples: `{}` and `{}`",
+                                                    self.for_display(Type::Tuple(existing_tuple_base.clone())),
+                                                    self.for_display(Type::Tuple(base_class_tuple_base.clone())),
+                                            ),
+                                            );
+                                        }
+                                } else {
+                                    tuple_base = Some(base_class_tuple_base.clone());
+                                }
+                            }
                             if let Some(proto) = &mut protocol_metadata {
                                 if let Some(base_proto) = base_class_metadata.protocol_metadata() {
                                     proto.members.extend(base_proto.members.iter().cloned());
@@ -224,8 +240,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 } else {
                                     self.error(errors,
                                         range,
-                                        ErrorKind::InvalidInheritance,
-                                        None,
+                                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                                         "If `Protocol` is included as a base class, all other bases must be protocols".to_owned(),
                                     );
                                 }
@@ -247,6 +262,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Some((c, base_class_metadata))
                         }
                         Some((Type::Tuple(tuple), _)) => {
+                            if tuple_base.is_none() {
+                                tuple_base = Some(tuple.clone());
+                            }
                             let class_ty = self.erase_tuple_type(tuple);
                             let metadata = self.get_metadata_for_class(class_ty.class_object());
                             Some((class_ty, metadata))
@@ -272,7 +290,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                         Some((t, range)) => {
                             self.error(
-                                errors, range, ErrorKind::InvalidInheritance, None,
+                                errors, range, ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                                 format!("Invalid base class: `{}`", self.for_display(t)));
                             has_base_any = true;
                             None
@@ -286,8 +304,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 cls.range(),
-                ErrorKind::InvalidInheritance,
-                None,
+                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                 "Named tuples do not support multiple inheritance".to_owned(),
             );
         }
@@ -319,8 +336,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         cls.range(),
-                        ErrorKind::BadTypedDict,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::BadTypedDict),
                         format!(
                             "TypedDict does not support keyword argument `{}`",
                             name.as_str()
@@ -364,8 +380,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         cls.range(),
-                        ErrorKind::InvalidInheritance,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                         "Enums may not be generic".to_owned(),
                     );
                 }
@@ -387,8 +402,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     cls.range(),
-                    ErrorKind::InvalidInheritance,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                     "Typed dictionary definitions may not specify a metaclass".to_owned(),
                 );
             }
@@ -403,8 +417,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     cls.range(),
-                    ErrorKind::InvalidInheritance,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                     "Metaclass may not be an unbound generic".to_owned(),
                 );
             }
@@ -425,8 +438,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             cls.range(),
-                            ErrorKind::InvalidArgument,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
                             "@runtime_checkable can only be applied to Protocol classes".to_owned(),
                         );
                     }
@@ -504,8 +516,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             self.error(errors,
                 cls.range(),
-                ErrorKind::InvalidInheritance,
-                None,
+                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                 format!("`{}` is not a typed dictionary. Typed dictionary definitions may only extend other typed dictionaries.", bad.0),
             );
         }
@@ -539,6 +550,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             enum_metadata,
             protocol_metadata,
             dataclass_metadata,
+            tuple_base,
             has_base_any,
             is_new_type,
             is_final,
@@ -617,8 +629,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 self.error(errors,
                     cls.range(),
-                    ErrorKind::InvalidInheritance,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                     format!(
                         "Class `{}` has metaclass `{}` which is not a subclass of metaclass `{}` from base class `{}`",
                         cls.name(),
@@ -648,8 +659,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         raw_metaclass.range(),
-                        ErrorKind::InvalidInheritance,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                         format!(
                             "Metaclass of `{}` has type `{}` which is not a subclass of `type`",
                             cls.name(),
@@ -663,8 +673,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     cls.range(),
-                    ErrorKind::InvalidInheritance,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                     format!(
                         "Metaclass of `{}` has type `{}` that is not a simple class type",
                         cls.name(),

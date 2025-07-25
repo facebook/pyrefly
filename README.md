@@ -61,6 +61,25 @@ inspiration from [Pyre1](https://pyre-check.org/),
 - We expect large strongly connected components of modules, and do not attempt
   to take advantage of a DAG-shape in the source code.
 
+## Code layout
+
+Pyrefly is split into a number of crates (mostly under `crates/`):
+
+- `pyrefly_util` are general purpose utilities, which have nothing to do with
+  Python or type checking. Examples include IO wrappers, locking, command line
+  helpers etc.
+- `pyrefly_derive` are proc-macros for deriving traits such as `TypeEq` and
+  `Visit`.
+- `pyrefly_python` are Python utilities with no type-checking aspects, such as
+  modelling modules or `sys.info`.
+- `pyrefly_bundled` are the third-party
+  [typeshed stubs](https://github.com/python/typeshed).
+- `pyrefly_config` defines the Pyrefly configuration, along with support for
+  reading Mypy/Pyright configuration.
+- `pyrefly_types` defines the Pyrefly type along with operations on it.
+- `pyrefly_wasm` defines the sandbox code that compiles to WASM.
+- `pyrefly` itself is the type checker and everything else.
+
 ## Design
 
 There are many nuances of design that change on a regular basis. But the basic

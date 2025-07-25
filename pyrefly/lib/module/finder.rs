@@ -18,6 +18,8 @@ use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 
+use crate::config::config::ConfigFile;
+use crate::module::typeshed::typeshed;
 use crate::state::loader::FindError;
 
 static PY_TYPED_CACHE: LazyLock<Mutex<SmallMap<PathBuf, PyTyped>>> =
@@ -43,8 +45,10 @@ enum FindResult {
     /// The path component indicates where to continue search next. It may contain more than one directories as the namespace package
     /// may span across multiple search roots.
     NamespacePackage(Vec1<PathBuf>),
-    /// Found a compiled Python file (.pyc). Represents a module compiled to bytecode, lacking source and type info.
-    /// Treated as `typing.Any` to handle imports without type errors.
+    /// Found a compiled Python file (.pyc, .pyx, .pyd). Represents some kind of
+    /// compiled module, whether that's bytecode, C extension, or DLL.
+    /// Compiled modules lack source and type info, and are
+    /// treated as `typing.Any` to handle imports without type errors.
     CompiledModule(PathBuf),
 }
 
@@ -96,6 +100,10 @@ impl FindResult {
 /// name: module name
 /// roots: search roots
 fn find_one_part<'a>(name: &Name, roots: impl Iterator<Item = &'a PathBuf>) -> Option<FindResult> {
+    // skip looking in `__pycache__`, since those modules are not accessible
+    if name == &Name::new_static("__pycache__") {
+        return None;
+    }
     let mut namespace_roots = Vec::new();
     for root in roots {
         let candidate_dir = root.join(name.as_str());
@@ -114,9 +122,11 @@ fn find_one_part<'a>(name: &Name, roots: impl Iterator<Item = &'a PathBuf>) -> O
             }
         }
         // Check if `name` corresponds to a compiled module.
-        let candidate_pyc_path = root.join(format!("{name}.pyc"));
-        if candidate_pyc_path.exists() {
-            return Some(FindResult::CompiledModule(candidate_pyc_path));
+        for candidate_compiled_suffix in ["pyc", "pyx", "pyd"] {
+            let candidate_path = root.join(format!("{name}.{candidate_compiled_suffix}"));
+            if candidate_path.exists() {
+                return Some(FindResult::CompiledModule(candidate_path));
+            }
         }
         // Finally check if `name` corresponds to a namespace package.
         if candidate_dir.is_dir() {
@@ -162,12 +172,10 @@ fn find_one_part_prefix<'a>(
                                 }
                             }
 
-                            if path.is_dir()
-                                && !results.iter().any(|r| match r {
-                                    (FindResult::RegularPackage(_, p), _) => p == &path,
-                                    _ => false,
-                                })
-                            {
+                            if !results.iter().any(|r| match r {
+                                (FindResult::RegularPackage(_, p), _) => p == &path,
+                                _ => false,
+                            }) {
                                 namespace_roots
                                     .entry(ModuleName::from_str(name))
                                     .or_default()
@@ -225,18 +233,16 @@ fn continue_find_module(
             }
         }
     }
-    Ok(current_result.map(|x| match x {
-        FindResult::SingleFileModule(path) |
-        FindResult::RegularPackage(path, _) |
-        // TODO(melvinhe): Address CompiledModule to return an ignored Error, for Typing.Any treatment
-        FindResult::CompiledModule(path) => {
-            ModulePath::filesystem(path)
+    current_result.map_or(Ok(None), |x| match x {
+        FindResult::SingleFileModule(path) | FindResult::RegularPackage(path, _) => {
+            Ok(Some(ModulePath::filesystem(path)))
         }
         FindResult::NamespacePackage(roots) => {
             // TODO(grievejia): Preserving all info in the list instead of dropping all but the first one.
-            ModulePath::namespace(roots.first().clone())
+            Ok(Some(ModulePath::namespace(roots.first().clone())))
         }
-    }))
+        FindResult::CompiledModule(_) => Err(FindError::Ignored),
+    })
 }
 
 /// Search for the given [`ModuleName`] in the given `include`, which is
@@ -250,7 +256,7 @@ fn continue_find_module(
 ///    should be third-party imports
 /// 2. import resolution: `site_package_path` has extra checks that can occur, while `search_path`
 ///    is just a 'find and return the first result' search.
-pub fn find_module_in_search_path<'a, I>(
+fn find_module_in_search_path<'a, I>(
     module: ModuleName,
     include: I,
 ) -> Result<Option<ModulePath>, FindError>
@@ -271,9 +277,10 @@ where
             }
 
             // If we couldn't find it in a `-stubs` module, look normally.
-            let start_result = find_one_part(first, include);
-            Ok(start_result
-                .and_then(|start_result| continue_find_module(start_result, rest).unwrap()))
+            let result = find_one_part(first, include)
+                .and_then(|start_result| continue_find_module(start_result, rest).transpose())
+                .transpose()?;
+            Ok(result)
         }
     }
 }
@@ -289,7 +296,7 @@ where
 ///    should be third-party imports
 /// 2. import resolution: `site_package_path` has extra checks that can occur, while `search_path`
 ///    is just a 'find and return the first result' search.
-pub fn find_module_in_site_package_path<'a, I>(
+fn find_module_in_site_package_path<'a, I>(
     module: ModuleName,
     include: I,
     use_untyped_imports: bool,
@@ -360,7 +367,7 @@ where
     Ok(None)
 }
 
-pub fn find_module_prefixes<'a>(
+fn find_module_prefixes<'a>(
     prefix: ModuleName,
     include: impl Iterator<Item = &'a PathBuf>,
 ) -> Vec<ModuleName> {
@@ -401,6 +408,63 @@ pub fn find_module_prefixes<'a>(
         }
     }
     results.iter().map(|(_, name)| *name).collect::<Vec<_>>()
+}
+
+/// Get the given [`ModuleName`] from this config's search and site package paths.
+/// We take the `path` of the file we're searching for the module from to determine if
+/// we should replace imports with `typing.Any`.
+/// Return `Err` when indicating the module could not be found.
+pub fn find_import(
+    config: &ConfigFile,
+    module: ModuleName,
+    path: Option<&Path>,
+) -> Result<ModulePath, FindError> {
+    if let Some(path) = config.custom_module_paths.get(&module) {
+        Ok(path.clone())
+    } else if module != ModuleName::builtins() && config.replace_imports_with_any(path, module) {
+        Err(FindError::Ignored)
+    } else if let Some(path) = find_module_in_search_path(module, config.search_path())? {
+        Ok(path)
+    } else if let Some(custom_typeshed_path) = &config.typeshed_path
+        && let Some(path) = find_module_in_search_path(
+            module,
+            std::iter::once(&custom_typeshed_path.join("stdlib")),
+        )?
+    {
+        Ok(path)
+    } else if let Some(path) = typeshed()
+        .map_err(|err| FindError::not_found(err, module))?
+        .find(module)
+    {
+        Ok(path)
+    } else if !config.disable_search_path_heuristics
+        && let Some(path) = find_module_in_search_path(module, config.fallback_search_path.iter())?
+    {
+        Ok(path)
+    } else if let Some(path) = find_module_in_site_package_path(
+        module,
+        config.site_package_path(),
+        config.use_untyped_imports,
+        config.ignore_missing_source,
+    )? {
+        Ok(path)
+    } else if config.ignore_missing_imports(path, module) {
+        Err(FindError::Ignored)
+    } else {
+        Err(FindError::import_lookup_path(
+            config.structured_import_lookup_path(),
+            module,
+            &config.source,
+        ))
+    }
+}
+
+/// Find all legitimate imports that start with `module`
+pub fn find_import_prefixes(config: &ConfigFile, module: ModuleName) -> Vec<ModuleName> {
+    find_module_prefixes(
+        module,
+        config.search_path().chain(config.site_package_path()),
+    )
 }
 
 #[cfg(test)]
@@ -1051,14 +1115,11 @@ mod tests {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
         TestPath::setup_test_directory(root, vec![TestPath::file("compiled_module.pyc")]);
-        assert_eq!(
-            find_module_in_search_path(
-                ModuleName::from_str("compiled_module"),
-                [root.to_path_buf()].iter(),
-            )
-            .unwrap(),
-            Some(ModulePath::filesystem(root.join("compiled_module.pyc")))
+        let find_compiled_result = find_module_in_search_path(
+            ModuleName::from_str("compiled_module"),
+            [root.to_path_buf()].iter(),
         );
+        assert!(matches!(find_compiled_result, Err(FindError::Ignored)));
         assert_eq!(
             find_module_in_search_path(
                 ModuleName::from_str("compiled_module.nested"),
@@ -1107,16 +1168,11 @@ mod tests {
             .unwrap(),
             Some(ModulePath::filesystem(root.join("subdir/nested_import.py")))
         );
-        assert_eq!(
-            find_module_in_search_path(
-                ModuleName::from_str("subdir.another_compiled_module"),
-                [root.to_path_buf()].iter(),
-            )
-            .unwrap(),
-            Some(ModulePath::filesystem(
-                root.join("subdir/another_compiled_module.pyc")
-            ))
+        let find_compiled_result = find_module_in_search_path(
+            ModuleName::from_str("subdir.another_compiled_module"),
+            [root.to_path_buf()].iter(),
         );
+        assert!(matches!(find_compiled_result, Err(FindError::Ignored)));
     }
 
     #[test]
@@ -1157,29 +1213,36 @@ mod tests {
         let root = tempdir.path();
         TestPath::setup_test_directory(
             root,
-            vec![TestPath::dir(
-                "subdir",
-                vec![
-                    TestPath::file("nested_module.pyc"),
-                    TestPath::file("another_nested_module.py"),
-                ],
-            )],
+            vec![
+                TestPath::file("nested_module.pyc"),
+                TestPath::file("another_nested_module.py"),
+                TestPath::file("cython_module.pyx"),
+                TestPath::file("windows_dll.pyd"),
+            ],
         );
-        let result = find_one_part(&Name::new("nested_module"), [root.join("subdir")].iter());
+        let result = find_one_part(&Name::new("nested_module"), [root.to_path_buf()].iter());
         assert_eq!(
             result,
-            Some(FindResult::CompiledModule(
-                root.join("subdir/nested_module.pyc")
-            ))
+            Some(FindResult::CompiledModule(root.join("nested_module.pyc")))
+        );
+        let result = find_one_part(&Name::new("cython_module"), [root.to_path_buf()].iter());
+        assert_eq!(
+            result,
+            Some(FindResult::CompiledModule(root.join("cython_module.pyx")))
+        );
+        let result = find_one_part(&Name::new("windows_dll"), [root.to_path_buf()].iter());
+        assert_eq!(
+            result,
+            Some(FindResult::CompiledModule(root.join("windows_dll.pyd")))
         );
         let result = find_one_part(
             &Name::new("another_nested_module"),
-            [root.join("subdir")].iter(),
+            [root.to_path_buf()].iter(),
         );
         assert_eq!(
             result,
             Some(FindResult::SingleFileModule(
-                root.join("subdir/another_nested_module.py")
+                root.join("another_nested_module.py")
             ))
         );
     }
@@ -1200,14 +1263,8 @@ mod tests {
         );
         let start_result =
             find_one_part(&Name::new("subdir"), [root.to_path_buf()].iter()).unwrap();
-        let module_path =
-            continue_find_module(start_result, &[Name::new("nested_module")]).unwrap();
-        assert_eq!(
-            module_path,
-            Some(ModulePath::filesystem(
-                root.join("subdir/nested_module.pyc")
-            ))
-        );
+        let module_path = continue_find_module(start_result, &[Name::new("nested_module")]);
+        assert!(matches!(module_path, Err(FindError::Ignored)));
         let start_result =
             find_one_part(&Name::new("subdir"), [root.to_path_buf()].iter()).unwrap();
         let module_path =
@@ -1232,12 +1289,13 @@ mod tests {
     }
 
     #[test]
-    fn test_find_module_in_search_path_signature() {
-        let module = ModuleName::from_str("test_module");
-        let include: Vec<PathBuf> = vec![];
-        let result: Result<Option<ModulePath>, FindError> =
-            find_module_in_search_path(module, include.iter());
-        let unwrapped_result = result.unwrap();
-        assert_eq!(unwrapped_result, None);
+    fn test_continue_find_module_with_pyc_no_source_ignored() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("module.pyc")]);
+        let start_result =
+            find_one_part(&Name::new("module"), [root.to_path_buf()].iter()).unwrap();
+        let result = continue_find_module(start_result, &[]);
+        assert!(matches!(result, Err(FindError::Ignored)));
     }
 }

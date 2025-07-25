@@ -23,11 +23,11 @@
     "Line 30: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveTuple']`\"]",
     "Line 42: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveMapping']`\"]",
     "Line 58: Unexpected errors ['Expected a type form, got instance of `_SpecialForm`']",
-    "Line 59: Unexpected errors [\"Can't apply arguments to non-class, got type[list[Unknown]]\"]",
-    "Line 62: Unexpected errors [\"Can't apply arguments to non-class, got type[list[Unknown]]\"]",
+    "Line 59: Unexpected errors ['`type[list[Unknown]]` is not subscriptable']",
+    "Line 62: Unexpected errors ['`type[list[Unknown]]` is not subscriptable']",
     "Line 65: Unexpected errors ['Expected a type form, got instance of `_SpecialForm`']",
-    "Line 67: Unexpected errors [\"Can't apply arguments to non-class, got type[list[Unknown]]\"]",
-    "Line 68: Unexpected errors [\"Can't apply arguments to non-class, got type[list[Unknown]]\"]"
+    "Line 67: Unexpected errors ['`type[list[Unknown]]` is not subscriptable']",
+    "Line 68: Unexpected errors ['`type[list[Unknown]]` is not subscriptable']"
   ],
   "aliases_type_statement.py": [
     "Line 26: Expected 1 errors",
@@ -37,7 +37,7 @@
     "Line 82: Expected 1 errors",
     "Line 84: Expected 1 errors",
     "Lines 51, 52: Expected error (tag 'TA14')",
-    "Lines 88, 89: Expected error (tag 'RTA6')"
+    "Lines 88, 89: Expected error (tag 'RTA6+')"
   ],
   "aliases_typealiastype.py": [
     "Line 44: Expected 1 errors",
@@ -59,6 +59,7 @@
     "Line 17: Unexpected errors ['Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
     "Line 18: Unexpected errors ['Argument `tuple[type[TypeVar[S]], type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
     "Line 19: Unexpected errors ['Argument `tuple[type[TypeVar[T]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
+    "Line 22: Unexpected errors [\"Expected a type form, got instance of `Literal['GoodAlias5[S, TStr, P]']`\"]",
     "Line 23: Unexpected errors ['Argument `tuple[type[TypeVar[S]], type[TypeVar[TStr]], type[ParamSpec[P]], type[TypeVarTuple[Ts]]]` is not assignable to parameter `type_params` with type `tuple[ParamSpec | TypeVar | TypeVarTuple, ...]` in function `typing.TypeAliasType.__new__`']",
     "Line 35: Unexpected errors ['Expected a type form, got instance of `GenericAlias`']",
     "Line 36: Unexpected errors ['Expected a type form, got instance of `GenericAlias`']",
@@ -131,21 +132,14 @@
     "Line 194: Unexpected errors ['assert_type(Any, Class9) failed']"
   ],
   "constructors_consistency.py": [],
-  "dataclasses_descriptors.py": [
-    "Line 35: Unexpected errors ['Argument `Literal[3]` is not assignable to parameter `y` with type `Desc1` in function `DC1.__init__`']"
-  ],
+  "dataclasses_descriptors.py": [],
   "dataclasses_final.py": [
-    "Line 27: Expected 1 errors",
-    "Line 35: Expected 1 errors",
-    "Line 38: Expected 1 errors"
+    "Line 35: Expected 1 errors"
   ],
   "dataclasses_frozen.py": [],
   "dataclasses_hash.py": [],
   "dataclasses_inheritance.py": [],
-  "dataclasses_kwonly.py": [
-    "Line 58: Unexpected errors ['Dataclass field `c` without a default may not follow dataclass field with a default']",
-    "Line 61: Unexpected errors ['Missing argument `c` in function `DC4.__init__`', 'Argument `float` is not assignable to parameter `b` with type `int` in function `DC4.__init__`', 'Multiple values for argument `b` in function `DC4.__init__`']"
-  ],
+  "dataclasses_kwonly.py": [],
   "dataclasses_order.py": [],
   "dataclasses_postinit.py": [],
   "dataclasses_slots.py": [
@@ -162,15 +156,7 @@
   "directives_cast.py": [],
   "directives_deprecated.py": [
     "Line 18: Expected 1 errors",
-    "Line 25: Expected 1 errors",
-    "Line 30: Expected 1 errors",
-    "Line 41: Expected 1 errors",
-    "Line 42: Expected 1 errors",
-    "Line 44: Expected 1 errors",
-    "Line 47: Expected 1 errors",
-    "Line 48: Expected 1 errors",
-    "Line 58: Expected 1 errors",
-    "Line 98: Expected 1 errors"
+    "Line 25: Expected 1 errors"
   ],
   "directives_no_type_check.py": [],
   "directives_reveal_type.py": [],
@@ -180,10 +166,9 @@
   "directives_type_ignore_file2.py": [],
   "directives_version_platform.py": [],
   "enums_behaviors.py": [
-    "Line 39: Expected 1 errors",
+    "Line 44: Expected 1 errors",
     "Line 19: Unexpected errors ['Type `type[Color]` is not iterable\\n  Argument `int` is not assignable to parameter `name` with type `str` in function `enum.EnumMeta.__getitem__`']",
-    "Line 20: Unexpected errors ['assert_type(Any, Color) failed']",
-    "Line 26: Unexpected errors ['assert_type(Literal[Color.RED], Color) failed']"
+    "Line 20: Unexpected errors ['assert_type(Any, Color) failed']"
   ],
   "enums_definition.py": [],
   "enums_expansion.py": [],
@@ -192,8 +177,7 @@
   "enums_members.py": [
     "Line 27: Unexpected errors ['assert_type(Any, str) failed', 'Instance-only attribute `genus` of class `Pet` is not visible on the class']",
     "Line 28: Unexpected errors ['assert_type(Any, str) failed', 'Instance-only attribute `species` of class `Pet` is not visible on the class']",
-    "Line 100: Unexpected errors ['assert_type(Literal[TrafficLight.AMBER], Literal[TrafficLight.YELLOW]) failed']",
-    "Line 128: Unexpected errors ['Could not find name `reveal_type`']"
+    "Line 100: Unexpected errors ['assert_type(Literal[TrafficLight.AMBER], Literal[TrafficLight.YELLOW]) failed']"
   ],
   "exceptions_context_managers.py": [
     "Line 50: Unexpected errors ['assert_type(str, int | str) failed']",
@@ -211,9 +195,9 @@
     "Line 68: Unexpected errors ['assert_type(MyStr, str) failed', 'Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`']"
   ],
   "generics_defaults.py": [
-    "Line 127: Unexpected errors ['assert_type(Any, int) failed']",
-    "Line 166: Unexpected errors ['assert_type([DefaultIntT](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']",
-    "Line 167: Unexpected errors ['assert_type(Any, int) failed', 'Instance-only attribute `attr` of class `Foo7` is not visible on the class']"
+    "Line 130: Unexpected errors ['assert_type(Any, int) failed']",
+    "Line 169: Unexpected errors ['assert_type([DefaultIntT](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']",
+    "Line 170: Unexpected errors ['assert_type(Any, int) failed', 'Instance-only attribute `attr` of class `Foo7` is not visible on the class']"
   ],
   "generics_defaults_referential.py": [
     "Line 66: Unexpected errors ['Expected default `TypeVar[X1]` of `Ok1` to be assignable to the upper bound of `float`']",
@@ -244,7 +228,7 @@
     "Line 45: Unexpected errors ['assert_type(ChildB, Self) failed']"
   ],
   "generics_self_attributes.py": [
-    "Line 29: Unexpected errors ['`OrdinalLinkedList` is not assignable to attribute `next` with type `Self | None`']"
+    "Line 32: Expected 1 errors"
   ],
   "generics_self_basic.py": [
     "Line 20: Expected 1 errors",
@@ -265,7 +249,6 @@
     "Line 116: Expected 1 errors",
     "Line 121: Expected 1 errors",
     "Line 125: Expected 1 errors",
-    "Line 50: Unexpected errors ['`(self: Self@CallableAttribute) -> int` is not assignable to `(Self) -> int`']",
     "Line 60: Unexpected errors ['TODO: Expr::attr_infer_for_type attribute base undefined for type: Self (trying to access x)']",
     "Line 63: Unexpected errors ['Argument `Self@HasNestedFunction` is not assignable to parameter `inner_self` with type `Self` in function `nested`']"
   ],
@@ -273,12 +256,11 @@
   "generics_syntax_declarations.py": [],
   "generics_syntax_infer_variance.py": [],
   "generics_syntax_scoping.py": [
-    "Line 35: Expected 1 errors",
     "Line 92: Expected 1 errors",
     "Line 95: Expected 1 errors",
     "Line 98: Expected 1 errors",
     "Line 66: Unexpected errors ['Found `S`, but it was not the global scope']",
-    "Line 67: Unexpected errors ['assert_type(str, int) failed']",
+    "Line 67: Unexpected errors ['assert_type(Any, int) failed']",
     "Line 116: Unexpected errors ['assert_type(type[T], TypeVar) failed']"
   ],
   "generics_type_erasure.py": [],
@@ -343,10 +325,10 @@
     "Lines 71, 73, 78, 81: Expected error (tag 'func5')",
     "Lines 84, 86, 90, 94: Expected error (tag 'func6')",
     "Lines 121, 123, 127: Expected error (tag 'invalid_final')",
-    "Lines 135, 137, 142: Expected error (tag 'invalid_final_2')",
+    "Lines 135, 136, 137, 141, 142: Expected error (tag 'invalid_final_2+')",
     "Lines 170, 175, 181, 183: Expected error (tag 'override-final')",
-    "Lines 190, 191, 198: Expected error (tag 'bad_override')",
-    "Lines 220, 222, 226: Expected error (tag 'override_impl')",
+    "Lines 190, 191, 197, 198: Expected error (tag 'bad_override')",
+    "Lines 220, 221, 222, 225, 226: Expected error (tag 'override_impl+')",
     "Line 49: Unexpected errors ['Overloaded function must have an implementation']"
   ],
   "overloads_evaluation.py": [
@@ -430,7 +412,6 @@
   "qualifiers_final_annotation.py": [
     "Line 34: Expected 1 errors",
     "Line 38: Expected 1 errors",
-    "Line 81: Expected 1 errors",
     "Line 107: Expected 1 errors",
     "Line 149: Expected 1 errors",
     "Line 152: Expected 1 errors",
@@ -441,13 +422,9 @@
     "Line 133: Unexpected errors ['Unexpected keyword argument `x` in function `N.__new__`', 'Unexpected keyword argument `y` in function `N.__new__`']"
   ],
   "qualifiers_final_decorator.py": [
-    "Lines 67, 75: Expected error (tag 'method4')",
-    "Lines 80, 89: Expected error (tag 'Derived3')",
+    "Lines 67, 68, 75: Expected error (tag 'method4')",
     "Lines 84, 85, 86: Expected error (tag 'Derived3-2')",
-    "Lines 94, 102: Expected error (tag 'Derived4')",
-    "Lines 125, 126: Expected error (tag 'func')",
-    "Line 81: Unexpected errors ['`method` is declared as final in parent class `Base3`']",
-    "Line 95: Unexpected errors ['`method` is declared as final in parent class `Base4`']"
+    "Lines 125, 126: Expected error (tag 'func')"
   ],
   "specialtypes_any.py": [],
   "specialtypes_never.py": [
@@ -465,28 +442,18 @@
     "Line 110: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed']",
     "Line 139: Unexpected errors ['assert_type(type, type[Any]) failed']"
   ],
-  "tuples_type_compat.py": [
-    "Line 115: Unexpected errors ['assert_type(tuple[int | str, int | str], tuple[int | str, str]) failed']",
-    "Line 117: Unexpected errors ['assert_type(tuple[int | str, int | str], tuple[int | str, int]) failed']"
-  ],
+  "tuples_type_compat.py": [],
   "tuples_type_form.py": [],
   "tuples_unpacked.py": [],
   "typeddicts_alt_syntax.py": [],
-  "typeddicts_class_syntax.py": [
-    "Line 33: Expected 1 errors",
-    "Line 38: Expected 1 errors",
-    "Line 34: Unexpected errors ['TypedDict item `method2` may not be initialized']",
-    "Line 39: Unexpected errors ['TypedDict item `method3` may not be initialized']"
-  ],
+  "typeddicts_class_syntax.py": [],
   "typeddicts_final.py": [],
   "typeddicts_inheritance.py": [
     "Line 65: Expected 1 errors"
   ],
   "typeddicts_operations.py": [],
   "typeddicts_readonly.py": [],
-  "typeddicts_readonly_consistency.py": [
-    "Line 79: Unexpected errors ['`TypedDict[C2]` is not assignable to `TypedDict[A2]`']"
-  ],
+  "typeddicts_readonly_consistency.py": [],
   "typeddicts_readonly_inheritance.py": [
     "Line 98: Expected 1 errors",
     "Line 106: Expected 1 errors",
@@ -494,10 +461,7 @@
     "Line 132: Expected 1 errors"
   ],
   "typeddicts_readonly_kwargs.py": [],
-  "typeddicts_readonly_update.py": [
-    "Line 23: Expected 1 errors",
-    "Line 34: Unexpected errors [\"No matching overload found for function `A.update`\\n  Possible overloads:\\n  (__m: Partial[typeddicts_readonly_update.A@16:7-8], /) -> None [closest match]\\n  (__m: Iterable[tuple[Literal['y'], int]], /) -> None\\n  (*, y: int) -> None\"]"
-  ],
+  "typeddicts_readonly_update.py": [],
   "typeddicts_required.py": [
     "Line 62: Expected 1 errors",
     "Line 74: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveMovie']`\"]"

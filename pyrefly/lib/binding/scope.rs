@@ -12,6 +12,7 @@ use parse_display::Display;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use ruff_python_ast::AtomicNodeIndex;
@@ -44,7 +45,7 @@ use crate::binding::binding::KeyFunction;
 use crate::binding::binding::KeyVariance;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
-use crate::binding::binding::RawClassFieldInitialization;
+use crate::binding::binding::MethodThatSetsAttr;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::CurrentIdx;
 use crate::binding::function::SelfAssignments;
@@ -54,7 +55,6 @@ use crate::export::exports::LookupExport;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
-use crate::module::short_identifier::ShortIdentifier;
 use crate::types::class::ClassDefIndex;
 
 /// Many names may map to the same TextRange (e.g. from foo import *).
@@ -267,6 +267,14 @@ pub struct FlowInfo {
     pub style: FlowStyle,
 }
 
+/// Represent what we know about a class field based on the scope information
+/// at the end of the class body.
+pub enum ClassFieldInBody {
+    InitializedByAssign(Expr),
+    InitializedWithoutAssign,
+    Uninitialized,
+}
+
 impl FlowInfo {
     fn new(key: Idx<Key>, style: Option<FlowStyle>) -> Self {
         Self {
@@ -297,17 +305,18 @@ impl FlowInfo {
         )
     }
 
-    pub fn as_initial_value(&self) -> RawClassFieldInitialization {
+    pub fn as_initial_value(&self) -> ClassFieldInBody {
         match &self.style {
             FlowStyle::ClassField {
                 initial_value: Some(e),
-            } => RawClassFieldInitialization::ClassBody(Some(e.clone())),
+            } => ClassFieldInBody::InitializedByAssign(e.clone()),
+            // This is only reachable via `AnnAssign` with no value.
             FlowStyle::ClassField {
                 initial_value: None,
-            } => RawClassFieldInitialization::Uninitialized,
+            } => ClassFieldInBody::Uninitialized,
             // All other styles (e.g. function def, import) indicate we do have
             // a value, but it is not coming from a simple style.
-            _ => RawClassFieldInitialization::ClassBody(None),
+            _ => ClassFieldInBody::InitializedWithoutAssign,
         }
     }
 }
@@ -337,16 +346,6 @@ pub struct ScopeClass {
     pub indices: ClassIndices,
     attributes_from_recognized_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
     attributes_from_other_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
-}
-
-/// The method where an attribute was defined implicitly by assignment to `self.<attr_name>`
-///
-/// We track whether this method is recognized as a valid attribute-defining
-/// method (e.g. a constructor); if an attribute is inferred only from assignments
-/// in non-recognized methods, we will infer its type but also produce a type error.
-pub struct MethodThatSetsAttr {
-    pub method_name: Name,
-    pub recognized_attribute_defining_method: bool,
 }
 
 impl ScopeClass {
@@ -807,10 +806,47 @@ impl Scopes {
         None
     }
 
-    pub fn get_flow_style(&self, name: &Name) -> &FlowStyle {
+    fn get_static_info(&self, name: &Name, should_skip_current_scope: bool) -> Option<&StaticInfo> {
+        let name = Hashed::new(name);
+        let mut iter = self.iter_rev();
+        if should_skip_current_scope {
+            iter.next();
+        }
+        for scope in iter {
+            if let Some(info) = scope.stat.0.get_hashed(name) {
+                return Some(info);
+            }
+        }
+        None
+    }
+
+    /// Get the flow style for `name`, depending on whether `name` is used in a
+    /// static type.
+    ///
+    /// If we can find a flow info for `name`, return its style. Otherwise, we
+    /// check the static type information to see if we have a uninitialized
+    /// binding, in which case, `FlowStyle::Uninitialized` is returned.
+    /// Otherwise we return `FlowStyle::Other` to indicate no information
+    /// available.
+    pub fn get_flow_style(&self, name: &Name, used_in_static_type: bool) -> &FlowStyle {
         match self.get_flow_info(name) {
             Some(flow) => &flow.style,
-            None => &FlowStyle::Other,
+            None => {
+                // If the name is used for static type information, we can look
+                // at the current scope.
+                // Otherwise, we should skip the current scope, because it may
+                // permit a name to be used before it is defined.
+                if self.get_static_info(name, !used_in_static_type).is_some() {
+                    // If we have a static binding, then we are in a scope where
+                    // the name is defined, so we can return Other.
+                    &FlowStyle::Other
+                } else {
+                    // If we don't have a static binding, then we are in a scope
+                    // where the name is not defined, so we return
+                    // Uninitialized.
+                    &FlowStyle::Uninitialized
+                }
+            }
         }
     }
 

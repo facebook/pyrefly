@@ -333,10 +333,27 @@ testcase!(
     r#"
 def test(*, x: int, y: str): ...
 test(x=1, y="hello") # OK
-test(1, "hello") # E: Expected 0 positional arguments, got 2 # E: Missing argument `x` # E: Missing argument `y`
+test(1, "hello") # E: Expected argument `x` to be passed by name # E: Expected argument `y` to be passed by name
 test(x=1) # E: Missing argument `y`
 test(y="hello") # E: Missing argument `x`
 "#,
+);
+
+testcase!(
+    test_extra_positional_args,
+    r#"
+def test(*, x: int): ...
+test(1, 2)  # E: Expected argument `x` to be passed by name  # E: Expected 0 positional arguments, got 2
+    "#,
+);
+
+testcase!(
+    test_missing_self_and_kwonly,
+    r#"
+class A:
+    def f(*, x): ...
+A().f(1)  # E: Expected argument `x` to be passed by name  # E: Expected 0 positional arguments, got 2 (including implicit `self`)
+    "#,
 );
 
 testcase!(

@@ -13,7 +13,6 @@ use itertools::EitherOrBoth;
 use itertools::Itertools;
 use itertools::izip;
 use pyrefly_python::dunder;
-use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
@@ -352,20 +351,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         true
     }
 
-    fn try_lookup_attr_from_class(&mut self, cls: &ClassType, name: &Name) -> Option<Type> {
-        self.type_order
-            .try_lookup_attr_from_class_type(cls.clone(), name)
-            .and_then(|attr| self.type_order.resolve_as_instance_method(attr))
-    }
-
     fn is_subset_protocol(&mut self, got: Type, protocol: ClassType) -> bool {
         let recursive_check = (got.clone(), Type::ClassType(protocol.clone()));
         if !self.recursive_assumptions.insert(recursive_check) {
             // Assume recursive checks are true
             return true;
         }
-        let to = self.type_order;
-        let protocol_members = to.get_protocol_member_names(protocol.class_object());
+        let protocol_members = self
+            .type_order
+            .get_protocol_member_names(protocol.class_object());
         for name in protocol_members {
             if name == dunder::INIT || name == dunder::NEW {
                 // Protocols can't be instantiated
@@ -375,10 +369,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 got,
                 Type::Callable(_) | Type::Function(_) | Type::BoundMethod(_)
             ) && name == dunder::CALL
-                && let Some(want) = self.try_lookup_attr_from_class(&protocol, &dunder::CALL)
+                && let Some(want) = self
+                    .type_order
+                    .try_lookup_instance_method(protocol.clone(), &dunder::CALL)
             {
                 if let Type::BoundMethod(method) = &want
-                    && let Some(want_no_self) = method.to_callable()
+                    && let Some(want_no_self) = method.drop_self()
                 {
                     if !self.is_subset_eq(&got, &want_no_self) {
                         return false;
@@ -386,18 +382,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 } else if !self.is_subset_eq(&got, &want) {
                     return false;
                 }
-            } else if let got_attrs = to.try_lookup_attr(&got, &name)
-                && !got_attrs.is_empty()
-                && let Some(want) = to.try_lookup_attr_from_class_type(protocol.clone(), &name)
-            {
-                for got in got_attrs {
-                    if !to
-                        .is_attr_subset(&got, &want, &mut |got, want| self.is_subset_eq(got, want))
-                    {
-                        return false;
-                    }
-                }
-            } else {
+            } else if !self.type_order.is_protocol_subset_at_attr(
+                &got,
+                &protocol,
+                &name,
+                &mut |got, want| self.is_subset_eq(got, want),
+            ) {
                 return false;
             }
         }
@@ -683,18 +673,18 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 .iter()
                 .any(|l| self.is_subset_eq(&l.as_type(), u)),
             (Type::BoundMethod(method), Type::Callable(_) | Type::Function(_))
-                if let Some(l_no_self) = method.to_callable() =>
+                if let Some(l_no_self) = method.drop_self() =>
             {
                 self.is_subset_eq_impl(&l_no_self, want)
             }
             (Type::Callable(_) | Type::Function(_), Type::BoundMethod(method))
-                if let Some(u_no_self) = method.to_callable() =>
+                if let Some(u_no_self) = method.drop_self() =>
             {
                 self.is_subset_eq_impl(got, &u_no_self)
             }
             (Type::BoundMethod(l), Type::BoundMethod(u))
-                if let Some(l_no_self) = l.to_callable()
-                    && let Some(u_no_self) = u.to_callable() =>
+                if let Some(l_no_self) = l.drop_self()
+                    && let Some(u_no_self) = u.drop_self() =>
             {
                 self.is_subset_eq_impl(&l_no_self, &u_no_self)
             }
@@ -733,12 +723,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 };
                 args_subset && self.is_subset_eq(&l.ret, &u.ret)
             }
-            (Type::TypedDict(got), Type::TypedDict(want))
-            | (Type::TypedDict(got), Type::PartialTypedDict(want)) => {
+            (Type::TypedDict(got), Type::TypedDict(want)) => {
                 // For each key in `want`, `got` has the corresponding key
                 // and the corresponding value type in `got` is consistent with the value type in `want`.
-                // For each required key in `got`, the corresponding key is required in `want`.
-                // For each non-required key in `got`, the corresponding key is not required in `want`.
+                // For each required key in `want`, the corresponding key is required in `got`.
+                // For each non-required, non-readonly key in `want`, the corresponding key is not required in `got`.
                 let got_fields = self.type_order.typed_dict_fields(got);
                 let want_fields = self.type_order.typed_dict_fields(want);
 
@@ -754,9 +743,27 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         }
                     })
                 }) && got_fields.iter().all(|(k, got_v)| {
-                    want_fields
-                        .get(k)
-                        .is_none_or(|want_v| got_v.required == want_v.required)
+                    want_fields.get(k).is_none_or(|want_v| {
+                        if want_v.required {
+                            got_v.required
+                        } else {
+                            want_v.is_read_only() || !got_v.required
+                        }
+                    })
+                })
+            }
+            (Type::TypedDict(got), Type::PartialTypedDict(want)) => {
+                let got_fields = self.type_order.typed_dict_fields(got);
+                let want_fields = self.type_order.typed_dict_fields(want);
+                want_fields.iter().all(|(k, want_v)| {
+                    got_fields.get(k).is_some_and(|got_v| {
+                        if want_v.is_read_only() {
+                            // ReadOnly can only be updated with Never (i.e., no update)
+                            self.is_subset_eq(&got_v.ty, &Type::never())
+                        } else {
+                            self.is_subset_eq(&got_v.ty, &want_v.ty)
+                        }
+                    })
                 })
             }
             (Type::TypedDict(_), Type::SelfType(cls))
@@ -840,7 +847,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (
                 Type::ClassType(got),
                 Type::BoundMethod(_) | Type::Callable(_) | Type::Function(_),
-            ) if let Some(call_ty) = self.try_lookup_attr_from_class(got, &dunder::CALL) => {
+            ) if let Some(call_ty) = self
+                .type_order
+                .try_lookup_instance_method(got.clone(), &dunder::CALL) =>
+            {
                 self.is_subset_eq(&call_ty, want)
             }
             // Constructors as callables
@@ -854,18 +864,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     want,
                 )
             }
-            (Type::ClassType(got), Type::Tuple(_))
-                if got.is_builtin("tuple") && got.targs().as_slice().len() == 1 =>
-            {
-                let mut tuple_targ = got.targs().as_slice()[0].clone();
-                // TODO: figure out how to get rid of the forcing logic here
-                if let Type::Var(var) = tuple_targ {
-                    tuple_targ = self.force_var(var);
-                }
-                self.is_subset_eq(&Type::Tuple(Tuple::Unbounded(Box::new(tuple_targ))), want)
-            }
             (Type::ClassDef(got), Type::ClassDef(want)) => {
                 self.type_order.has_superclass(got, want)
+            }
+            // Although the object created by a NewType call behaves like a class for type-checking
+            // purposes, it isn't one at runtime, so don't allow it to match `type`.
+            (Type::ClassDef(got), Type::Type(_)) if self.type_order.is_new_type(got) => false,
+            (Type::ClassDef(got), Type::ClassType(want))
+                if self.type_order.is_new_type(got) && want.is_builtin("type") =>
+            {
+                false
             }
             (Type::ClassDef(got), Type::Type(want)) => {
                 self.is_subset_eq(&self.type_order.promote_silently(got), want)
@@ -881,9 +889,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             (Type::Type(box Type::Any(_)), Type::ClassDef(_)) => true,
             (Type::ClassType(cls), want @ Type::Tuple(_))
-                if let Some(elts) = self.type_order.named_tuple_element_types(cls) =>
+                if let Some(got) = self.type_order.as_tuple_type(cls) =>
             {
-                self.is_subset_eq(&Type::Tuple(Tuple::Concrete(elts)), want)
+                self.is_subset_eq(&got, want)
             }
             (Type::ClassType(got), Type::SelfType(want)) => self
                 .type_order

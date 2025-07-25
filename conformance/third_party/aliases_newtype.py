@@ -14,6 +14,9 @@ u2: UserId = UserId(42)  # OK
 
 assert_type(UserId(5) + 1, int)
 
+# > NewType('Derived', Base) returns a dummy function
+_: type = UserId  # E: functions are not instances of `type`
+
 # > Both isinstance and issubclass, as well as subclassing will fail for
 # > NewType('Derived', Base) since function objects don’t support these
 # > operations.

@@ -16,7 +16,6 @@ use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
-use crate::alt::attr::Attribute;
 use crate::alt::class::variance_inference::VarianceMap;
 use crate::binding::binding::KeyVariance;
 use crate::types::callable::Required;
@@ -74,6 +73,10 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         self.0.get_metadata_for_class(cls).is_protocol()
     }
 
+    pub fn is_new_type(self, cls: &Class) -> bool {
+        self.0.get_metadata_for_class(cls).is_new_type()
+    }
+
     pub fn get_protocol_member_names(self, cls: &Class) -> SmallSet<Name> {
         let meta = self.0.get_metadata_for_class(cls);
         if let Some(proto) = meta.protocol_metadata() {
@@ -92,33 +95,23 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         }
     }
 
-    pub fn try_lookup_attr_from_class_type(
+    pub fn try_lookup_instance_method(self, class_type: ClassType, name: &Name) -> Option<Type> {
+        self.0.try_lookup_instance_method(class_type, name)
+    }
+
+    pub fn is_protocol_subset_at_attr(
         self,
-        cls: ClassType,
-        attr_name: &Name,
-    ) -> Option<Attribute> {
-        self.0.try_lookup_attr_from_class_type(cls, attr_name)
-    }
-
-    pub fn try_lookup_attr(self, base: &Type, attr_name: &Name) -> Vec<Attribute> {
-        self.0.try_lookup_attr(base, attr_name)
-    }
-
-    pub fn resolve_as_instance_method(self, attr: Attribute) -> Option<Type> {
-        self.0.resolve_as_instance_method(attr)
-    }
-
-    pub fn is_attr_subset(
-        self,
-        got: &Attribute,
-        want: &Attribute,
+        got: &Type,
+        protocol: &ClassType,
+        name: &Name,
         is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
     ) -> bool {
-        self.0.check_attr_subset(got, want, is_subset).is_ok()
+        self.0
+            .is_protocol_subset_at_attr(got, protocol, name, is_subset)
     }
 
-    pub fn named_tuple_element_types(self, cls: &ClassType) -> Option<Vec<Type>> {
-        self.0.named_tuple_element_types(cls)
+    pub fn as_tuple_type(self, cls: &ClassType) -> Option<Type> {
+        self.0.as_tuple(cls).map(Type::Tuple)
     }
 
     pub fn extends_any(self, cls: &Class) -> bool {

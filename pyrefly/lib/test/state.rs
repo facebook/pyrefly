@@ -22,6 +22,7 @@ use pyrefly_util::prelude::SliceExt;
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
+use crate::module::finder::find_import;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -52,7 +53,7 @@ else:
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
-        let path = config_file.find_import(name, None).unwrap();
+        let path = find_import(&config_file, name, None).unwrap();
         (
             Handle::new(name, path, sys_info.dupe()),
             Require::Everything,

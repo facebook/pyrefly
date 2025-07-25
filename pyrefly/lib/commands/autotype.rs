@@ -9,15 +9,16 @@ use std::path::Path;
 
 use clap::Parser;
 use dupe::Dupe;
+use pyrefly_config::args::ConfigOverrideArgs;
+use pyrefly_config::finder::ConfigFinder;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::globs::FilteredGlobs;
 use ruff_text_size::TextSize;
 
 use crate::commands::check::Handles;
-use crate::commands::check::checkpoint;
-use crate::commands::run::CommandExitStatus;
-use crate::config::finder::ConfigFinder;
+use crate::commands::files::FilesArgs;
+use crate::commands::util::CommandExitStatus;
 use crate::state::lsp::AnnotationKind;
 use crate::state::lsp::ParameterAnnotation;
 use crate::state::require::Require;
@@ -30,7 +31,15 @@ use crate::types::types::Type;
 /// Arguments for the autotype command which automatically adds type annotations to Python code
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
-pub struct Args {}
+pub struct AutotypeArgs {
+    /// Which files to check.
+    #[command(flatten)]
+    files: FilesArgs,
+
+    /// Type checking arguments and configuration
+    #[command(flatten)]
+    config_override: ConfigOverrideArgs,
+}
 
 impl ParameterAnnotation {
     fn to_inlay_hint(self) -> Option<(TextSize, Type, AnnotationKind)> {
@@ -45,6 +54,13 @@ impl ParameterAnnotation {
     }
 }
 
+fn is_container(hint: &Type) -> bool {
+    match hint {
+        Type::ClassType(c) => c.name().eq("list") || c.name().eq("dict"),
+        _ => false,
+    }
+}
+
 fn format_hints(
     inlay_hints: Vec<(ruff_text_size::TextSize, Type, AnnotationKind)>,
     stdlib: &Stdlib,
@@ -52,6 +68,7 @@ fn format_hints(
 ) -> Vec<(ruff_text_size::TextSize, String)> {
     let mut qualified_hints = Vec::new();
     for (position, hint, kind) in inlay_hints {
+        let is_container = is_container(&hint);
         let formatted_hint = hint_to_string(hint, stdlib, enum_members);
         // TODO: Put these behind a flag
         if formatted_hint.contains("Any") {
@@ -69,12 +86,18 @@ fn format_hints(
         if formatted_hint == "None" && kind == AnnotationKind::Parameter {
             continue;
         }
+        if !is_container && kind == AnnotationKind::Variable {
+            continue;
+        }
         match kind {
             AnnotationKind::Parameter => {
                 qualified_hints.push((position, format!(": {formatted_hint}")));
             }
             AnnotationKind::Return => {
                 qualified_hints.push((position, format!(" -> {formatted_hint}")));
+            }
+            AnnotationKind::Variable => {
+                qualified_hints.push((position, format!(": {formatted_hint}")));
             }
         }
     }
@@ -104,17 +127,18 @@ fn hint_to_string(
     hint.to_string()
 }
 
-impl Args {
-    pub fn new() -> Self {
-        Self {}
+impl AutotypeArgs {
+    pub fn run(self) -> anyhow::Result<CommandExitStatus> {
+        self.config_override.validate()?;
+        let (files_to_check, config_finder) = self.files.resolve(&self.config_override)?;
+        Self::run_inner(files_to_check, config_finder)
     }
 
-    pub fn run(
-        self,
+    pub fn run_inner(
         files_to_check: FilteredGlobs,
         config_finder: ConfigFinder,
     ) -> anyhow::Result<CommandExitStatus> {
-        let expanded_file_list = checkpoint(files_to_check.files(), &config_finder)?;
+        let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
         let state = State::new(config_finder);
         let holder = Forgetter::new(state, false);
         let handles = Handles::new(expanded_file_list, holder.as_ref().config_finder());
@@ -154,14 +178,13 @@ impl Args {
                 });
                 let sorted = sort_inlay_hints(formatted);
                 let file_path = handle.path().as_path();
-                self.add_annotations_to_file(file_path, sorted)?;
+                Self::add_annotations_to_file(file_path, sorted)?;
             }
         }
         Ok(CommandExitStatus::Success)
     }
 
     fn add_annotations_to_file(
-        &self,
         file_path: &Path,
         sorted: Vec<(TextSize, String)>,
     ) -> anyhow::Result<()> {
@@ -175,13 +198,14 @@ impl Args {
                 result.insert_str(offset, &hint);
             }
         }
-        fs_anyhow::write(file_path, result.as_bytes())
+        fs_anyhow::write(file_path, result)
     }
 }
 
 #[cfg(test)]
 mod test {
     use pretty_assertions::assert_str_eq;
+    use pyrefly_util::globs::FilteredGlobs;
     use pyrefly_util::globs::Globs;
     use tempfile;
 
@@ -191,14 +215,13 @@ mod test {
     fn assert_annotations(input: &str, output: &str) {
         let tdir = tempfile::tempdir().unwrap();
         let path = tdir.path().join("test.py");
-        fs_anyhow::write(&path, input.as_bytes()).unwrap();
+        fs_anyhow::write(&path, input).unwrap();
         let mut t = TestEnv::new();
         t.add(&path.display().to_string(), input);
         let includes = Globs::new(vec![format!("{}/**/*", tdir.path().display()).to_owned()]);
         let f_globs = FilteredGlobs::new(includes, Globs::new(vec![]));
         let config_finder = t.config_finder();
-        let arg = Args::new();
-        let result = arg.run(f_globs, config_finder);
+        let result = AutotypeArgs::run_inner(f_globs, config_finder);
         assert!(
             result.is_ok(),
             "autotype command failed: {:?}",
@@ -383,6 +406,57 @@ def foo() -> str:
             r#"
     def foo(a: int=2) -> None:
         pass
+    "#,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_empty_container() -> anyhow::Result<()> {
+        assert_annotations(
+            r#"
+    def foo() -> None:
+        x = [] 
+        x.append(1)
+    "#,
+            r#"
+    def foo() -> None:
+        x: list[int] = [] 
+        x.append(1)
+    "#,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_empty_dictionary() -> anyhow::Result<()> {
+        assert_annotations(
+            r#"
+    def foo() -> None:
+        x = {}
+        x["a"] = 1
+    "#,
+            r#"
+    def foo() -> None:
+        x: dict[str, int] = {}
+        x["a"] = 1
+    "#,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_non_empty_dictionary() -> anyhow::Result<()> {
+        assert_annotations(
+            r#"
+    def foo() -> None:
+        x = {"a": 1}
+        x["a"] = 1
+    "#,
+            r#"
+    def foo() -> None:
+        x = {"a": 1}
+        x["a"] = 1
     "#,
         );
         Ok(())

@@ -7,7 +7,6 @@
 
 use std::fs;
 use std::fs::ReadDir;
-use std::io::Write;
 use std::path::Path;
 
 use anyhow::Context as _;
@@ -20,18 +19,8 @@ pub fn read(path: &Path) -> anyhow::Result<Vec<u8>> {
     fs::read(path).with_context(|| format!("When reading file `{}`", path.display()))
 }
 
-pub fn write(path: &Path, contents: &[u8]) -> Result<(), anyhow::Error> {
+pub fn write(path: &Path, contents: impl AsRef<[u8]>) -> Result<(), anyhow::Error> {
     fs::write(path, contents).with_context(|| format!("When writing file `{}`", path.display()))
-}
-
-pub fn append(path: &Path, contents: &[u8]) -> Result<(), anyhow::Error> {
-    let context = || format!("When appending to file `{}`", path.display());
-    let mut out = fs::File::options()
-        .create(true)
-        .append(true)
-        .open(path)
-        .with_context(context)?;
-    out.write_all(contents).with_context(context)
 }
 
 pub fn read_dir(path: &Path) -> anyhow::Result<ReadDir> {

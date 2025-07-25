@@ -17,7 +17,8 @@ export interface PyreflyErrorMessage {
     startColumn: number;
     endLineNumber: number;
     endColumn: number;
-    message: string;
+    message_header: string;
+    message_details: string;
     kind: string;
     severity: number;
 }
@@ -76,7 +77,6 @@ function ErrorMessage({
             {error.kind}
         </a>
     );
-    const message = `${rangeStr}: ${error.message} `;
 
     return (
         <span
@@ -85,15 +85,29 @@ function ErrorMessage({
                 goToDef(startLineNumber, startColumn, endLineNumber, endColumn)
             }
         >
-            {error.message.includes('revealed type') ? (
-                <span {...stylex.props(styles.RevealTypeError)}>INFO </span>
-            ) : (
-                <span {...stylex.props(styles.ErrorMessageError)}>ERROR </span>
-            )}
-            {message}
+            {
+                // We intentionally add a leading space to INFO and WARN so they visually line up with ERROR
+                error.severity == 2 ? (
+                    <span {...stylex.props(styles.ErrorMessageInfo)}>
+                        {' '}
+                        INFO{' '}
+                    </span>
+                ) : error.severity == 4 ? (
+                    <span {...stylex.props(styles.ErrorMessageWarning)}>
+                        {' '}
+                        WARN{' '}
+                    </span>
+                ) : (
+                    <span {...stylex.props(styles.ErrorMessageError)}>
+                        ERROR{' '}
+                    </span>
+                )
+            }
+            {`${rangeStr}: ${error.message_header} `}
             {'['}
             {errorKindUrl}
             {']'}
+            {error.message_details && '\n' + error.message_details}
         </span>
     );
 }
@@ -117,7 +131,7 @@ export default function SandboxResults({
     pythonOutput,
     pyodideStatus,
     activeTab,
-    setActiveTab = () => {},
+    setActiveTab = () => { },
 }: SandboxResultsProps): React.ReactElement {
     const activeToolbarTab = activeTab;
 
@@ -177,11 +191,11 @@ export default function SandboxResults({
                                     {internalError
                                         ? `Pyrefly encountered an internal error: ${internalError}.`
                                         : errors === undefined ||
-                                          errors === null
-                                        ? 'Pyrefly failed to fetch errors.'
-                                        : errors?.length === 0
-                                        ? 'No errors!'
-                                        : null}
+                                            errors === null
+                                            ? 'Pyrefly failed to fetch errors.'
+                                            : errors?.length === 0
+                                                ? 'No errors!'
+                                                : null}
                                 </li>
                             )}
                         </ul>
@@ -196,10 +210,10 @@ export default function SandboxResults({
                         {pyodideStatus === PyodideStatus.NOT_INITIALIZED
                             ? 'No output, please press the ▶️ Run button.'
                             : pyodideStatus === PyodideStatus.INITIALIZING
-                            ? 'Loading Python interpreter...'
-                            : pyodideStatus === PyodideStatus.RUNNING
-                            ? 'Running...'
-                            : pythonOutput.trimStart()}
+                                ? 'Loading Python interpreter...'
+                                : pyodideStatus === PyodideStatus.RUNNING
+                                    ? 'Running...'
+                                    : pythonOutput.trimStart()}
                     </pre>
                 )}
                 {/* TODO (T217536145): Add JSON tab to sandbox */}
@@ -310,10 +324,13 @@ const styles = stylex.create({
         cursor: 'pointer',
     },
     ErrorMessageError: {
-        color: '#ed0a0a',
+        color: '#ed0a0a', // red
     },
-    RevealTypeError: {
-        color: '#007bff', // Blue color for reveal_type errors
+    ErrorMessageWarning: {
+        color: '#ffde21', // yellow
+    },
+    ErrorMessageInfo: {
+        color: '#00aa00', // green
     },
     PyodideDisclaimer: {
         color: 'var(--color-primary)',

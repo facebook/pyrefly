@@ -6,6 +6,7 @@
  */
 
 use lsp_types::CompletionItem;
+use lsp_types::CompletionItemKind;
 use pretty_assertions::assert_eq;
 use ruff_text_size::TextSize;
 
@@ -23,18 +24,20 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
         ..
     } in state.transaction().completion(handle, position)
     {
-        report.push_str("\n- (");
-        report.push_str(&format!("{:?}", kind.unwrap()));
-        report.push_str(") ");
-        report.push_str(&label);
-        if let Some(detail) = detail {
-            report.push_str(": ");
-            report.push_str(&detail);
-        }
-        if let Some(insert_text) = insert_text {
-            report.push_str(" inserting `");
-            report.push_str(&insert_text);
-            report.push('`');
+        if kind != Some(CompletionItemKind::KEYWORD) {
+            report.push_str("\n- (");
+            report.push_str(&format!("{:?}", kind.unwrap()));
+            report.push_str(") ");
+            report.push_str(&label);
+            if let Some(detail) = detail {
+                report.push_str(": ");
+                report.push_str(&detail);
+            }
+            if let Some(insert_text) = insert_text {
+                report.push_str(" inserting `");
+                report.push_str(&insert_text);
+                report.push('`');
+            }
         }
     }
     report
@@ -66,8 +69,8 @@ Completion Results:
 10 | bar.
          ^
 Completion Results:
-- (Field) y: int
 - (Field) x: int
+- (Field) y: int
 "#
         .trim(),
         report.trim(),
@@ -95,10 +98,10 @@ foo.
 10 | foo.
          ^
 Completion Results:
-- (Field) x: int
+- (Method) class_method: BoundMethod[type[Foo], (cls: type[Self@Foo]) -> None]
 - (Method) method: BoundMethod[Foo, (self: Self@Foo) -> None]
 - (Function) static_method: () -> None
-- (Method) class_method: BoundMethod[type[Foo], (cls: type[Self@Foo]) -> None]
+- (Field) x: int
 "#
         .trim(),
         report.trim(),
@@ -125,8 +128,8 @@ foo.
 9 | foo.
         ^
 Completion Results:
-- (Field) y: int
 - (Field) x: int
+- (Field) y: int
 - (Field) _private: bool
 - (Field) __special__: str
 "#
@@ -142,9 +145,21 @@ def foo():
   xxxx = 3
   x
 # ^
+  y
+# ^
+  f
+# ^
+  b
+# ^
   def bar():
     yyyy = 4;
+    x
+#   ^
     y
+#   ^
+    f
+#   ^
+    b
 #   ^
 "#;
     let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
@@ -154,17 +169,63 @@ def foo():
 4 |   x
       ^
 Completion Results:
-- (Function) bar: () -> None
 - (Variable) xxxx: Literal[3]
+
+6 |   y
+      ^
+Completion Results:
+
+8 |   f
+      ^
+Completion Results:
 - (Function) foo: () -> None
 
-8 |     y
-        ^
+10 |   b
+       ^
+Completion Results:
+- (Function) bar: () -> None
+
+14 |     x
+         ^
+Completion Results:
+- (Variable) xxxx: Literal[3]
+
+16 |     y
+         ^
 Completion Results:
 - (Variable) yyyy: Literal[4]
-- (Variable) xxxx: Literal[3]
-- (Function) bar: () -> None
+
+18 |     f
+         ^
+Completion Results:
 - (Function) foo: () -> None
+
+20 |     b
+         ^
+Completion Results:
+- (Function) bar: () -> None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn variable_with_globals_complete_test() {
+    let code = r#"
+FileExistsOrNot = 1
+FileExist
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 | FileExist
+             ^
+Completion Results:
+- (Class) FileExistsError
+- (Variable) FileExistsOrNot: Literal[1]
 "#
         .trim(),
         report.trim(),
@@ -243,13 +304,13 @@ Completion Results:
 - (Variable) __cached__
 - (Variable) __debug__
 - (Variable) __dict__
+- (Variable) __doc__
 - (Variable) __file__
 - (Variable) __loader__
 - (Variable) __name__
 - (Variable) __package__
 - (Variable) __path__
 - (Variable) __spec__
-- (Variable) __doc__
 
 
 # foo.py
@@ -316,13 +377,54 @@ Completion Results:
 - (Variable) __cached__
 - (Variable) __debug__
 - (Variable) __dict__
+- (Variable) __doc__
 - (Variable) __file__
 - (Variable) __loader__
 - (Variable) __name__
 - (Variable) __package__
 - (Variable) __path__
 - (Variable) __spec__
+
+
+# foo.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn from_import_relative() {
+    let foo_code = r#"
+imperial_guard = "cool"
+"#;
+    let main_code = r#"
+from .foo import imperial
+#                       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main_code), ("foo", foo_code)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from .foo import imperial
+                            ^
+Completion Results:
+- (Variable) imperial_guard
+- (Variable) __annotations__
+- (Variable) __builtins__
+- (Variable) __cached__
+- (Variable) __debug__
+- (Variable) __dict__
 - (Variable) __doc__
+- (Variable) __file__
+- (Variable) __loader__
+- (Variable) __name__
+- (Variable) __package__
+- (Variable) __path__
+- (Variable) __spec__
 
 
 # foo.py
@@ -349,7 +451,6 @@ foo(x
 Completion Results:
 - (Variable) a=: int
 - (Variable) b=: str
-- (Function) foo: (a: int, b: str) -> None
 - (Variable) xyz: Literal[5]
 "#
         .trim(),
@@ -555,17 +656,17 @@ isins
          ^
 Completion Results:
 - (Function) isinstance
-- (Function) timerfd_settime_ns: from os import timerfd_settime_ns
-
-- (Function) distributions: from importlib.metadata import distributions
-
-- (Function) packages_distributions: from importlib.metadata import packages_distributions
+- (Class) FirstHeaderLineIsContinuationDefect: from email.errors import FirstHeaderLineIsContinuationDefect
 
 - (Class) MissingHeaderBodySeparatorDefect: from email.errors import MissingHeaderBodySeparatorDefect
 
+- (Function) distributions: from importlib.metadata import distributions
+
 - (Function) fix_missing_locations: from ast import fix_missing_locations
 
-- (Class) FirstHeaderLineIsContinuationDefect: from email.errors import FirstHeaderLineIsContinuationDefect
+- (Function) packages_distributions: from importlib.metadata import packages_distributions
+
+- (Function) timerfd_settime_ns: from os import timerfd_settime_ns
 "#
         .trim(),
         report.trim(),

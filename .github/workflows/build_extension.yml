@@ -97,6 +97,10 @@ jobs:
         # by Cargo have long paths and will cause builds/tests to fail
         if: ${{ matrix.os == 'windows-latest' }}
         run: echo "CARGO_HOME=C:\\cargo" >> ${{ matrix.github_env }}
+      - name: set up rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: pyrefly-extension
       - name: build pyrefly binary (cross-compile)
         if: ${{ matrix.rust_target != '' }}
         uses: houseabsolute/actions-rust-cross@v1
@@ -111,6 +115,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
       - name: save platform name
         run: echo "platform=${{ matrix.platform }}-${{ matrix.arch }}" >> ${{ matrix.github_env }}
       - run: npm ci

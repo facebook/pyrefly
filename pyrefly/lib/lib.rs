@@ -31,13 +31,15 @@
 
 mod alt;
 mod binding;
+mod buck;
 #[cfg(not(target_arch = "wasm32"))]
 mod commands;
-mod common;
-mod config;
+mod compat;
 mod error;
 mod export;
 mod graph;
+#[cfg(not(target_arch = "wasm32"))]
+mod lsp;
 mod module;
 pub mod playground;
 pub mod query;
@@ -45,7 +47,8 @@ mod report;
 mod solver;
 mod state;
 mod test;
-mod types;
+
+pub(crate) use compat::*;
 
 /// This interface is NOT stable and should not be relied upon.
 /// It will change during minor version increments.
@@ -53,28 +56,16 @@ mod types;
 /// We name it `library` many times to make it longer than our real imports, and thus
 /// to discourage Rust Analyzer from suggesting it for imports.
 /// See https://github.com/rust-lang/rust-analyzer/issues/19689.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod library {
     pub mod library {
         pub mod library {
             pub mod library {
-                pub use pyrefly_python::module_name::ModuleName;
-                pub use pyrefly_python::module_path::ModulePath;
-                pub use pyrefly_python::sys_info::PythonPlatform;
-                pub use pyrefly_python::sys_info::PythonVersion;
-
-                #[cfg(not(target_arch = "wasm32"))]
+                pub use crate::commands::all::Command;
+                pub use crate::commands::check::CheckArgs;
+                pub use crate::commands::check::FullCheckArgs;
                 pub use crate::commands::config_finder::standard_config_finder;
-                #[cfg(not(target_arch = "wasm32"))]
-                pub use crate::commands::globs_and_config_getter;
-                #[cfg(not(target_arch = "wasm32"))]
-                pub use crate::commands::run;
-                pub use crate::config::base::ConfigBase;
-                pub use crate::config::config::ConfigFile;
-                pub use crate::config::config::ConfigSource;
-                pub use crate::config::config::ProjectLayout;
-                pub use crate::config::environment::environment::PythonEnvironment;
-                pub use crate::config::finder;
-                pub use crate::error::kind::Severity;
+                pub use crate::commands::util;
             }
         }
     }

@@ -27,8 +27,8 @@ use ruff_text_size::TextSize;
 use serde::Serialize;
 
 use crate::config::config::ConfigFile;
+use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
-use crate::error::kind::Severity;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -96,7 +96,8 @@ pub struct Diagnostic {
     pub end_line: i32,
     #[serde(rename(serialize = "endColumn"))]
     pub end_col: i32,
-    pub message: String,
+    pub message_header: String,
+    pub message_details: String,
     pub kind: String,
     pub severity: i32,
 }
@@ -189,7 +190,8 @@ impl Playground {
                     start_col: range.start.column.get() as i32,
                     end_line: range.end.line.get() as i32,
                     end_col: range.end.column.get() as i32,
-                    message: e.msg().to_owned(),
+                    message_header: e.msg_header().to_owned(),
+                    message_details: e.msg_details().unwrap_or("").to_owned(),
                     kind: e.error_kind().to_name().to_owned(),
                     // Severity values defined here: https://microsoft.github.io/monaco-editor/typedoc/enums/MarkerSeverity.html
                     severity: match e.error_kind().default_severity() {
@@ -227,7 +229,7 @@ impl Playground {
             .goto_definition(&self.handle, position)
             .into_iter()
             .next()
-            .map(|r| Range::new(r.module_info.display_range(r.range)))
+            .map(|r| Range::new(r.module.display_range(r.range)))
     }
 
     pub fn autocomplete(&self, pos: Position) -> Vec<AutoCompletionItem> {
@@ -270,7 +272,7 @@ impl Playground {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::kind::ErrorKind;
+    use crate::config::error_kind::ErrorKind;
 
     #[test]
     fn test_regular_import() {
@@ -283,7 +285,7 @@ mod tests {
             state
                 .get_errors()
                 .into_iter()
-                .map(|x| x.message)
+                .map(|x| x.message_header)
                 .collect::<Vec<_>>(),
             expected_errors,
         );
@@ -293,13 +295,21 @@ mod tests {
     fn test_invalid_import() {
         let mut state = Playground::new(None).unwrap();
         state.update_source("from t".to_owned());
-        let expected_errors = &[
-            "Could not find import of `t`\n  No search path or site package path",
+        let expected_headers = &[
+            "Could not find import of `t`",
             "Parse error: Expected 'import', found newline",
         ];
+        let expected_details = &["  No search path or site package path", ""];
         let expected_error_kinds = &[ErrorKind::ImportError, ErrorKind::ParseError];
 
-        assert_eq!(&state.get_errors().into_map(|x| x.message), expected_errors);
+        assert_eq!(
+            &state.get_errors().into_map(|x| x.message_header),
+            expected_headers
+        );
+        assert_eq!(
+            &state.get_errors().into_map(|x| x.message_details),
+            expected_details
+        );
 
         assert_eq!(
             state.get_errors().into_map(|x| x.kind),

@@ -9,10 +9,11 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
-use anyhow::Context as _;
 use clap::Parser;
-use parse_display::Display;
-use path_absolutize::Absolutize;
+use pyrefly_config::file_kind::ConfigFileKind;
+use pyrefly_config::migration::run::config_migration;
+use pyrefly_config::pyproject::PyProject;
+use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::display;
 use pyrefly_util::fs_anyhow;
 use tracing::error;
@@ -20,43 +21,12 @@ use tracing::info;
 use tracing::warn;
 
 use crate::commands::check;
-use crate::commands::config_migration;
-use crate::commands::config_migration::write_pyproject;
-use crate::commands::globs_and_config_getter;
-use crate::commands::run::CommandExitStatus;
+use crate::commands::files::FilesArgs;
+use crate::commands::util::CommandExitStatus;
 use crate::config::config::ConfigFile;
 use crate::error::summarise;
 
 const MAX_ERRORS_TO_PROMPT_SUPPRESSION: usize = 100;
-
-// This should likely be moved into config.rs
-/// Types of configuration files that can be detected or created.
-#[derive(Clone, Debug, Parser, Copy, Display)]
-pub enum ConfigFileKind {
-    MyPy,
-    Pyright,
-    Pyrefly,
-    Pyproject,
-}
-
-impl ConfigFileKind {
-    fn file_name(&self) -> &str {
-        match self {
-            Self::MyPy => "mypy.ini",
-            Self::Pyright => "pyrightconfig.json",
-            Self::Pyrefly => "pyrefly.toml",
-            Self::Pyproject => "pyproject.toml",
-        }
-    }
-
-    fn toml_identifier(self) -> String {
-        match self {
-            // This makes me question if pyproject should be a part of the enum at all
-            Self::Pyproject => "".to_owned(),
-            _ => format!("[tool.{self}]").to_lowercase(),
-        }
-    }
-}
 
 /// Initialize a new pyrefly config in the given directory. Can also be used to run pyrefly config-migration on a given project.
 #[deny(clippy::missing_docs_in_private_items)]
@@ -64,14 +34,14 @@ impl ConfigFileKind {
 #[command(after_help = "Examples:
    `pyrefly init`: Create a new pyrefly.toml config in the current directory
  ")]
-pub struct Args {
+pub struct InitArgs {
     /// The path to the project to initialize. Optional. If not present, will create a new pyrefly.toml config in the current directory.
     /// If this is the path to a pyproject.toml, the config will be written as a `[tool.pyrefly]` entry in that file.
     #[arg(default_value_os_t = PathBuf::from("."))]
     path: PathBuf,
 }
 
-impl Args {
+impl InitArgs {
     pub fn new(path: PathBuf) -> Self {
         Self { path }
     }
@@ -86,31 +56,6 @@ impl Args {
         }
         let pyproject_path = &path.join(ConfigFile::PYPROJECT_FILE_NAME);
         pyproject_path.exists()
-    }
-
-    fn check_for_existing_config(path: &Path, kind: ConfigFileKind) -> anyhow::Result<bool> {
-        let file_name = kind.file_name();
-        if path.ends_with(file_name) && path.exists() {
-            return Ok(true);
-        }
-        if path.ends_with(ConfigFile::PYPROJECT_FILE_NAME) && path.exists() {
-            let raw_pyproject = fs_anyhow::read_to_string(path).with_context(|| {
-                format!(
-                    "While trying to check for an existing {} config in `{}`",
-                    kind,
-                    path.display()
-                )
-            })?;
-            return Ok(raw_pyproject.contains(&kind.toml_identifier()));
-        }
-        if path.is_dir() {
-            let custom_file = Args::check_for_existing_config(&path.join(file_name), kind);
-
-            let pyproject =
-                Args::check_for_existing_config(&path.join(ConfigFile::PYPROJECT_FILE_NAME), kind);
-            return Ok(custom_file? || pyproject?);
-        }
-        Ok(false)
     }
 
     fn prompt_user_confirmation(prompt: &str) -> bool {
@@ -161,11 +106,11 @@ impl Args {
         info!("Running pyrefly check...");
 
         // Create check args by parsing arguments with output-format set to omit-errors
-        let mut check_args = check::Args::parse_from(["check", "--output-format", "omit-errors"]);
+        let check_args = check::CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
 
         // Use get to get the filtered globs and config finder
         let (filtered_globs, config_finder) =
-            globs_and_config_getter::get(Vec::new(), None, config_path, &mut check_args)?;
+            FilesArgs::get(Vec::new(), config_path, &check_args.config_override)?;
 
         // Run the check directly
         match check_args.run_once(filtered_globs, config_finder, true) {
@@ -189,17 +134,17 @@ impl Args {
             info!("Running pyrefly check with suppress-errors flag...");
 
             // Create check args with suppress-errors flag
-            let mut suppress_args = check::Args::parse_from([
+            let suppress_args = check::CheckArgs::parse_from([
                 "check",
                 "--suppress-errors",
                 "--output-format",
                 "omit-errors",
-                "--no-summary",
+                "--summary=none",
             ]);
 
             // Use get to get the filtered globs and config finder
             let (suppress_globs, suppress_config_finder) =
-                globs_and_config_getter::get(Vec::new(), None, config_path, &mut suppress_args)?;
+                FilesArgs::get(Vec::new(), config_path, &suppress_args.config_override)?;
 
             // Run the check with suppress-errors flag
             match suppress_args.run_once(suppress_globs, suppress_config_finder, true) {
@@ -212,6 +157,67 @@ impl Args {
         }
 
         Ok(CommandExitStatus::Success)
+    }
+
+    /// Disables typechecking for all repos except the selected directories by:
+    /// Setting project_includes to only include the selected directories
+    fn disable_typechecking_for_repos_other_than_selected_files(
+        &self,
+        config_path: &Option<PathBuf>,
+        selected_dirs: &[PathBuf],
+    ) -> anyhow::Result<()> {
+        if let Some(root_config_path) = config_path {
+            let mut include_patterns = Vec::new();
+
+            for dir in selected_dirs {
+                let config_dir = root_config_path.parent().unwrap_or(Path::new("/"));
+
+                let rel_path = if dir.starts_with(config_dir) {
+                    match dir.strip_prefix(config_dir) {
+                        Ok(rel) => rel.to_string_lossy().to_string(),
+                        Err(_) => dir.to_string_lossy().to_string(), // Fallback to absolute path
+                    }
+                } else {
+                    dir.to_string_lossy().to_string()
+                };
+
+                let glob_pattern = if rel_path.is_empty() {
+                    "**".to_owned()
+                } else {
+                    format!("{rel_path}/**")
+                };
+
+                include_patterns.push(glob_pattern);
+            }
+
+            // Read the existing config to preserve any other settings
+            let (mut existing_config, _) = ConfigFile::from_file(root_config_path);
+
+            // Update only the project_includes field
+            existing_config.project_includes = pyrefly_util::globs::Globs::new(include_patterns);
+
+            // Handle differently based on config file type
+            if root_config_path.ends_with(ConfigFile::PYPROJECT_FILE_NAME) {
+                // For pyproject.toml, use write_pyproject to update only the pyrefly section
+                // This preserves other tool configurations in the file
+                PyProject::update(root_config_path, existing_config)?;
+                info!(
+                    "Updated pyrefly section in pyproject.toml to focus typechecking on selected directories"
+                );
+            } else {
+                // For pyrefly.toml, write the updated config back to the file
+                let serialized = toml::to_string_pretty(&existing_config)?;
+                fs_anyhow::write(root_config_path, serialized)?;
+                info!("Updated pyrefly.toml to focus typechecking on selected directories");
+            }
+
+            info!(
+                "Updated root config at {} to focus typechecking on selected directories",
+                root_config_path.display()
+            );
+        }
+
+        Ok(())
     }
 
     fn prompt_init_on_subdirectory(
@@ -285,12 +291,12 @@ impl Args {
         );
 
         // Create check args with suppress-errors flag
-        let mut suppress_args = check::Args::parse_from([
+        let suppress_args = check::CheckArgs::parse_from([
             "check",
             "--suppress-errors",
             "--output-format",
             "omit-errors",
-            "--no-summary",
+            "--summary=none",
         ]);
 
         // Collect file paths from errors in selected directories
@@ -310,21 +316,38 @@ impl Args {
         }
 
         // Use get to get the filtered globs and config finder, passing the files to check
-        let (suppress_globs, suppress_config_finder) =
-            globs_and_config_getter::get(files_to_check, None, config_path, &mut suppress_args)?;
+        let (suppress_globs, suppress_config_finder) = FilesArgs::get(
+            files_to_check,
+            config_path.clone(),
+            &suppress_args.config_override,
+        )?;
 
         // Run the check with suppress-errors flag
         match suppress_args.run_once(suppress_globs, suppress_config_finder, true) {
-            Ok(_) => Ok(CommandExitStatus::Success),
+            Ok(_) => {}
             Err(e) => {
                 error!("Failed to suppress errors: {}", e);
-                Ok(CommandExitStatus::Success) // Still return success to match original behavior
             }
+        };
+
+        // Disable typechecking for all repos except the selected ones
+        if let Err(e) = self
+            .disable_typechecking_for_repos_other_than_selected_files(&config_path, &selected_dirs)
+        {
+            error!("Failed to configure typechecking: {}", e);
         }
+        info!(
+            "Disabled typechecking for all directories except the selected {}",
+            dirs_str
+        );
+        info!(
+            "To enable typechecking in other directories in the future, please expand project-include in pyproject.toml."
+        );
+        Ok(CommandExitStatus::Success)
     }
 
     fn create_config(&self) -> anyhow::Result<(CommandExitStatus, Option<PathBuf>)> {
-        let path = self.path.absolutize()?.to_path_buf();
+        let path = self.path.absolutize();
 
         let dir: Option<&Path> = if path.is_dir() {
             Some(&path)
@@ -332,7 +355,7 @@ impl Args {
             path.parent()
         };
         if let Some(dir) = dir
-            && Args::check_for_existing_config(dir, ConfigFileKind::Pyrefly)?
+            && ConfigFileKind::Pyrefly.check_for_existing_config(dir)?
         {
             let prompt = format!(
                 "The project at `{}` has already been initialized for pyrefly. Run `pyrefly check` to see type errors. Re-initialize and write a new section? (y/N): ",
@@ -344,20 +367,13 @@ impl Args {
         }
 
         // 1. Check for mypy or pyright configuration
-        let found_mypy = Args::check_for_existing_config(&path, ConfigFileKind::MyPy)?;
-        let found_pyright = Args::check_for_existing_config(&path, ConfigFileKind::Pyright)?;
+        let found_mypy = ConfigFileKind::MyPy.check_for_existing_config(&path)?;
+        let found_pyright = ConfigFileKind::Pyright.check_for_existing_config(&path)?;
 
         // 2. Migrate existing configuration to Pyrefly configuration
         if found_mypy || found_pyright {
-            println!("Found an existing type checking configuration - setting up pyrefly ...");
-            let args = config_migration::Args {
-                original_config_path: Some(path.clone()),
-            };
-            match args.run() {
-                Ok((status, Some(config_path))) => return Ok((status, Some(config_path))),
-                Ok((status, None)) => return Ok((status, None)),
-                Err(e) => return Err(e),
-            }
+            info!("Found an existing type checking configuration - setting up pyrefly ...");
+            return Ok((CommandExitStatus::Success, Some(config_migration(&path)?)));
         }
 
         // Generate a basic config with a couple sensible defaults.
@@ -369,13 +385,13 @@ impl Args {
         };
 
         // 3. Initialize pyproject.toml configuration in the case that there are no existing Mypy or Pyright configurations but user specified a pyproject.toml
-        if Args::check_for_pyproject_file(&path) {
+        if InitArgs::check_for_pyproject_file(&path) {
             let config_path = if path.ends_with(ConfigFile::PYPROJECT_FILE_NAME) {
                 path
             } else {
                 path.join(ConfigFile::PYPROJECT_FILE_NAME)
             };
-            write_pyproject(&config_path, cfg)?;
+            PyProject::update(&config_path, cfg)?;
             info!("Config written to `{}`", config_path.display());
             return Ok((CommandExitStatus::Success, Some(config_path)));
         }
@@ -396,7 +412,7 @@ impl Args {
             return Ok((CommandExitStatus::UserError, None));
         };
         let serialized = toml::to_string_pretty(&cfg)?;
-        fs_anyhow::write(&config_path, serialized.as_bytes())?;
+        fs_anyhow::write(&config_path, serialized)?;
         info!("New config written to `{}`", config_path.display());
         Ok((CommandExitStatus::Success, Some(config_path)))
     }
@@ -480,12 +496,12 @@ mod test {
     }
 
     fn run_init_on_dir(dir: &TempDir) -> anyhow::Result<CommandExitStatus> {
-        let args = Args::new(dir.path().to_path_buf());
+        let args = InitArgs::new(dir.path().to_path_buf());
         args.run()
     }
 
     fn run_init_on_file(dir: &TempDir, file: &str) -> anyhow::Result<CommandExitStatus> {
-        let args = Args::new(dir.path().join(file));
+        let args = InitArgs::new(dir.path().join(file));
         args.run()
     }
 
@@ -780,13 +796,6 @@ k = [\"v\"]
     }
 
     #[test]
-    fn test_config_file_kinds() -> anyhow::Result<()> {
-        let kind = ConfigFileKind::MyPy;
-        assert_eq!(kind.toml_identifier(), "[tool.mypy]".to_owned());
-        Ok(())
-    }
-
-    #[test]
     fn test_bad_path() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let status = run_init_on_file(&tmp, "personal_configs.json")?;
@@ -841,7 +850,7 @@ k = [\"v\"]
 
         // Run each test case
         for (i, (input, min, max, expected)) in test_cases.iter().enumerate() {
-            let result = Args::parse_comma_separated_values(input, *min, *max);
+            let result = InitArgs::parse_comma_separated_values(input, *min, *max);
             assert_eq!(
                 result, *expected,
                 "Test case {i} failed: input='{input}', min={min}, max={max}",

@@ -12,6 +12,7 @@ use dupe::Dupe;
 use itertools::Either;
 use pyrefly_python::dunder;
 use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::StmtFunctionDef;
@@ -29,12 +30,12 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyFunction;
 use crate::binding::binding::KeyLegacyTypeParam;
+use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
-use crate::error::kind::ErrorKind;
 use crate::graph::index::Idx;
-use crate::module::short_identifier::ShortIdentifier;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncFlags;
 use crate::types::callable::FuncMetadata;
@@ -62,7 +63,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         // Overloads in .pyi should not have an implementation.
-        let skip_implementation = self.module_info().path().style() == ModuleStyle::Interface
+        let skip_implementation = self.module().path().style() == ModuleStyle::Interface
             || class_metadata.is_some_and(|idx| self.get_idx(*idx).is_protocol());
         let def = self.get_idx(idx);
         if def.metadata.flags.is_overload {
@@ -73,12 +74,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // This is the last definition in the chain. We should produce an overload type.
                 let last_range = def.id_range;
                 let has_impl = def.stub_or_impl == FunctionStubOrImpl::Impl;
-                let mut acc = Vec1::new((last_range, ty));
+                let mut acc = Vec1::new((last_range, ty, def.metadata.clone()));
                 let mut first = def;
                 let mut impl_before_overload_range = None;
                 while let Some(def) = self.step_pred(predecessor) {
                     if def.metadata.flags.is_overload {
-                        acc.push((def.id_range, def.ty.clone()));
+                        acc.push((def.id_range, def.ty.clone(), def.metadata.clone()));
                         first = def;
                     } else {
                         impl_before_overload_range = Some(def.id_range);
@@ -90,8 +91,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorKind::InvalidOverload,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidOverload),
                             "@overload declarations must come before function implementation"
                                 .to_owned(),
                         );
@@ -99,8 +99,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             last_range,
-                            ErrorKind::InvalidOverload,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidOverload),
                             "@overload decorator should not be used on function implementation"
                                 .to_owned(),
                         );
@@ -108,8 +107,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             first.id_range,
-                            ErrorKind::InvalidOverload,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidOverload),
                             "Overloaded function must have an implementation".to_owned(),
                         );
                     }
@@ -118,8 +116,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         first.id_range,
-                        ErrorKind::InvalidOverload,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidOverload),
                         "Overloaded function needs at least two @overload declarations".to_owned(),
                     );
                     acc.split_off_first().0.1
@@ -138,12 +135,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ty
             }
         } else {
+            let impl_is_deprecated = def.metadata.flags.is_deprecated;
             let mut acc = Vec::new();
             let mut first = def;
             while let Some(def) = self.step_pred(predecessor)
                 && def.metadata.flags.is_overload
             {
-                acc.push((def.id_range, def.ty.clone()));
+                acc.push((def.id_range, def.ty.clone(), def.metadata.clone()));
                 first = def;
             }
             acc.reverse();
@@ -152,19 +150,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         first.id_range,
-                        ErrorKind::InvalidOverload,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidOverload),
                         "Overloaded function needs at least two @overload declarations".to_owned(),
                     );
                     defs.split_off_first().0.1
                 } else {
+                    // TODO: merge the metadata properly.
+                    let mut metadata = first.metadata.clone();
+                    metadata.flags.is_deprecated = impl_is_deprecated;
                     Type::Overload(Overload {
                         signatures: self.extract_signatures(
-                            first.metadata.kind.as_func_id().func,
+                            metadata.kind.as_func_id().func,
                             defs,
                             errors,
                         ),
-                        metadata: Box::new(first.metadata.clone()),
+                        metadata: Box::new(metadata),
                     })
                 }
             } else {
@@ -183,18 +183,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Arc<DecoratedFunction> {
         let defining_cls = class_key.and_then(|k| self.get_idx(*k).0.dupe());
-        let mut self_type = if def.name.id == dunder::NEW || def.name.id == dunder::INIT_SUBCLASS {
-            // __new__ and __init_subclass__ are staticmethods, and do not take a self parameter.
-            None
-        } else {
-            defining_cls
-                .as_ref()
-                .map(|cls| Type::SelfType(self.as_class_type_unchecked(cls)))
-        };
+        let mut self_type = defining_cls
+            .as_ref()
+            .map(|cls| Type::SelfType(self.as_class_type_unchecked(cls)));
+
+        // __new__ is an implicit staticmethod, __init_subclass__ is an implicit classmethod
+        // __new__, unlike decorated staticmethods, uses Self
+        let is_dunder_new = defining_cls.is_some() && def.name.as_str() == dunder::NEW;
+        let is_dunder_init_subclass =
+            defining_cls.is_some() && def.name.as_str() == dunder::INIT_SUBCLASS;
 
         let mut is_overload = false;
-        let mut is_staticmethod = false;
-        let mut is_classmethod = false;
+        let mut is_staticmethod = is_dunder_new;
+        let mut is_classmethod = is_dunder_init_subclass;
         let mut is_deprecated = false;
         let mut is_property_getter = false;
         let mut is_property_setter_with_getter = None;
@@ -259,10 +260,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Look for a @classmethod or @staticmethod decorator and change the "self" type
         // accordingly. This is not totally correct, since it doesn't account for chaining
         // decorators, or weird cases like both decorators existing at the same time.
-        if is_staticmethod {
-            self_type = None;
-        } else if is_classmethod {
+        if is_classmethod || is_dunder_new {
             self_type = self_type.map(Type::type_form);
+        } else if is_staticmethod {
+            self_type = None;
         }
 
         let get_requiredness =
@@ -345,8 +346,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         x.parameter.name.range,
-                        ErrorKind::BadFunctionDefinition,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::BadFunctionDefinition),
                         format!(
                             "Positional-only parameter `{}` cannot appear after keyword parameters",
                             x.parameter.name
@@ -374,8 +374,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 param.range,
-                ErrorKind::BadFunctionDefinition,
-                None,
+                ErrorInfo::Kind(ErrorKind::BadFunctionDefinition),
                 format!(
                     "Keyword-only parameter `{}` may not appear after ParamSpec args parameter",
                     param.parameter.name
@@ -405,62 +404,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .arc_clone_ty();
 
         if matches!(&ret, Type::TypeGuard(_) | Type::TypeIs(_)) {
-            // https://typing.python.org/en/latest/spec/narrowing.html#typeguard
-            // https://typing.python.org/en/latest/spec/narrowing.html#typeis
-            // TypeGuard and TypeIs must accept at least one positional argument.
-            // If a type guard function is implemented as an instance method or
-            // class method, the first positional argument maps to the second
-            // parameter (after “self” or “cls”).
-            let position_args_count = params
-                .iter()
-                .filter(|p| matches!(p, Param::Pos(..) | Param::PosOnly(..)))
-                .count()
-                - (if class_key.is_some() && !is_staticmethod {
-                    1 // Subtract the "self" or "cls" parameter
-                } else {
-                    0
-                });
-            if position_args_count < 1 {
-                self.error(
-                    errors,
-                    // The error should be raised on the line of the function
-                    // definition, but using `def.range` would be too broad
-                    // since it includes the decorators, which does not match
-                    // the conformance testsuite.
-                    def.name.range,
-                    ErrorKind::BadFunctionDefinition,
-                    None,
-                    "Type guard functions must accept at least one positional argument".to_owned(),
-                );
-            }
+            self.validate_type_guard_positional_argument_count(
+                &params,
+                def,
+                class_key,
+                is_staticmethod,
+                errors,
+            );
         };
 
         if let Type::TypeIs(ty_narrow) = &ret {
-            // https://typing.python.org/en/latest/spec/narrowing.html#typeis
-            // The return type R must be assignable to I. The type checker
-            // should emit an error if this condition is not met.
-            let ty_arg = if class_key.is_some() && !is_staticmethod {
-                // Skip the first argument (`self` or `cls`) if this is a method or class method.
-                params.get(1)
-            } else {
-                params.first()
-            };
-            if let Some(ty_arg) = ty_arg
-                && !self.is_subset_eq(ty_narrow, ty_arg.param_to_type())
-            {
-                // If the narrowed type is not a subtype of the argument type, we report an error.
-                self.error(
-                    errors,
-                    def.name.range,
-                    ErrorKind::BadFunctionDefinition,
-                    None,
-                    format!(
-                        "Return type `{}` must be assignable to the first argument type `{}`",
-                        self.for_display(*ty_narrow.clone()),
-                        self.for_display(ty_arg.param_to_type().clone())
-                    ),
-                );
-            }
+            self.validate_type_is_type_narrowing(
+                &params,
+                def,
+                class_key,
+                is_staticmethod,
+                ty_narrow,
+                errors,
+            );
         }
 
         let mut tparams = self.scoped_type_params(def.type_params.as_deref(), errors);
@@ -473,16 +434,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     def.range,
-                    ErrorKind::InvalidParamSpec,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidParamSpec),
                     "`ParamSpec` *args and **kwargs must be used together".to_owned(),
                 );
             } else {
                 self.error(
                     errors,
                     def.range,
-                    ErrorKind::InvalidParamSpec,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidParamSpec),
                     "*args and **kwargs must come from the same `ParamSpec`".to_owned(),
                 );
             }
@@ -523,7 +482,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Callable::list(ParamList::new(params), ret)
         };
         let kind = FunctionKind::from_name(
-            self.module_info().name(),
+            self.module().name(),
             defining_cls.as_ref().map(|cls| cls.name()),
             &def.name.id,
         );
@@ -563,8 +522,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 {
                     let call_attr = self.instance_to_method(&cls).and_then(|call_attr| {
                         if let Type::BoundMethod(m) = call_attr {
-                            let func = m.as_bound_function();
-                            Some(func.to_unbound_callable().unwrap_or(func))
+                            let func = m.as_function();
+                            Some(func.drop_first_param_of_unbound_callable().unwrap_or(func))
                         } else {
                             None
                         }
@@ -592,6 +551,82 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
+    /// For a type guard function, validate whether it has at least one
+    /// positional argument.
+    fn validate_type_guard_positional_argument_count(
+        &self,
+        params: &[Param],
+        def: &StmtFunctionDef,
+        class_key: Option<&Idx<KeyClass>>,
+        is_staticmethod: bool,
+        errors: &ErrorCollector,
+    ) {
+        // https://typing.python.org/en/latest/spec/narrowing.html#typeguard
+        // https://typing.python.org/en/latest/spec/narrowing.html#typeis
+        // TypeGuard and TypeIs must accept at least one positional argument.
+        // If a type guard function is implemented as an instance method or
+        // class method, the first positional argument maps to the second
+        // parameter (after “self” or “cls”).
+        let position_args_count = params
+            .iter()
+            .filter(|p| matches!(p, Param::Pos(..) | Param::PosOnly(..)))
+            .count()
+            - (if class_key.is_some() && !is_staticmethod {
+                1 // Subtract the "self" or "cls" parameter
+            } else {
+                0
+            });
+        if position_args_count < 1 {
+            self.error(
+                errors,
+                // The error should be raised on the line of the function
+                // definition, but using `def.range` would be too broad
+                // since it includes the decorators, which does not match
+                // the conformance testsuite.
+                def.name.range,
+                ErrorInfo::Kind(ErrorKind::BadFunctionDefinition),
+                "Type guard functions must accept at least one positional argument".to_owned(),
+            );
+        }
+    }
+
+    /// For a "TypeIs" type guard, validate whether the return type is a subtype
+    /// of the first argument type.
+    fn validate_type_is_type_narrowing(
+        &self,
+        params: &[Param],
+        def: &StmtFunctionDef,
+        class_key: Option<&Idx<KeyClass>>,
+        is_staticmethod: bool,
+        ty_narrow: &Type,
+        errors: &ErrorCollector,
+    ) {
+        // https://typing.python.org/en/latest/spec/narrowing.html#typeis
+        // The return type R must be assignable to I. The type checker
+        // should emit an error if this condition is not met.
+        let ty_arg = if class_key.is_some() && !is_staticmethod {
+            // Skip the first argument (`self` or `cls`) if this is a method or class method.
+            params.get(1)
+        } else {
+            params.first()
+        };
+        if let Some(ty_arg) = ty_arg
+            && !self.is_subset_eq(ty_narrow, ty_arg.param_to_type())
+        {
+            // If the narrowed type is not a subtype of the argument type, we report an error.
+            self.error(
+                errors,
+                def.name.range,
+                ErrorInfo::Kind(ErrorKind::BadFunctionDefinition),
+                format!(
+                    "Return type `{}` must be assignable to the first argument type `{}`",
+                    self.for_display(ty_narrow.clone()),
+                    self.for_display(ty_arg.param_to_type().clone())
+                ),
+            );
+        }
+    }
+
     /// If instances of this class are callable - that is, have a `__call__` method - return the method.
     pub fn instance_to_method(&self, cls: &ClassType) -> Option<Type> {
         self.get_instance_attribute(cls, &dunder::CALL)
@@ -617,12 +652,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn extract_signatures(
         &self,
         func: Name,
-        ts: Vec1<(TextRange, Type)>,
+        ts: Vec1<(TextRange, Type, FuncMetadata /* is_deprecated */)>,
         errors: &ErrorCollector,
     ) -> Vec1<OverloadType> {
-        ts.mapped(|(range, t)| match t {
-            Type::Callable(callable) => OverloadType::Callable(*callable),
-            Type::Function(function) => OverloadType::Callable(function.signature),
+        ts.mapped(|(range, t, metadata)| match t {
+            Type::Callable(callable) => OverloadType::Callable(Function {
+                signature: *callable,
+                metadata,
+            }),
+            Type::Function(function) => OverloadType::Callable(*function),
             Type::Forall(box Forall {
                 tparams,
                 body: Forallable::Function(func),
@@ -630,22 +668,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 tparams,
                 body: func,
             }),
-            Type::Any(any_style) => {
-                OverloadType::Callable(Callable::ellipsis(any_style.propagate()))
-            }
+            Type::Any(any_style) => OverloadType::Callable(Function {
+                signature: Callable::ellipsis(any_style.propagate()),
+                metadata,
+            }),
             _ => {
                 self.error(
                     errors,
                     range,
-                    ErrorKind::InvalidOverload,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidOverload),
                     format!(
                         "`{}` has type `{}` after decorator application, which is not callable",
                         func,
                         self.for_display(t)
                     ),
                 );
-                OverloadType::Callable(Callable::ellipsis(Type::any_error()))
+                OverloadType::Callable(Function {
+                    signature: Callable::ellipsis(Type::any_error()),
+                    metadata,
+                })
             }
         })
     }

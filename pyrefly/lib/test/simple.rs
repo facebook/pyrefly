@@ -1446,10 +1446,24 @@ testcase!(
     test_union_function_exponential,
     r#"
 # This used to take an exponential amount of time to type check
-from typing import Any, Callable, reveal_type
+from typing import Any, Callable
 
 def check(f: Callable[[int], bool] | Callable[[str], bool]) -> Any:
     f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(True)))))))))))))))))))))))) # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E:
+"#,
+);
+
+testcase!(
+    test_union_function_exponential2,
+    r#"
+# This used to take an exponential amount of time to type check
+from typing import Callable, TypeVar
+
+T = TypeVar('T', bound=Callable[[int], bool] | Callable[[str], bool])
+
+def check(f: T) -> T:
+    f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(f(True)))))))))))))))))))))))) # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E: # E:
+    return f
 "#,
 );
 
@@ -1492,8 +1506,8 @@ testcase!(
 # Used to loop forever, https://github.com/facebook/pyrefly/issues/519
 
 # Note: Removing any element makes this test pass.
-while 3:
-    z = "" if 3 else ""
+while True:
+    z = "" if True else ""
     break
 else:
     exit(1)
@@ -1656,5 +1670,37 @@ testcase!(
     r#"
 def f(x:float, y:bool) -> float:
     return x * y 
+"#,
+);
+
+testcase!(
+    test_assert_type_class_union,
+    r#"
+from typing import assert_type
+
+class A: pass
+
+def f(condition: bool):
+    if condition:
+        x = A()
+    else:
+        x = A
+    assert_type(x, A | type[A])
+    "#,
+);
+
+testcase!(test_panic_docstring, "\"\"\" F\n\u{85}\"\"\"",);
+
+testcase!(
+    test_nested_list_comp,
+    r#"from typing import assert_type
+assert_type([a for a in [b for b in ["a", "b"]]], list[str])
+"#,
+);
+
+testcase!(
+    test_incomplete_nested_list_comp,
+    r#"# Issue https://github.com/facebook/pyrefly/issues/455
+[a for [a for # E: Could # E: Parse # E: Could # E: Parse # E: Parse
 "#,
 );

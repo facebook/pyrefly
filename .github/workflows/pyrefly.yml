@@ -27,6 +27,10 @@ jobs:
       # by Cargo have long paths and will cause builds/tests to fail
       if: ${{ matrix.os == 'windows-latest' }}
       run: echo "CARGO_HOME=C:\\cargo" >> ${{ matrix.github_env }}
+    - name: set up rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        prefix-key: pyrefly
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: nightly-2025-05-09

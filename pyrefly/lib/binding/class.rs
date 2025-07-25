@@ -9,7 +9,9 @@ use std::mem;
 use std::sync::LazyLock;
 
 use pyrefly_python::ast::Ast;
+use pyrefly_python::docstring::Docstring;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::prelude::SliceExt;
 use regex::Regex;
 use ruff_python_ast::Expr;
@@ -38,6 +40,7 @@ use crate::binding::binding::BindingClassSynthesizedFields;
 use crate::binding::binding::BindingTParams;
 use crate::binding::binding::BindingVariance;
 use crate::binding::binding::ClassBinding;
+use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
@@ -48,22 +51,20 @@ use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyVariance;
-use crate::binding::binding::RawClassFieldInitialization;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamBuilder;
+use crate::binding::scope::ClassFieldInBody;
 use crate::binding::scope::ClassIndices;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
-use crate::binding::scope::MethodThatSetsAttr;
 use crate::binding::scope::Scope;
 use crate::binding::scope::ScopeKind;
-use crate::error::kind::ErrorKind;
+use crate::config::error_kind::ErrorKind;
+use crate::error::context::ErrorInfo;
 use crate::graph::index::Idx;
-use crate::module::short_identifier::ShortIdentifier;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
-use crate::types::special_form::SpecialForm;
 use crate::types::types::Type;
 
 enum IllegalIdentifierHandling {
@@ -119,6 +120,7 @@ impl<'a> BindingsBuilder<'a> {
         let (mut class_object, class_indices) = self.class_object_and_indices(&x.name);
         let mut key_class_fields: SmallSet<Idx<KeyClassField>> = SmallSet::new();
 
+        let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let body = mem::take(&mut x.body);
         let decorators_with_ranges = self.ensure_and_bind_decorators_with_ranges(
             mem::take(&mut x.decorator_list),
@@ -140,8 +142,7 @@ impl<'a> BindingsBuilder<'a> {
                 Expr::StringLiteral(v) => {
                     self.error(
                         base.range(),
-                        ErrorKind::InvalidInheritance,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                         format!(
                             "Cannot use string annotation `{}` as a base class",
                             v.value.to_str()
@@ -171,8 +172,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.error(
                         keyword.range(),
-                        ErrorKind::InvalidInheritance,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                         format!(
                             "The use of unpacking in class header of `{}` is not supported",
                             x.name
@@ -222,30 +222,47 @@ impl<'a> BindingsBuilder<'a> {
             // Ignore a name not in the current flow's static. This can happen because operations
             // like narrows can change the local flow info for a name defined in some parent scope.
             if let Some(stat_info) = last_scope.stat.0.get_hashed(name) {
-                let is_function_without_return_annotation =
+                let (definition, is_initialized_on_class) = {
                     if let FlowStyle::FunctionDef(_, has_return_annotation) = info.style {
-                        !has_return_annotation
+                        (
+                            ClassFieldDefinition::MethodLike {
+                                definition: info.key,
+                                has_return_annotation,
+                            },
+                            true,
+                        )
                     } else {
-                        false
-                    };
-                let initial_value = info.as_initial_value();
-                let value = match &initial_value {
-                    RawClassFieldInitialization::ClassBody(Some(e)) => {
-                        ExprOrBinding::Expr(e.clone())
+                        match info.as_initial_value() {
+                            ClassFieldInBody::InitializedByAssign(e) => (
+                                ClassFieldDefinition::AssignedInBody {
+                                    value: ExprOrBinding::Expr(e.clone()),
+                                    annotation: stat_info.annot,
+                                },
+                                true,
+                            ),
+                            ClassFieldInBody::InitializedWithoutAssign => (
+                                ClassFieldDefinition::DefinedWithoutAssign {
+                                    definition: info.key,
+                                },
+                                true,
+                            ),
+                            ClassFieldInBody::Uninitialized => {
+                                let annotation = stat_info.annot.unwrap_or_else(
+                                    || panic!("A class field known in the body but uninitialized always has an annotation.")
+                                );
+                                (
+                                    ClassFieldDefinition::DeclaredByAnnotation { annotation },
+                                    false,
+                                )
+                            }
+                        }
                     }
-                    _ => ExprOrBinding::Binding(Binding::Forward(info.key)),
                 };
-                let is_initialized_on_class =
-                    matches!(initial_value, RawClassFieldInitialization::ClassBody(_));
                 let binding = BindingClassField {
                     class_idx: class_indices.class_idx,
                     name: name.into_key().clone(),
-                    value,
-                    annotation: stat_info.annot,
                     range: stat_info.loc,
-                    initial_value,
-                    is_function_without_return_annotation,
-                    implicit_def_method: None,
+                    definition,
                 };
                 fields.insert_hashed(
                     name.cloned(),
@@ -261,22 +278,10 @@ impl<'a> BindingsBuilder<'a> {
             }
         }
         if let ScopeKind::Class(class_scope) = last_scope.kind {
-            for (
-                name,
-                MethodThatSetsAttr {
-                    method_name,
-                    recognized_attribute_defining_method,
-                },
-                InstanceAttribute(value, annotation, range),
-            ) in class_scope.method_defined_attributes()
+            for (name, method, InstanceAttribute(value, annotation, range)) in
+                class_scope.method_defined_attributes()
             {
                 if !fields.contains_key_hashed(name.as_ref()) {
-                    let implicit_def_method = if !recognized_attribute_defining_method {
-                        Some(method_name.clone())
-                    } else {
-                        None
-                    };
-
                     fields.insert_hashed(
                         name.clone(),
                         ClassFieldProperties::new(annotation.is_some(), false, range),
@@ -290,12 +295,12 @@ impl<'a> BindingsBuilder<'a> {
                         BindingClassField {
                             class_idx: class_indices.class_idx,
                             name: name.into_key(),
-                            value,
-                            annotation,
                             range,
-                            initial_value: RawClassFieldInitialization::Method(method_name.clone()),
-                            is_function_without_return_annotation: false,
-                            implicit_def_method,
+                            definition: ClassFieldDefinition::DefinedInMethod {
+                                value,
+                                annotation,
+                                method,
+                            },
                         },
                     );
                 }
@@ -339,6 +344,7 @@ impl<'a> BindingsBuilder<'a> {
                 def: x,
                 fields,
                 tparams_require_binding,
+                docstring_range,
             }),
         );
 
@@ -361,8 +367,7 @@ impl<'a> BindingsBuilder<'a> {
                 _ => {
                     self.error(
                         item.range(),
-                        ErrorKind::InvalidLiteral,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidLiteral),
                         "Expected a string literal".to_owned(),
                     );
                     None
@@ -385,8 +390,7 @@ impl<'a> BindingsBuilder<'a> {
                     [k, _] => {
                         self.error(
                             k.range(),
-                            ErrorKind::InvalidArgument,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
                             "Expected first item to be a string literal".to_owned(),
                         );
                         None
@@ -394,8 +398,7 @@ impl<'a> BindingsBuilder<'a> {
                     _ => {
                         self.error(
                             item.range(),
-                            ErrorKind::InvalidArgument,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
                             "Expected a pair".to_owned(),
                         );
                         None
@@ -404,8 +407,7 @@ impl<'a> BindingsBuilder<'a> {
                 _ => {
                     self.error(
                         item.range(),
-                        ErrorKind::InvalidArgument,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
                         "Expected a tuple".to_owned(),
                     );
                     None
@@ -467,8 +469,7 @@ impl<'a> BindingsBuilder<'a> {
                     IllegalIdentifierHandling::Error => {
                         self.error(
                             range,
-                            ErrorKind::BadClassDefinition,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::BadClassDefinition),
                             format!("`{member_name}` is not a valid identifier"),
                         );
                         continue;
@@ -482,8 +483,7 @@ impl<'a> BindingsBuilder<'a> {
                     IllegalIdentifierHandling::Error => {
                         self.error(
                              range,
-                             ErrorKind::BadClassDefinition,
-                             None,
+                             ErrorInfo::Kind(ErrorKind::BadClassDefinition),
                              format!(
                                  "NamedTuple field name may not start with an underscore: `{member_name}`"
                              ),
@@ -498,8 +498,7 @@ impl<'a> BindingsBuilder<'a> {
             if fields.contains_key(&member_name) {
                 self.error(
                     range,
-                    ErrorKind::BadClassDefinition,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
                     format!("Duplicate field `{member_name}`"),
                 );
                 continue;
@@ -513,53 +512,43 @@ impl<'a> BindingsBuilder<'a> {
                     range,
                 ),
             );
-            let initial_value = if force_class_initialization || member_value.is_some() {
-                RawClassFieldInitialization::ClassBody(member_value.clone())
-            } else {
-                RawClassFieldInitialization::Uninitialized
-            };
-            let value = match member_value {
-                Some(value) => ExprOrBinding::Expr(value),
-                None => ExprOrBinding::Binding(Binding::Type(Type::any_implicit())),
-            };
-            let annotation_binding = if let Some(annotation) = member_annotation {
-                let ann_key = KeyAnnotation::Annotation(ShortIdentifier::new(&Identifier::new(
-                    member_name.clone(),
-                    range,
-                )));
-                let ann_val = if let Some(special) = SpecialForm::new(&member_name, &annotation) {
-                    BindingAnnotation::Type(
-                        AnnotationTarget::ClassMember(member_name.clone()),
-                        special.to_type(),
-                    )
-                } else {
+            let annotation = member_annotation.map(|annotation_expr| {
+                self.insert_binding(
+                    KeyAnnotation::Annotation(ShortIdentifier::new(&Identifier::new(
+                        member_name.clone(),
+                        range,
+                    ))),
                     BindingAnnotation::AnnotateExpr(
                         AnnotationTarget::ClassMember(member_name.clone()),
-                        annotation,
+                        annotation_expr,
                         None,
-                    )
-                };
-                Some(self.insert_binding(ann_key, ann_val))
-            } else {
-                None
+                    ),
+                )
+            });
+            let definition = match (member_value, force_class_initialization) {
+                (Some(value), _) => ClassFieldDefinition::AssignedInBody {
+                    value: ExprOrBinding::Expr(value),
+                    annotation,
+                },
+                (None, true) => ClassFieldDefinition::AssignedInBody {
+                    value: ExprOrBinding::Binding(Binding::Type(Type::any_implicit())),
+                    annotation,
+                },
+                (None, false) => match annotation {
+                    Some(annotation) => ClassFieldDefinition::DeclaredByAnnotation { annotation },
+                    None => ClassFieldDefinition::DeclaredWithoutAnnotation,
+                },
             };
-
-            let key_field = KeyClassField(class_indices.def_index, member_name.clone());
-            key_class_fields.insert(self.idx_for_promise(key_field.clone()));
-
-            self.insert_binding(
-                key_field,
+            let idx = self.insert_binding(
+                KeyClassField(class_indices.def_index, member_name.clone()),
                 BindingClassField {
                     class_idx: class_indices.class_idx,
                     name: member_name,
-                    value,
-                    annotation: annotation_binding,
                     range,
-                    initial_value,
-                    is_function_without_return_annotation: false,
-                    implicit_def_method: None,
+                    definition,
                 },
             );
+            key_class_fields.insert(idx);
         }
         self.bind_definition_current(
             &class_name,
@@ -648,8 +637,7 @@ impl<'a> BindingsBuilder<'a> {
                         (Some(k), _) => {
                             self.error(
                                 k.range(),
-                                ErrorKind::InvalidArgument,
-                                None,
+                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
                                 "Expected first item to be a string literal".to_owned(),
                             );
                             None
@@ -657,8 +645,7 @@ impl<'a> BindingsBuilder<'a> {
                         _ => {
                             self.error(
                                 item.range(),
-                                ErrorKind::InvalidArgument,
-                                None,
+                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
                                 "Expected a key-value pair".to_owned(),
                             );
                             None
@@ -668,8 +655,7 @@ impl<'a> BindingsBuilder<'a> {
                 _ => {
                     self.error(
                         class_name.range,
-                        ErrorKind::InvalidArgument,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
                         "Expected valid functional enum definition".to_owned(),
                     );
                     Vec::new()
@@ -737,8 +723,7 @@ impl<'a> BindingsBuilder<'a> {
             _ => {
                 self.error(
                     class_name.range,
-                    ErrorKind::InvalidArgument,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
                     "Expected valid functional named tuple definition".to_owned(),
                 );
                 Vec::new()
@@ -764,8 +749,7 @@ impl<'a> BindingsBuilder<'a> {
                 if n_defaults > n_members {
                     self.error(
                         kw.value.range(),
-                        ErrorKind::InvalidArgument,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
                         format!(
                             "Too many defaults values: expected up to {n_members}, got {n_defaults}",
                         ),
@@ -778,8 +762,7 @@ impl<'a> BindingsBuilder<'a> {
             } else {
                 self.error(
                     kw.value.range(),
-                    ErrorKind::InvalidArgument,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
                     "Unrecognized argument for typed dictionary definition".to_owned(),
                 );
             }
@@ -834,8 +817,7 @@ impl<'a> BindingsBuilder<'a> {
                 _ => {
                     self.error(
                         class_name.range,
-                        ErrorKind::InvalidArgument,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
                         "Expected valid functional named tuple definition".to_owned(),
                     );
                     Vec::new()
@@ -914,8 +896,7 @@ impl<'a> BindingsBuilder<'a> {
             } else {
                 self.error(
                     kw.value.range(),
-                    ErrorKind::InvalidArgument,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
                     "Unrecognized argument for typed dictionary definition".to_owned(),
                 );
             }
@@ -936,8 +917,7 @@ impl<'a> BindingsBuilder<'a> {
                         (Some(k), _) => {
                             self.error(
                                 k.range(),
-                                ErrorKind::InvalidArgument,
-                                None,
+                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
                                 "Expected first item to be a string literal".to_owned(),
                             );
                             None
@@ -945,8 +925,7 @@ impl<'a> BindingsBuilder<'a> {
                         _ => {
                             self.error(
                                 item.range(),
-                                ErrorKind::InvalidArgument,
-                                None,
+                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
                                 "Expected a key-value pair".to_owned(),
                             );
                             None
@@ -957,8 +936,7 @@ impl<'a> BindingsBuilder<'a> {
             _ => {
                 self.error(
                     class_name.range,
-                    ErrorKind::InvalidArgument,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
                     "Expected valid functional typed dictionary definition".to_owned(),
                 );
                 Vec::new()
@@ -984,16 +962,14 @@ impl<'a> BindingsBuilder<'a> {
             if x.value.to_str() != name.as_str() {
                 self.error(
                     arg.range(),
-                    ErrorKind::InvalidArgument,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
                     format!("Expected string literal \"{name}\""),
                 );
             }
         } else {
             self.error(
                 arg.range(),
-                ErrorKind::InvalidArgument,
-                None,
+                ErrorInfo::Kind(ErrorKind::InvalidArgument),
                 format!("Expected string literal \"{name}\""),
             );
         }

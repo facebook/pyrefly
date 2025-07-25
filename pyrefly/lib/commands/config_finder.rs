@@ -21,7 +21,7 @@ use crate::config::config::ProjectLayout;
 use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::config::finder::debug_log;
-use crate::module::bundled::BundledTypeshed;
+use crate::module::typeshed::BundledTypeshed;
 
 /// Create a standard `ConfigFinder`. The `configure` function is expected to set any additional options,
 /// then call `configure` and `validate`.
@@ -137,23 +137,21 @@ pub fn standard_config_finder(
 #[cfg(test)]
 mod tests {
 
-    use std::ffi::OsString;
     use std::ops::Deref as _;
 
-    use clap::Parser;
     use pretty_assertions::assert_eq;
+    use pyrefly_config::args::ConfigOverrideArgs;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
-    use crate::commands::check::Args;
     use crate::config::config::ConfigSource;
     use crate::config::environment::environment::PythonEnvironment;
 
     #[test]
     fn test_site_package_path_from_environment() {
-        let args = Args::parse_from(Vec::<OsString>::new().iter());
+        let args = ConfigOverrideArgs::default();
         let config = standard_config_finder(Arc::new(move |_, x| args.override_config(x)))
             .python_file(ModuleName::unknown(), &ModulePath::filesystem("".into()));
         let env = PythonEnvironment::get_default_interpreter_env();

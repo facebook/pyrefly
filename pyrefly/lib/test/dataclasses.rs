@@ -292,7 +292,7 @@ from dataclasses import dataclass
 class C:
     x: int
 C(x=0)  # OK
-C(0)  # E: Missing argument `x`  # E: Expected 0 positional arguments
+C(0)  # E: Expected argument `x` to be passed by name
 assert_type(C.__match_args__, tuple[()])
     "#,
 );
@@ -309,7 +309,7 @@ class C:
     y: str
 C(0, y="1")  # OK
 C(x=0, y="1")  # OK
-C(0, "1")  # E: Missing argument `y`  # E: Expected 1 positional argument
+C(0, "1")  # E: Expected argument `y` to be passed by name
 assert_type(C.__match_args__, tuple[Literal["x"]])
     "#,
 );
@@ -411,7 +411,7 @@ from dataclasses import dataclass, field
 @dataclass
 class C:
     x: int = field(kw_only=True)
-C(1)  # E: Missing argument `x`  # E: Expected 0 positional arguments
+C(1)  # E: Expected argument `x` to be passed by name
 C(x=1)  # OK
     "#,
 );
@@ -1184,5 +1184,38 @@ class Bad2:
     y: InitVar[str]
     z: InitVar[bytes]
     def __post_init__(self, *, y: str, z: bytes): ...  # E: `__post_init__` type
+    "#,
+);
+
+testcase!(
+    test_descriptor,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+class Desc:
+    def __get__(self, obj, classobj) -> int: ...
+    def __set__(self, obj, value: str) -> None: ...
+@dataclass
+class C:
+    x: Desc = Desc()
+c = C('')
+assert_type(c.x, int)
+c.x = 'cat'
+c.x = 42  # E: `Literal[42]` is not assignable to parameter `value` with type `str` in function `Desc.__set__`
+    "#,
+);
+
+testcase!(
+    test_kwonly_mix,
+    r#"
+from dataclasses import dataclass, field
+@dataclass(kw_only=True)
+class C1:
+    a: str = field(kw_only=False)
+    b: int = 0
+@dataclass
+class C2(C1):
+    c: float
+C2('', 0.2, b=3)
     "#,
 );

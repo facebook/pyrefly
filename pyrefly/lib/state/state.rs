@@ -34,6 +34,7 @@ use enum_iterator::Sequence;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
+use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
@@ -63,6 +64,7 @@ use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing::trace;
 use vec1::vec1;
 
 use crate::alt::answers::AnswerEntry;
@@ -84,17 +86,17 @@ use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
 use crate::config::config::ConfigFile;
+use crate::config::error_kind::ErrorKind;
 use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::error::collector::ErrorCollector;
-use crate::error::kind::ErrorKind;
-use crate::export::definitions::DocString;
+use crate::error::context::ErrorInfo;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
-use crate::module::bundled::BundledTypeshed;
-use crate::module::module_info::ModuleInfo;
+use crate::module::finder::find_import_prefixes;
+use crate::module::typeshed::BundledTypeshed;
 use crate::state::dirty::Dirty;
 use crate::state::epoch::Epoch;
 use crate::state::epoch::Epochs;
@@ -473,7 +475,7 @@ impl<'a> Transaction<'a> {
         self.data.state.config_finder.errors()
     }
 
-    pub fn get_module_info(&self, handle: &Handle) -> Option<ModuleInfo> {
+    pub fn get_module_info(&self, handle: &Handle) -> Option<Module> {
         self.get_load(handle).map(|x| x.module_info.dupe())
     }
 
@@ -576,10 +578,7 @@ impl<'a> Transaction<'a> {
 
     /// Create a handle for import `module` within the handle `handle`
     pub fn import_prefixes(&self, handle: &Handle, module: ModuleName) -> Vec<ModuleName> {
-        self.get_module(handle)
-            .config
-            .read()
-            .find_import_prefixes(module)
+        find_import_prefixes(&self.get_module(handle).config.read(), module)
     }
 
     fn clean(
@@ -781,12 +780,9 @@ impl<'a> Transaction<'a> {
                         && let Some(new) = writer.steps.solutions.as_ref()
                         && let Some(difference) = old.first_difference(new)
                     {
-                        debug!(
-                            "Exports changed for `{}`: {difference}",
-                            module_data.handle.module(),
-                        );
+                        debug!("Exports changed for `{}`", module_data.handle.module());
+                        trace!("Difference: {difference}");
                         changed = true;
-                        writer.epochs.changed = self.data.now;
                     }
                     if !require.keep_bindings() && !require.keep_answers() {
                         // From now on we can use the answers directly, so evict the bindings/answers.
@@ -917,7 +913,7 @@ impl<'a> Transaction<'a> {
         kind: ErrorKind,
     ) {
         let load = module_data.state.read().steps.load.dupe().unwrap();
-        load.errors.add(range, kind, None, vec1![msg]);
+        load.errors.add(range, ErrorInfo::Kind(kind), vec1![msg]);
     }
 
     fn lookup<'b>(&'b self, module_data: ArcId<ModuleDataMut>) -> TransactionHandle<'b> {
@@ -1002,7 +998,10 @@ impl<'a> Transaction<'a> {
         // Check; demand; check - the second check is guaranteed to work.
         for _ in 0..2 {
             let lock = module_data.state.read();
-            if let Some(solutions) = &lock.steps.solutions {
+            if let Some(solutions) = &lock.steps.solutions
+                && lock.epochs.checked == self.data.now
+                && lock.steps.last_step == Some(Step::Solutions)
+            {
                 return solutions.get_hashed_opt(key).duped();
             } else if let Some(answers) = &lock.steps.answers {
                 let load = lock.steps.load.dupe().unwrap();
@@ -1459,7 +1458,7 @@ impl<'a> Transaction<'a> {
         let mut lines = contents.lines().collect::<Vec<_>>();
         lines.sort_by_cached_key(|x| line_key(x));
         lines.reverse();
-        fs_anyhow::write(path, (lines.join("\n") + "\n").as_bytes())?;
+        fs_anyhow::write(path, lines.join("\n") + "\n")?;
 
         for (step, duration) in timings {
             info!("Step {step} took {duration:.3} seconds");
@@ -1473,9 +1472,9 @@ impl<'a> Transaction<'a> {
             .exports(&self.lookup(module_data))
     }
 
-    pub fn get_module_docstring(&self, handle: &Handle) -> Option<DocString> {
+    pub fn get_module_docstring_range(&self, handle: &Handle) -> Option<TextRange> {
         let module_data = self.get_module(handle);
-        self.lookup_export(&module_data).docstring().cloned()
+        self.lookup_export(&module_data).docstring_range()
     }
 }
 
@@ -1723,6 +1722,7 @@ impl State {
     }
 
     pub fn commit_transaction(&self, transaction: CommittingTransaction) {
+        debug!("Committing transaction");
         let CommittingTransaction {
             transaction:
                 Transaction {

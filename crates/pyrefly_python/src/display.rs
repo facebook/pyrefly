@@ -21,18 +21,18 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
-use crate::module_info::ModuleInfo;
+use crate::module::Module;
 
 // Special module-specific types
 
-impl ModuleInfo {
-    pub fn display<'a>(&'a self, x: &'a impl DisplayWith<ModuleInfo>) -> impl Display + 'a {
+impl Module {
+    pub fn display<'a>(&'a self, x: &'a impl DisplayWith<Module>) -> impl Display + 'a {
         x.display_with(self)
     }
 }
 
-impl DisplayWith<ModuleInfo> for Expr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &ModuleInfo) -> fmt::Result {
+impl DisplayWith<Module> for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &Module) -> fmt::Result {
         // We have a special case for NoneLiteral because we might manufacture these
         // during type checking (e.g. in the return position)
         if let Expr::NoneLiteral(_) = self {
@@ -43,50 +43,50 @@ impl DisplayWith<ModuleInfo> for Expr {
     }
 }
 
-impl DisplayWith<ModuleInfo> for ExprYield {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &ModuleInfo) -> fmt::Result {
+impl DisplayWith<Module> for ExprYield {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &Module) -> fmt::Result {
         write!(f, "{}", m.code_at(self.range()))
     }
 }
 
-impl DisplayWith<ModuleInfo> for ExprYieldFrom {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &ModuleInfo) -> fmt::Result {
+impl DisplayWith<Module> for ExprYieldFrom {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &Module) -> fmt::Result {
         write!(f, "{}", m.code_at(self.range()))
     }
 }
 
-impl DisplayWith<ModuleInfo> for ExprCall {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &ModuleInfo) -> fmt::Result {
+impl DisplayWith<Module> for ExprCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &Module) -> fmt::Result {
         write!(f, "{}", m.code_at(self.range()))
     }
 }
 
-impl DisplayWith<ModuleInfo> for Arguments {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &ModuleInfo) -> fmt::Result {
+impl DisplayWith<Module> for Arguments {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &Module) -> fmt::Result {
         write!(f, "{}", m.code_at(self.range()))
     }
 }
 
-impl DisplayWith<ModuleInfo> for StmtAugAssign {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &ModuleInfo) -> fmt::Result {
+impl DisplayWith<Module> for StmtAugAssign {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &Module) -> fmt::Result {
         write!(f, "{}", m.code_at(self.range()))
     }
 }
 
-impl DisplayWith<ModuleInfo> for Stmt {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &ModuleInfo) -> fmt::Result {
+impl DisplayWith<Module> for Stmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &Module) -> fmt::Result {
         write!(f, "{}", m.code_at(self.range()))
     }
 }
 
-impl DisplayWith<ModuleInfo> for TextRange {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &ModuleInfo) -> fmt::Result {
+impl DisplayWith<Module> for TextRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &Module) -> fmt::Result {
         write!(f, "{}", m.display_range(*self))
     }
 }
 
-impl DisplayWith<ModuleInfo> for TextSize {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &ModuleInfo) -> fmt::Result {
+impl DisplayWith<Module> for TextSize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &Module) -> fmt::Result {
         write!(f, "{}", m.display_pos(*self))
     }
 }

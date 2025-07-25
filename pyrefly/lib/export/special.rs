@@ -41,6 +41,7 @@ pub enum SpecialExport {
     NoTypeCheck,
     Overload,
     AbstractMethod,
+    SelfType,
 }
 
 impl SpecialExport {
@@ -58,6 +59,7 @@ impl SpecialExport {
             "TypedDict" => Some(Self::TypedDict),
             "namedtuple" => Some(Self::CollectionsNamedTuple),
             "NamedTuple" => Some(Self::TypingNamedTuple),
+            "Self" => Some(Self::SelfType),
             "assert_type" => Some(Self::AssertType),
             "NewType" => Some(Self::NewType),
             "Union" => Some(Self::Union),
@@ -93,6 +95,7 @@ impl SpecialExport {
             | Self::AssertType
             | Self::NoTypeCheck
             | Self::Overload
+            | Self::SelfType
             | Self::Cast => {
                 matches!(m.as_str(), "typing" | "typing_extensions")
             }

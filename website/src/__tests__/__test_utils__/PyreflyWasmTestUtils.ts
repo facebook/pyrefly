@@ -43,5 +43,5 @@ export function findError(
     errors: ReadonlyArray<PyreflyErrorMessage>,
     errorText: string
 ): PyreflyErrorMessage | undefined {
-    return errors.find((error) => error.message.includes(errorText));
+    return errors.find((error) => error.message_header.includes(errorText));
 }

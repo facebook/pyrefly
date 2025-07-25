@@ -16,6 +16,7 @@ use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::ordered_map::OrderedMap;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
@@ -23,12 +24,13 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::solve::Iterable;
+use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::display::function_suffix;
-use crate::error::kind::ErrorKind;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncId;
 use crate::types::callable::Param;
@@ -58,6 +60,12 @@ impl CallWithTypes {
         errors: &ErrorCollector,
     ) -> TypeOrExpr<'a> {
         match x {
+            TypeOrExpr::Expr(e @ (Expr::Dict(_) | Expr::List(_) | Expr::Set(_))) => {
+                // Hack: don't flatten mutable builtin containers into types before calling a
+                // function, as we know these containers often need to be contextually typed using
+                // the function's parameter types.
+                TypeOrExpr::Expr(e)
+            }
             TypeOrExpr::Expr(e) => {
                 let t = solver.expr_infer(e, errors);
                 TypeOrExpr::Type(self.0.push(t), e.range())
@@ -89,15 +97,6 @@ impl CallWithTypes {
             arg: x.arg,
             value: self.type_or_expr(x.value, solver, errors),
         }
-    }
-
-    pub fn opt_call_arg<'a, 'b: 'a, Ans: LookupAnswer>(
-        &'a self,
-        x: Option<&CallArg<'b>>,
-        solver: &AnswersSolver<Ans>,
-        errors: &ErrorCollector,
-    ) -> Option<CallArg<'a>> {
-        x.map(|x| self.call_arg(x, solver, errors))
     }
 
     pub fn vec_call_arg<'a, 'b: 'a, Ans: LookupAnswer>(
@@ -410,12 +409,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                kind,
-                context,
+                ErrorInfo::new(kind, context),
                 format!(
                     "{}{}",
                     msg,
-                    function_suffix(callable_name.as_ref(), self.module_info().name())
+                    function_suffix(callable_name.as_ref(), self.module().name())
                 ),
             )
         };
@@ -424,7 +422,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // so that we can easily peek at and pop from the end.
         let mut rparams = params.items().iter().cloned().rev().collect::<Vec<_>>();
         let mut num_positional_params = 0;
-        let mut num_extra_positional_args = 0;
+        let mut extra_positional_args = Vec::new();
         let mut seen_names = SmallMap::new();
         let mut extra_arg_pos = None;
         let mut unpacked_vararg = None;
@@ -521,7 +519,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None => {
                         arg_pre.post_infer(self, arg_errors);
                         if !arg_pre.is_star() {
-                            num_extra_positional_args += 1;
+                            extra_positional_args.push(arg.range());
                         }
                         if extra_arg_pos.is_none() && !arg_pre.is_star() {
                             extra_arg_pos = Some(arg.range());
@@ -595,32 +593,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 },
             );
         }
-        if let Some(arg_range) = extra_arg_pos {
-            let (expected, actual) = if self_arg.is_some() && num_positional_params == 0 {
-                (
-                    "0 positional arguments".to_owned(),
-                    format!("{num_extra_positional_args} (including implicit `self`)"),
-                )
-            } else {
-                let num_positional_params = num_positional_params - (self_arg.is_some() as usize);
-                (
-                    count(num_positional_params, "positional argument"),
-                    (num_positional_params + num_extra_positional_args).to_string(),
-                )
-            };
-            error(
-                call_errors,
-                arg_range,
-                ErrorKind::BadArgumentCount,
-                format!("Expected {expected}, got {actual}"),
-            );
-        }
         // Missing positional-only arguments, split by whether the corresponding parameters
         // in the callable have names. E.g., functions declared with `def` have named posonly
         // parameters and `typing.Callable`s have unnamed ones.
         let mut missing_unnamed_posonly = 0;
         let mut missing_named_posonly = SmallSet::new();
-        let mut kwparams = SmallMap::new();
+        let mut kwparams = OrderedMap::new();
         let mut kwargs = None;
         let mut kwargs_is_unpack = false;
         loop {
@@ -652,9 +630,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Param::Kwargs(_, Type::Unpack(box Type::TypedDict(typed_dict))) => {
                     self.typed_dict_fields(&typed_dict)
-                        .into_iter_hashed()
+                        .into_iter()
                         .for_each(|(name, field)| {
-                            kwparams.insert_hashed(name, (field.ty, field.required));
+                            kwparams.insert(name, (field.ty, field.required));
                         });
                     kwargs_is_unpack = true;
                 }
@@ -845,15 +823,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             error(call_errors, range, ErrorKind::BadArgumentCount, msg);
         }
+        let missing_self_param = self_arg.is_some() && num_positional_params == 0;
+        // We'll attempt to match extra positional arguments to kw-only parameters for better error messages.
+        let mut extra_posargs_iter = extra_positional_args.iter();
+        if missing_self_param {
+            // The first extra arg is `self`, so it shouldn't be matched to a kw-only parameter.
+            extra_posargs_iter.next();
+        }
+        let mut extra_posargs_matched = 0;
         for (name, (want, required)) in kwparams.iter() {
             if !seen_names.contains_key(name) {
                 if splat_kwargs.is_empty() && *required {
-                    error(
-                        call_errors,
-                        range,
-                        ErrorKind::MissingArgument,
-                        format!("Missing argument `{name}`"),
-                    );
+                    if let Some(arg_range) = extra_posargs_iter.next() {
+                        error(
+                            call_errors,
+                            *arg_range,
+                            ErrorKind::UnexpectedPositionalArgument,
+                            format!("Expected argument `{name}` to be passed by name"),
+                        );
+                        extra_posargs_matched += 1;
+                    } else {
+                        error(
+                            call_errors,
+                            range,
+                            ErrorKind::MissingArgument,
+                            format!("Missing argument `{name}`"),
+                        );
+                    }
                 }
                 for (ty, range) in &splat_kwargs {
                     self.check_type(want, ty, *range, call_errors, &|| TypeCheckContext {
@@ -862,6 +858,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     });
                 }
             }
+        }
+        let num_extra_positional_args = extra_positional_args.len();
+        if let Some(arg_range) = extra_arg_pos
+            // This error is redundant if we've already reported an error for every individual arg.
+            && extra_posargs_matched < num_extra_positional_args
+        {
+            let (expected, actual) = if missing_self_param {
+                (
+                    "0 positional arguments".to_owned(),
+                    format!("{num_extra_positional_args} (including implicit `self`)"),
+                )
+            } else {
+                let num_positional_params = num_positional_params - (self_arg.is_some() as usize);
+                (
+                    count(num_positional_params, "positional argument"),
+                    (num_positional_params + num_extra_positional_args).to_string(),
+                )
+            };
+            error(
+                call_errors,
+                arg_range,
+                ErrorKind::BadArgumentCount,
+                format!("Expected {expected}, got {actual}"),
+            );
         }
     }
 
@@ -876,14 +896,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         callable: Callable,
         callable_name: Option<FuncId>,
-        self_arg: Option<CallArg>,
+        self_obj: Option<Type>,
         args: &[CallArg],
         keywords: &[CallKeyword],
         range: TextRange,
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
+        _hint: Option<&Type>,
     ) -> Type {
+        let self_arg = self_obj.as_ref().map(|ty| CallArg::ty(ty, range));
         match callable.params {
             Params::List(params) => {
                 self.callable_infer_params(
@@ -945,8 +967,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 call_errors,
                                 range,
-                                ErrorKind::InvalidParamSpec,
-                                context,
+                                ErrorInfo::new(ErrorKind::InvalidParamSpec, context),
                                 format!(
                                     "Expected *-unpacked {}.args and **-unpacked {}.kwargs",
                                     q.name(),
@@ -974,8 +995,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             call_errors,
                             range,
-                            ErrorKind::InvalidParamSpec,
-                            context,
+                            ErrorInfo::new(ErrorKind::InvalidParamSpec, context),
                             format!("Unexpected ParamSpec type: `{}`", self.for_display(p)),
                         );
                     }

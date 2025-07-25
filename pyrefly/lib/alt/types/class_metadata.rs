@@ -24,14 +24,16 @@ use vec1::Vec1;
 use vec1::vec1;
 
 use crate::alt::class::class_field::ClassField;
+use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::kind::ErrorKind;
+use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::display::ClassDisplayContext;
 use crate::types::keywords::DataclassKeywords;
 use crate::types::keywords::DataclassTransformKeywords;
 use crate::types::stdlib::Stdlib;
+use crate::types::tuple::Tuple;
 use crate::types::types::CalleeKind;
 use crate::types::types::Type;
 
@@ -44,6 +46,7 @@ pub struct ClassMetadata {
     enum_metadata: Option<EnumMetadata>,
     protocol_metadata: Option<ProtocolMetadata>,
     dataclass_metadata: Option<DataclassMetadata>,
+    tuple_base: Option<Tuple>,
     bases_with_metadata: Vec<(ClassType, Arc<ClassMetadata>)>,
     has_base_any: bool,
     is_new_type: bool,
@@ -80,6 +83,7 @@ impl ClassMetadata {
         enum_metadata: Option<EnumMetadata>,
         protocol_metadata: Option<ProtocolMetadata>,
         dataclass_metadata: Option<DataclassMetadata>,
+        tuple_base: Option<Tuple>,
         has_base_any: bool,
         is_new_type: bool,
         is_final: bool,
@@ -95,6 +99,7 @@ impl ClassMetadata {
             enum_metadata,
             protocol_metadata,
             dataclass_metadata,
+            tuple_base,
             bases_with_metadata,
             has_base_any,
             is_new_type,
@@ -114,6 +119,7 @@ impl ClassMetadata {
             enum_metadata: None,
             protocol_metadata: None,
             dataclass_metadata: None,
+            tuple_base: None,
             bases_with_metadata: Vec::new(),
             has_base_any: false,
             is_new_type: false,
@@ -155,6 +161,10 @@ impl ClassMetadata {
 
     pub fn named_tuple_metadata(&self) -> Option<&NamedTupleMetadata> {
         self.named_tuple_metadata.as_ref()
+    }
+
+    pub fn tuple_base(&self) -> Option<&Tuple> {
+        self.tuple_base.as_ref()
     }
 
     pub fn enum_metadata(&self) -> Option<&EnumMetadata> {
@@ -502,8 +512,7 @@ impl Linearization {
                     let ctx = ClassDisplayContext::new(&[cls, base]);
                     errors.add(
                         cls.range(),
-                        ErrorKind::InvalidInheritance,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                         vec1![format!(
                             "Class `{}` inheriting from `{}` creates a cycle",
                             ctx.display(cls),
@@ -587,8 +596,7 @@ impl Linearization {
                 let ctx = ClassDisplayContext::new(&[cls, first_candidate]);
                 errors.add(
                     cls.range(),
-                    ErrorKind::InvalidInheritance,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                     vec1![format!(
                         "Class `{}` has a nonlinearizable inheritance chain detected at `{}`",
                         ctx.display(cls),

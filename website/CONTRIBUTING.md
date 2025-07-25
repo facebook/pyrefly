@@ -7,11 +7,11 @@ This file shows details on how to develop the Website locally, as well as deploy
 
 ### Prerequisites
 
--   Website development isn't currently supported on Windows, please use Linux or Mac or WSL (Windows Subsystem for Linux) for development.
--   Ensure you have clang installed:
-    -   For mac: `brew install llvm` ([source](https://github.com/briansmith/ring/issues/1824))
-    -   For CentOS: `sudo dnf install clang`
--   Install Mercurial: `sudo apt install mercurial`
+- Website development isn't currently supported on Windows, please use Linux or Mac or WSL (Windows Subsystem for Linux) for development.
+- Ensure you have clang installed:
+    - For mac: `brew install llvm` ([source](https://github.com/briansmith/ring/issues/1824))
+    - For CentOS: `sudo dnf install clang`
+- Install Mercurial: `sudo apt install mercurial`
 
 Install dependencies:
 

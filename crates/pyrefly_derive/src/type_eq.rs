@@ -42,7 +42,7 @@ fn generics(
             }
         }
     }
-    let before = quote_spanned! { generics.span() => < #(#ts: crate::types::equality::TypeEq),* > };
+    let before = quote_spanned! { generics.span() => < #(#ts: crate::equality::TypeEq),* > };
     let after = quote_spanned! { generics.span() => < #(#ts),* > };
     Ok((before, after))
 }
@@ -50,8 +50,8 @@ fn generics(
 fn derive_type_eq_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let name = &input.ident;
     let (generics_before, generics_after) = generics(&input.generics)?;
-    let type_eq = quote! { crate::types::equality::TypeEq };
-    let type_eq_ctx = quote! { crate::types::equality::TypeEqCtx };
+    let type_eq = quote! { crate::equality::TypeEq };
+    let type_eq_ctx = quote! { crate::equality::TypeEqCtx };
     let body = match &input.data {
         Data::Struct(data_struct) => match &data_struct.fields {
             Fields::Named(fields_named) => {

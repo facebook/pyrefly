@@ -12,6 +12,7 @@ use std::io;
 use std::io::Write;
 
 use itertools::Itertools;
+use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::number_thousands;
 use pyrefly_util::lined_buffer::DisplayRange;
@@ -27,13 +28,12 @@ use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 use yansi::Paint;
 
-use crate::error::kind::ErrorKind;
-use crate::error::kind::Severity;
-use crate::module::module_info::ModuleInfo;
+use crate::config::error_kind::ErrorKind;
+use crate::config::error_kind::Severity;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Error {
-    module_info: ModuleInfo,
+    module: Module,
     range: TextRange,
     display_range: DisplayRange,
     error_kind: ErrorKind,
@@ -119,7 +119,7 @@ impl Error {
 
         // Warning: The SourceRange is char indexed, while the snippet is byte indexed.
         //          Be careful in the conversion.
-        let source = self.module_info.lined_buffer().content_in_line_range(
+        let source = self.module.lined_buffer().content_in_line_range(
             self.display_range.start.line,
             cmp::min(
                 LineNumber::from_zero_indexed(
@@ -129,7 +129,7 @@ impl Error {
             ),
         );
         let line_start = self
-            .module_info
+            .module
             .lined_buffer()
             .line_start(self.display_range.start.line);
 
@@ -191,13 +191,8 @@ pub fn print_error_counts(errors: &[Error], limit: usize) {
 }
 
 impl Error {
-    pub fn new(
-        module_info: ModuleInfo,
-        range: TextRange,
-        msg: Vec1<String>,
-        error_kind: ErrorKind,
-    ) -> Self {
-        let display_range = module_info.display_range(range);
+    pub fn new(module: Module, range: TextRange, msg: Vec1<String>, error_kind: ErrorKind) -> Self {
+        let display_range = module.display_range(range);
         let msg_has_details = msg.len() > 1;
         let mut msg = msg.into_iter();
         let msg_header = msg.next().unwrap().into_boxed_str();
@@ -207,7 +202,7 @@ impl Error {
             None
         };
         Self {
-            module_info,
+            module,
             range,
             display_range,
             error_kind,
@@ -222,15 +217,19 @@ impl Error {
     }
 
     pub fn lined_buffer(&self) -> &LinedBuffer {
-        self.module_info.lined_buffer()
+        self.module.lined_buffer()
     }
 
     pub fn path(&self) -> &ModulePath {
-        self.module_info.path()
+        self.module.path()
     }
 
     pub fn msg_header(&self) -> &str {
         &self.msg_header
+    }
+
+    pub fn msg_details(&self) -> Option<&str> {
+        self.msg_details.as_deref()
     }
 
     pub fn msg(&self) -> String {
@@ -242,7 +241,7 @@ impl Error {
     }
 
     pub fn is_ignored(&self, permissive_ignores: bool) -> bool {
-        self.module_info.is_ignored(
+        self.module.is_ignored(
             &self.display_range,
             self.error_kind.to_name(),
             permissive_ignores,
@@ -268,7 +267,7 @@ mod tests {
 
     #[test]
     fn test_error_render() {
-        let module_info = ModuleInfo::new(
+        let module_info = Module::new(
             ModuleName::from_str("test"),
             ModulePath::filesystem(PathBuf::from("test.py")),
             Arc::new("def f(x: int) -> str:\n    return x".to_owned()),
@@ -308,7 +307,7 @@ mod tests {
     fn test_error_too_long() {
         let contents = format!("Start\n{}\nEnd", "X\n".repeat(1000));
 
-        let module_info = ModuleInfo::new(
+        let module_info = Module::new(
             ModuleName::from_str("test"),
             ModulePath::filesystem(PathBuf::from("test.py")),
             Arc::new(contents.clone()),

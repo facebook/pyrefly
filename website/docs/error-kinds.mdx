@@ -153,6 +153,16 @@ Ex = Enum("Ex", [("Red", 1), ("Blue", 2), ("Red", 3)])  # Duplicate field `Red` 
 
 However, it is best practice to use the class syntax if possible, which doesn't treat duplicate names as an error.
 
+## bad-context-manager
+
+This error occurs when a type that cannot be used as a context manager appears in a `with` statement.
+
+```python
+class A:
+    def __enter__(self): ...
+with A(): ...  # `A` is missing an `__exit__` method!
+```
+
 ## bad-function-definition
 
 Like `bad-class-definition`, this error kind is uncommon because other error kinds are used for more specific issues.
@@ -314,6 +324,16 @@ def f(): ...
 f()  # deprecated!
 ```
 
+## implicit-import
+
+A module exists, but was not imported. At runtime, if something has made this import
+before your code, it will work. But relies on whatever did the import to continue doing it.
+
+```python
+import importlib
+importlib.util.find_spec("os")  # error, `importlib.util` was not imported
+```
+
 ## implicitly-defined-attribute
 
 An attribute was implicitly defined by assignment to `self` in a method that we
@@ -457,6 +477,19 @@ def f(x, *args: P1.args, **kwargs: P2.kwargs) -> None:
 ```
 
 Here, `P1.args` and `P2.kwargs` can't be used together; `*args` and `**kwargs` must come from the same `ParamSpec`.
+
+## invalid-self-type
+
+This error occurs when `Self` is used in a context Pyrefly does not currently support.
+
+For example, Pyrefly does not currently allow `Self` for `TypedDict`, so the
+following code would error:
+```python
+from typing import *
+
+class TD(TypedDict):
+    x: Option[Self]
+```
 
 ## invalid-super-call
 
@@ -702,6 +735,22 @@ x = Ex()
 x.meaning = 0
 ```
 
+## redundant-condition
+
+This error is used to indicate a type that's equivalent to True or False is used as a boolean condition (e.g. an uncalled function)
+
+```python
+def f() -> bool:
+  ...
+
+# This will throw error, as it's likely that the function needs to be invoked.
+if f:
+  ...
+# This will throw error, as it's equivalent to `if True`.
+if "abc":
+  ...
+```
+
 ## reveal-type
 
 Pyrefly uses this error to communicate the output of the [`reveal_type`](https://typing.python.org/en/latest/spec/directives.html#reveal-type) function.
@@ -758,6 +807,17 @@ def two_args(a: int, b: int) -> int:
 two_args(a=1, b=2, c=3)
 ```
 
+## unexpected-positional-argument
+
+A positional argument was passed for a keyword-only parameter.
+
+```python
+def takes_kwonly(*, x: int) -> int:
+  ...
+
+takes_kwonly(1)  # should be `takes_kwonly(x=1)`!
+```
+
 ## unknown-name
 
 `unknown-name` occurs when attempting to load a name from another scope, but the name cannot be found.
@@ -772,12 +832,9 @@ def where() -> None:
 
 This error indicates that pyrefly does not currently support a typing feature.
 
-## unsupported-operand
+## unsupported-operation
 
 This error arises when attempting to perform an operation between values of two incompatible types.
-Since many Python operators are actually syntactic sugar for function calls, many operations will result in [`bad-argument-type`](#bad-argument-type) errors.
-
-An exception is the `in` operator, which fails when looking for a value in something that does not support `in`:
 
 ```python
 if "hello" in 1:  # int doesn't support `in`!

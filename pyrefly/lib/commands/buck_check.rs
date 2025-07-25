@@ -17,18 +17,17 @@ use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
-use pyrefly_util::args::clap_env;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::prelude::VecExt;
 use serde::Deserialize;
 use tracing::info;
 
-use crate::commands::run::CommandExitStatus;
+use crate::buck::source_db::BuckSourceDatabase;
+use crate::commands::util::CommandExitStatus;
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
 use crate::error::legacy::LegacyErrors;
-use crate::module::source_db::BuckSourceDatabase;
 use crate::state::handle::Handle;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -36,12 +35,12 @@ use crate::state::state::State;
 /// Arguments for Buck-powered type checking.
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Parser)]
-pub struct Args {
+pub struct BuckCheckArgs {
     /// Path to input JSON manifest.
     input_path: PathBuf,
 
     /// Path to output JSON file containing Pyrefly Pyrefly type check results.
-    #[arg(long = "output", short = 'o', env = clap_env("OUTPUT_PATH"), value_name = "FILE")]
+    #[arg(long = "output", short = 'o', value_name = "FILE")]
     output_path: Option<PathBuf>,
 }
 
@@ -107,7 +106,7 @@ fn write_output(errors: &[Error], path: Option<&Path>) -> anyhow::Result<()> {
     }
 }
 
-impl Args {
+impl BuckCheckArgs {
     pub fn run(self) -> anyhow::Result<CommandExitStatus> {
         let input_file = read_input_file(self.input_path.as_path())?;
         let python_version = PythonVersion::from_str(&input_file.py_version)?;

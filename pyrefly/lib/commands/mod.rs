@@ -5,18 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+pub mod all;
 pub mod autotype;
 pub mod buck_check;
 pub mod check;
 pub mod config_finder;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod config_migration;
-pub mod globs_and_config_getter;
+pub mod dump_config;
+pub mod files;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod init;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lsp;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod run;
-pub mod suppress;
 pub mod util;

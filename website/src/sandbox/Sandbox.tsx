@@ -660,12 +660,15 @@ function mapPyreflyErrorsToMarkerData(
     errors: ReadonlyArray<PyreflyErrorMessage>
 ): editor.IMarkerData[] {
     return errors.map((error) => {
+        const message = error.message_details
+            ? `${error.message_header}\n${error.message_details}`
+            : error.message_header;
         return {
             startLineNumber: error.startLineNumber,
             startColumn: error.startColumn,
             endLineNumber: error.endLineNumber,
             endColumn: error.endColumn,
-            message: error.message,
+            message: message,
             severity: error.severity,
         };
     });

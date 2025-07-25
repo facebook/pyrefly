@@ -19,7 +19,6 @@ use anyhow::Context;
 use bstr::ByteSlice;
 use glob::Pattern;
 use itertools::Itertools;
-use path_absolutize::Absolutize;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de;
@@ -27,6 +26,7 @@ use serde::de::Visitor;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
 
+use crate::absolutize::Absolutize as _;
 use crate::fs_anyhow;
 use crate::prelude::SliceExt;
 use crate::prelude::VecExt;
@@ -35,8 +35,8 @@ use crate::prelude::VecExt;
 
 /// A glob pattern for matching files.
 ///
-/// Only matches Python files (.py, .pyi) and automatically excludes:
-/// - Files that don't have .py or .pyi extensions
+/// Only matches Python files (.py, .pyi, .pyw) and automatically excludes:
+/// - Files that don't have .py, .pyi, or .pyw extensions
 /// - Files whose names start with '.' (dot files)
 pub struct Glob(PathBuf);
 
@@ -70,11 +70,7 @@ impl Glob {
     }
 
     fn pattern_relative_to_root(root: &Path, pattern: &Path) -> PathBuf {
-        // absolutize_from always returns `Ok()`
-        pattern
-            .absolutize_from(Pattern::escape(root.to_string_lossy().as_ref()))
-            .unwrap()
-            .into_owned()
+        pattern.absolutize_from(Path::new(&Pattern::escape(root.to_string_lossy().as_ref())))
     }
 
     fn get_glob_root(&self) -> PathBuf {
@@ -103,7 +99,7 @@ impl Glob {
     }
 
     fn is_python_extension(ext: Option<&OsStr>) -> bool {
-        ext.is_some_and(|e| e == "py" || e == "pyi")
+        ext.is_some_and(|e| e == "py" || e == "pyi" || e == "pyw")
     }
 
     /// Returns true if the given file should be included in results.
@@ -277,7 +273,11 @@ impl Globs {
 
     /// Given a glob pattern, return the directories that can contain files that match the pattern.
     pub fn roots(&self) -> Vec<PathBuf> {
-        self.0.map(|s| s.get_glob_root())
+        let mut res = self.0.map(|s| s.get_glob_root());
+        res.sort();
+        res.dedup();
+        // We could dedup more in future, if there is `/foo` and `/foo/bar` then the second is redundant.
+        res
     }
 
     /// Returns true if the given file matches any of the contained globs.
@@ -318,7 +318,7 @@ impl Display for Globs {
 const USE_EDEN: bool = cfg!(fbcode_build);
 
 impl Globs {
-    pub fn files_eden(&self) -> anyhow::Result<Vec<PathBuf>> {
+    pub fn files_eden(&self, filter: &Globs) -> anyhow::Result<Vec<PathBuf>> {
         fn hg_root() -> anyhow::Result<PathBuf> {
             let output = Command::new("hg")
                 .arg("root")
@@ -364,12 +364,14 @@ impl Globs {
 
         let root = hg_root()?;
         let globs = self.0.try_map(|g| g.0.strip_prefix(&root))?;
-        eden_glob(root, globs)
+        let mut result = eden_glob(root, globs)?;
+        result.retain(|p| filter.matches(p).is_ok_and(|matches| !matches));
+        Ok(result)
     }
 
     fn filtered_files(&self, filter: &Globs) -> anyhow::Result<Vec<PathBuf>> {
         if USE_EDEN {
-            match self.files_eden() {
+            match self.files_eden(filter) {
                 Ok(files) if files.is_empty() => {
                     return Err(anyhow::anyhow!(
                         "No Python files matched pattern(s) {}",
@@ -675,7 +677,7 @@ mod tests {
     fn test_globs_match_file() {
         fn glob_matches(pattern: &str, equal: bool) {
             let root = std::env::current_dir().unwrap();
-            let root = root.absolutize().unwrap();
+            let root = root.absolutize();
             let escaped_root = Pattern::escape(root.to_string_lossy().as_ref());
             let escaped_root = Path::new(&escaped_root);
 

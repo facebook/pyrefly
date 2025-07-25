@@ -4,7 +4,7 @@
 
 ```scrut {output_stream: stderr}
 $ echo "" > $TMPDIR/empty.py && $PYREFLY check --python-version 3.13.0 $TMPDIR/empty.py -a
- INFO errors shown: 0* (glob)
+ INFO 0 errors* (glob)
 [0]
 ```
 
@@ -12,7 +12,7 @@ $ echo "" > $TMPDIR/empty.py && $PYREFLY check --python-version 3.13.0 $TMPDIR/e
 
 ```scrut {output_stream: stderr}
 $ echo -e "from typing import reveal_type\nreveal_type(1)" > $TMPDIR/empty.py && $PYREFLY check --python-version 3.13.0 $TMPDIR/empty.py -a
- INFO errors shown: 0* (glob)
+ INFO 0 errors* (glob)
 [0]
 ```
 
@@ -20,7 +20,7 @@ $ echo -e "from typing import reveal_type\nreveal_type(1)" > $TMPDIR/empty.py &&
 
 ```scrut {output_stream: stderr}
 $ $PYREFLY check $TEST_PY
- INFO errors shown: 0* (glob)
+ INFO 0 errors
 [0]
 ```
 
@@ -71,6 +71,6 @@ $ python3 -m venv $TMPDIR/venv && \
 > echo "x = 1" > $site_packages/third_party/test2.py && \
 > touch $TMPDIR/pyrefly.toml && \
 > $PYREFLY check $TMPDIR/test.py
- INFO errors shown: 0* (glob)
+ INFO 0 errors* (glob)
 [0]
 ```

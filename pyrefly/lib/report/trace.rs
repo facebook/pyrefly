@@ -54,8 +54,8 @@ fn trace_module(transaction: &Transaction, handle: &Handle) -> Option<ModuleOutp
             definitions.insert(
                 info.display_range(x.range()).to_string(),
                 (
-                    def.module_info.path().to_string(),
-                    def.module_info.display_range(def.range).to_string(),
+                    def.module.path().to_string(),
+                    def.module.display_range(def.range).to_string(),
                 ),
             );
         }

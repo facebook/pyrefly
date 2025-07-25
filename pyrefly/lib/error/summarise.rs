@@ -12,8 +12,8 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display;
 use starlark_map::small_map::SmallMap;
 
+use crate::config::error_kind::ErrorKind;
 use crate::error::error::Error;
-use crate::error::kind::ErrorKind;
 
 type ErrorCounts = SmallMap<ErrorKind, usize>;
 

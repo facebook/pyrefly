@@ -16,5 +16,6 @@ pub mod new_type;
 pub mod targs;
 pub mod total_ordering;
 pub mod tparams;
+pub mod tuple;
 pub mod typed_dict;
 pub mod variance_inference;

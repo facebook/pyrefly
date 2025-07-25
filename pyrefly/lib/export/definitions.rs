@@ -6,12 +6,13 @@
  */
 
 use std::cmp;
-use std::sync::Arc;
 
 use pyrefly_python::ast::Ast;
+use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::visit::Visit;
@@ -31,7 +32,6 @@ use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
-use crate::module::short_identifier::ShortIdentifier;
 use crate::types::globals::Global;
 
 /// How a name is defined. If a name is defined outside of this
@@ -67,7 +67,7 @@ pub struct Definition {
     pub count: usize,
     /// If the first statement in a definition (class, function) is a string literal, PEP 257 convention
     /// states that is is the docstring.
-    pub docstring: Option<DocString>,
+    pub docstring_range: Option<TextRange>,
 }
 
 /// Find the definitions available in a scope. Does not traverse inside classes/functions,
@@ -180,7 +180,7 @@ impl Definitions {
                     style: DefinitionStyle::Global,
                     annot: None,
                     count: 1,
-                    docstring: None,
+                    docstring_range: None,
                 },
             );
         }
@@ -222,25 +222,6 @@ impl Definitions {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct DocString(Arc<String>);
-impl DocString {
-    pub fn from_stmts(xs: &[Stmt]) -> Option<Self> {
-        xs.first().and_then(|stmt| {
-            if let Stmt::Expr(expr_stmt) = stmt
-                && let ruff_python_ast::Expr::StringLiteral(string_lit) = &*expr_stmt.value
-            {
-                return Some(DocString(Arc::new(string_lit.value.to_string())));
-            }
-            None
-        })
-    }
-
-    pub fn as_string(&self) -> String {
-        self.0.to_string()
-    }
-}
-
 impl<'a> DefinitionsBuilder<'a> {
     fn stmts(&mut self, xs: &[Stmt]) {
         for x in xs {
@@ -270,7 +251,7 @@ impl<'a> DefinitionsBuilder<'a> {
                     style,
                     annot,
                     count: 1,
-                    docstring: body.and_then(DocString::from_stmts),
+                    docstring_range: body.and_then(Docstring::range_from_stmts),
                 });
             }
         }

@@ -18,7 +18,7 @@ zstd = { version = "0.13" }
 dupe = "0.9.1"
 pyrefly = { path = "../pyrefly" }
 serde = { version = "1.0", features = ["derive"] }
-serde-wasm-bindgen = "0.5"
+serde-wasm-bindgen = "0.6.5"
 starlark_map = "0.13.0"
 wasm-bindgen = "0.2.95"
 getrandom = { version = "0.2.16", default-features = false, features = ["js"] }

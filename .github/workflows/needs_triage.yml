@@ -1,0 +1,130 @@
+name: Label issues and PRs that need triage
+
+on:
+  schedule:
+    # Run once every weekday at midnight
+    - cron: '0 0 * * 1-5'
+  workflow_dispatch:  # Allow manual triggering
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  label-issues:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label issues that need triage
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Get current date and calculate the date 48 hours ago
+            const now = new Date();
+            const twoDaysAgo = new Date(now);
+            twoDaysAgo.setHours(now.getHours() - 48);
+
+            console.log(`Finding issues that need triage created before ${twoDaysAgo.toISOString()}...`);
+
+            // Get 100 oldest issues without a Bug/Feature/Task type
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              type: 'none',
+              per_page: 100,
+              sort: 'created',
+              direction: 'asc'
+            });
+
+            // Select issues that:
+            // 1. Were created before the cutoff date
+            // 2. Do not have the 'question' label
+            // 3. Are not pull requests
+            const oldIssues = issues.filter(issue => {
+              const createdAt = new Date(issue.created_at);
+              return createdAt < twoDaysAgo &&
+                     !issue.labels.some((label) => label.name == 'question') &&
+                     !issue.pull_request;
+            });
+
+            console.log(`Found ${oldIssues.length} old issues that need triage`);
+
+            // Add 'needs-triage' label to each issue
+            for (const issue of oldIssues) {
+              console.log(`Adding 'needs-triage' label to issue #${issue.number}: ${issue.title}`);
+
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: ['needs-triage']
+              });
+            }
+
+            console.log('Finished labeling issues that need triage');
+  label-prs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label pull requests that need triage
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Get current date and calculate the date 48 hours ago
+            const now = new Date();
+            const twoDaysAgo = new Date(now);
+            twoDaysAgo.setHours(now.getHours() - 48);
+
+            console.log(`Finding pull requests that need triage created before ${twoDaysAgo.toISOString()}...`);
+
+            // Get 100 oldest pull requests
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+              sort: 'created',
+              direction: 'asc'
+            });
+
+            // Select non-draft pull requests that:
+            // 1. Were created before the cutoff date
+            // 2. Do not have the 'fb-exported' label
+            // 3. Do not have a requested reviewer or assignee
+            // 4. Do not have a review
+            var oldPRs = [];
+            for (const pr of prs) {
+              const createdAt = new Date(pr.created_at);
+              if (pr.draft ||
+                  createdAt >= twoDaysAgo ||
+                  pr.labels.some((label) => label.name == 'fb-exported') ||
+                  (Array.isArray(pr.requested_reviewers) && pr.requested_reviewers.length) ||
+                  (Array.isArray(pr.assignees) && pr.assignees.length)) {
+                continue;
+              }
+              const { data: reviews } = await github.rest.pulls.listReviews({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number
+              });
+              if (!reviews.length) {
+                oldPRs.push(pr);
+              }
+            }
+
+            console.log(`Found ${oldPRs.length} old pull requests that need triage`);
+
+            // Add 'needs-triage' label to each PR
+            for (const pr of oldPRs) {
+              console.log(`Adding 'needs-triage' label to PR #${pr.number}: ${pr.title}`);
+
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                labels: ['needs-triage']
+              });
+            }
+
+            console.log('Finished labeling pull requests that need triage');

@@ -12,6 +12,7 @@ use dupe::Dupe;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
 use pyrefly_util::lock::Mutex;
+use pyrefly_util::panic::has_panicked;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 
@@ -30,7 +31,7 @@ pub trait Subscriber: Sync {
 
     /// We have finished work on a `Handle`, having computed its solutions.
     /// While we have computed the solutions, we return the `Load` as that contains
-    /// the `ErrorCollector` and `ModuleInfo` which are useful context for the completion.
+    /// the `ErrorCollector` and `Module` which are useful context for the completion.
     fn finish_work(&self, handle: Handle, result: Arc<Load>);
 }
 
@@ -116,6 +117,11 @@ struct ProgressBarState {
 
 impl ProgressBarSubscriber {
     fn event(&self, f: impl FnOnce(&mut ProgressBarState)) {
+        if has_panicked() {
+            // If we have panicked, and are exiting, don't put the progress bar on stderr afresh.
+            return;
+        }
+
         let millis = self.progress_bar.elapsed().as_millis();
 
         // Do as little as possible with the lock held.

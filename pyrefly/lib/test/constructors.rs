@@ -176,6 +176,53 @@ assert_type(x, int)
 );
 
 testcase!(
+    bug = "Generic metaclasses are not allowed, should error on `C` classdef.",
+    test_metaclass_invalid_generic,
+    r#"
+from typing import Any, assert_type
+class Meta[T](type):
+    def __call__(cls, x: T): ...
+class C[T](metaclass=Meta[T]): # TODO: error here (or possibly on Meta classdef)
+    pass
+assert_type(C(), C[Any]) # Correct, because invalid metaclass.
+    "#,
+);
+
+// Test reflects behavior of existing type checkers, but is probably worth revisiting with
+// the typing council. Two reasons: (1) `class Meta(type)` is almost certainly a metaclass,
+// and metaclass __call__ cls param is not actually `type[Self]`; (2) instantiating `T=str`
+// may be reasonable here.
+testcase!(
+    bug = "Missing check that self/cls param is a supertype of the defining class",
+    test_metaclass_call_cls_param_does_not_instantiate,
+    r#"
+from typing import assert_type
+class Meta(type):
+    def __call__(cls: 'type[C[str]]', *args, **kwargs): ... # TODO: error because annot is not supertype of Meta
+class C[T](metaclass=Meta):
+    def __init__(self, x: T):
+        pass
+assert_type(C(0), C[int]) # Correct, because metaclass call does not instantiate T=str
+    "#,
+);
+
+// Test reflects behavior of existing type checkers, but is probably worth revisiting with
+// the typing council. I think instantiating `T=str` may be reasonable here.
+testcase!(
+    test_metaclass_call_does_not_instantiate,
+    r#"
+from typing import assert_type
+class Meta(type):
+    def __call__(cls, *args, **kwargs) -> 'C[str]':
+        ...
+class C[T](metaclass=Meta):
+    def __init__(self, x: T):
+        pass
+assert_type(C(0), C[int])
+    "#,
+);
+
+testcase!(
     test_new,
     r#"
 class C:
@@ -325,24 +372,25 @@ assert_type(MyClass(), Any)
 );
 
 testcase!(
+    bug = "We should specialize `type[Self@A]` to `type[A]` in the call to `A.__new__`",
     test_cls_type_in_new_annotated,
     r#"
 from typing import Self
 class A:
     def __new__(cls: type[Self]): ...
 A.__new__(A)  # OK
-A.__new__(int)  # E: `type[int]` is not assignable to parameter `cls`
+A.__new__(int) # E: Argument `type[int]` is not assignable to parameter `cls` with type `type[Self@A]` in function `A.__new__`
     "#,
 );
 
 testcase!(
-    bug = "We should give the first parameter of `__new__` a type of `type[Self]` even when unannotated",
+    bug = "We should specialize `type[Self@A]` to `type[A]` in the call to `A.__new__`",
     test_cls_type_in_new_unannotated,
     r#"
 class A:
     def __new__(cls): ...
 A.__new__(A)  # OK
-A.__new__(int)  # Should be an error
+A.__new__(int)  # E: Argument `type[int]` is not assignable to parameter `cls` with type `type[Self@A]` in function `A.__new__`
     "#,
 );
 

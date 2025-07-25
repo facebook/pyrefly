@@ -68,7 +68,6 @@ global x  # E: `x` was assigned in the current scope before the global declarati
 );
 
 testcase!(
-    bug = "We fail to correctly mark `g()` as allowing augmented assign.",
     test_global_aug_assign,
     r#"
 x: str = ""
@@ -76,8 +75,7 @@ def f():
     x += "a"  # E: `x` is not mutable from the current scope
 def g():
     global x
-    # Should be okay!!
-    x += "a"  # E: `x` is not mutable from the current scope
+    x += "a"
 def h0():
     global x
     def h1():
@@ -89,7 +87,7 @@ def h0():
 // mutable capture entirely (leading to an error saying the mutation is invalid), whereas
 // if there is an assignment we incorrectly mark the name as defined in the local scope.
 testcase!(
-    bug = "We fail to mark a del of a mutable capture as illegal, unless there is no assignment",
+    bug = "We fail to mark a del of a mutable capture as illegal",
     test_global_del,
     r#"
 x: str = ""
@@ -101,7 +99,7 @@ def f():
 # Here we do error, but for the wrong reason - we think `x` is an immutable capture.
 def g():
     global x
-    del x  # E: `x` is not mutable from the current scope
+    del x
 f()
 f()  # This will crash at runtime!
 "#,
@@ -146,7 +144,7 @@ def f() -> None:
 );
 
 testcase!(
-    bug = "We should not treat global like nonlocal with an error, we should actually find global",
+    bug = "We fail to add x to the global scope so that it's visible from `outer`",
     test_global_can_see_past_enclosing_scopes,
     r#"
 from typing import assert_type
@@ -155,13 +153,13 @@ def outer():
     x: int = 5
     def f():
         # This works fine in Python, `x` is the global `x`, not the one from `outer`.
-        global x  # E: Found `x`, but it was not the global scope
-        assert_type(x, str)  # E: assert_type(int, str)
+        global x # E: Found `x`, but it was not the global scope
+        assert_type(x, str)  # E: assert_type(Any, str)
 "#,
 );
 
 testcase!(
-    bug = "We currently always complain on aug assign, but when we fix it we need to be careful about type changes (we cannot blindly allow it syntactically)",
+    bug = "We currently never complain on aug assign, but when we fix it we need to be careful about type changes",
     test_global_aug_assign_incompatible_type,
     r#"
 from typing import assert_type
@@ -175,12 +173,12 @@ def f():
     global c1
     global c2
     # Should be permitted, the resulting operation is in-place
-    c0 += C()  # E: `c0` is not mutable from the current scope 
+    c0 += C()
     # Should be permitted, the resulting operation returns a new C which is okay
-    c1 -= C()  # E: `c1` is not mutable from the current scope 
+    c1 -= C()
     # Should *not* be permitted, this changes the type of the global in a way
     # that is incompatible with static analysis of the global scope
-    c2 *= C()  # E: `c2` is not mutable from the current scope 
+    c2 *= C()
 f()
 # This shows what would go wrong if we allow the aug assign on `c2`
 assert_type(c2, C)
@@ -228,7 +226,6 @@ def f() -> None:
 );
 
 testcase!(
-    bug = "We fail to correctly mark `g()` as allowing an aug assign",
     test_nonlocal_aug_assign,
     r#"
 def outer():
@@ -237,8 +234,7 @@ def outer():
         x += "a"  # E: `x` is not mutable from the current scope
     def g():
         nonlocal x
-        # Should be okay!!
-        x += "a"  # E: `x` is not mutable from the current scope
+        x += "a"
     def h0():
         nonlocal x
         def h1():
@@ -250,7 +246,7 @@ def outer():
 // mutable capture entirely (leading to an error saying the mutation is invalid), whereas
 // if there is an assignment we incorrectly mark the name as defined in the local scope.
 testcase!(
-    bug = "We fail to mark a del of a mutable capture as illegal, unless there is no assignment",
+    bug = "We fail to mark a del of a mutable capture as illegal",
     test_nonlocal_del,
     r#"
 def outer():
@@ -260,10 +256,9 @@ def outer():
         x = "foo"
         del x  # not okay: it will work at runtime, but is not statically analyzable
     # A minor variation on f(), relevant to specific implementation bugs in our scope analysis
-    # Here we do error, but for the wrong reason - we think `x` is an immutable capture.
     def g():
         nonlocal x
-        del x  # E: `x` is not mutable from the current scope
+        del x
     f()
     f()  # This will crash at runtime!
 "#,
@@ -440,5 +435,15 @@ def f(arg: int) -> None:
     assert_type(w, list[int])
     lambd = lambda x: (z := x) + 1
     z  # E: Could not find name `z`
+"#,
+);
+
+testcase!(
+    test_forward_reference_ok,
+    r#"
+def foo():
+    x = y
+
+y = 42
 "#,
 );

@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::short_identifier::ShortIdentifier;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprName;
@@ -31,7 +32,6 @@ use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::binding::scope::FlowStyle;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
-use crate::module::short_identifier::ShortIdentifier;
 
 impl<'a> BindingsBuilder<'a> {
     /// Bind one level of an unpacked LHS target, for example in `x, (y, [*z]), q = foo`
@@ -121,11 +121,26 @@ impl<'a> BindingsBuilder<'a> {
         );
     }
 
-    // Create a binding to verify that an attribute assignment is valid and
-    // potentially narrow (or invalidate narrows on) the name assigned to.
-    //
-    // Return the value of the attribute assignment (as an ExprOrBinding);
-    // this might be used to record self-attribute assignments.
+    /// Check whether a name is well-defined, when updating flow info for
+    /// attribute / subscript assignments. The lookup kind is regular but the
+    /// usage is MutableLookup because these operations are non-mutating from a
+    /// scope rules point of view, but the checks are not useful for first-usage
+    /// tracking since we're just checking whether the mutation of a facet
+    /// deserves a narrow binding.
+    fn name_is_defined(&mut self, name: &Identifier) -> bool {
+        self.lookup_name(
+            Hashed::new(&name.id),
+            LookupKind::Regular,
+            &mut Usage::MutableLookup,
+        )
+        .is_ok()
+    }
+
+    /// Create a binding to verify that an attribute assignment is valid and
+    /// potentially narrow (or invalidate narrows on) the name assigned to.
+    ///
+    /// Return the value of the attribute assignment (as an ExprOrBinding);
+    /// this might be used to record self-attribute assignments.
     pub fn bind_attr_assign_impl(
         &mut self,
         mut attr: ExprAttribute,
@@ -152,7 +167,10 @@ impl<'a> BindingsBuilder<'a> {
         );
         if let Some(identifier) = narrowing_identifier {
             let name = Hashed::new(&identifier.id);
-            if self.lookup_name(name, LookupKind::Regular).is_ok() {
+            // This is a mutable usage even though it's not a "mutable lookup" because the
+            // scoping rules for attribute assignment are normal lookups, but they aren't useful
+            // for first-usage tracking.
+            if self.name_is_defined(&identifier) {
                 self.scopes.upsert_flow_info(name, idx, None);
             }
         }
@@ -173,8 +191,8 @@ impl<'a> BindingsBuilder<'a> {
         )
     }
 
-    // Create a binding to verify that a subscript assignment is valid and
-    // potentially narrow (or invalidate narrows on) the name assigned to.
+    /// Create a binding to verify that a subscript assignment is valid and
+    /// potentially narrow (or invalidate narrows on) the name assigned to.
     pub fn bind_subscript_assign_impl(
         &mut self,
         mut subscript: ExprSubscript,
@@ -200,7 +218,7 @@ impl<'a> BindingsBuilder<'a> {
             .insert_binding_current(user, Binding::AssignToSubscript(subscript, Box::new(value)));
         if let Some(identifier) = narrowing_identifier {
             let name = Hashed::new(&identifier.id);
-            if self.lookup_name(name, LookupKind::Regular).is_ok() {
+            if self.name_is_defined(&identifier) {
                 self.scopes.upsert_flow_info(name, idx, None);
             }
         }

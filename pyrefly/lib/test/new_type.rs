@@ -109,3 +109,13 @@ Foo((1, 2))  # OK
 Foo((1, 2, 3))  # this shouldn't be allowed
      "#,
 );
+
+testcase!(
+    test_new_type_is_not_type,
+    r#"
+from typing import Any, NewType
+Foo = NewType("Foo", int)
+x: type = Foo  # E: `type[Foo]` is not assignable to `type`
+y: type[Any] = Foo  # E: `type[Foo]` is not assignable to `type[Any]`
+    "#,
+);

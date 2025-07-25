@@ -21,6 +21,7 @@ use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
 use crate::config::config::ImportLookupPathPart;
 use crate::error::context::ErrorContext;
+use crate::module::finder::find_import;
 
 #[derive(Debug, Clone, Dupe)]
 pub enum FindError {
@@ -127,7 +128,7 @@ impl LoaderFindCache {
         path: Option<&Path>,
     ) -> Result<ModulePath, FindError> {
         self.cache
-            .ensure(&module, || self.config.find_import(module, path))
+            .ensure(&module, || find_import(&self.config, module, path))
             .dupe()
     }
 }

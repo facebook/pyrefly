@@ -8,3 +8,6 @@ def this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimpor
     None
 ):
     return
+
+
+this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search

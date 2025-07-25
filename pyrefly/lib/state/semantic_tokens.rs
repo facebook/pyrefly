@@ -11,6 +11,7 @@ use lsp_types::SemanticToken;
 use lsp_types::SemanticTokenModifier;
 use lsp_types::SemanticTokenType;
 use lsp_types::SemanticTokensLegend;
+use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_util::visit::Visit as _;
@@ -21,7 +22,6 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 
 use crate::binding::binding::Key;
-use crate::module::module_info::ModuleInfo;
 
 pub struct SemanticTokensLegends {
     token_types_index: HashMap<SemanticTokenType, u32>,
@@ -90,7 +90,7 @@ impl SemanticTokensLegends {
     pub fn convert_tokens_into_lsp_semantic_tokens(
         &self,
         tokens: &[SemanticTokenWithFullRange],
-        module_info: ModuleInfo,
+        module_info: Module,
     ) -> Vec<SemanticToken> {
         let mut previous_line = 0;
         let mut previous_col = 0;

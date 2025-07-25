@@ -35,7 +35,7 @@ $ PYREFLY_STDLIB_SEARCH_PATH=$TYPESHED_ROOT/typeshed/stdlib $PYREFLY check --pyt
 ```scrut {output_stream: stderr}
 $ mkdir -p $TMPDIR/src_project/src/foo && echo "x: int = 0" > $TMPDIR/src_project/src/foo/bar.py && echo "from foo.bar import x" > $TMPDIR/src_project/src/foo/baz.py && cd $TMPDIR/src_project && $PYREFLY check
  INFO Checking current directory with default configuration
- INFO errors shown: 0* (glob)
+ INFO 0 errors
 [0]
 ```
 
@@ -43,7 +43,7 @@ $ mkdir -p $TMPDIR/src_project/src/foo && echo "x: int = 0" > $TMPDIR/src_projec
 
 ```scrut {output_stream: stderr}
 $ mkdir $TMPDIR/foo && touch $TMPDIR/foo/bar.py && echo "x: str = 0" > $TMPDIR/foo/problem.py && cd $TMPDIR/foo && $PYREFLY check "*.py" --project-excludes=problem.py
- INFO errors shown: 0* (glob)
+ INFO 0 errors
 [0]
 ```
 

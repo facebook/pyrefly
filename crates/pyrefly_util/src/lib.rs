@@ -29,6 +29,7 @@
 
 //! Utility functions that are not specific to the things Pyre does.
 
+pub mod absolutize;
 pub mod arc_id;
 pub mod args;
 pub mod assert_size;
@@ -45,6 +46,7 @@ pub mod locked_map;
 pub mod memory;
 pub mod no_hash;
 pub mod owner;
+pub mod panic;
 pub mod prelude;
 pub mod recurser;
 pub mod ruff_visitors;

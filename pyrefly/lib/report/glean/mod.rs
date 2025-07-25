@@ -15,12 +15,7 @@ pub mod schema;
 
 pub fn glean(transaction: &Transaction, handle: &Handle) -> String {
     fn f(transaction: &Transaction, handle: &Handle) -> Option<Glean> {
-        Some(Glean::new(
-            &transaction.get_module_info(handle)?,
-            &*transaction.get_ast(handle)?,
-            &transaction.get_bindings(handle)?,
-            &*transaction.get_answers(handle)?,
-        ))
+        Some(Glean::new(transaction, handle))
     }
 
     let data = f(transaction, handle).expect("Glean data be ready");

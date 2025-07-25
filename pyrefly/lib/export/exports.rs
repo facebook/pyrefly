@@ -11,6 +11,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_python::docstring::Docstring;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
@@ -22,7 +23,6 @@ use starlark_map::small_set::SmallSet;
 
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
-use crate::export::definitions::DocString;
 use crate::export::definitions::DunderAllEntry;
 use crate::graph::calculation::Calculation;
 use crate::module::module_info::ModuleInfo;
@@ -38,7 +38,7 @@ pub trait LookupExport {
 pub struct Export {
     pub location: TextRange,
     pub symbol_kind: Option<SymbolKind>,
-    pub docstring: Option<DocString>,
+    pub docstring_range: Option<TextRange>,
 }
 
 /// Where is this export defined?
@@ -65,8 +65,8 @@ struct ExportsInner {
     wildcard: Calculation<Arc<SmallSet<Name>>>,
     /// Names that are available via `from <this_module> import <name>` along with their locations
     exports: Calculation<Arc<SmallMap<Name, ExportLocation>>>,
-    /// If this module has a docstring, it's stored here. Docstrings for exports themselves are stored in exports.
-    docstring: Option<DocString>,
+    /// If this module has a docstring, the range is stored here. Docstrings for exports themselves are stored in exports.
+    docstring_range: Option<TextRange>,
 }
 
 impl Display for Exports {
@@ -109,7 +109,7 @@ impl Exports {
             definitions,
             wildcard: Calculation::new(),
             exports: Calculation::new(),
-            docstring: DocString::from_stmts(x),
+            docstring_range: Docstring::range_from_stmts(x),
         }))
     }
 
@@ -143,8 +143,8 @@ impl Exports {
     }
 
     /// Get the docstring for this module.
-    pub fn docstring(&self) -> Option<&DocString> {
-        self.0.docstring.as_ref()
+    pub fn docstring_range(&self) -> Option<TextRange> {
+        self.0.docstring_range
     }
 
     pub fn is_submodule_imported_implicitly(&self, name: &Name) -> bool {
@@ -162,18 +162,18 @@ impl Exports {
                     DefinitionStyle::Local(symbol_kind) => ExportLocation::ThisModule(Export {
                         location: definition.range,
                         symbol_kind: Some(symbol_kind),
-                        docstring: definition.docstring.clone(),
+                        docstring_range: definition.docstring_range,
                     }),
                     // If the import is invalid, the final location is this module.
                     DefinitionStyle::ImportInvalidRelative => ExportLocation::ThisModule(Export {
                         location: definition.range,
                         symbol_kind: None,
-                        docstring: definition.docstring.clone(),
+                        docstring_range: definition.docstring_range,
                     }),
                     DefinitionStyle::Global => ExportLocation::ThisModule(Export {
                         location: definition.range,
                         symbol_kind: Some(SymbolKind::Constant),
-                        docstring: None,
+                        docstring_range: None,
                     }),
                     DefinitionStyle::ImportAs(from)
                     | DefinitionStyle::ImportAsEq(from)

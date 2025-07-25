@@ -68,7 +68,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Class::new(
             def_index,
             x.name.clone(),
-            self.module_info().dupe(),
+            self.module().dupe(),
             precomputed_tparams,
             fields,
         )
@@ -83,7 +83,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Class::new(
             def_index,
             name.clone(),
-            self.module_info().dupe(),
+            self.module().dupe(),
             Some(Arc::new(TParams::default())),
             fields.clone(),
         )
@@ -114,10 +114,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn get_enum_from_class(&self, cls: &Class) -> Option<EnumMetadata> {
         self.get_metadata_for_class(cls).enum_metadata().cloned()
-    }
-
-    pub fn get_enum_from_class_type(&self, class_type: &ClassType) -> Option<EnumMetadata> {
-        self.get_enum_from_class(class_type.class_object())
     }
 
     pub fn unwrap_class_object_silently(&self, ty: &Type) -> Option<Type> {

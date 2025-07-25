@@ -70,28 +70,28 @@ class MyAbstractBase(ABC):
 class C:
     @overload  # E[func5]
     @staticmethod
-    def func5(x: int) -> int:  # E[func5]
+    def func5(x: int, /) -> int:  # E[func5]
         ...
 
     @overload
     @staticmethod
-    def func5(x: str) -> str:  # E[func5]
+    def func5(x: str, /) -> str:  # E[func5]
         ...
 
-    def func5(self, x: int | str) -> int | str:  # E[func5]
+    def func5(*args: object) -> int | str:  # E[func5]
         return 1
 
     @overload  # E[func6]
     @classmethod
-    def func6(cls, x: int) -> int:  # E[func6]
+    def func6(cls, x: int, /) -> int:  # E[func6]
         ...
 
     @overload
-    def func6(cls, x: str) -> str:  # E[func6]
+    def func6(self, x: str, /) -> str:  # E[func6]
         ...
 
     @classmethod
-    def func6(cls, x: int | str) -> int | str:  # E[func6]
+    def func6(cls, *args: int | str) -> int | str:  # E[func6]
         return 1
 
 
@@ -132,14 +132,14 @@ class Base:
     # The @final decorator should not be on multiple overloads and
     # implementation:
 
-    @overload  # E[invalid_final_2] @final should be on implementation only
-    @final
-    def invalid_final_2(self, x: int) -> int:  # E[invalid_final_2]
+    @overload  # E[invalid_final_2+]: @final should be on implementation only
+    @final  # E[invalid_final_2+]
+    def invalid_final_2(self, x: int) -> int:  # E[invalid_final_2+]
         ...
 
     @overload
-    @final
-    def invalid_final_2(self, x: str) -> str:  # E[invalid_final_2]
+    @final  # E[invalid_final_2+]
+    def invalid_final_2(self, x: str) -> str:  # E[invalid_final_2+]
         ...
 
     @final
@@ -194,7 +194,7 @@ class Child(Base):  # E[override-final]
     @overload
     def bad_override(self, x: str) -> str: ...
 
-    @override
+    @override  # E[bad_override]
     def bad_override(self, x: int | str) -> int | str:  # E[bad_override]
         ...
 
@@ -217,13 +217,13 @@ class Child(Base):  # E[override-final]
     # This is the wrong way to use @override with an overloaded method, and
     # should emit an error:
 
-    @overload  # E[override_impl]: @override should appear only on implementation
-    @override
-    def to_override(self, x: int) -> int: ...  # E[override_impl]
+    @overload  # E[override_impl+]: @override should appear only on implementation
+    @override  # E[override_impl+]
+    def to_override(self, x: int) -> int: ...  # E[override_impl+]
 
     @overload
-    @override
-    def to_override(self, x: str) -> str: ...  # E[override_impl]
+    @override  # E[override_impl+]
+    def to_override(self, x: str) -> str: ...  # E[override_impl+]
 
     @override
     def to_override(self, x: int | str) -> int | str: ...

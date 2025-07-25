@@ -206,7 +206,7 @@ def build(x): ...
 class C:
     x: int = field()
 C(x=0)
-C(0)  # E: Missing argument `x`  # E: Expected 0 positional arguments
+C(0)  # E: Expected argument `x` to be passed by name
     "#,
 );
 

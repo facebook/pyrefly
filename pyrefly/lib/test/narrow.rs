@@ -19,6 +19,16 @@ def f(x: str | None):
 );
 
 testcase!(
+    test_assert_narrow_message,
+    r#"
+from typing import assert_type
+def test(x: str | None):
+    assert x is None, x[0]
+    assert_type(x, None)
+    "#,
+);
+
+testcase!(
     test_truthy_falsy,
     r#"
 from typing import assert_type, Literal

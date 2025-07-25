@@ -18,6 +18,17 @@ xs: list[A] = [B()]
 );
 
 testcase!(
+    test_context_list_mult,
+    r#"
+def test(x: list[int], n: int) -> None:
+    a: list[object] = [1] * n
+    b: list[object] = x * n  # E: `list[int]` is not assignable to `list[object]`
+    c: list[object] = [1] * 2
+    d: list[object] = x * 2  # E: `list[int]` is not assignable to `list[object]`
+"#,
+);
+
+testcase!(
     test_context_assign_annotated_binding,
     r#"
 class A: ...
@@ -340,6 +351,21 @@ x: C[list[A]] = C([B()])
 );
 
 testcase!(
+    test_context_typeddict_ctor_return,
+    r#"
+from typing import TypedDict
+
+class A: ...
+class B(A): ...
+
+class TD[T](TypedDict):
+    x: list[T]
+
+x: TD[A] = TD(x = [B()])
+"#,
+);
+
+testcase!(
     test_context_in_multi_target_assign,
     r#"
 class A: ...
@@ -376,14 +402,13 @@ xs: list[A] = []
 );
 
 testcase!(
-    bug = "Would be nice if this worked, but requires contextual typing on overloads",
     test_context_assign_subscript,
     r#"
 class A: ...
 class B(A): ...
 
 xs: list[list[A]] = [[]]
-xs[0] = [B()] # E: No matching overload found
+xs[0] = [B()]
 "#,
 );
 
@@ -440,5 +465,16 @@ class B(A):
 class C(B):
     def __init__(self):
         self.x = ["hello world"]
+    "#,
+);
+
+testcase!(
+    test_context_special_methods,
+    r#"
+from typing import assert_type, reveal_type
+class A: ...
+class B(A): ...
+x1: list[A] = reveal_type([B()]) # E: revealed type: list[A]
+x2: list[A] = assert_type([B()], list[A])
     "#,
 );

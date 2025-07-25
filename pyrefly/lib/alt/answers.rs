@@ -13,11 +13,11 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use dupe::OptionDupedExt;
+use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
-use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::recurser::Recurser;
 use pyrefly_util::uniques::UniqueFactory;
@@ -47,7 +47,6 @@ use crate::graph::calculation::Calculation;
 use crate::graph::index::Idx;
 use crate::graph::index_map::IndexMap;
 use crate::module::module_info::ModuleInfo;
-use crate::module::module_info::TextRangeWithModuleInfo;
 use crate::solver::solver::Solver;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::key_to_intermediate_definition;
@@ -129,7 +128,7 @@ impl DisplayWith<Bindings> for Answers {
                 writeln!(
                     f,
                     "{} = {} = {}",
-                    bindings.module_info().display(key),
+                    bindings.module().display(key),
                     value.display_with(bindings),
                     match answer.get() {
                         Some(v) => v.to_string(),
@@ -453,7 +452,7 @@ impl Answers {
             for idx in bindings.keys::<Key>() {
                 let key = bindings.idx_to_key(idx);
                 let (imported_module_name, imported_name) =
-                    match key_to_intermediate_definition(bindings, key, &mut Gas::new(20)) {
+                    match key_to_intermediate_definition(bindings, key) {
                         None => continue,
                         Some(IntermediateDefinition::Local(_)) => continue,
                         Some(IntermediateDefinition::Module(_)) => continue,
@@ -479,7 +478,7 @@ impl Answers {
                 let reference_range = bindings.idx_to_key(idx).range();
                 // Sanity check: the reference should have the same text as the definition.
                 // This check helps to filter out synthetic bindings.
-                if bindings.module_info().code_at(reference_range) == imported_name.as_str() {
+                if bindings.module().code_at(reference_range) == imported_name.as_str() {
                     index
                         .externally_defined_variable_references
                         .entry((imported_module_name, imported_name))
@@ -500,7 +499,7 @@ impl Answers {
         }
         table_mut_for_each!(&mut res, |items| post_solve(items, &self.solver));
         Solutions {
-            module_info: bindings.module_info().dupe(),
+            module_info: bindings.module().dupe(),
             table: res,
             index: self.index.dupe(),
         }
@@ -606,8 +605,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // We should always be sure before calling `get`.
             panic!(
                 "Internal error: answer not found, module {}, path {}, key {:?}",
-                self.module_info().name(),
-                self.module_info().path(),
+                self.module().name(),
+                self.module().path(),
                 self.bindings().idx_to_key(idx),
             )
         })
@@ -622,7 +621,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn record_overload_trace(
         &self,
         loc: TextRange,
-        all_overloads: &[Callable],
+        all_overloads: Vec<&Callable>,
         closest_overload: &Callable,
         is_closest_overload_chosen: bool,
     ) {
@@ -630,7 +629,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             trace.lock().overloaded_callees.insert(
                 loc,
                 OverloadedCallee {
-                    all_overloads: all_overloads.to_vec(),
+                    all_overloads: all_overloads
+                        .into_iter()
+                        .map(|func| (*func).clone())
+                        .collect(),
                     closest_overload: closest_overload.clone(),
                     is_closest_overload_chosen,
                 },
@@ -652,11 +654,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } in self.completions(base.clone(), Some(attribute_name), false)
             {
                 match definition {
-                    Some(AttrDefinition::FullyResolved(TextRangeWithModuleInfo {
-                        module_info: module,
-                        range,
-                    })) => {
-                        if module.path() != self.bindings().module_info().path() {
+                    Some(AttrDefinition::FullyResolved(TextRangeWithModule { module, range })) => {
+                        if module.path() != self.bindings().module().path() {
                             index
                                 .lock()
                                 .externally_defined_attribute_references

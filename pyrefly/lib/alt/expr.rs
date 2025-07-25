@@ -5,10 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fmt;
+use std::fmt::Display;
+
 use dupe::Dupe;
 use num_traits::ToPrimitive;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::callable::FuncId;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
@@ -27,6 +33,7 @@ use ruff_python_ast::Number;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -38,12 +45,12 @@ use crate::alt::solve::TypeFormContext;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
+use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
-use crate::error::kind::ErrorKind;
 use crate::graph::index::Idx;
-use crate::module::short_identifier::ShortIdentifier;
 use crate::types::callable::Callable;
 use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
@@ -95,45 +102,76 @@ impl<'a> TypeOrExpr<'a> {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    // Helper method for inferring the type of a boolean operation over a sequence of values.
-    fn boolop(&self, values: &[Expr], op: BoolOp, errors: &ErrorCollector) -> Type {
-        let target = match op {
-            BoolOp::And => false,
-            BoolOp::Or => true,
-        };
-        let should_shortcircuit = |t: &Type| t.as_bool() == Some(target);
-        let should_discard = |t: &Type| t.as_bool() == Some(!target);
+#[derive(Debug, Clone)]
+enum ConditionRedundantReason {
+    /// The boolean indicates whether it's equivalent to True
+    IntLiteral(bool),
+    StrLiteral(bool),
+    BytesLiteral(bool),
+    /// Class name + member name
+    EnumLiteral(Name, Name),
+    Function(ModuleName, FuncId),
+    Class(Name),
+}
 
-        let mut types = Vec::new();
-        let last_index = values.len() - 1;
-        for (i, value) in values.iter().enumerate() {
-            let mut t = self.expr_infer(value, errors);
-            self.expand_type_mut(&mut t);
-            if should_shortcircuit(&t) {
-                types.push(t);
-                break;
+impl ConditionRedundantReason {
+    fn equivalent_boolean(&self) -> Option<bool> {
+        match self {
+            ConditionRedundantReason::Function(..) | ConditionRedundantReason::Class(..) => {
+                Some(true)
             }
-            for t in t.into_unions() {
-                // If we reach the last value, we should always keep it.
-                if i == last_index || !should_discard(&t) {
-                    if i != last_index && t == self.stdlib.bool().clone().to_type() {
-                        types.push(Lit::Bool(target).to_type());
-                    } else if i != last_index && t == self.stdlib.int().clone().to_type() && !target
-                    {
-                        types.push(Lit::Int(LitInt::new(0)).to_type());
-                    } else if i != last_index && t == self.stdlib.str().clone().to_type() && !target
-                    {
-                        types.push(Lit::Str(String::new().into_boxed_str()).to_type());
-                    } else {
-                        types.push(t);
-                    }
-                }
-            }
+            ConditionRedundantReason::IntLiteral(b)
+            | ConditionRedundantReason::StrLiteral(b)
+            | ConditionRedundantReason::BytesLiteral(b) => Some(*b),
+            ConditionRedundantReason::EnumLiteral(..) => None,
         }
-        self.unions(types)
     }
 
+    fn description(&self) -> String {
+        match self {
+            ConditionRedundantReason::IntLiteral(..) => {
+                "Integer literal used as condition".to_owned()
+            }
+            ConditionRedundantReason::StrLiteral(..) => {
+                "String literal used as condition".to_owned()
+            }
+            ConditionRedundantReason::BytesLiteral(..) => {
+                "Bytes literal used as condition".to_owned()
+            }
+            ConditionRedundantReason::EnumLiteral(class_name, member_name) => {
+                format!("Enum literal `{class_name}.{member_name}` used as condition")
+            }
+            ConditionRedundantReason::Function(module_name, func_id) => {
+                format!(
+                    "Function object `{}` used as condition",
+                    func_id.format(module_name.dupe())
+                )
+            }
+            ConditionRedundantReason::Class(name) => {
+                format!("Class name `{name}` used as condition")
+            }
+        }
+    }
+}
+
+impl Display for ConditionRedundantReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}. It's equivalent to {}",
+            self.description(),
+            match self.equivalent_boolean() {
+                Some(true) => "`True`",
+                Some(false) => "`False`",
+                None => "a boolean literal",
+            }
+        )
+    }
+}
+
+impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    /// Infer a type for an expression, with an optional type hint that influences the inferred type.
+    /// The inferred type is also checked against the hint.
     pub fn expr(
         &self,
         x: &Expr,
@@ -143,19 +181,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.expr_type_info(x, check, errors).into_ty()
     }
 
-    pub fn expr_type_info(
-        &self,
-        x: &Expr,
-        check: Option<(&Type, &dyn Fn() -> TypeCheckContext)>,
-        errors: &ErrorCollector,
-    ) -> TypeInfo {
-        self.expr_type_info_with_separate_check_errors(
-            x,
-            check.map(|(ty, tcc)| (ty, tcc, errors)),
-            errors,
-        )
-    }
-
+    /// Like expr(), but errors from the infer and check steps are recorded to separate error collectors.
     pub fn expr_with_separate_check_errors(
         &self,
         x: &Expr,
@@ -166,599 +192,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .into_ty()
     }
 
-    fn expr_type_info_with_separate_check_errors(
+    /// Infer a type for an expression.
+    pub fn expr_infer(&self, x: &Expr, errors: &ErrorCollector) -> Type {
+        self.expr_infer_type_info_with_hint(x, None, errors)
+            .into_ty()
+    }
+
+    /// Infer a type for an expression, with an optional type hint that influences the inferred type.
+    /// Unlike expr(), the inferred type is not checked against the hint.
+    pub fn expr_infer_with_hint(
         &self,
         x: &Expr,
-        check: Option<(&Type, &dyn Fn() -> TypeCheckContext, &ErrorCollector)>,
-        errors: &ErrorCollector,
-    ) -> TypeInfo {
-        match check {
-            Some((want, tcc, check_errors)) if !want.is_any() => {
-                let got = self.expr_infer_type_info_with_hint(x, Some(want), errors);
-                self.check_and_return_type_info(want, got, x.range(), check_errors, tcc)
-            }
-            _ => self.expr_infer_type_info(x, errors),
-        }
-    }
-
-    /// Infers types for `if` clauses in the given comprehensions.
-    /// This is for error detection only; the types are not used.
-    fn ifs_infer(&self, comps: &[Comprehension], errors: &ErrorCollector) {
-        for comp in comps {
-            for if_clause in comp.ifs.iter() {
-                self.expr_infer(if_clause, errors);
-            }
-        }
-    }
-
-    pub fn attr_infer_for_type(
-        &self,
-        base: &Type,
-        attr_name: &Name,
-        range: TextRange,
-        errors: &ErrorCollector,
-        context: Option<&dyn Fn() -> ErrorContext>,
-    ) -> Type {
-        self.type_of_attr_get(
-            base,
-            attr_name,
-            range,
-            errors,
-            context,
-            "Expr::attr_infer_for_type",
-        )
-    }
-
-    pub fn attr_infer(
-        &self,
-        base: &TypeInfo,
-        attr_name: &Name,
-        range: TextRange,
-        errors: &ErrorCollector,
-        context: Option<&dyn Fn() -> ErrorContext>,
-    ) -> TypeInfo {
-        TypeInfo::at_facet(base, &FacetKind::Attribute(attr_name.clone()), || {
-            self.attr_infer_for_type(base.ty(), attr_name, range, errors, context)
-        })
-    }
-
-    pub fn subscript_infer(
-        &self,
-        base: &TypeInfo,
-        slice: &Expr,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) -> TypeInfo {
-        match slice {
-            Expr::NumberLiteral(ExprNumberLiteral {
-                value: Number::Int(idx),
-                ..
-            }) if let Some(idx) = idx.as_usize() => {
-                TypeInfo::at_facet(base, &FacetKind::Index(idx), || {
-                    self.subscript_infer_for_type(base.ty(), slice, range, errors)
-                })
-            }
-            Expr::StringLiteral(ExprStringLiteral { value: key, .. }) => {
-                TypeInfo::at_facet(base, &FacetKind::Key(key.to_string()), || {
-                    self.subscript_infer_for_type(base.ty(), slice, range, errors)
-                })
-            }
-            _ => TypeInfo::of_ty(self.subscript_infer_for_type(base.ty(), slice, range, errors)),
-        }
-    }
-
-    /// When interpreted as static types (as opposed to when accounting for runtime
-    /// behavior when used as values), `Type::ClassDef(cls)` is equivalent to
-    /// `Type::Type(box Type::ClassType(cls, default_targs(cls)))` where `default_targs(cls)`
-    /// is the result of looking up the class `tparams` and synthesizing default `targs` that
-    /// are gradual if needed (e.g. `list` is treated as `list[Any]` when used as an annotation).
-    ///
-    /// This function canonicalizes to `Type::ClassType` or `Type::TypedDict`
-    pub fn canonicalize_all_class_types(&self, ty: Type, range: TextRange) -> Type {
-        ty.transform(&mut |ty| match ty {
-            Type::SpecialForm(SpecialForm::Tuple) => {
-                *ty = Type::Tuple(Tuple::unbounded(Type::Any(AnyStyle::Implicit)));
-            }
-            Type::SpecialForm(SpecialForm::Callable) => {
-                *ty = Type::callable_ellipsis(Type::Any(AnyStyle::Implicit))
-            }
-            Type::SpecialForm(SpecialForm::Type) => {
-                *ty = Type::type_form(Type::Any(AnyStyle::Implicit))
-            }
-            Type::ClassDef(cls) => {
-                if cls.is_builtin("tuple") {
-                    *ty = Type::type_form(Type::Tuple(Tuple::unbounded(Type::Any(
-                        AnyStyle::Implicit,
-                    ))));
-                } else {
-                    *ty = Type::type_form(self.promote(cls, range));
-                }
-            }
-            _ => {}
-        })
-    }
-
-    fn literal_bool_infer(&self, x: &Expr, errors: &ErrorCollector) -> bool {
-        let ty = self.expr_infer(x, errors);
-        match ty {
-            Type::Literal(Lit::Bool(b)) => b,
-            _ => {
-                self.error(
-                    errors,
-                    x.range(),
-                    ErrorKind::InvalidLiteral,
-                    None,
-                    format!(
-                        "Expected literal `True` or `False`, got `{}`",
-                        self.for_display(ty)
-                    ),
-                );
-                false
-            }
-        }
-    }
-
-    pub fn typevar_from_call(
-        &self,
-        name: Identifier,
-        x: &ExprCall,
-        errors: &ErrorCollector,
-    ) -> TypeVar {
-        let mut arg_name = false;
-        let mut restriction = None;
-        let mut default = None;
-        let mut variance = None;
-
-        let check_name_arg = |arg: &Expr| {
-            if let Expr::StringLiteral(lit) = arg {
-                if lit.value.to_str() != name.id.as_str() {
-                    self.error(
-                        errors,
-                        x.range,
-                        ErrorKind::InvalidTypeVar,
-                        None,
-                        format!(
-                            "TypeVar must be assigned to a variable named `{}`",
-                            lit.value.to_str()
-                        ),
-                    );
-                }
-            } else {
-                self.error(
-                    errors,
-                    arg.range(),
-                    ErrorKind::InvalidTypeVar,
-                    None,
-                    "Expected first argument of TypeVar to be a string literal".to_owned(),
-                );
-            }
-        };
-
-        let mut try_set_variance = |kw: &Keyword, v: PreInferenceVariance| {
-            if self.literal_bool_infer(&kw.value, errors) {
-                if variance.is_some() {
-                    self.error(
-                        errors,
-                        kw.range,
-                        ErrorKind::InvalidTypeVar,
-                        None,
-                        "Contradictory variance specifications".to_owned(),
-                    );
-                } else {
-                    variance = Some(v);
-                }
-            }
-        };
-
-        let mut iargs = x.arguments.args.iter();
-        if let Some(arg) = iargs.next() {
-            check_name_arg(arg);
-            arg_name = true;
-        }
-
-        let constraints = iargs
-            .map(|arg| self.expr_untype(arg, TypeFormContext::TypeVarConstraint, errors))
-            .collect::<Vec<_>>();
-        if !constraints.is_empty() {
-            restriction = Some(Restriction::Constraints(constraints));
-        }
-
-        for kw in &x.arguments.keywords {
-            match &kw.arg {
-                Some(id) => match id.id.as_str() {
-                    "bound" => {
-                        let bound =
-                            self.expr_untype(&kw.value, TypeFormContext::TypeVarConstraint, errors);
-                        if restriction.is_some() {
-                            self.error(
-                                errors,
-                                kw.range,
-                                ErrorKind::InvalidTypeVar,
-                                None,
-                                "TypeVar cannot have both constraints and bound".to_owned(),
-                            );
-                        } else {
-                            restriction = Some(Restriction::Bound(bound));
-                        }
-                    }
-                    "default" => {
-                        default = Some((
-                            self.expr_untype(&kw.value, TypeFormContext::TypeVarDefault, errors),
-                            kw.value.range(),
-                        ))
-                    }
-                    "covariant" => try_set_variance(kw, PreInferenceVariance::PCovariant),
-                    "contravariant" => try_set_variance(kw, PreInferenceVariance::PContravariant),
-                    "invariant" => try_set_variance(kw, PreInferenceVariance::PInvariant),
-                    "infer_variance" => try_set_variance(kw, PreInferenceVariance::PUndefined),
-                    "name" => {
-                        if arg_name {
-                            self.error(
-                                errors,
-                                kw.range,
-                                ErrorKind::InvalidTypeVar,
-                                None,
-                                "Multiple values for argument `name`".to_owned(),
-                            );
-                        } else {
-                            check_name_arg(&kw.value);
-                            arg_name = true;
-                        }
-                    }
-                    _ => {
-                        self.error(
-                            errors,
-                            kw.range,
-                            ErrorKind::InvalidTypeVar,
-                            None,
-                            format!("Unexpected keyword argument `{}` to TypeVar", id.id),
-                        );
-                    }
-                },
-                _ => {
-                    self.error(
-                        errors,
-                        kw.range,
-                        ErrorKind::InvalidTypeVar,
-                        None,
-                        "Cannot pass unpacked keyword arguments to TypeVar".to_owned(),
-                    );
-                }
-            }
-        }
-
-        if !arg_name {
-            self.error(
-                errors,
-                x.range,
-                ErrorKind::InvalidTypeVar,
-                None,
-                "Missing `name` argument".to_owned(),
-            );
-        }
-        let restriction = restriction.unwrap_or(Restriction::Unrestricted);
-        let mut default_value = None;
-        if let Some((default_ty, default_range)) = default {
-            default_value = Some(self.validate_type_var_default(
-                &name.id,
-                QuantifiedKind::TypeVar,
-                &default_ty,
-                default_range,
-                &restriction,
-                errors,
-            ));
-        }
-
-        let variance = variance.unwrap_or(PreInferenceVariance::PInvariant);
-
-        TypeVar::new(
-            name,
-            self.module_info().dupe(),
-            restriction,
-            default_value,
-            variance,
-        )
-    }
-
-    pub fn paramspec_from_call(
-        &self,
-        name: Identifier,
-        x: &ExprCall,
-        errors: &ErrorCollector,
-    ) -> ParamSpec {
-        // TODO: check and complain on extra args, keywords
-        let mut arg_name = false;
-
-        let check_name_arg = |arg: &Expr| {
-            if let Expr::StringLiteral(lit) = arg {
-                if lit.value.to_str() != name.id.as_str() {
-                    self.error(
-                        errors,
-                        x.range,
-                        ErrorKind::InvalidParamSpec,
-                        None,
-                        format!(
-                            "ParamSpec must be assigned to a variable named `{}`",
-                            lit.value.to_str()
-                        ),
-                    );
-                }
-            } else {
-                self.error(
-                    errors,
-                    arg.range(),
-                    ErrorKind::InvalidParamSpec,
-                    None,
-                    "Expected first argument of ParamSpec to be a string literal".to_owned(),
-                );
-            }
-        };
-
-        if let Some(arg) = x.arguments.args.first() {
-            check_name_arg(arg);
-            arg_name = true;
-        }
-        let mut default = None;
-        for kw in &x.arguments.keywords {
-            match &kw.arg {
-                Some(id) => match id.id.as_str() {
-                    "name" => {
-                        if arg_name {
-                            self.error(
-                                errors,
-                                kw.range,
-                                ErrorKind::InvalidParamSpec,
-                                None,
-                                "Multiple values for argument `name`".to_owned(),
-                            );
-                        } else {
-                            check_name_arg(&kw.value);
-                            arg_name = true;
-                        }
-                    }
-                    "default" => {
-                        default = Some((
-                            self.expr_untype(&kw.value, TypeFormContext::ParamSpecDefault, errors),
-                            kw.range(),
-                        ));
-                    }
-                    _ => {
-                        self.error(
-                            errors,
-                            kw.range,
-                            ErrorKind::InvalidParamSpec,
-                            None,
-                            format!("Unexpected keyword argument `{}` to ParamSpec", id.id),
-                        );
-                    }
-                },
-                _ => {
-                    self.error(
-                        errors,
-                        kw.range,
-                        ErrorKind::InvalidParamSpec,
-                        None,
-                        "Cannot pass unpacked keyword arguments to ParamSpec".to_owned(),
-                    );
-                }
-            }
-        }
-
-        if !arg_name {
-            self.error(
-                errors,
-                x.range,
-                ErrorKind::InvalidParamSpec,
-                None,
-                "Missing `name` argument".to_owned(),
-            );
-        }
-        let mut default_value = None;
-        if let Some((default_ty, default_range)) = default {
-            default_value = Some(self.validate_type_var_default(
-                &name.id,
-                QuantifiedKind::ParamSpec,
-                &default_ty,
-                default_range,
-                &Restriction::Unrestricted,
-                errors,
-            ));
-        }
-        ParamSpec::new(name, self.module_info().dupe(), default_value)
-    }
-
-    pub fn typevartuple_from_call(
-        &self,
-        name: Identifier,
-        x: &ExprCall,
-        errors: &ErrorCollector,
-    ) -> TypeVarTuple {
-        let mut arg_name = false;
-        let check_name_arg = |arg: &Expr| {
-            if let Expr::StringLiteral(lit) = arg {
-                if lit.value.to_str() != name.id.as_str() {
-                    self.error(
-                        errors,
-                        x.range,
-                        ErrorKind::InvalidTypeVarTuple,
-                        None,
-                        format!(
-                            "TypeVarTuple must be assigned to a variable named `{}`",
-                            lit.value.to_str()
-                        ),
-                    );
-                }
-            } else {
-                self.error(
-                    errors,
-                    arg.range(),
-                    ErrorKind::InvalidTypeVarTuple,
-                    None,
-                    "Expected first argument of TypeVarTuple to be a string literal".to_owned(),
-                );
-            }
-        };
-        if let Some(arg) = x.arguments.args.first() {
-            check_name_arg(arg);
-            arg_name = true;
-        }
-        if let Some(arg) = x.arguments.args.get(1) {
-            self.error(
-                errors,
-                arg.range(),
-                ErrorKind::InvalidTypeVarTuple,
-                None,
-                "Unexpected positional argument to TypeVarTuple".to_owned(),
-            );
-        }
-        let mut default = None;
-        for kw in &x.arguments.keywords {
-            match &kw.arg {
-                Some(id) => match id.id.as_str() {
-                    "name" => {
-                        if arg_name {
-                            self.error(
-                                errors,
-                                kw.range,
-                                ErrorKind::InvalidTypeVarTuple,
-                                None,
-                                "Multiple values for argument `name`".to_owned(),
-                            );
-                        } else {
-                            check_name_arg(&kw.value);
-                            arg_name = true;
-                        }
-                    }
-                    "default" => {
-                        default = Some((
-                            self.expr_untype(
-                                &kw.value,
-                                TypeFormContext::TypeVarTupleDefault,
-                                errors,
-                            ),
-                            kw.range(),
-                        ));
-                    }
-                    _ => {
-                        self.error(
-                            errors,
-                            kw.range,
-                            ErrorKind::InvalidTypeVarTuple,
-                            None,
-                            format!("Unexpected keyword argument `{}` to TypeVarTuple", id.id),
-                        );
-                    }
-                },
-                _ => {
-                    self.error(
-                        errors,
-                        kw.range,
-                        ErrorKind::InvalidTypeVarTuple,
-                        None,
-                        "Cannot pass unpacked keyword arguments to TypeVarTuple".to_owned(),
-                    );
-                }
-            }
-        }
-        if !arg_name {
-            self.error(
-                errors,
-                x.range,
-                ErrorKind::InvalidTypeVarTuple,
-                None,
-                "Missing `name` argument".to_owned(),
-            );
-        }
-        let mut default_value = None;
-        if let Some((default_ty, default_range)) = default {
-            default_value = Some(self.validate_type_var_default(
-                &name.id,
-                QuantifiedKind::TypeVarTuple,
-                &default_ty,
-                default_range,
-                &Restriction::Unrestricted,
-                errors,
-            ));
-        }
-        TypeVarTuple::new(name, self.module_info().dupe(), default_value)
-    }
-
-    pub fn expr_infer(&self, x: &Expr, errors: &ErrorCollector) -> Type {
-        self.expr_infer_type_info(x, errors).into_ty()
-    }
-
-    pub fn expr_infer_type_info(&self, x: &Expr, errors: &ErrorCollector) -> TypeInfo {
-        self.expr_infer_type_info_with_hint(x, None, errors)
-    }
-
-    /// Apply a decorator. This effectively synthesizes a function call.
-    pub fn apply_decorator(
-        &self,
-        decorator: Idx<Key>,
-        decoratee: Type,
+        hint: Option<&Type>,
         errors: &ErrorCollector,
     ) -> Type {
-        if matches!(&decoratee, Type::ClassDef(cls) if cls.has_qname("typing", "TypeVar")) {
-            // Avoid recursion in TypeVar, which is decorated with `@final`, whose type signature
-            // itself depends on a TypeVar.
-            return decoratee;
-        }
-        let ty_decorator = self.get_idx(decorator).arc_clone_ty();
-        if matches!(&decoratee, Type::ClassDef(_)) {
-            // TODO: don't blanket ignore class decorators.
-            return decoratee;
-        }
-        let range = self.bindings().idx_to_key(decorator).range();
-        let call_target =
-            self.as_call_target_or_error(ty_decorator, CallStyle::FreeForm, range, errors, None);
-        let arg = CallArg::ty(&decoratee, range);
-        self.call_infer(call_target, &[arg], &[], range, errors, None, None)
+        self.expr_infer_type_info_with_hint(x, hint, errors)
+            .into_ty()
     }
 
-    /// Helper to infer element types for a list or set.
-    fn elts_infer(
-        &self,
-        elts: &[Expr],
-        elt_hint: Option<Type>,
-        errors: &ErrorCollector,
-    ) -> Vec<Type> {
-        elts.map(|x| match x {
-            Expr::Starred(ExprStarred { value, .. }) => {
-                let hint = elt_hint
-                    .as_ref()
-                    .map(|ty| self.stdlib.iterable(ty.clone()).to_type());
-                let unpacked_ty = self.expr_infer_with_hint_promote(value, hint.as_ref(), errors);
-                if let Some(iterable_ty) = self.unwrap_iterable(&unpacked_ty) {
-                    iterable_ty
-                } else {
-                    self.error(
-                        errors,
-                        x.range(),
-                        ErrorKind::NotIterable,
-                        None,
-                        format!(
-                            "Expected an iterable, got `{}`",
-                            self.for_display(unpacked_ty)
-                        ),
-                    )
-                }
-            }
-            _ => self.expr_infer_with_hint_promote(x, elt_hint.as_ref(), errors),
-        })
-    }
-
-    fn expr_infer_type_info_with_hint(
+    /// Like expr_infer_with_hint(), but returns a TypeInfo that includes narrowing information.
+    pub fn expr_infer_type_info_with_hint(
         &self,
         x: &Expr,
         hint: Option<&Type>,
         errors: &ErrorCollector,
     ) -> TypeInfo {
+        if let Some(self_type_annotation) = self.intercept_typing_self_use(x) {
+            return self_type_annotation;
+        }
         let res = match x {
             Expr::Name(x) => self
                 .get(&Key::BoundName(ShortIdentifier::expr_name(x)))
                 .arc_clone(),
             Expr::Attribute(x) => {
-                let base = self.expr_infer_type_info(&x.value, errors);
+                let base = self.expr_infer_type_info_with_hint(&x.value, None, errors);
                 self.record_external_attribute_definition_index(
                     base.ty(),
                     x.attr.id(),
@@ -768,7 +235,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Expr::Subscript(x) => {
                 // TODO: We don't deal properly with hint here, we should.
-                let base = self.expr_infer_type_info(&x.value, errors);
+                let base = self.expr_infer_type_info_with_hint(&x.value, None, errors);
                 self.subscript_infer(&base, &x.slice, x.range(), errors)
             }
             Expr::Named(x) => match &*x.target {
@@ -786,216 +253,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         res
     }
 
-    pub fn subscript_infer_for_type(
+    fn expr_type_info(
         &self,
-        base: &Type,
-        slice: &Expr,
-        range: TextRange,
+        x: &Expr,
+        check: Option<(&Type, &dyn Fn() -> TypeCheckContext)>,
         errors: &ErrorCollector,
-    ) -> Type {
-        let xs = Ast::unpack_slice(slice);
-        self.distribute_over_union(base, |base| {
-            let mut base = base.clone();
-            if let Type::Var(v) = base {
-                base = self.solver().force_var(v);
-            }
-            if matches!(&base, Type::ClassDef(t) if t.name() == "tuple") {
-                base = Type::type_form(Type::SpecialForm(SpecialForm::Tuple));
-            }
-            match base {
-                Type::Forall(forall) => {
-                    let tys =
-                        xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors));
-                    self.specialize_forall(*forall, tys, range, errors)
-                }
-                // Note that we have to check for `builtins.type` by name here because this code runs
-                // when we're bootstrapping the stdlib and don't have access to class objects yet.
-                Type::ClassDef(cls) if cls.is_builtin("type") => {
-                    let targ = match xs.len() {
-                        // This causes us to treat `type[list]` as equivalent to `type[list[Any]]`,
-                        // which may or may not be what we want.
-                        1 => self.expr_untype(&xs[0], TypeFormContext::TypeArgumentForType, errors),
-                        _ => self.error(
-                            errors,
-                            range,
-                            ErrorKind::BadSpecialization,
-                            None,
-                            format!("Expected 1 type argument for `type`, got {}", xs.len()),
-                        ),
-                    };
-                    // TODO: Validate that `targ` refers to a "valid in-scope class or TypeVar"
-                    // (https://typing.readthedocs.io/en/latest/spec/annotations.html#type-and-annotation-expressions)
-                    Type::type_form(Type::type_form(targ))
-                }
-                // TODO: pyre_extensions.PyreReadOnly is a non-standard type system extension that marks read-only
-                // objects. We don't support it yet.
-                Type::ClassDef(cls)
-                    if cls.has_qname("pyre_extensions", "PyreReadOnly")
-                        || cls.has_qname("pyre_extensions", "ReadOnly") =>
-                {
-                    match xs.len() {
-                        1 => self.expr_infer(&xs[0], errors),
-                        _ => self.error(
-                            errors,
-                            range,
-                            ErrorKind::BadSpecialization,
-                            None,
-                            format!(
-                                "Expected 1 type argument for `PyreReadOnly`, got {}",
-                                xs.len()
-                            ),
-                        ),
-                    }
-                }
-                Type::ClassDef(ref cls)
-                    if let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = slice
-                        && self.get_enum_from_class(cls).is_some() =>
-                {
-                    if let Some(member) = self.get_enum_member(cls, &Name::new(key.to_str())) {
-                        Type::Literal(member)
-                    } else {
-                        self.error(
-                            errors,
-                            slice.range(),
-                            ErrorKind::IndexError,
-                            None,
-                            format!(
-                                "Enum `{}` does not have a member named `{}`",
-                                cls.name(),
-                                key.to_str()
-                            ),
-                        )
-                    }
-                }
-                Type::ClassDef(ref cls) if self.get_enum_from_class(cls).is_some() => {
-                    if self.is_subset_eq(
-                        &self.expr(slice, None, errors),
-                        &self.stdlib.str().clone().to_type(),
-                    ) {
-                        Type::ClassType(self.as_class_type_unchecked(cls))
-                    } else {
-                        self.error(
-                            errors,
-                            slice.range(),
-                            ErrorKind::IndexError,
-                            None,
-                            format!("Enum `{}` can only be indexed by strings", cls.name()),
-                        )
-                    }
-                }
-                Type::ClassDef(cls) => Type::type_form(self.specialize(
-                    &cls,
-                    xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors)),
-                    range,
-                    errors,
-                )),
-                Type::Type(box Type::SpecialForm(special)) => {
-                    self.apply_special_form(special, slice, range, errors)
-                }
-                Type::Tuple(Tuple::Concrete(ref elts)) if xs.len() == 1 => self.infer_tuple_index(
-                    elts.to_owned(),
-                    &xs[0],
-                    range,
-                    errors,
-                    Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
-                ),
-                Type::Tuple(_) if xs.len() == 1 => self.call_method_or_error(
-                    &base,
-                    &dunder::GETITEM,
-                    range,
-                    &[CallArg::expr(slice)],
-                    &[],
-                    errors,
-                    Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
-                ),
-                Type::Any(style) => style.propagate(),
-                Type::Literal(Lit::Bytes(ref bytes)) => self.subscript_bytes_literal(
-                    bytes,
-                    slice,
-                    errors,
-                    range,
-                    Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
-                ),
-                Type::LiteralString | Type::Literal(Lit::Str(_)) if xs.len() <= 3 => {
-                    // We could have a more precise type here, but this matches Pyright.
-                    self.stdlib.str().clone().to_type()
-                }
-                Type::ClassType(ref cls) | Type::SelfType(ref cls)
-                    if let Some(elts) = self.named_tuple_element_types(cls) =>
-                {
-                    self.infer_tuple_index(
-                        elts,
-                        slice,
-                        range,
-                        errors,
-                        Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
-                    )
-                }
-                Type::ClassType(_) | Type::SelfType(_) => self.call_method_or_error(
-                    &base,
-                    &dunder::GETITEM,
-                    range,
-                    &[CallArg::expr(slice)],
-                    &[],
-                    errors,
-                    Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
-                ),
-                Type::TypedDict(typed_dict) => {
-                    let key_ty = self.expr_infer(slice, errors);
-                    self.distribute_over_union(&key_ty, |ty| match ty {
-                        Type::Literal(Lit::Str(field_name)) => {
-                            if let Some(field) =
-                                self.typed_dict_field(&typed_dict, &Name::new(field_name))
-                            {
-                                field.ty.clone()
-                            } else {
-                                self.error(
-                                    errors,
-                                    slice.range(),
-                                    ErrorKind::TypedDictKeyError,
-                                    None,
-                                    format!(
-                                        "TypedDict `{}` does not have key `{}`",
-                                        typed_dict.name(),
-                                        field_name
-                                    ),
-                                )
-                            }
-                        }
-                        _ => self.error(
-                            errors,
-                            slice.range(),
-                            ErrorKind::TypedDictKeyError,
-                            None,
-                            format!(
-                                "Invalid key for TypedDict `{}`, got `{}`",
-                                typed_dict.name(),
-                                self.for_display(ty.clone())
-                            ),
-                        ),
-                    })
-                }
-                t => self.error(
-                    errors,
-                    range,
-                    ErrorKind::BadSpecialization,
-                    None,
-                    format!(
-                        "Can't apply arguments to non-class, got {}",
-                        self.for_display(t)
-                    ),
-                ),
-            }
-        })
+    ) -> TypeInfo {
+        self.expr_type_info_with_separate_check_errors(
+            x,
+            check.map(|(ty, tcc)| (ty, tcc, errors)),
+            errors,
+        )
     }
 
-    fn has_exactly_two_posargs(&self, arguments: &Arguments) -> bool {
-        arguments.keywords.is_empty()
-            && arguments.args.len() == 2
-            && arguments
-                .args
-                .iter()
-                .all(|e| !matches!(e, Expr::Starred(_)))
+    fn expr_type_info_with_separate_check_errors(
+        &self,
+        x: &Expr,
+        check: Option<(&Type, &dyn Fn() -> TypeCheckContext, &ErrorCollector)>,
+        errors: &ErrorCollector,
+    ) -> TypeInfo {
+        match check {
+            Some((want, tcc, check_errors)) if !want.is_any() => {
+                let got = self.expr_infer_type_info_with_hint(x, Some(want), errors);
+                self.check_and_return_type_info(want, got, x.range(), check_errors, tcc)
+            }
+            _ => self.expr_infer_type_info_with_hint(x, None, errors),
+        }
     }
 
     /// This function should not be used directly: we want every expression to record a type trace,
@@ -1019,6 +302,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let body_type = self.expr_infer_type_no_trace(&x.body, hint, errors);
                 let orelse_type = self.expr_infer_type_no_trace(&x.orelse, hint, errors);
                 self.check_dunder_bool_is_callable(&condition_type, x.range(), errors);
+                self.check_redundant_condition(&condition_type, x.range(), errors);
                 match condition_type.as_bool() {
                     Some(true) => body_type,
                     Some(false) => orelse_type,
@@ -1026,7 +310,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Expr::BoolOp(x) => self.boolop(&x.values, x.op, errors),
-            Expr::BinOp(x) => self.binop_infer(x, errors),
+            Expr::BinOp(x) => self.binop_infer(x, hint, errors),
             Expr::UnaryOp(x) => self.unop_infer(x, errors),
             Expr::Lambda(lambda) => {
                 let mut param_vars = Vec::new();
@@ -1099,8 +383,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         self.error(
                                             errors,
                                             x.range(),
-                                            ErrorKind::NotIterable,
-                                            None,
+                                            ErrorInfo::Kind(ErrorKind::NotIterable),
                                             format!(
                                                 "Expected an iterable, got `{}`",
                                                 self.for_display(ty)
@@ -1245,8 +528,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     self.error(
                                         errors,
                                         x.value.range(),
-                                        ErrorKind::InvalidArgument,
-                                        None,
+                                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
                                         format!("Expected a mapping, got {}", self.for_display(ty)),
                                     );
                                 }
@@ -1314,8 +596,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None => self.error(
                         errors,
                         x.range,
-                        ErrorKind::AsyncError,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::AsyncError),
                         ErrorContext::Await(self.for_display(awaiting_ty)).format(),
                     ),
                 }
@@ -1324,22 +605,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::YieldFrom(x) => self.get(&KeyYieldFrom(x.range)).return_ty.clone(),
             Expr::Compare(x) => self.compare_infer(x, errors),
             Expr::Call(x) => {
-                let mut ty_fun = self.expr_infer(&x.func, errors);
-                if matches!(&ty_fun, Type::ClassDef(cls) if cls.is_builtin("super")) {
-                    if is_special_name(&x.func, "super") {
-                        self.get(&Key::SuperInstance(x.range)).arc_clone_ty()
-                    } else {
-                        // Because we have to construct a binding for super in order to fill in
-                        // implicit arguments, we can't handle things like local aliases to super.
-                        Type::any_implicit()
-                    }
+                let mut callee_ty = self.expr_infer(&x.func, errors);
+                if matches!(&callee_ty, Type::ClassDef(cls) if cls.is_builtin("super")) {
+                    // Because we have to construct a binding for super in order to fill in implicit arguments,
+                    // we can't handle things like local aliases to super. If we hit a case where the binding
+                    // wasn't constructed, fall back to `Any`.
+                    self.get_hashed_opt(Hashed::new(&Key::SuperInstance(x.range)))
+                        .map_or_else(Type::any_implicit, |type_info| type_info.arc_clone_ty())
                 } else {
-                    self.expand_type_mut(&mut ty_fun);
+                    self.expand_type_mut(&mut callee_ty);
 
                     let args;
                     let kws;
                     let call = CallWithTypes::new();
-                    if ty_fun.is_union() {
+                    if callee_ty.is_union() {
                         // If we have a union we will distribute over it, and end up duplicating each function call.
                         args = x
                             .arguments
@@ -1354,12 +633,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         kws = x.arguments.keywords.map(CallKeyword::new);
                     }
 
-                    self.distribute_over_union(&ty_fun, |ty| match ty.callee_kind() {
+                    self.distribute_over_union(&callee_ty, |ty| match ty.callee_kind() {
                         Some(CalleeKind::Function(FunctionKind::AssertType)) => self
                             .call_assert_type(
                                 &x.arguments.args,
                                 &x.arguments.keywords,
                                 x.arguments.range,
+                                hint,
                                 errors,
                             ),
                         Some(CalleeKind::Function(FunctionKind::RevealType)) => self
@@ -1367,6 +647,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &x.arguments.args,
                                 &x.arguments.keywords,
                                 x.arguments.range,
+                                hint,
                                 errors,
                             ),
                         Some(CalleeKind::Function(FunctionKind::Cast)) => {
@@ -1386,6 +667,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &x.arguments.args,
                                 &x.arguments.keywords,
                                 x.arguments.range,
+                                hint,
                                 errors,
                             ),
                         None if ty.is_error() && is_special_name(&x.func, "reveal_type") => self
@@ -1393,6 +675,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &x.arguments.args,
                                 &x.arguments.keywords,
                                 x.arguments.range,
+                                hint,
                                 errors,
                             ),
                         Some(CalleeKind::Function(FunctionKind::IsInstance))
@@ -1405,13 +688,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         {
                             self.call_issubclass(&x.arguments.args[0], &x.arguments.args[1], errors)
                         }
-                        _ if matches!(&ty_fun, Type::ClassDef(cls) if cls == self.stdlib.builtins_type().class_object())
+                        _ if matches!(ty, Type::ClassDef(cls) if cls == self.stdlib.builtins_type().class_object())
                             && x.arguments.args.len() == 1 && x.arguments.keywords.is_empty() =>
                         {
                             // We may be able to provide a more precise type when the constructor for `builtins.type`
                             // is called with a single argument.
-                            let typ = self.expr_infer(&x.arguments.args[0], errors);
-                            self.type_of(typ)
+                            let arg_ty = self.expr_infer(&x.arguments.args[0], errors);
+                            self.type_of(arg_ty)
                         }
                         _ => {
                             let callable = self.as_call_target_or_error(
@@ -1428,7 +711,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 x.arguments.range,
                                 errors,
                                 None,
-                                hint.cloned(),
+                                hint,
                             )
                         }
                     })
@@ -1452,8 +735,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::TString(x) => self.error(
                 errors,
                 x.range,
-                ErrorKind::Unsupported,
-                None,
+                ErrorInfo::Kind(ErrorKind::Unsupported),
                 "t-strings are not yet supported".to_owned(),
             ),
             Expr::StringLiteral(x) => Lit::from_string_literal(x).to_type(),
@@ -1481,8 +763,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::IpyEscapeCommand(x) => self.error(
                 errors,
                 x.range,
-                ErrorKind::Unsupported,
-                None,
+                ErrorInfo::Kind(ErrorKind::Unsupported),
                 "IPython escapes are not supported".to_owned(),
             ),
         }
@@ -1504,6 +785,793 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             ty.promote_literals(self.stdlib)
         }
+    }
+
+    // Helper method for inferring the type of a boolean operation over a sequence of values.
+    fn boolop(&self, values: &[Expr], op: BoolOp, errors: &ErrorCollector) -> Type {
+        let target = match op {
+            BoolOp::And => false,
+            BoolOp::Or => true,
+        };
+        let should_shortcircuit = |t: &Type| t.as_bool() == Some(target);
+        let should_discard = |t: &Type| t.as_bool() == Some(!target);
+
+        let mut types = Vec::new();
+        let last_index = values.len() - 1;
+        for (i, value) in values.iter().enumerate() {
+            let mut t = self.expr_infer(value, errors);
+            self.expand_type_mut(&mut t);
+            if should_shortcircuit(&t) {
+                types.push(t);
+                break;
+            }
+            for t in t.into_unions() {
+                // If we reach the last value, we should always keep it.
+                if i == last_index || !should_discard(&t) {
+                    if i != last_index && t == self.stdlib.bool().clone().to_type() {
+                        types.push(Lit::Bool(target).to_type());
+                    } else if i != last_index && t == self.stdlib.int().clone().to_type() && !target
+                    {
+                        types.push(Lit::Int(LitInt::new(0)).to_type());
+                    } else if i != last_index && t == self.stdlib.str().clone().to_type() && !target
+                    {
+                        types.push(Lit::Str(String::new().into_boxed_str()).to_type());
+                    } else {
+                        types.push(t);
+                    }
+                }
+            }
+        }
+        self.unions(types)
+    }
+
+    /// Infers types for `if` clauses in the given comprehensions.
+    /// This is for error detection only; the types are not used.
+    fn ifs_infer(&self, comps: &[Comprehension], errors: &ErrorCollector) {
+        for comp in comps {
+            for if_clause in comp.ifs.iter() {
+                let ty = self.expr_infer(if_clause, errors);
+                self.check_redundant_condition(&ty, if_clause.range(), errors);
+            }
+        }
+    }
+
+    pub fn attr_infer_for_type(
+        &self,
+        base: &Type,
+        attr_name: &Name,
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) -> Type {
+        self.type_of_attr_get(
+            base,
+            attr_name,
+            range,
+            errors,
+            context,
+            "Expr::attr_infer_for_type",
+        )
+    }
+
+    pub fn attr_infer(
+        &self,
+        base: &TypeInfo,
+        attr_name: &Name,
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) -> TypeInfo {
+        TypeInfo::at_facet(base, &FacetKind::Attribute(attr_name.clone()), || {
+            self.attr_infer_for_type(base.ty(), attr_name, range, errors, context)
+        })
+    }
+
+    pub fn subscript_infer(
+        &self,
+        base: &TypeInfo,
+        slice: &Expr,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> TypeInfo {
+        match slice {
+            Expr::NumberLiteral(ExprNumberLiteral {
+                value: Number::Int(idx),
+                ..
+            }) if let Some(idx) = idx.as_usize() => {
+                TypeInfo::at_facet(base, &FacetKind::Index(idx), || {
+                    self.subscript_infer_for_type(base.ty(), slice, range, errors)
+                })
+            }
+            Expr::StringLiteral(ExprStringLiteral { value: key, .. }) => {
+                TypeInfo::at_facet(base, &FacetKind::Key(key.to_string()), || {
+                    self.subscript_infer_for_type(base.ty(), slice, range, errors)
+                })
+            }
+            _ => TypeInfo::of_ty(self.subscript_infer_for_type(base.ty(), slice, range, errors)),
+        }
+    }
+
+    /// When interpreted as static types (as opposed to when accounting for runtime
+    /// behavior when used as values), `Type::ClassDef(cls)` is equivalent to
+    /// `Type::Type(box Type::ClassType(cls, default_targs(cls)))` where `default_targs(cls)`
+    /// is the result of looking up the class `tparams` and synthesizing default `targs` that
+    /// are gradual if needed (e.g. `list` is treated as `list[Any]` when used as an annotation).
+    ///
+    /// This function canonicalizes to `Type::ClassType` or `Type::TypedDict`
+    pub fn canonicalize_all_class_types(&self, ty: Type, range: TextRange) -> Type {
+        ty.transform(&mut |ty| match ty {
+            Type::SpecialForm(SpecialForm::Tuple) => {
+                *ty = Type::Tuple(Tuple::unbounded(Type::Any(AnyStyle::Implicit)));
+            }
+            Type::SpecialForm(SpecialForm::Callable) => {
+                *ty = Type::callable_ellipsis(Type::Any(AnyStyle::Implicit))
+            }
+            Type::SpecialForm(SpecialForm::Type) => {
+                *ty = Type::type_form(Type::Any(AnyStyle::Implicit))
+            }
+            Type::ClassDef(cls) => {
+                if cls.is_builtin("tuple") {
+                    *ty = Type::type_form(Type::Tuple(Tuple::unbounded(Type::Any(
+                        AnyStyle::Implicit,
+                    ))));
+                } else {
+                    *ty = Type::type_form(self.promote(cls, range));
+                }
+            }
+            _ => {}
+        })
+    }
+
+    fn literal_bool_infer(&self, x: &Expr, errors: &ErrorCollector) -> bool {
+        let ty = self.expr_infer(x, errors);
+        match ty {
+            Type::Literal(Lit::Bool(b)) => b,
+            _ => {
+                self.error(
+                    errors,
+                    x.range(),
+                    ErrorInfo::Kind(ErrorKind::InvalidLiteral),
+                    format!(
+                        "Expected literal `True` or `False`, got `{}`",
+                        self.for_display(ty)
+                    ),
+                );
+                false
+            }
+        }
+    }
+
+    pub fn typevar_from_call(
+        &self,
+        name: Identifier,
+        x: &ExprCall,
+        errors: &ErrorCollector,
+    ) -> TypeVar {
+        let mut arg_name = false;
+        let mut restriction = None;
+        let mut default = None;
+        let mut variance = None;
+
+        let check_name_arg = |arg: &Expr| {
+            if let Expr::StringLiteral(lit) = arg {
+                if lit.value.to_str() != name.id.as_str() {
+                    self.error(
+                        errors,
+                        x.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                        format!(
+                            "TypeVar must be assigned to a variable named `{}`",
+                            lit.value.to_str()
+                        ),
+                    );
+                }
+            } else {
+                self.error(
+                    errors,
+                    arg.range(),
+                    ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                    "Expected first argument of TypeVar to be a string literal".to_owned(),
+                );
+            }
+        };
+
+        let mut try_set_variance = |kw: &Keyword, v: PreInferenceVariance| {
+            if self.literal_bool_infer(&kw.value, errors) {
+                if variance.is_some() {
+                    self.error(
+                        errors,
+                        kw.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                        "Contradictory variance specifications".to_owned(),
+                    );
+                } else {
+                    variance = Some(v);
+                }
+            }
+        };
+
+        let mut iargs = x.arguments.args.iter();
+        if let Some(arg) = iargs.next() {
+            check_name_arg(arg);
+            arg_name = true;
+        }
+
+        let constraints = iargs
+            .map(|arg| self.expr_untype(arg, TypeFormContext::TypeVarConstraint, errors))
+            .collect::<Vec<_>>();
+        if !constraints.is_empty() {
+            restriction = Some(Restriction::Constraints(constraints));
+        }
+
+        for kw in &x.arguments.keywords {
+            match &kw.arg {
+                Some(id) => match id.id.as_str() {
+                    "bound" => {
+                        let bound =
+                            self.expr_untype(&kw.value, TypeFormContext::TypeVarConstraint, errors);
+                        if restriction.is_some() {
+                            self.error(
+                                errors,
+                                kw.range,
+                                ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                                "TypeVar cannot have both constraints and bound".to_owned(),
+                            );
+                        } else {
+                            restriction = Some(Restriction::Bound(bound));
+                        }
+                    }
+                    "default" => {
+                        default = Some((
+                            self.expr_untype(&kw.value, TypeFormContext::TypeVarDefault, errors),
+                            kw.value.range(),
+                        ))
+                    }
+                    "covariant" => try_set_variance(kw, PreInferenceVariance::PCovariant),
+                    "contravariant" => try_set_variance(kw, PreInferenceVariance::PContravariant),
+                    "invariant" => try_set_variance(kw, PreInferenceVariance::PInvariant),
+                    "infer_variance" => try_set_variance(kw, PreInferenceVariance::PUndefined),
+                    "name" => {
+                        if arg_name {
+                            self.error(
+                                errors,
+                                kw.range,
+                                ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                                "Multiple values for argument `name`".to_owned(),
+                            );
+                        } else {
+                            check_name_arg(&kw.value);
+                            arg_name = true;
+                        }
+                    }
+                    _ => {
+                        self.error(
+                            errors,
+                            kw.range,
+                            ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                            format!("Unexpected keyword argument `{}` to TypeVar", id.id),
+                        );
+                    }
+                },
+                _ => {
+                    self.error(
+                        errors,
+                        kw.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                        "Cannot pass unpacked keyword arguments to TypeVar".to_owned(),
+                    );
+                }
+            }
+        }
+
+        if !arg_name {
+            self.error(
+                errors,
+                x.range,
+                ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                "Missing `name` argument".to_owned(),
+            );
+        }
+        let restriction = restriction.unwrap_or(Restriction::Unrestricted);
+        let mut default_value = None;
+        if let Some((default_ty, default_range)) = default {
+            default_value = Some(self.validate_type_var_default(
+                &name.id,
+                QuantifiedKind::TypeVar,
+                &default_ty,
+                default_range,
+                &restriction,
+                errors,
+            ));
+        }
+
+        let variance = variance.unwrap_or(PreInferenceVariance::PInvariant);
+
+        TypeVar::new(
+            name,
+            self.module().dupe(),
+            restriction,
+            default_value,
+            variance,
+        )
+    }
+
+    pub fn paramspec_from_call(
+        &self,
+        name: Identifier,
+        x: &ExprCall,
+        errors: &ErrorCollector,
+    ) -> ParamSpec {
+        // TODO: check and complain on extra args, keywords
+        let mut arg_name = false;
+
+        let check_name_arg = |arg: &Expr| {
+            if let Expr::StringLiteral(lit) = arg {
+                if lit.value.to_str() != name.id.as_str() {
+                    self.error(
+                        errors,
+                        x.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidParamSpec),
+                        format!(
+                            "ParamSpec must be assigned to a variable named `{}`",
+                            lit.value.to_str()
+                        ),
+                    );
+                }
+            } else {
+                self.error(
+                    errors,
+                    arg.range(),
+                    ErrorInfo::Kind(ErrorKind::InvalidParamSpec),
+                    "Expected first argument of ParamSpec to be a string literal".to_owned(),
+                );
+            }
+        };
+
+        if let Some(arg) = x.arguments.args.first() {
+            check_name_arg(arg);
+            arg_name = true;
+        }
+        let mut default = None;
+        for kw in &x.arguments.keywords {
+            match &kw.arg {
+                Some(id) => match id.id.as_str() {
+                    "name" => {
+                        if arg_name {
+                            self.error(
+                                errors,
+                                kw.range,
+                                ErrorInfo::Kind(ErrorKind::InvalidParamSpec),
+                                "Multiple values for argument `name`".to_owned(),
+                            );
+                        } else {
+                            check_name_arg(&kw.value);
+                            arg_name = true;
+                        }
+                    }
+                    "default" => {
+                        default = Some((
+                            self.expr_untype(&kw.value, TypeFormContext::ParamSpecDefault, errors),
+                            kw.range(),
+                        ));
+                    }
+                    _ => {
+                        self.error(
+                            errors,
+                            kw.range,
+                            ErrorInfo::Kind(ErrorKind::InvalidParamSpec),
+                            format!("Unexpected keyword argument `{}` to ParamSpec", id.id),
+                        );
+                    }
+                },
+                _ => {
+                    self.error(
+                        errors,
+                        kw.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidParamSpec),
+                        "Cannot pass unpacked keyword arguments to ParamSpec".to_owned(),
+                    );
+                }
+            }
+        }
+
+        if !arg_name {
+            self.error(
+                errors,
+                x.range,
+                ErrorInfo::Kind(ErrorKind::InvalidParamSpec),
+                "Missing `name` argument".to_owned(),
+            );
+        }
+        let mut default_value = None;
+        if let Some((default_ty, default_range)) = default {
+            default_value = Some(self.validate_type_var_default(
+                &name.id,
+                QuantifiedKind::ParamSpec,
+                &default_ty,
+                default_range,
+                &Restriction::Unrestricted,
+                errors,
+            ));
+        }
+        ParamSpec::new(name, self.module().dupe(), default_value)
+    }
+
+    pub fn typevartuple_from_call(
+        &self,
+        name: Identifier,
+        x: &ExprCall,
+        errors: &ErrorCollector,
+    ) -> TypeVarTuple {
+        let mut arg_name = false;
+        let check_name_arg = |arg: &Expr| {
+            if let Expr::StringLiteral(lit) = arg {
+                if lit.value.to_str() != name.id.as_str() {
+                    self.error(
+                        errors,
+                        x.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidTypeVarTuple),
+                        format!(
+                            "TypeVarTuple must be assigned to a variable named `{}`",
+                            lit.value.to_str()
+                        ),
+                    );
+                }
+            } else {
+                self.error(
+                    errors,
+                    arg.range(),
+                    ErrorInfo::Kind(ErrorKind::InvalidTypeVarTuple),
+                    "Expected first argument of TypeVarTuple to be a string literal".to_owned(),
+                );
+            }
+        };
+        if let Some(arg) = x.arguments.args.first() {
+            check_name_arg(arg);
+            arg_name = true;
+        }
+        if let Some(arg) = x.arguments.args.get(1) {
+            self.error(
+                errors,
+                arg.range(),
+                ErrorInfo::Kind(ErrorKind::InvalidTypeVarTuple),
+                "Unexpected positional argument to TypeVarTuple".to_owned(),
+            );
+        }
+        let mut default = None;
+        for kw in &x.arguments.keywords {
+            match &kw.arg {
+                Some(id) => match id.id.as_str() {
+                    "name" => {
+                        if arg_name {
+                            self.error(
+                                errors,
+                                kw.range,
+                                ErrorInfo::Kind(ErrorKind::InvalidTypeVarTuple),
+                                "Multiple values for argument `name`".to_owned(),
+                            );
+                        } else {
+                            check_name_arg(&kw.value);
+                            arg_name = true;
+                        }
+                    }
+                    "default" => {
+                        default = Some((
+                            self.expr_untype(
+                                &kw.value,
+                                TypeFormContext::TypeVarTupleDefault,
+                                errors,
+                            ),
+                            kw.range(),
+                        ));
+                    }
+                    _ => {
+                        self.error(
+                            errors,
+                            kw.range,
+                            ErrorInfo::Kind(ErrorKind::InvalidTypeVarTuple),
+                            format!("Unexpected keyword argument `{}` to TypeVarTuple", id.id),
+                        );
+                    }
+                },
+                _ => {
+                    self.error(
+                        errors,
+                        kw.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidTypeVarTuple),
+                        "Cannot pass unpacked keyword arguments to TypeVarTuple".to_owned(),
+                    );
+                }
+            }
+        }
+        if !arg_name {
+            self.error(
+                errors,
+                x.range,
+                ErrorInfo::Kind(ErrorKind::InvalidTypeVarTuple),
+                "Missing `name` argument".to_owned(),
+            );
+        }
+        let mut default_value = None;
+        if let Some((default_ty, default_range)) = default {
+            default_value = Some(self.validate_type_var_default(
+                &name.id,
+                QuantifiedKind::TypeVarTuple,
+                &default_ty,
+                default_range,
+                &Restriction::Unrestricted,
+                errors,
+            ));
+        }
+        TypeVarTuple::new(name, self.module().dupe(), default_value)
+    }
+
+    /// Apply a decorator. This effectively synthesizes a function call.
+    pub fn apply_decorator(
+        &self,
+        decorator: Idx<Key>,
+        decoratee: Type,
+        errors: &ErrorCollector,
+    ) -> Type {
+        if matches!(&decoratee, Type::ClassDef(cls) if cls.has_qname("typing", "TypeVar")) {
+            // Avoid recursion in TypeVar, which is decorated with `@final`, whose type signature
+            // itself depends on a TypeVar.
+            return decoratee;
+        }
+        let ty_decorator = self.get_idx(decorator).arc_clone_ty();
+        if matches!(&decoratee, Type::ClassDef(_)) {
+            // TODO: don't blanket ignore class decorators.
+            return decoratee;
+        }
+        let range = self.bindings().idx_to_key(decorator).range();
+        let call_target =
+            self.as_call_target_or_error(ty_decorator, CallStyle::FreeForm, range, errors, None);
+        let arg = CallArg::ty(&decoratee, range);
+        self.call_infer(call_target, &[arg], &[], range, errors, None, None)
+    }
+
+    /// Helper to infer element types for a list or set.
+    fn elts_infer(
+        &self,
+        elts: &[Expr],
+        elt_hint: Option<Type>,
+        errors: &ErrorCollector,
+    ) -> Vec<Type> {
+        elts.map(|x| match x {
+            Expr::Starred(ExprStarred { value, .. }) => {
+                let hint = elt_hint
+                    .as_ref()
+                    .map(|ty| self.stdlib.iterable(ty.clone()).to_type());
+                let unpacked_ty = self.expr_infer_with_hint_promote(value, hint.as_ref(), errors);
+                if let Some(iterable_ty) = self.unwrap_iterable(&unpacked_ty) {
+                    iterable_ty
+                } else {
+                    self.error(
+                        errors,
+                        x.range(),
+                        ErrorInfo::Kind(ErrorKind::NotIterable),
+                        format!(
+                            "Expected an iterable, got `{}`",
+                            self.for_display(unpacked_ty)
+                        ),
+                    )
+                }
+            }
+            _ => self.expr_infer_with_hint_promote(x, elt_hint.as_ref(), errors),
+        })
+    }
+
+    fn intercept_typing_self_use(&self, x: &Expr) -> Option<TypeInfo> {
+        match x {
+            Expr::Name(..) | Expr::Attribute(..) => {
+                let key = Key::SelfTypeLiteral(x.range());
+                let self_type_form = self.get_hashed_opt(Hashed::new(&key))?;
+                Some(self_type_form.arc_clone())
+            }
+            _ => None,
+        }
+    }
+
+    pub fn subscript_infer_for_type(
+        &self,
+        base: &Type,
+        slice: &Expr,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let xs = Ast::unpack_slice(slice);
+        self.distribute_over_union(base, |base| {
+            let mut base = base.clone();
+            if let Type::Var(v) = base {
+                base = self.solver().force_var(v);
+            }
+            if matches!(&base, Type::ClassDef(t) if t.name() == "tuple") {
+                base = Type::type_form(Type::SpecialForm(SpecialForm::Tuple));
+            }
+            match base {
+                Type::Forall(forall) => {
+                    let tys =
+                        xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors));
+                    self.specialize_forall(*forall, tys, range, errors)
+                }
+                // Note that we have to check for `builtins.type` by name here because this code runs
+                // when we're bootstrapping the stdlib and don't have access to class objects yet.
+                Type::ClassDef(cls) if cls.is_builtin("type") => {
+                    let targ = match xs.len() {
+                        // This causes us to treat `type[list]` as equivalent to `type[list[Any]]`,
+                        // which may or may not be what we want.
+                        1 => self.expr_untype(&xs[0], TypeFormContext::TypeArgumentForType, errors),
+                        _ => self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::BadSpecialization),
+                            format!("Expected 1 type argument for `type`, got {}", xs.len()),
+                        ),
+                    };
+                    // TODO: Validate that `targ` refers to a "valid in-scope class or TypeVar"
+                    // (https://typing.readthedocs.io/en/latest/spec/annotations.html#type-and-annotation-expressions)
+                    Type::type_form(Type::type_form(targ))
+                }
+                // TODO: pyre_extensions.PyreReadOnly is a non-standard type system extension that marks read-only
+                // objects. We don't support it yet.
+                Type::ClassDef(cls)
+                    if cls.has_qname("pyre_extensions", "PyreReadOnly")
+                        || cls.has_qname("pyre_extensions", "ReadOnly") =>
+                {
+                    match xs.len() {
+                        1 => self.expr_infer(&xs[0], errors),
+                        _ => self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::BadSpecialization),
+                            format!(
+                                "Expected 1 type argument for `PyreReadOnly`, got {}",
+                                xs.len()
+                            ),
+                        ),
+                    }
+                }
+                Type::ClassDef(ref cls)
+                    if let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = slice
+                        && self.get_enum_from_class(cls).is_some() =>
+                {
+                    if let Some(member) = self.get_enum_member(cls, &Name::new(key.to_str())) {
+                        Type::Literal(member)
+                    } else {
+                        self.error(
+                            errors,
+                            slice.range(),
+                            ErrorInfo::Kind(ErrorKind::IndexError),
+                            format!(
+                                "Enum `{}` does not have a member named `{}`",
+                                cls.name(),
+                                key.to_str()
+                            ),
+                        )
+                    }
+                }
+                Type::ClassDef(ref cls) if self.get_enum_from_class(cls).is_some() => {
+                    if self.is_subset_eq(
+                        &self.expr(slice, None, errors),
+                        &self.stdlib.str().clone().to_type(),
+                    ) {
+                        Type::ClassType(self.as_class_type_unchecked(cls))
+                    } else {
+                        self.error(
+                            errors,
+                            slice.range(),
+                            ErrorInfo::Kind(ErrorKind::IndexError),
+                            format!("Enum `{}` can only be indexed by strings", cls.name()),
+                        )
+                    }
+                }
+                Type::ClassDef(cls) => Type::type_form(self.specialize(
+                    &cls,
+                    xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors)),
+                    range,
+                    errors,
+                )),
+                Type::Type(box Type::SpecialForm(special)) => {
+                    self.apply_special_form(special, slice, range, errors)
+                }
+                Type::Tuple(Tuple::Concrete(ref elts)) if xs.len() == 1 => self.infer_tuple_index(
+                    elts.to_owned(),
+                    &xs[0],
+                    range,
+                    errors,
+                    Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
+                ),
+                Type::Tuple(_) if xs.len() == 1 => self.call_method_or_error(
+                    &base,
+                    &dunder::GETITEM,
+                    range,
+                    &[CallArg::expr(slice)],
+                    &[],
+                    errors,
+                    Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
+                ),
+                Type::Any(style) => style.propagate(),
+                Type::Literal(Lit::Bytes(ref bytes)) => self.subscript_bytes_literal(
+                    bytes,
+                    slice,
+                    errors,
+                    range,
+                    Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
+                ),
+                Type::LiteralString | Type::Literal(Lit::Str(_)) if xs.len() <= 3 => {
+                    // We could have a more precise type here, but this matches Pyright.
+                    self.stdlib.str().clone().to_type()
+                }
+                Type::ClassType(ref cls) | Type::SelfType(ref cls)
+                    if let Some(Tuple::Concrete(elts)) = self.as_tuple(cls) =>
+                {
+                    self.infer_tuple_index(
+                        elts,
+                        slice,
+                        range,
+                        errors,
+                        Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
+                    )
+                }
+                Type::ClassType(_) | Type::SelfType(_) => self.call_method_or_error(
+                    &base,
+                    &dunder::GETITEM,
+                    range,
+                    &[CallArg::expr(slice)],
+                    &[],
+                    errors,
+                    Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
+                ),
+                Type::TypedDict(typed_dict) => {
+                    let key_ty = self.expr_infer(slice, errors);
+                    self.distribute_over_union(&key_ty, |ty| match ty {
+                        Type::Literal(Lit::Str(field_name)) => {
+                            if let Some(field) =
+                                self.typed_dict_field(&typed_dict, &Name::new(field_name))
+                            {
+                                field.ty.clone()
+                            } else {
+                                self.error(
+                                    errors,
+                                    slice.range(),
+                                    ErrorInfo::Kind(ErrorKind::TypedDictKeyError),
+                                    format!(
+                                        "TypedDict `{}` does not have key `{}`",
+                                        typed_dict.name(),
+                                        field_name
+                                    ),
+                                )
+                            }
+                        }
+                        _ => self.error(
+                            errors,
+                            slice.range(),
+                            ErrorInfo::Kind(ErrorKind::TypedDictKeyError),
+                            format!(
+                                "Invalid key for TypedDict `{}`, got `{}`",
+                                typed_dict.name(),
+                                self.for_display(ty.clone())
+                            ),
+                        ),
+                    })
+                }
+                t => self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
+                    format!("`{}` is not subscriptable", self.for_display(t)),
+                ),
+            }
+        })
+    }
+
+    fn has_exactly_two_posargs(&self, arguments: &Arguments) -> bool {
+        arguments.keywords.is_empty()
+            && arguments.args.len() == 2
+            && arguments
+                .args
+                .iter()
+                .all(|e| !matches!(e, Expr::Starred(_)))
     }
 
     /// When indexing/slicing concrete tuples with literals, try to infer a more precise type
@@ -1579,8 +1647,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 range,
-                                ErrorKind::IndexError,
-                                None,
+                                ErrorInfo::Kind(ErrorKind::IndexError),
                                 format!(
                                     "Index {idx} out of range for tuple with {} elements",
                                     elts.len()
@@ -1630,8 +1697,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorKind::IndexError,
-                            None,
+                            ErrorInfo::Kind(ErrorKind::IndexError),
                             format!(
                                 "Index `{idx}` out of range for bytes with {} elements",
                                 bytes.len()
@@ -1659,6 +1725,52 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
                 context,
             ),
+        }
+    }
+
+    /// Return the reason why we think `ty` is suspicious to use as a branching condition
+    fn get_condition_redundant_reason(&self, ty: &Type) -> Option<ConditionRedundantReason> {
+        match ty {
+            Type::Literal(Lit::Bool(_)) => None,
+            Type::Literal(Lit::Int(i)) => Some(ConditionRedundantReason::IntLiteral(i.as_bool())),
+            Type::Literal(Lit::Str(s)) => Some(ConditionRedundantReason::StrLiteral(!s.is_empty())),
+            Type::Literal(Lit::Bytes(s)) => {
+                Some(ConditionRedundantReason::BytesLiteral(!s.is_empty()))
+            }
+            Type::Literal(Lit::Enum(e)) => Some(ConditionRedundantReason::EnumLiteral(
+                e.class.class_object().name().clone(),
+                e.member.clone(),
+            )),
+            Type::Function(f) => Some(ConditionRedundantReason::Function(
+                self.module().name(),
+                f.metadata.kind.as_func_id(),
+            )),
+            Type::Overload(f) => Some(ConditionRedundantReason::Function(
+                self.module().name(),
+                f.metadata.kind.as_func_id(),
+            )),
+            Type::BoundMethod(f) => Some(ConditionRedundantReason::Function(
+                self.module().name(),
+                f.func.metadata().kind.as_func_id(),
+            )),
+            Type::ClassDef(cls) => Some(ConditionRedundantReason::Class(cls.name().clone())),
+            _ => None,
+        }
+    }
+
+    pub fn check_redundant_condition(
+        &self,
+        condition_type: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if let Some(reason) = self.get_condition_redundant_reason(condition_type) {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::RedundantCondition),
+                format!("{reason}"),
+            );
         }
     }
 }

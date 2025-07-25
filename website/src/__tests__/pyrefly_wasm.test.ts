@@ -52,7 +52,7 @@ import
             expect(revealTypeError).toBeDefined();
             expect(revealTypeError.kind).toEqual('reveal-type');
             // The revealed type should be 'str'
-            const match = revealTypeError.message.match(
+            const match = revealTypeError.message_header.match(
                 /revealed type: ([^\s]+)/
             );
             const revealedType = match[1];
@@ -130,12 +130,8 @@ tes
             const completions = pyreService.autoComplete(18, 2);
             expect(completions.length).toBeGreaterThan(0);
 
-            // Check the first completion item
-            const firstCompletion = completions[0];
-            expect(firstCompletion.label).toEqual('test');
             // Autocompletion kind is defined here: https://fburl.com/code/9v0zg9e7
-            expect(firstCompletion.kind).toEqual(3); // CompletionItemKind.FUNCTION
-            expect(firstCompletion.detail).toEqual('(x: int) -> str');
+            expect(completions).toContainEqual(expect.objectContaining({label: 'test', detail: '(x: int) -> str', kind: 3}));
         });
     });
 

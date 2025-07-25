@@ -5,79 +5,77 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::path::Component;
-use std::path::Path;
-use std::path::PathBuf;
+use std::process::ExitCode;
 
-use pyrefly_python::dunder;
-use pyrefly_python::module_name::ModuleName;
+use clap::ColorChoice;
+use clap::Parser;
+use pyrefly_util::args::clap_env;
+use pyrefly_util::thread_pool::ThreadCount;
+use pyrefly_util::thread_pool::init_thread_pool;
+use pyrefly_util::trace::init_tracing;
 
-/// If the module is on the search path, return its name from that path. Otherwise, return None.
-pub fn module_from_path<'a>(
-    path: &Path,
-    includes: impl Iterator<Item = &'a PathBuf>,
-) -> Option<ModuleName> {
-    // Return a module name, and a boolean as to whether it is any good.
-    fn path_to_module(mut path: &Path) -> Option<ModuleName> {
-        if path.file_stem() == Some(dunder::INIT.as_str().as_ref()) {
-            path = path.parent()?;
-        }
-        let mut out = Vec::new();
-        let path = path.with_extension("");
-        for x in path.components() {
-            if let Component::Normal(x) = x
-                && !x.is_empty()
-            {
-                out.push(x.to_string_lossy());
-            }
-        }
-        if out.is_empty() {
-            None
-        } else {
-            Some(ModuleName::from_parts(out))
-        }
-    }
+/// Arguments shared between all commands.
+#[deny(clippy::missing_docs_in_private_items)]
+#[derive(Debug, Parser, Clone)]
+pub struct CommonGlobalArgs {
+    /// Number of threads to use for parallelization.
+    /// Setting the value to 1 implies sequential execution without any parallelism.
+    /// Setting the value to 0 means to pick the number of threads automatically using default heuristics.
+    #[arg(long, short = 'j', default_value = "0", global = true, env = clap_env("THREADS"))]
+    threads: ThreadCount,
 
-    for include in includes {
-        if let Ok(x) = path.strip_prefix(include)
-            && let Some(res) = path_to_module(x)
-        {
-            return Some(res);
-        }
-    }
-    None
+    /// Control whether colored output is used.
+    #[arg(long, default_value = "auto", global = true, env = clap_env("COLOR"))]
+    color: ColorChoice,
+
+    /// Enable verbose logging.
+    #[arg(long = "verbose", short = 'v', global = true, env = clap_env("VERBOSE"))]
+    verbose: bool,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn init_color(color: ColorChoice) {
+    match color {
+        ColorChoice::Never => {
+            anstream::ColorChoice::write_global(anstream::ColorChoice::Never);
+        }
+        ColorChoice::Always => {
+            anstream::ColorChoice::write_global(anstream::ColorChoice::Always);
+        }
+        ColorChoice::Auto => {
+            // Do nothing: the default is auto-determine
+        }
+    }
+}
 
-    #[test]
-    fn test_module_from_path() {
-        let includes = [PathBuf::from("/foo/bar")];
-        assert_eq!(
-            module_from_path(Path::new("/foo/bar/baz.py"), includes.iter()),
-            Some(ModuleName::from_str("baz"))
-        );
-        assert_eq!(
-            module_from_path(Path::new("/foo/bar/baz/qux.pyi"), includes.iter()),
-            Some(ModuleName::from_str("baz.qux"))
-        );
-        assert_eq!(
-            module_from_path(Path::new("/foo/bar/baz/test/magic.py"), includes.iter()),
-            Some(ModuleName::from_str("baz.test.magic"))
-        );
-        assert_eq!(
-            module_from_path(Path::new("/foo/bar/baz/__init__.pyi"), includes.iter()),
-            Some(ModuleName::from_str("baz"))
-        );
-        assert_eq!(
-            module_from_path(Path::new("/test.py"), includes.iter()),
-            None
-        );
-        assert_eq!(
-            module_from_path(Path::new("/not_foo/test.py"), includes.iter()),
-            None
-        );
+impl CommonGlobalArgs {
+    pub fn init(&self, skip_tracing: bool) {
+        if !skip_tracing {
+            init_tracing(self.verbose, false);
+        }
+        init_thread_pool(self.threads);
+        init_color(self.color);
+    }
+}
+
+/// Exit status of a command, if the run is completed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CommandExitStatus {
+    /// The command completed without an issue.
+    Success,
+    /// The command completed, but problems (e.g. type errors) were found.
+    UserError,
+    /// An error occurred in the environment or the underlying infrastructure,
+    /// which prevents the command from completing.
+    InfraError,
+}
+
+impl CommandExitStatus {
+    pub fn to_exit_code(self) -> ExitCode {
+        match self {
+            CommandExitStatus::Success => ExitCode::SUCCESS,
+            CommandExitStatus::UserError => ExitCode::FAILURE,
+            // Exit code 2 is reserved for Meta-internal usages
+            CommandExitStatus::InfraError => ExitCode::from(3),
+        }
     }
 }

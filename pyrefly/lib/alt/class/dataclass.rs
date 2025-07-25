@@ -26,11 +26,11 @@ use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::types::class_metadata::DataclassMetadata;
-use crate::error;
+use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
-use crate::error::kind::ErrorKind;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
@@ -108,8 +108,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     cls.range(),
-                    ErrorKind::BadClassDefinition,
-                    None,
+                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
                     "Cannot specify both `slots=True` and `__slots__`".to_owned(),
                 );
             } else {
@@ -155,8 +154,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         cls.range(),
-                        ErrorKind::InvalidInheritance,
-                        None,
+                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                         format!(
                             "Cannot inherit {} dataclass `{}` from {} dataclass `{}`",
                             current_status,
@@ -265,13 +263,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             // Overloaded function. Call it to see which signature is actually used.
             self.call_overloads(
-                Vec1::try_from_vec(sigs.map(|x| (*x).clone())).unwrap(),
+                Vec1::try_from_vec(sigs.map(|x| Function {
+                    signature: ((*x).clone()),
+                    metadata: *overload.metadata.clone(),
+                }))
+                .unwrap(),
                 (*overload.metadata).clone(),
                 None,
                 &args.args.map(CallArg::expr_maybe_starred),
                 &args.keywords.map(CallKeyword::new),
                 args.range,
                 errors,
+                None,
                 None,
             )
             .1
@@ -336,7 +339,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let callable = self.constructor_to_callable(&instance);
                 &self.distribute_over_union(&callable, |ty| {
                     if let Type::BoundMethod(m) = ty {
-                        m.to_callable().unwrap_or_else(|| ty.clone())
+                        m.drop_self().unwrap_or_else(|| ty.clone())
                     } else {
                         ty.clone()
                     }
@@ -371,7 +374,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if keywords.kw_only.is_none() {
                         // kw_only hasn't been explicitly set on the field
                         keywords.kw_only = Some(
-                            seen_kw_only_marker || (cls_is_kw_only && field.defining_class == *cls),
+                            seen_kw_only_marker
+                                || if field.defining_class == *cls {
+                                    cls_is_kw_only
+                                } else {
+                                    self.get_metadata_for_class(&field.defining_class)
+                                        .dataclass_metadata()
+                                        .is_some_and(|m| m.kws.kw_only)
+                                },
                         );
                     };
                     if keywords.is_kw_only() {
@@ -408,8 +418,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                                 errors,
                                 range,
-                                error::kind::ErrorKind::BadClassDefinition,
-                                None,
+                                ErrorInfo::Kind(ErrorKind::BadClassDefinition),
                                 format!(
                                     "Dataclass field `{name}` without a default may not follow dataclass field with a default"
                                 ),
@@ -430,11 +439,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let ty = Type::Function(Box::new(Function {
             signature: Callable::list(ParamList::new(params), Type::None),
-            metadata: FuncMetadata::def(
-                self.module_info().name(),
-                cls.name().clone(),
-                dunder::INIT,
-            ),
+            metadata: FuncMetadata::def(self.module().name(), cls.name().clone(), dunder::INIT),
         }));
         ClassSynthesizedField::new(ty)
     }
@@ -504,7 +509,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             callable.clone()
                         },
                         metadata: FuncMetadata::def(
-                            self.module_info().name(),
+                            self.module().name(),
                             cls.name().clone(),
                             name.clone(),
                         ),
@@ -519,11 +524,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ret = self.stdlib.int().clone().to_type();
         ClassSynthesizedField::new(Type::Function(Box::new(Function {
             signature: Callable::list(ParamList::new(params), ret),
-            metadata: FuncMetadata::def(
-                self.module_info().name(),
-                cls.name().clone(),
-                dunder::HASH,
-            ),
+            metadata: FuncMetadata::def(self.module().name(), cls.name().clone(), dunder::HASH),
         })))
     }
 }
