@@ -92,12 +92,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn get_named_tuple_new(&self, cls: &Class, elements: &SmallSet<Name>) -> ClassSynthesizedField {
         let mut params = vec![Param::Pos(
             Name::new_static("cls"),
-            Type::type_form(self.instantiate(cls)),
+            Type::type_form(Type::SelfType(self.as_class_type_unchecked(cls))),
             Required::Required,
         )];
         params.extend(self.get_named_tuple_field_params(cls, elements));
         let ty = Type::Function(Box::new(Function {
-            signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
+            signature: Callable::list(
+                ParamList::new(params),
+                Type::SelfType(self.as_class_type_unchecked(cls)),
+            ),
             metadata: FuncMetadata::def(self.module().name(), cls.name().clone(), dunder::NEW),
         }));
         ClassSynthesizedField::new(ty)
@@ -111,7 +114,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut params = vec![self.class_self_param(cls, false)];
         params.extend(self.get_named_tuple_field_params(cls, elements));
         let ty = Type::Function(Box::new(Function {
-            signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
+            signature: Callable::list(ParamList::new(params), Type::None),
             metadata: FuncMetadata::def(self.module().name(), cls.name().clone(), dunder::INIT),
         }));
         ClassSynthesizedField::new(ty)
