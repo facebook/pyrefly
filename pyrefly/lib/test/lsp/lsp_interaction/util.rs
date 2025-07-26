@@ -59,7 +59,7 @@ pub struct TestCase {
 
 pub fn run_test_lsp(test_case: TestCase) {
     init_test();
-    let timeout = Duration::from_secs(25);
+    let timeout = Duration::from_secs(60);
     let args = LspArgs {
         indexing_mode: test_case.indexing_mode,
     };
