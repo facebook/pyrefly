@@ -470,3 +470,79 @@ def foo():
 y = 42
 "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/154
+testcase!(
+    test_exception_not_in_scope,
+    r#"
+def try_except():
+    try:
+        1 / 0
+    except Exception as e1:
+        pass
+
+    e1 # E: `e1` is uninitialized
+
+def try_except_finally():
+    try:
+        1 / 0
+    except Exception as e2:
+        pass
+    finally:
+        e2 # E: `e2` is uninitialized
+
+    e2 # E: `e2` is uninitialized
+
+def try_except_twice():
+    try:
+        1 / 0
+    except OSError as e3:
+        pass
+    except Exception:
+        e3 # E: `e3` is uninitialized
+
+    e3 # E: `e3` is uninitialized
+
+def try_except_multiple_finally():
+    try:
+        1 / 0
+    except OSError as e4:
+        pass
+    except Exception:
+        pass
+    except OSError as e5:
+        e4 # E: `e4` is uninitialized
+    finally:
+        e4 # E: `e4` is uninitialized
+        e5 # E: `e5` is uninitialized
+
+    e4 # E: `e4` is uninitialized
+    e5 # E: `e5` is uninitialized
+
+def try_except_else():
+    try:
+        1 / 0
+    except OSError as e6:
+        pass
+    except Exception:
+        pass
+    else:
+        e6 # E: `e6` is uninitialized
+
+    e6 # E: `e6` is uninitialized
+
+def try_except_else_finally():
+    try:
+        1 / 0
+    except OSError as e7:
+        pass
+    except Exception:
+        pass
+    else:
+        e7 # E: `e7` is uninitialized
+    finally:
+        e7 # E: `e7` is uninitialized
+
+    e7 # E: `e7` is uninitialized
+"#,
+);
