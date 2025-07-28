@@ -7,6 +7,7 @@
 
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_util::gas::Gas;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
@@ -37,117 +38,129 @@ pub fn key_to_intermediate_definition(
     bindings: &Bindings,
     key: &Key,
 ) -> Option<IntermediateDefinition> {
+    let def_key = find_definition_key_from(bindings, key)?;
+    create_intermediate_definition_from(bindings, def_key)
+}
+
+/// If `key` is already a definition, return it.
+/// Otherwise, follow the use-def chain in bindings, and return non-None if we could reach a definition.
+fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<&'a Key> {
     let mut gas = KEY_TO_DEFINITION_INITIAL_GAS;
-    key_to_intermediate_definition_inner(bindings, key, &mut gas)
-}
-
-fn key_to_intermediate_definition_inner(
-    bindings: &Bindings,
-    key: &Key,
-    gas: &mut Gas,
-) -> Option<IntermediateDefinition> {
-    let idx = bindings.key_to_idx(key);
-    let binding = bindings.get(idx);
-    let res = binding_to_intermediate_definition(bindings, binding, key, gas);
-    match &res {
-        Some(IntermediateDefinition::Local(_))
-        | Some(IntermediateDefinition::Module(_))
-        | Some(IntermediateDefinition::NamedImport(_, _, _, _)) => res,
-        None => {
-            if let Key::Definition(x) = key {
-                Some(IntermediateDefinition::Local(Export {
-                    location: x.range(),
-                    symbol_kind: binding.symbol_kind(),
-                    docstring_range: None,
-                }))
-            } else {
-                None
-            }
-        }
-    }
-}
-
-fn binding_to_intermediate_definition(
-    bindings: &Bindings,
-    binding: &Binding,
-    key: &Key,
-    gas: &mut Gas,
-) -> Option<IntermediateDefinition> {
-    if gas.stop() {
-        return None;
-    }
-
-    let mut resolve_assign_to_expr = |expr: &Expr| {
+    let mut current_idx = bindings.key_to_idx(key);
+    let base_key_of_assign_target = |expr: &Expr| {
         if let Some((id, _)) = identifier_and_chain_for_expr(expr) {
-            key_to_intermediate_definition_inner(
-                bindings,
-                &Key::BoundName(ShortIdentifier::new(&id)),
-                gas,
-            )
+            Some(Key::BoundName(ShortIdentifier::new(&id)))
         } else if let Some((id, _)) = identifier_and_chain_prefix_for_expr(expr) {
-            key_to_intermediate_definition_inner(
-                bindings,
-                &Key::BoundName(ShortIdentifier::new(&id)),
-                gas,
-            )
+            Some(Key::BoundName(ShortIdentifier::new(&id)))
         } else {
             None
         }
     };
-    match binding {
-        Binding::Forward(k) | Binding::Narrow(k, _, _) | Binding::Pin(k, ..) => {
-            key_to_intermediate_definition_inner(bindings, bindings.idx_to_key(*k), gas)
+    while !gas.stop() {
+        let current_key = bindings.idx_to_key(current_idx);
+        match current_key {
+            Key::Definition(..) | Key::Import(..) => {
+                // These keys signal that we've reached a definition within the current module
+                return Some(current_key);
+            }
+            _ => {}
         }
-        Binding::Default(k, m) => {
-            binding_to_intermediate_definition(bindings, m, bindings.idx_to_key(*k), gas)
+        match bindings.get(current_idx) {
+            Binding::Forward(k)
+            | Binding::Narrow(k, _, _)
+            | Binding::Pin(k, ..)
+            | Binding::Default(k, ..) => {
+                current_idx = *k;
+            }
+            Binding::Phi(ks) if !ks.is_empty() => current_idx = *ks.iter().next().unwrap(),
+            Binding::CheckLegacyTypeParam(k, _) => {
+                let binding = bindings.get(*k);
+                current_idx = binding.0;
+            }
+            Binding::AssignToSubscript(subscript, _)
+                if let Some(key) =
+                    base_key_of_assign_target(&Expr::Subscript(subscript.clone())) =>
+            {
+                current_idx = bindings.key_to_idx(&key);
+            }
+            Binding::AssignToAttribute(attribute, _)
+                if let Some(key) =
+                    base_key_of_assign_target(&Expr::Attribute(attribute.clone())) =>
+            {
+                current_idx = bindings.key_to_idx(&key);
+            }
+            _ => {
+                // We have reached the end of the forwarding chain, and did not find any definitions
+                break;
+            }
         }
-        Binding::Phi(ks) if !ks.is_empty() => key_to_intermediate_definition_inner(
-            bindings,
-            bindings.idx_to_key(*ks.iter().next().unwrap()),
-            gas,
-        ),
-        Binding::Import(m, name, original_name_range) => Some(IntermediateDefinition::NamedImport(
-            key.range(),
-            *m,
-            name.clone(),
-            *original_name_range,
-        )),
-        Binding::Module(name, _, _) => Some(IntermediateDefinition::Module(*name)),
-        Binding::CheckLegacyTypeParam(k, _) => {
-            let binding = bindings.get(*k);
-            key_to_intermediate_definition_inner(bindings, bindings.idx_to_key(binding.0), gas)
-        }
-        Binding::AssignToSubscript(subscript, _) => {
-            let expr = Expr::Subscript(subscript.clone());
-            resolve_assign_to_expr(&expr)
-        }
-        Binding::AssignToAttribute(attribute, _) => {
-            let expr = Expr::Attribute(attribute.clone());
-            resolve_assign_to_expr(&expr)
-        }
-        Binding::Function(idx, _prev_idx, _class_metadata) => {
-            let func = bindings.get(*idx);
-            Some(IntermediateDefinition::Local(Export {
-                location: func.def.name.range,
-                symbol_kind: binding.symbol_kind(),
-                docstring_range: func.docstring_range,
-            }))
-        }
-        Binding::ClassDef(idx, _decorators) => match bindings.get(*idx) {
-            BindingClass::FunctionalClassDef(..) => None,
-            BindingClass::ClassDef(ClassBinding {
-                def,
-                docstring_range,
-                ..
-            }) => Some(IntermediateDefinition::Local(Export {
-                location: def.name.range,
-                symbol_kind: binding.symbol_kind(),
-                docstring_range: *docstring_range,
-            })),
-        },
-
-        _ => None,
     }
+    None
+}
+
+/// Given a `def_key` which is guaranteed to point to a definition, do our best to construct a
+/// `IntermediateDefinition` that holds the most exact information for it.
+fn create_intermediate_definition_from(
+    bindings: &Bindings,
+    def_key: &Key,
+) -> Option<IntermediateDefinition> {
+    let mut gas = KEY_TO_DEFINITION_INITIAL_GAS;
+    let mut current_binding = bindings.get(bindings.key_to_idx(def_key));
+
+    while !gas.stop() {
+        match current_binding {
+            Binding::Forward(k) => current_binding = bindings.get(*k),
+            Binding::CheckLegacyTypeParam(k, _) => {
+                let binding = bindings.get(*k);
+                current_binding = bindings.get(binding.0);
+            }
+            Binding::Import(m, name, original_name_range) => {
+                return Some(IntermediateDefinition::NamedImport(
+                    def_key.range(),
+                    *m,
+                    name.clone(),
+                    *original_name_range,
+                ));
+            }
+            Binding::Module(name, ..) => return Some(IntermediateDefinition::Module(*name)),
+            Binding::Function(idx, ..) => {
+                let func = bindings.get(*idx);
+                return Some(IntermediateDefinition::Local(Export {
+                    location: func.def.name.range,
+                    symbol_kind: Some(SymbolKind::Function),
+                    docstring_range: func.docstring_range,
+                }));
+            }
+            Binding::ClassDef(idx, ..) => {
+                return match bindings.get(*idx) {
+                    BindingClass::FunctionalClassDef(..) => {
+                        Some(IntermediateDefinition::Local(Export {
+                            location: def_key.range(),
+                            symbol_kind: Some(SymbolKind::Class),
+                            docstring_range: None,
+                        }))
+                    }
+                    BindingClass::ClassDef(ClassBinding {
+                        def,
+                        docstring_range,
+                        ..
+                    }) => Some(IntermediateDefinition::Local(Export {
+                        location: def.name.range,
+                        symbol_kind: Some(SymbolKind::Class),
+                        docstring_range: *docstring_range,
+                    })),
+                };
+            }
+            _ => {
+                return Some(IntermediateDefinition::Local(Export {
+                    location: def_key.range(),
+                    symbol_kind: current_binding.symbol_kind(),
+                    docstring_range: None,
+                }));
+            }
+        }
+    }
+    None
 }
 
 pub fn insert_import_edit(

@@ -186,6 +186,17 @@ assert_type(c2, C)
 );
 
 testcase!(
+    test_global_reference_in_nested_function,
+    r#"
+x: str = ""
+def f() -> None:
+    global x
+    def g() -> str:
+        return x
+"#,
+);
+
+testcase!(
     test_nonlocal_simple,
     r#"
 def f(x: int) -> None:
@@ -310,6 +321,18 @@ testcase!(
 x: str = ""
 def f() -> None:
     nonlocal x  # E: Found `x`, but it was not in a valid enclosing scope
+"#,
+);
+
+testcase!(
+    test_nonlocal_reference_in_nested_function,
+    r#"
+def f() -> None:
+    x: str = ""
+    def g() -> None:
+        nonlocal x
+        def h() -> str:
+            return x
 "#,
 );
 

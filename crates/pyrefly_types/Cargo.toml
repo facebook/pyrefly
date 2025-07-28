@@ -9,6 +9,7 @@ repository = "https://github.com/facebook/pyrefly"
 license = "MIT"
 
 [dependencies]
+compact_str = "0.8.0"
 dupe = "0.9.1"
 itertools = "0.14.0"
 num-bigint = { version = "0.4.6", features = ["rand"] }

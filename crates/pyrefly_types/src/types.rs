@@ -364,10 +364,13 @@ pub struct BoundMethod {
 
 impl BoundMethod {
     pub fn drop_self(&self) -> Option<Type> {
-        self.as_function().drop_first_param_of_unbound_callable()
+        self.func
+            .clone()
+            .as_type()
+            .drop_first_param_of_unbound_callable()
     }
 
-    pub fn as_function(&self) -> Type {
+    pub fn as_function(self) -> Type {
         self.func.as_type()
     }
 }
@@ -381,13 +384,11 @@ pub enum BoundMethodType {
 }
 
 impl BoundMethodType {
-    pub fn as_type(&self) -> Type {
+    pub fn as_type(self) -> Type {
         match self {
-            Self::Function(func) => Type::Function(Box::new(func.clone())),
-            Self::Forall(forall) => {
-                Forallable::Function(forall.body.clone()).forall(forall.tparams.clone())
-            }
-            Self::Overload(overload) => Type::Overload(overload.clone()),
+            Self::Function(func) => Type::Function(Box::new(func)),
+            Self::Forall(forall) => Forallable::Function(forall.body).forall(forall.tparams),
+            Self::Overload(overload) => Type::Overload(overload),
         }
     }
 

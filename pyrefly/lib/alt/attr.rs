@@ -1469,9 +1469,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AttributeBase::Never => LookupResult::found_type(Type::never()),
             AttributeBase::Property(mut getter) => {
                 if attr_name == "setter" {
-                    // Get the property's `setter` method, which, when called with a function, returns
-                    // a copy of the property with the passed-in function as its setter. We hack this
-                    // by updating the getter's metadata to mark it as a setter method.
+                    // When given a decorator `@some_property.setter`, instead of modeling the setter
+                    // directly at the type level we just return the getter (the raw `some_property`)
+                    // but with the function metadata marked to indicate this is a setter invocation.
+                    //
+                    // This doesn't accurately model the runtime semantics (the setter function is
+                    // not at all the same type), but makes it easy for us to use function metadata
+                    // to track both the getter and setter in a way that class field can use.
+                    //
+                    // See also the function decorator and class field code to
+                    // understand how all this works end-to-end.
+                    //
                     // TODO(stroxler): it is probably possible to synthesize a forall type here
                     // that uses a type var to propagate the setter. Investigate this option later.
                     getter.transform_toplevel_func_metadata(|meta: &mut FuncMetadata| {

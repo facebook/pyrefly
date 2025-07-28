@@ -434,3 +434,32 @@ fn test_dueling_typevar() {
     );
     i.check(&["main"], &["main"]);
 }
+
+#[test]
+fn test_incremental_cycle_class() {
+    let mut i = Incremental::new();
+    i.set("foo", "from bar import Cls");
+    i.set(
+        "bar",
+        r#"
+from foo import Cls as C
+class Cls:
+    def fld(self): return 1
+def f(c: C):
+    print(c.fld)
+"#,
+    );
+    i.check(&["foo", "bar"], &["foo", "bar"]);
+
+    i.set(
+        "bar",
+        r#"
+from foo import Cls as C
+class Cls:
+    def fld2(self): return 1
+def f(c: C):
+    print(c.fld) # E: Object of class `Cls` has no attribute `fld`
+"#,
+    );
+    i.unchecked(&["foo"]); // Used to panic
+}

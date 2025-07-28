@@ -1352,3 +1352,14 @@ while E.B:  # E: Enum literal `E.B` used as condition
 [x for x in range(42) if E.C]  # E: Enum literal `E.C` used as condition
     "#,
 );
+
+testcase!(
+    crash_no_try_type,
+    r#"
+# Used to crash, https://github.com/facebook/pyrefly/issues/766
+try:
+    pass
+except as r: # E: Parse error: Expected one or more exception types
+    pass
+"#,
+);

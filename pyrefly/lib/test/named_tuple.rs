@@ -328,3 +328,21 @@ for y in v:
     print(assert_type(y, Any))
 "#,
 );
+
+testcase!(
+    test_named_tuple_override_self,
+    r#"
+from typing import NamedTuple, Self
+
+class A(NamedTuple):
+    x: int
+    y: str
+
+class B(A):
+    def __new__(cls, x: int, y: str) -> Self:
+        return super().__new__(cls, x, y)
+    
+    def __init__(self, x: int, y: str) -> None:
+        return super().__init__(x, y)
+"#,
+);

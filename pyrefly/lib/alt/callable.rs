@@ -332,33 +332,33 @@ enum PosParamKind {
 }
 
 /// Helps track matching of arguments against positional parameters in AnswersSolver::callable_infer_params.
-struct PosParam {
-    ty: Type,
-    name: Option<Name>,
+struct PosParam<'a> {
+    ty: &'a Type,
+    name: Option<&'a Name>,
     kind: PosParamKind,
 }
 
-impl PosParam {
-    fn new(p: &Param) -> Option<Self> {
+impl<'a> PosParam<'a> {
+    fn new(p: &'a Param) -> Option<Self> {
         match p {
             Param::PosOnly(name, ty, _required) => Some(Self {
-                ty: ty.clone(),
-                name: name.clone(),
+                ty,
+                name: name.as_ref(),
                 kind: PosParamKind::PositionalOnly,
             }),
             Param::Pos(name, ty, _required) => Some(Self {
-                ty: ty.clone(),
-                name: Some(name.clone()),
+                ty,
+                name: Some(name),
                 kind: PosParamKind::Positional,
             }),
             Param::VarArg(name, Type::Unpack(ty)) => Some(Self {
-                ty: (**ty).clone(),
-                name: name.clone(),
+                ty: &**ty,
+                name: name.as_ref(),
                 kind: PosParamKind::Unpacked,
             }),
             Param::VarArg(name, ty) => Some(Self {
-                ty: ty.clone(),
-                name: name.clone(),
+                ty,
+                name: name.as_ref(),
                 kind: PosParamKind::Variadic,
             }),
             Param::KwOnly(..) | Param::Kwargs(..) => None,
@@ -367,12 +367,12 @@ impl PosParam {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    fn is_param_spec_args(&self, x: &CallArg, q: Quantified, errors: &ErrorCollector) -> bool {
+    fn is_param_spec_args(&self, x: &CallArg, q: &Quantified, errors: &ErrorCollector) -> bool {
         match x {
             CallArg::Star(x, _) => {
                 let mut ty = x.infer(self, errors);
                 self.expand_type_mut(&mut ty);
-                ty == Type::Args(q)
+                matches!(ty, Type::Args(q2) if &q2 == q)
             }
             _ => false,
         }
@@ -381,12 +381,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn is_param_spec_kwargs(
         &self,
         x: &CallKeyword,
-        q: Quantified,
+        q: &Quantified,
         errors: &ErrorCollector,
     ) -> bool {
         let mut ty = x.value.infer(self, errors);
         self.expand_type_mut(&mut ty);
-        ty == Type::Kwargs(q)
+        matches!(ty, Type::Kwargs(q2) if &q2 == q)
     }
 
     // See comment on `callable_infer` about `arg_errors` and `call_errors`.
@@ -405,6 +405,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) {
+        // We want to work mostly with references, but some things are taken from elsewhere,
+        // so have some owners to capture them.
+        let param_list_owner = Owner::new();
+        let name_owner = Owner::new();
+        let type_owner = Owner::new();
+
         let error = |errors, range, kind, msg: String| {
             self.error(
                 errors,
@@ -420,13 +426,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let iargs = self_arg.iter().chain(args.iter());
         // Creates a reversed copy of the parameters that we iterate through from back to front,
         // so that we can easily peek at and pop from the end.
-        let mut rparams = params.items().iter().cloned().rev().collect::<Vec<_>>();
-        let mut num_positional_params = 0;
-        let mut extra_positional_args = Vec::new();
-        let mut seen_names = SmallMap::new();
-        let mut extra_arg_pos = None;
-        let mut unpacked_vararg = None;
-        let mut unpacked_vararg_matched_args = Vec::new();
+        let mut rparams: Vec<&Param> = params.items().iter().rev().collect::<Vec<_>>();
+        let mut num_positional_params: usize = 0;
+        let mut extra_positional_args: Vec<TextRange> = Vec::new();
+        let mut seen_names: SmallMap<&Name, &Type> = SmallMap::new();
+        let mut extra_arg_pos: Option<TextRange> = None;
+        let mut unpacked_vararg: Option<(Option<&Name>, &Type)> = None;
+        let mut unpacked_vararg_matched_args: Vec<CallArgPreEval<'_>> = Vec::new();
+
         let var_to_rparams = |var| {
             let ps = match self.solver().force_var(var) {
                 Type::ParamSpecValue(ps) => ps,
@@ -446,7 +453,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ParamList::everything()
                 }
             };
-            ps.items().iter().cloned().rev().collect()
+            param_list_owner.push(ps).items().iter().rev().collect()
         };
         for arg in iargs {
             let mut arg_pre = arg.pre_eval(self, arg_errors);
@@ -471,18 +478,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }) => {
                         num_positional_params += 1;
                         rparams.pop();
-                        if let Some(name) = &name
+                        if let Some(name) = name
                             && kind == PosParamKind::Positional
                         {
                             // Remember names of positional parameters to detect duplicates.
                             // We ignore positional-only parameters because they can't be passed in by name.
-                            seen_names.insert(name.clone(), ty.clone());
+                            seen_names.insert(name, ty);
                         }
                         arg_pre.post_check(
                             self,
                             callable_name.as_ref(),
-                            &ty,
-                            name.as_ref(),
+                            ty,
+                            name,
                             false,
                             arg.range(),
                             arg_errors,
@@ -508,8 +515,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }) => arg_pre.post_check(
                         self,
                         callable_name.as_ref(),
-                        &ty,
-                        name.as_ref(),
+                        ty,
+                        name,
                         true,
                         arg.range(),
                         arg_errors,
@@ -565,11 +572,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             }
-            let unpacked_args_ty = match middle.as_slice() {
-                [] => Type::tuple(prefix),
-                [middle] => Type::Tuple(Tuple::unpacked(
+            let unpacked_args_ty = match middle.len() {
+                0 => Type::tuple(prefix),
+                1 => Type::Tuple(Tuple::unpacked(
                     prefix,
-                    Type::Tuple(Tuple::unbounded(middle.clone())),
+                    Type::Tuple(Tuple::unbounded(middle.pop().unwrap())),
                     suffix,
                 )),
                 _ => Type::Tuple(Tuple::unpacked(
@@ -579,14 +586,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )),
             };
             self.check_type(
-                &unpacked_param_ty,
+                unpacked_param_ty,
                 &unpacked_args_ty,
                 range,
                 arg_errors,
                 &|| TypeCheckContext {
                     kind: TypeCheckKind::CallVarArgs(
                         true,
-                        unpacked_name.clone(),
+                        unpacked_name.cloned(),
                         callable_name.clone(),
                     ),
                     context: context.map(|ctx| ctx()),
@@ -596,11 +603,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Missing positional-only arguments, split by whether the corresponding parameters
         // in the callable have names. E.g., functions declared with `def` have named posonly
         // parameters and `typing.Callable`s have unnamed ones.
-        let mut missing_unnamed_posonly = 0;
-        let mut missing_named_posonly = SmallSet::new();
-        let mut kwparams = OrderedMap::new();
-        let mut kwargs = None;
-        let mut kwargs_is_unpack = false;
+        let mut missing_unnamed_posonly: usize = 0;
+        let mut missing_named_posonly: SmallSet<&Name> = SmallSet::new();
+        let mut kwparams: OrderedMap<&Name, (&Type, bool)> = OrderedMap::new();
+        let mut kwargs: Option<(Option<&Name>, &Type)> = None;
+        let mut kwargs_is_unpack: bool = false;
         loop {
             let p = match rparams.pop() {
                 Some(p) => p,
@@ -616,7 +623,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             match p {
                 Param::PosOnly(name, _, required) => {
-                    if required == Required::Required {
+                    if required == &Required::Required {
                         if let Some(name) = name {
                             missing_named_posonly.insert(name);
                         } else {
@@ -626,18 +633,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Param::VarArg(..) => {}
                 Param::Pos(name, ty, required) | Param::KwOnly(name, ty, required) => {
-                    kwparams.insert(name.clone(), (ty, required == Required::Required));
+                    kwparams.insert(name, (ty, required == &Required::Required));
                 }
                 Param::Kwargs(_, Type::Unpack(box Type::TypedDict(typed_dict))) => {
-                    self.typed_dict_fields(&typed_dict)
+                    self.typed_dict_fields(typed_dict)
                         .into_iter()
                         .for_each(|(name, field)| {
-                            kwparams.insert(name, (field.ty, field.required));
+                            kwparams.insert(
+                                name_owner.push(name),
+                                (type_owner.push(field.ty), field.required),
+                            );
                         });
                     kwargs_is_unpack = true;
                 }
                 Param::Kwargs(name, ty) => {
-                    kwargs = Some((name, ty));
+                    kwargs = Some((name.as_ref(), ty));
                 }
             }
         }
@@ -664,8 +674,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None => {
                     let ty = kw.value.infer(self, arg_errors);
                     if let Type::TypedDict(typed_dict) = ty {
-                        for (name, field) in self.typed_dict_fields(&typed_dict).iter() {
-                            let mut hint = kwargs.as_ref().map(|(_, ty)| ty.clone());
+                        for (name, field) in self.typed_dict_fields(&typed_dict).into_iter() {
+                            let name = name_owner.push(name);
+                            let mut hint = kwargs.as_ref().map(|(_, ty)| *ty);
                             if let Some(ty) = seen_names.get(name) {
                                 error(
                                     call_errors,
@@ -673,9 +684,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     ErrorKind::BadKeywordArgument,
                                     format!("Multiple values for argument `{name}`"),
                                 );
-                                hint = Some(ty.clone());
+                                hint = Some(*ty);
                             } else if let Some((ty, required)) = kwparams.get(name) {
-                                seen_names.insert(name.clone(), ty.clone());
+                                seen_names.insert(name, *ty);
                                 if *required && !field.required {
                                     error(
                                         call_errors,
@@ -684,7 +695,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         format!("Expected key `{name}` to be required"),
                                     );
                                 }
-                                hint = Some(ty.clone())
+                                hint = Some(*ty)
                             } else if kwargs.is_none() && !kwargs_is_unpack {
                                 unexpected_keyword_error(name, kw.range);
                             }
@@ -713,7 +724,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                             &|| TypeCheckContext {
                                                 kind: TypeCheckKind::CallKwArgs(
                                                     None,
-                                                    name.clone(),
+                                                    name.cloned(),
                                                     callable_name.clone(),
                                                 ),
                                                 context: context.map(|ctx| ctx()),
@@ -748,7 +759,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Some(id) => {
-                    let mut hint = kwargs.as_ref().map(|(_, ty)| ty.clone());
+                    let mut hint = kwargs.as_ref().map(|(_, ty)| *ty);
                     let mut has_matching_param = false;
                     if let Some(ty) = seen_names.get(&id.id) {
                         error(
@@ -757,11 +768,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ErrorKind::BadKeywordArgument,
                             format!("Multiple values for argument `{}`", id.id),
                         );
-                        hint = Some(ty.clone());
+                        hint = Some(*ty);
                         has_matching_param = true;
                     } else if let Some((ty, _)) = kwparams.get(&id.id) {
-                        seen_names.insert(id.id.clone(), ty.clone());
-                        hint = Some(ty.clone());
+                        seen_names.insert(&id.id, *ty);
+                        hint = Some(*ty);
                         has_matching_param = true;
                     } else if kwargs.is_none() {
                         unexpected_keyword_error(&id.id, id.range);
@@ -772,7 +783,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         } else {
                             TypeCheckKind::CallKwArgs(
                                 Some(id.id.clone()),
-                                kwargs.as_ref().and_then(|(name, _)| name.clone()),
+                                kwargs.as_ref().and_then(|(name, _)| name.cloned()),
                                 callable_name.clone(),
                             )
                         },
@@ -782,7 +793,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         TypeOrExpr::Expr(x) => {
                             self.expr_with_separate_check_errors(
                                 x,
-                                hint.as_ref().map(|ty| (ty, tcc, call_errors)),
+                                hint.map(|ty| (ty, tcc, call_errors)),
                                 arg_errors,
                             );
                         }
@@ -853,7 +864,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 for (ty, range) in &splat_kwargs {
                     self.check_type(want, ty, *range, call_errors, &|| TypeCheckContext {
-                        kind: TypeCheckKind::CallUnpackKwArg(name.clone(), callable_name.clone()),
+                        kind: TypeCheckKind::CallUnpackKwArg(
+                            (*name).clone(),
+                            callable_name.clone(),
+                        ),
                         context: context.map(|ctx| ctx()),
                     });
                 }
@@ -946,7 +960,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // Before we match an argument to `f`, we don't know what `P` is, so we don't have an answer for the Var yet.
                     Type::Var(var) => self.callable_infer_params(
                         callable_name,
-                        &ParamList::new_types(&concatenate),
+                        &ParamList::new_types(concatenate.into_vec()),
                         Some(var),
                         self_arg,
                         args,
@@ -959,10 +973,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::Quantified(q) => {
                         if !args
                             .last()
-                            .is_some_and(|x| self.is_param_spec_args(x, q.clone(), arg_errors))
-                            || !keywords.last().is_some_and(|x| {
-                                self.is_param_spec_kwargs(x, q.clone(), arg_errors)
-                            })
+                            .is_some_and(|x| self.is_param_spec_args(x, &q, arg_errors))
+                            || !keywords
+                                .last()
+                                .is_some_and(|x| self.is_param_spec_kwargs(x, &q, arg_errors))
                         {
                             self.error(
                                 call_errors,
@@ -977,7 +991,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         } else {
                             self.callable_infer_params(
                                 callable_name,
-                                &ParamList::new_types(&concatenate),
+                                &ParamList::new_types(concatenate.into_vec()),
                                 None,
                                 self_arg,
                                 &args[0..args.len() - 1],

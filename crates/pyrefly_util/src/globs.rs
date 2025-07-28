@@ -58,13 +58,13 @@ impl Glob {
     /// Create a new `Glob`, with the pattern relative to `root`.
     /// `root` should be an absolute path.
     pub fn new_with_root(root: &Path, pattern: String) -> anyhow::Result<Self> {
-        Self::new(pattern)?.from_root(root)
+        Ok(Self::new(pattern)?.from_root(root))
     }
 
     /// Rewrite the current `Glob` relative to `root`.
     /// `root` should be an absolute path.
-    pub fn from_root(self, root: &Path) -> anyhow::Result<Self> {
-        Ok(Self(Self::pattern_relative_to_root(root, &self.0)?))
+    pub fn from_root(self, root: &Path) -> Self {
+        Self(Self::pattern_relative_to_root(root, &self.0))
     }
 
     fn contains_glob_char(part: &OsStr) -> bool {
@@ -72,10 +72,13 @@ impl Glob {
         bytes.contains(&b'*') || bytes.contains(&b'?') || bytes.contains(&b'[')
     }
 
-    fn pattern_relative_to_root(root: &Path, pattern: &Pattern) -> anyhow::Result<Pattern> {
+    fn pattern_relative_to_root(root: &Path, pattern: &Pattern) -> Pattern {
         let from_root = Path::new(pattern.as_str())
             .absolutize_from(Path::new(&Pattern::escape(root.to_string_lossy().as_ref())));
-        Ok(Pattern::new(&from_root.to_string_lossy())?)
+        // the unwrap is okay because the previous `pattern` worked already
+        // and the escaped `root` shouldn't realistically fail
+        Pattern::new(&from_root.to_string_lossy())
+            .with_context(|| "Got invalid Glob pattern relative to root that was assumed to be safe. Please report this to the Pyrefly maintainers on our GitHub.").unwrap()
     }
 
     fn get_glob_root(&self) -> PathBuf {
@@ -295,18 +298,19 @@ impl Globs {
     /// Create a new `Globs`, rewriting all patterns to be relative to `root`.
     /// `root` should be an absolute path.
     pub fn new_with_root(root: &Path, patterns: Vec<String>) -> anyhow::Result<Self> {
-        Self::rewrite_with_root(root, patterns.into_try_map(Glob::new)?)
+        Ok(Self::rewrite_with_root(
+            root,
+            patterns.into_try_map(Glob::new)?,
+        ))
     }
 
-    fn rewrite_with_root(root: &Path, patterns: Vec<Glob>) -> anyhow::Result<Self> {
-        Ok(Self(
-            patterns.into_try_map(|pattern| pattern.from_root(root))?,
-        ))
+    fn rewrite_with_root(root: &Path, patterns: Vec<Glob>) -> Self {
+        Self(patterns.into_map(|pattern| pattern.from_root(root)))
     }
 
     /// Rewrite the existing `Globs` to be relative to `root`.
     /// `root` should be an absolute path.
-    pub fn from_root(self, root: &Path) -> anyhow::Result<Self> {
+    pub fn from_root(self, root: &Path) -> Self {
         // TODO(connernilsen): store root as part of globs to make it easier to rewrite later on
         Self::rewrite_with_root(root, self.0)
     }

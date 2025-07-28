@@ -233,6 +233,11 @@ impl TypeCheckKind {
             Self::OverloadReturn => format!(
                 "Overload return type `{got}` is not assignable to implementation return type `{want}`",
             ),
+            Self::OverloadInput(overload_sig, impl_sig) => {
+                format!(
+                    "Implementation signature `{impl_sig}` does not accept all arguments that overload signature `{overload_sig}` accepts"
+                )
+            }
         }
     }
 }

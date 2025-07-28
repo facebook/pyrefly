@@ -6,6 +6,7 @@
  */
 
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_types::callable::Callable;
 use ruff_python_ast::name::Name;
 
 use crate::binding::binding::AnnotationTarget;
@@ -166,6 +167,8 @@ pub enum TypeCheckKind {
     PostInit,
     /// Consistency check for overload return types.
     OverloadReturn,
+    /// Consistency check for overload input signature, as (overload_signature, implementation_signature)
+    OverloadInput(Callable, Callable),
 }
 
 impl TypeCheckKind {
@@ -206,6 +209,7 @@ impl TypeCheckKind {
             Self::UnexpectedBareYield => ErrorKind::InvalidYield,
             Self::PostInit => ErrorKind::BadFunctionDefinition,
             Self::OverloadReturn => ErrorKind::InvalidOverload,
+            Self::OverloadInput(..) => ErrorKind::InvalidOverload,
         }
     }
 }

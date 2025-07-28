@@ -274,6 +274,43 @@ token-type: interface
 }
 
 #[test]
+fn for_name_test() {
+    let code = r#"
+for x in range(1):
+    [(y, z) for y, z in {x: 0}.items()]
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 4, length: 1, text: x
+token-type: variable
+
+line: 1, column: 9, length: 5, text: range
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 2, column: 6, length: 1, text: y
+token-type: variable
+
+line: 2, column: 9, length: 1, text: z
+token-type: variable
+
+line: 2, column: 16, length: 1, text: y
+token-type: variable
+
+line: 2, column: 19, length: 1, text: z
+token-type: variable
+
+line: 2, column: 25, length: 1, text: x
+token-type: variable
+
+line: 2, column: 31, length: 5, text: items
+token-type: method
+"#,
+    );
+}
+
+#[test]
 fn type_param_test() {
     let code = r#"
 def foo[T](v: T) -> T: 

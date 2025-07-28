@@ -1085,6 +1085,7 @@ impl<'a> BindingsBuilder<'a> {
                 name.range,
                 SymbolKind::TypeParameter,
                 None,
+                false,
             );
             self.bind_definition(
                 &name,
@@ -1120,8 +1121,13 @@ impl<'a> BindingsBuilder<'a> {
             Key::Definition(ShortIdentifier::new(name)),
             Binding::LambdaParameter(var),
         );
-        self.scopes
-            .add_to_current_static(name.id.clone(), name.range, SymbolKind::Parameter, None);
+        self.scopes.add_to_current_static(
+            name.id.clone(),
+            name.range,
+            SymbolKind::Parameter,
+            None,
+            false,
+        );
         self.bind_name(&name.id, idx, FlowStyle::Other);
     }
 
@@ -1158,6 +1164,7 @@ impl<'a> BindingsBuilder<'a> {
             name.range,
             SymbolKind::Parameter,
             Some(annot),
+            false,
         );
         self.bind_name(&name.id, key, FlowStyle::Other);
     }
@@ -1233,6 +1240,7 @@ impl LegacyTParamBuilder {
                     name.range,
                     SymbolKind::TypeParameter,
                     None,
+                    false,
                 );
                 builder.bind_definition(
                     name,

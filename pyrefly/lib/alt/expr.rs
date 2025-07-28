@@ -815,7 +815,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         types.push(Lit::Int(LitInt::new(0)).to_type());
                     } else if i != last_index && t == self.stdlib.str().clone().to_type() && !target
                     {
-                        types.push(Lit::Str(String::new().into_boxed_str()).to_type());
+                        types.push(Lit::Str(Default::default()).to_type());
                     } else {
                         types.push(t);
                     }

@@ -48,9 +48,8 @@ pub struct SubConfig {
 }
 
 impl SubConfig {
-    fn rewrite_with_path_to_config(&mut self, config_root: &Path) -> anyhow::Result<()> {
-        self.matches = self.matches.clone().from_root(config_root)?;
-        Ok(())
+    fn rewrite_with_path_to_config(&mut self, config_root: &Path) {
+        self.matches = self.matches.clone().from_root(config_root);
     }
 }
 
@@ -330,7 +329,7 @@ impl ConfigFile {
         // ignore failures rewriting path to config, since we're trying to construct
         // an ephemeral config for the user, and it's not fatal (but things might be
         // a little weird)
-        let _ = result.rewrite_with_path_to_config(root);
+        result.rewrite_with_path_to_config(root);
         result
     }
 
@@ -611,9 +610,9 @@ impl ConfigFile {
     /// We do this as a step separate from `configure()` because CLI args may override some of these
     /// values, but CLI args will always be relative to CWD, whereas config values should be relative
     /// to the config root.
-    fn rewrite_with_path_to_config(&mut self, config_root: &Path) -> anyhow::Result<()> {
-        self.project_includes = self.project_includes.clone().from_root(config_root)?;
-        self.project_excludes = self.project_excludes.clone().from_root(config_root)?;
+    fn rewrite_with_path_to_config(&mut self, config_root: &Path) {
+        self.project_includes = self.project_includes.clone().from_root(config_root);
+        self.project_excludes = self.project_excludes.clone().from_root(config_root);
         self.search_path_from_file
             .iter_mut()
             .for_each(|search_root| {
@@ -637,8 +636,7 @@ impl ConfigFile {
             .map(|s| s.map(|i| i.absolutize_from(config_root)));
         self.sub_configs
             .iter_mut()
-            .try_for_each(|c| c.rewrite_with_path_to_config(config_root))?;
-        Ok(())
+            .for_each(|c| c.rewrite_with_path_to_config(config_root));
     }
 
     pub fn from_file(config_path: &Path) -> (ConfigFile, Vec<ConfigError>) {
@@ -670,10 +668,7 @@ impl ConfigFile {
                 Some(config_root) => {
                     let layout = ProjectLayout::new(config_root);
                     if let Some(mut config) = maybe_config {
-                        let rewrite_error = config.rewrite_with_path_to_config(config_root);
-                        if let Err(error) = rewrite_error {
-                            errors.push(ConfigError::error(error));
-                        }
+                        config.rewrite_with_path_to_config(config_root);
                         config.import_root = Some(layout.get_import_root(config_root));
                         config
                     } else {
@@ -1128,7 +1123,7 @@ mod tests {
         )
         .unwrap();
 
-        config.rewrite_with_path_to_config(&test_path).unwrap();
+        config.rewrite_with_path_to_config(&test_path);
 
         let expected_config = ConfigFile {
             source: ConfigSource::Synthetic,

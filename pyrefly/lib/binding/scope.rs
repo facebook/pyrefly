@@ -70,6 +70,8 @@ pub struct StaticInfo {
     /// How many times this will be redefined
     pub count: usize,
     pub style: DefinitionStyle,
+    /// Is this just a name declaration (i.e. a global or a nonlocal)?
+    pub is_declaration: bool,
 }
 
 impl StaticInfo {
@@ -81,11 +83,16 @@ impl StaticInfo {
                 _ => {
                     // We are constructing an identifier, but it must have been one that we saw earlier
                     assert_ne!(self.loc, TextRange::default());
-                    Key::Definition(ShortIdentifier::new(&Identifier {
+                    let short_identifier = ShortIdentifier::new(&Identifier {
                         node_index: AtomicNodeIndex::dummy(),
                         id: name.clone(),
                         range: self.loc,
-                    }))
+                    });
+                    if self.is_declaration {
+                        Key::Declaration(short_identifier)
+                    } else {
+                        Key::Definition(short_identifier)
+                    }
                 }
             }
         } else {
@@ -101,6 +108,7 @@ impl Static {
         loc: TextRange,
         symbol_kind: SymbolKind,
         annot: Option<Idx<KeyAnnotation>>,
+        is_declaration: bool,
         count: usize,
     ) -> &mut StaticInfo {
         // Use whichever one we see first
@@ -109,6 +117,7 @@ impl Static {
             annot,
             count: 0,
             style: DefinitionStyle::Local(symbol_kind),
+            is_declaration,
         });
         res.count += count;
         res
@@ -120,8 +129,16 @@ impl Static {
         range: TextRange,
         symbol_kind: SymbolKind,
         annot: Option<Idx<KeyAnnotation>>,
+        is_declaration: bool,
     ) {
-        self.add_with_count(Hashed::new(name), range, symbol_kind, annot, 1);
+        self.add_with_count(
+            Hashed::new(name),
+            range,
+            symbol_kind,
+            annot,
+            is_declaration,
+            1,
+        );
     }
 
     pub fn stmts(
@@ -160,21 +177,35 @@ impl Static {
 
         for (name, def) in d.definitions.into_iter_hashed() {
             let annot = def.annot.map(&mut get_annotation_idx);
-            let info = self.add_with_count(name, def.range, SymbolKind::Variable, annot, def.count);
+            let info = self.add_with_count(
+                name,
+                def.range,
+                SymbolKind::Variable,
+                annot,
+                false,
+                def.count,
+            );
             info.style = def.style;
         }
         for (range, wildcard) in wildcards {
             for name in wildcard.iter_hashed() {
                 // TODO: semantics of import * and global var with same name
-                self.add_with_count(name.cloned(), range, SymbolKind::Module, None, 1)
+                self.add_with_count(name.cloned(), range, SymbolKind::Module, None, false, 1)
                     .style = DefinitionStyle::ImportModule(module_info.name());
             }
         }
     }
 
     pub fn expr_lvalue(&mut self, x: &Expr) {
-        let mut add =
-            |name: &ExprName| self.add(name.id.clone(), name.range, SymbolKind::Variable, None);
+        let mut add = |name: &ExprName| {
+            self.add(
+                name.id.clone(),
+                name.range,
+                SymbolKind::Variable,
+                None,
+                false,
+            )
+        };
         Ast::expr_lvalue(x, &mut add);
     }
 }
@@ -904,8 +935,11 @@ impl Scopes {
         range: TextRange,
         symbol_kind: SymbolKind,
         ann: Option<Idx<KeyAnnotation>>,
+        is_declaration: bool,
     ) {
-        self.current_mut().stat.add(name, range, symbol_kind, ann);
+        self.current_mut()
+            .stat
+            .add(name, range, symbol_kind, ann, is_declaration);
     }
 
     pub fn add_lvalue_to_current_static(&mut self, x: &Expr) {

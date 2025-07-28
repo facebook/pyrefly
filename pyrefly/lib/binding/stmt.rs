@@ -157,8 +157,8 @@ impl<'a> BindingsBuilder<'a> {
         })
     }
 
-    fn define_nonlocal_name(&mut self, name: &Identifier) {
-        let key = Key::Definition(ShortIdentifier::new(name));
+    fn declare_nonlocal_name(&mut self, name: &Identifier) {
+        let key = Key::Declaration(ShortIdentifier::new(name));
         let binding =
             match self.lookup_mutable_captured_name(&name.id, MutableCaptureLookupKind::Nonlocal) {
                 Ok(found) => Binding::Forward(found),
@@ -173,14 +173,19 @@ impl<'a> BindingsBuilder<'a> {
             };
         let binding_key = self.insert_binding(key, binding);
 
-        self.scopes
-            .add_to_current_static(name.id.clone(), name.range, SymbolKind::Variable, None);
+        self.scopes.add_to_current_static(
+            name.id.clone(),
+            name.range,
+            SymbolKind::Variable,
+            None,
+            true,
+        );
 
         self.bind_name(&name.id, binding_key, FlowStyle::Other);
     }
 
-    fn define_global_name(&mut self, name: &Identifier) {
-        let key = Key::Definition(ShortIdentifier::new(name));
+    fn declare_global_name(&mut self, name: &Identifier) {
+        let key = Key::Declaration(ShortIdentifier::new(name));
         let binding =
             match self.lookup_mutable_captured_name(&name.id, MutableCaptureLookupKind::Global) {
                 Ok(found) => Binding::Forward(found),
@@ -195,8 +200,13 @@ impl<'a> BindingsBuilder<'a> {
             };
         let binding_key = self.insert_binding(key, binding);
 
-        self.scopes
-            .add_to_current_static(name.id.clone(), name.range, SymbolKind::Variable, None);
+        self.scopes.add_to_current_static(
+            name.id.clone(),
+            name.range,
+            SymbolKind::Variable,
+            None,
+            true,
+        );
 
         self.bind_name(&name.id, binding_key, FlowStyle::Other);
     }
@@ -740,25 +750,38 @@ impl<'a> BindingsBuilder<'a> {
                     base = self.scopes.clone_current_flow();
                     let range = h.range();
                     let h = h.except_handler().unwrap(); // Only one variant for now
-                    if let Some(name) = h.name
-                        && let Some(mut type_) = h.type_
-                    {
-                        let mut handler =
-                            self.declare_current_idx(Key::Definition(ShortIdentifier::new(&name)));
-                        self.ensure_expr(&mut type_, handler.usage());
-                        self.bind_definition_current(
-                            &name,
-                            handler,
-                            Binding::ExceptionHandler(type_, x.is_star),
-                            FlowStyle::Other,
-                        );
-                    } else if let Some(mut type_) = h.type_ {
-                        let mut handler = self.declare_current_idx(Key::Anon(range));
-                        self.ensure_expr(&mut type_, handler.usage());
-                        self.insert_binding_current(
-                            handler,
-                            Binding::ExceptionHandler(type_, x.is_star),
-                        );
+                    match (h.name, h.type_) {
+                        (Some(name), Some(mut type_)) => {
+                            let mut handler = self
+                                .declare_current_idx(Key::Definition(ShortIdentifier::new(&name)));
+                            self.ensure_expr(&mut type_, handler.usage());
+                            self.bind_definition_current(
+                                &name,
+                                handler,
+                                Binding::ExceptionHandler(type_, x.is_star),
+                                FlowStyle::Other,
+                            );
+                        }
+                        (None, Some(mut type_)) => {
+                            let mut handler = self.declare_current_idx(Key::Anon(range));
+                            self.ensure_expr(&mut type_, handler.usage());
+                            self.insert_binding_current(
+                                handler,
+                                Binding::ExceptionHandler(type_, x.is_star),
+                            );
+                        }
+                        (Some(name), None) => {
+                            // Must be a syntax error. But make sure we bind name to something.
+                            let handler = self
+                                .declare_current_idx(Key::Definition(ShortIdentifier::new(&name)));
+                            self.bind_definition_current(
+                                &name,
+                                handler,
+                                Binding::Type(Type::any_error()),
+                                FlowStyle::Other,
+                            );
+                        }
+                        (None, None) => {}
                     }
                     self.stmts(h.body);
                     self.scopes.swap_current_flow_with(&mut base);
@@ -946,12 +969,12 @@ impl<'a> BindingsBuilder<'a> {
             }
             Stmt::Global(x) => {
                 for name in x.names {
-                    self.define_global_name(&name);
+                    self.declare_global_name(&name);
                 }
             }
             Stmt::Nonlocal(x) => {
                 for name in x.names {
-                    self.define_nonlocal_name(&name);
+                    self.declare_nonlocal_name(&name);
                 }
             }
             Stmt::Expr(mut x) => {

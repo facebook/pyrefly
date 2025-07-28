@@ -611,6 +611,11 @@ fn bind_instance_attribute(
             instance.class.dupe(),
         )
     } else if let Some(getter) = attr.is_property_setter_with_getter() {
+        // The attribute lookup code and function decorator logic together ensure that
+        // a property with a setter winds up being bound to the raw setter function
+        // type, with function metadata that includes the raw getter function type.
+        //
+        // See the `attr.rs` and `function.rs` code for more details on how this works.
         Attribute::property(
             make_bound_method(instance.to_type(), getter).into_inner(),
             Some(make_bound_method(instance.to_type(), attr).into_inner()),

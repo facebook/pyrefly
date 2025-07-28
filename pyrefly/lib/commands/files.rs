@@ -58,7 +58,7 @@ fn config_finder(args: ConfigOverrideArgs) -> ConfigFinder {
     standard_config_finder(Arc::new(move |_, x| args.override_config(x)))
 }
 
-fn absolutize(globs: Globs) -> anyhow::Result<Globs> {
+fn absolutize(globs: Globs) -> Globs {
     globs.from_root(&PathBuf::new().absolutize())
 }
 
@@ -142,7 +142,7 @@ fn get_globs_and_config_for_files(
     args: &ConfigOverrideArgs,
 ) -> anyhow::Result<(FilteredGlobs, ConfigFinder)> {
     let project_excludes = project_excludes.unwrap_or_else(ConfigFile::default_project_excludes);
-    let files_to_check = absolutize(files_to_check)?;
+    let files_to_check = absolutize(files_to_check);
     let (config_finder, errors) = match config {
         Some(explicit) => {
             let (config, errors) = get_explicit_config(&explicit, args);
@@ -182,7 +182,7 @@ impl FilesArgs {
         config_override: &ConfigOverrideArgs,
     ) -> anyhow::Result<(FilteredGlobs, ConfigFinder)> {
         let project_excludes = if let Some(project_excludes) = self.project_excludes {
-            Some(absolutize(Globs::new(project_excludes)?)?)
+            Some(absolutize(Globs::new(project_excludes)?))
         } else {
             None
         };

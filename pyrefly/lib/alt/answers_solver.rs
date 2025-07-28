@@ -616,7 +616,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         if module == self.module().name() && path.is_none_or(|path| path == self.module().path()) {
-            Some(self.get(k))
+            // We are working in our own module, so don't have to go back to the `LookupAnswer` trait.
+            // But even though we are looking at our own module, we might be using our own type via an import
+            // from a mutually recursive module, so have to deal with key_to_idx finding nothing due to incremental.
+            Some(self.get_idx(self.bindings().key_to_idx_hashed_opt(Hashed::new(k))?))
         } else {
             self.answers.get(module, path, k, self.thread_state)
         }

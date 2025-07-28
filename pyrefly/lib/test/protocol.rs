@@ -562,3 +562,20 @@ class AnotherClass: # E: @runtime_checkable can only be applied to Protocol clas
     x: int = 5
 "#,
 );
+
+testcase!(
+    bug = "We don't support this yet",
+    test_callback_protocol_generic,
+    r#"
+from typing import Protocol
+class C(Protocol):
+    def __call__[T](self, x: T) -> T:
+        return x
+def f[T](x: T) -> T:
+    return x
+def g(x: int) -> int:
+    return x
+c: C = f  # should be OK  # E: `[T](x: T) -> T` is not assignable to `C`
+c: C = g  # E: `(x: int) -> int` is not assignable to `C`
+    "#,
+);

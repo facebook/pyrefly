@@ -7747,6 +7747,16 @@
       "name": "invalid-overload",
       "stop_column": 16,
       "stop_line": 25
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Implementation signature `(x: int) -> int | str` does not accept all arguments that overload signature `(x: str) -> str` accepts",
+      "description": "Implementation signature `(x: int) -> int | str` does not accept all arguments that overload signature `(x: str) -> str` accepts",
+      "line": 41,
+      "name": "invalid-overload",
+      "stop_column": 19,
+      "stop_line": 41
     }
   ],
   "overloads_definitions.py": [
@@ -7789,6 +7799,16 @@
       "name": "invalid-overload",
       "stop_column": 21,
       "stop_line": 59
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Implementation signature `(cls: type[Self@C], *args: int | str) -> int | str` does not accept all arguments that overload signature `(self: Self@C, x: str, /) -> str` accepts",
+      "description": "Implementation signature `(cls: type[Self@C], *args: int | str) -> int | str` does not accept all arguments that overload signature `(self: Self@C, x: str, /) -> str` accepts",
+      "line": 90,
+      "name": "invalid-overload",
+      "stop_column": 14,
+      "stop_line": 90
     }
   ],
   "overloads_evaluation.py": [

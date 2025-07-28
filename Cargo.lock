@@ -2152,6 +2152,7 @@ dependencies = [
 name = "pyrefly_types"
 version = "0.25.1"
 dependencies = [
+ "compact_str 0.8.0",
  "dupe",
  "itertools 0.14.0",
  "num-bigint",
@@ -2176,6 +2177,7 @@ dependencies = [
  "append-only-vec",
  "argfile",
  "bstr",
+ "compact_str 0.8.0",
  "const-str",
  "dupe",
  "equivalent",

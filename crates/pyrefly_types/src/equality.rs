@@ -8,6 +8,7 @@
 use std::hash::Hash;
 use std::sync::Arc;
 
+use compact_str::CompactString;
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::uniques::Unique;
@@ -134,6 +135,7 @@ impl TypeEq for u64 {}
 impl TypeEq for u128 {}
 impl TypeEq for usize {}
 impl TypeEq for String {}
+impl TypeEq for CompactString {}
 impl TypeEq for str {}
 
 impl TypeEq for Name {}

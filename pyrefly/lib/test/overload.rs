@@ -361,7 +361,7 @@ class defaulty[K, V]:
     def __init__(self: defaulty[str, V], **kwargs: V) -> None: ...
     @overload
     def __init__(self, default_factory: Callable[[], V] | None, /) -> None: ...
-    def __init__() -> None:
+    def __init__(self, *args, **kwargs) -> None:
         return None
 badge: defaulty[bool, list[str]] = defaulty(list)
     "#,
@@ -515,6 +515,62 @@ def f(x: int) -> int: ...
 @overload
 def f(x: str) -> str: ...
 def f[T](x: T) -> T:
+    return x
+    "#,
+);
+
+testcase!(
+    test_param_consistency,
+    r#"
+from typing import overload
+
+@overload
+def f(x: int) -> int: ...
+@overload
+def f(x: str) -> int: ...  # E: Implementation signature `(x: int) -> int` does not accept all arguments that overload signature `(x: str) -> int` accepts
+def f(x: int) -> int:
+    return x
+    "#,
+);
+
+testcase!(
+    test_generic_implementation_multiple_typevars,
+    r#"
+from typing import overload
+
+@overload
+def f(x: int, y: str) -> tuple[str, int]: ...
+@overload
+def f(x: bool, y: float) -> tuple[float, bool]: ...
+def f[T1, T2](x: T1, y: T2) -> tuple[T2, T1]:
+    return (y, x)
+
+@overload
+def g(x: int, y: str) -> tuple[str, int]: ...  # E: `tuple[str, int]` is not assignable to implementation return type `tuple[int, str]`
+@overload
+def g(x: bool, y: float) -> tuple[float, bool]: ...  # E: `tuple[float, bool]` is not assignable to implementation return type `tuple[bool, float]`
+def g[T1, T2](x: T1, y: T2) -> tuple[T1, T2]:
+    return (x, y)
+    "#,
+);
+
+testcase!(
+    test_generic_overload_nongeneric_impl,
+    r#"
+from typing import Any, overload
+
+@overload
+def f[T](x: T, y=None) -> T: ...  # E: does not accept all arguments  # E: not assignable to implementation return type
+@overload
+def f(x, y) -> Any: ...
+def f(x: int, y=None) -> int:
+    return x
+
+@overload
+def g[T: int](x: T, y=None) -> T: ...
+@overload
+def g(x, y) -> Any: ...
+def g(x: int, y=None) -> int:
     return x
     "#,
 );

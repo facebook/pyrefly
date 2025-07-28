@@ -317,12 +317,9 @@
   "narrowing_typeguard.py": [],
   "narrowing_typeis.py": [],
   "overloads_basic.py": [],
-  "overloads_consistency.py": [
-    "Lines 41, 44: Expected error (tag 'parameter_type')"
-  ],
+  "overloads_consistency.py": [],
   "overloads_definitions.py": [
     "Lines 71, 73, 78, 81: Expected error (tag 'func5')",
-    "Lines 84, 86, 90, 94: Expected error (tag 'func6')",
     "Lines 121, 123, 127: Expected error (tag 'invalid_final')",
     "Lines 135, 136, 137, 141, 142: Expected error (tag 'invalid_final_2+')",
     "Lines 170, 175, 181, 183: Expected error (tag 'override-final')",

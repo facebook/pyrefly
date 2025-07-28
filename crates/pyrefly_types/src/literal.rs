@@ -9,6 +9,7 @@ use std::char;
 use std::fmt;
 use std::fmt::Display;
 
+use compact_str::CompactString;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
@@ -33,7 +34,7 @@ assert_words!(Lit, 3);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum Lit {
-    Str(Box<str>),
+    Str(CompactString),
     Int(LitInt),
     Bool(bool),
     Bytes(Box<[u8]>),
@@ -131,7 +132,7 @@ impl Lit {
                 }
             }
         }
-        Some(Lit::Str(collected_literals.join("").into_boxed_str()))
+        Some(Lit::Str(collected_literals.join("").into()))
     }
 
     pub fn from_int(x: &Int) -> Self {

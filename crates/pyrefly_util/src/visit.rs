@@ -11,6 +11,7 @@
 use std::any;
 use std::any::Any;
 
+use compact_str::CompactString;
 use const_str;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -139,6 +140,8 @@ visit_nothing!(i64);
 visit_nothing!(i128);
 visit_nothing!(isize);
 visit_nothing!(());
+visit_nothing!(String);
+visit_nothing!(CompactString);
 
 // We can't visit `str` on its own, so this is atomic.
 visit_nothing!(Box<str>);
