@@ -211,6 +211,8 @@ pub struct FuncFlags {
     /// `dataclass_transform` call. See
     /// https://typing.python.org/en/latest/spec/dataclasses.html#specification.
     pub dataclass_transform_metadata: Option<DataclassTransformKeywords>,
+    /// A function decorated with `@abc.abstractmethod`
+    pub is_abstract_method: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

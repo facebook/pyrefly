@@ -117,6 +117,13 @@ struct CalledOverload {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    /// Check if a module is a builtin module that should be exempt from abstract method validation
+    fn is_builtin_module(&self, module: pyrefly_python::module_name::ModuleName) -> bool {
+        matches!(
+            module.as_str(),
+            "builtins" | "abc" | "typing" | "typing_extensions"
+        )
+    }
     fn error_call_target(
         &self,
         errors: &ErrorCollector,
@@ -539,6 +546,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ErrorInfo::new(ErrorKind::Deprecated, context),
                 format!(
                     "Call to deprecated function `{}`",
+                    m.kind.as_func_id().format(self.module().name())
+                ),
+            );
+        }
+        // Check for abstract method calls
+        if let Some(m) = metadata
+            && m.flags.is_abstract_method
+            && !self.is_builtin_module(m.kind.as_func_id().module)
+        {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::new(ErrorKind::AbstractMethodCall, context),
+                format!(
+                    "Cannot call abstract method `{}` - must be implemented in a subclass",
                     m.kind.as_func_id().format(self.module().name())
                 ),
             );
