@@ -13,7 +13,6 @@
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use serde_repr::*;
 
 use crate::report::glean::schema::*;
 
