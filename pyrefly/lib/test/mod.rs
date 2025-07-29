@@ -43,6 +43,7 @@ mod paramspec;
 mod pattern_match;
 mod perf;
 mod protocol;
+mod pydantic;
 mod returns;
 mod scope;
 mod simple;

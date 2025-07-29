@@ -97,6 +97,7 @@ pub struct TestEnv {
     modules: SmallMap<ModuleName, (ModulePath, Option<Arc<String>>)>,
     version: PythonVersion,
     untyped_def_behavior: UntypedDefBehavior,
+    site_package_path: Option<Vec<PathBuf>>,
 }
 
 impl TestEnv {
@@ -104,6 +105,17 @@ impl TestEnv {
         // We aim to init the tracing before now, but if not, better now than never
         init_test();
         Self::default()
+    }
+
+    pub fn new_with_site_package_path(path: &str) -> Self {
+        let mut res = Self::new();
+
+        if path.is_empty() {
+            res.site_package_path = None;
+        } else {
+            res.site_package_path = Some(vec![PathBuf::from(path)]);
+        }
+        res
     }
 
     pub fn new_with_version(version: PythonVersion) -> Self {
@@ -116,6 +128,11 @@ impl TestEnv {
         let mut res = Self::new();
         res.untyped_def_behavior = untyped_def_behavior;
         res
+    }
+
+    pub fn new_pydantic_env() -> Self {
+        let path = std::env::var("PYDANTIC_TEST_PATH").expect("PYDANTIC_TEST_PATH must be set");
+        Self::new_with_site_package_path(&path)
     }
 
     pub fn add_with_path(&mut self, name: &str, path: &str, code: &str) {
@@ -177,7 +194,7 @@ impl TestEnv {
         let mut config = ConfigFile::default();
         config.python_environment.python_version = Some(self.version);
         config.python_environment.python_platform = Some(PythonPlatform::linux());
-        config.python_environment.site_package_path = Some(Vec::new());
+        config.python_environment.site_package_path = self.site_package_path.clone();
         config.root.untyped_def_behavior = Some(self.untyped_def_behavior);
         for (name, (path, _)) in self.modules.iter() {
             config.custom_module_paths.insert(*name, path.clone());
