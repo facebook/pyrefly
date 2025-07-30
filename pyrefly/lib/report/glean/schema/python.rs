@@ -13,6 +13,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use serde_repr::*;
 
 use crate::report::glean::schema::*;
 
@@ -1566,6 +1567,7 @@ pub struct TypeInfo {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchVariableByName_key {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<SName>,
     pub decl: VariableDeclaration,
 }
@@ -1579,6 +1581,7 @@ pub struct SearchVariableByLowerCaseName_key {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchModuleByName_key {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<SName>,
     pub decl: Module,
 }
@@ -1592,6 +1595,7 @@ pub struct SearchModuleByLowerCaseName_key {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchMethodByName_key {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<SName>,
     pub decl: FunctionDeclaration,
 }
@@ -1605,6 +1609,7 @@ pub struct SearchMethodByLowerCaseName_key {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchFunctionByName_key {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<SName>,
     pub decl: FunctionDeclaration,
 }
@@ -1618,6 +1623,7 @@ pub struct SearchFunctionByLowerCaseName_key {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchFieldByName_key {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<SName>,
     pub decl: VariableDeclaration,
 }
@@ -1631,6 +1637,7 @@ pub struct SearchFieldByLowerCaseName_key {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchClassByName_key {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<SName>,
     pub decl: ClassDeclaration,
 }
@@ -1646,6 +1653,7 @@ pub type SNameToName_value = Name;
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SName_key {
     pub local_name: Name,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<SName>,
 }
 
@@ -1658,7 +1666,9 @@ pub struct ResolveOriginalName_key {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Parameter {
     pub name: Name,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub typeInfo: Option<TypeInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
 }
 
@@ -1781,20 +1791,29 @@ pub enum DeclarationContainer {
 pub struct FunctionDefinition_key {
     pub declaration: FunctionDeclaration,
     pub is_async: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub returnsInfo: Option<TypeInfo>,
     pub params: Vec<Parameter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub posonly_params: Option<Vec<Parameter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub kwonly_params: Option<Vec<Parameter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub star_arg: Option<Parameter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub star_kwarg: Option<Parameter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub decorators: Option<Vec<Decorator>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub container: Option<DeclarationContainer>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct VariableDefinition_key {
     pub declaration: VariableDeclaration,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub typeInfo: Option<TypeInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub container: Option<DeclarationContainer>,
 }
 
@@ -1918,15 +1937,20 @@ pub struct ContainedBy_key {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ClassDefinition_key {
     pub declaration: ClassDeclaration,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bases: Option<Vec<ClassDeclaration>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub keywords: Option<Vec<Parameter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub decorators: Option<Vec<Decorator>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub container: Option<DeclarationContainer>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ClassDeclaration_key {
     pub name: Name,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bases: Option<Vec<Name>>,
 }
 
@@ -1951,8 +1975,10 @@ pub enum Argument {
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct CallArgument {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<Name>,
     pub span: src::ByteSpan,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub argument: Option<Argument>,
 }
 
