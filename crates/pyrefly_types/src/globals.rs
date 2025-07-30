@@ -42,7 +42,9 @@ const GLOBALS: &[Global] = &[
         Type::optional(stdlib.str().clone().to_type())
     }),
     Global::new("__path__", |stdlib| {
-        stdlib.iterable(stdlib.str().clone().to_type()).to_type()
+        stdlib
+            .mutable_sequence(stdlib.str().clone().to_type())
+            .to_type()
     }),
     Global::new("__spec__", |_| Type::any_explicit()),
 ];

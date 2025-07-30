@@ -25,24 +25,36 @@ use crate::types::types::Type;
 /// work of computing inheritance information and the MRO.
 #[derive(Debug, Clone)]
 pub enum BaseClass {
-    TypedDict,
-    Generic(Vec<Type>),
-    Protocol(Vec<Type>),
+    TypedDict(TextRange),
+    Generic(Vec<Type>, TextRange),
+    Protocol(Vec<Type>, TextRange),
     Expr(Expr),
     NamedTuple(TextRange),
 }
 
 impl BaseClass {
     pub fn can_apply(&self) -> bool {
-        matches!(self, BaseClass::Generic(_) | BaseClass::Protocol(_))
+        matches!(self, BaseClass::Generic(..) | BaseClass::Protocol(..))
     }
 
     pub fn apply(&mut self, args: Vec<Type>) {
         match self {
-            BaseClass::Generic(xs) | BaseClass::Protocol(xs) => {
+            BaseClass::Generic(xs, ..) | BaseClass::Protocol(xs, ..) => {
                 xs.extend(args);
             }
             _ => panic!("cannot apply base class"),
+        }
+    }
+}
+
+impl Ranged for BaseClass {
+    fn range(&self) -> TextRange {
+        match self {
+            BaseClass::TypedDict(range) => *range,
+            BaseClass::Generic(_, range) => *range,
+            BaseClass::Protocol(_, range) => *range,
+            BaseClass::Expr(expr) => expr.range(),
+            BaseClass::NamedTuple(range) => *range,
         }
     }
 }
@@ -68,9 +80,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         match self.expr_infer(base_expr, errors) {
             Type::Type(box Type::SpecialForm(special)) => match special {
-                SpecialForm::Protocol => Some(BaseClass::Protocol(Vec::new())),
-                SpecialForm::Generic => Some(BaseClass::Generic(Vec::new())),
-                SpecialForm::TypedDict => Some(BaseClass::TypedDict),
+                SpecialForm::Protocol => Some(BaseClass::Protocol(Vec::new(), base_expr.range())),
+                SpecialForm::Generic => Some(BaseClass::Generic(Vec::new(), base_expr.range())),
+                SpecialForm::TypedDict => Some(BaseClass::TypedDict(base_expr.range())),
                 _ => None,
             },
             Type::ClassDef(cls) if cls.has_qname("typing", "NamedTuple") => {

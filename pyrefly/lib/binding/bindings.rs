@@ -988,7 +988,8 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_name(&name.id, idx, style).0
     }
 
-    pub fn bind_definition_current(
+    /// Bind a name in scope to the idx of `current`, inserting `binding` as the binding.
+    pub fn bind_current_as(
         &mut self,
         name: &Identifier,
         current: CurrentIdx,
@@ -999,6 +1000,10 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_name(&name.id, idx, style).0
     }
 
+    /// Bind a name in scope to the idx of `current`, without inserting a binding.
+    ///
+    /// Returns the same data as `bind_name`, which a caller might use to produce the binding
+    /// for `current` (which they are responsible for inserting later).
     pub fn bind_current(
         &mut self,
         name: &Name,

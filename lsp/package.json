@@ -1,6 +1,7 @@
 {
     "name": "pyrefly",
-    "description": "A Python language server, powered by pyrefly",
+    "displayName": "Pyrefly - Python Language Tooling",
+    "description": "Python autocomplete, typechecking, code navigation and more! Powered by Pyrefly, an open-source language server",
     "icon": "images/pyrefly-symbol.png",
     "extensionKind": [
         "workspace"
@@ -19,7 +20,13 @@
         "Other"
     ],
     "keywords": [
-        "multi-root ready"
+        "multi-root ready",
+        "python",
+        "type",
+        "typecheck",
+        "typehint",
+        "completion",
+        "lint"
     ],
     "engines": {
         "vscode": "^1.94.0"

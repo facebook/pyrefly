@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_types::callable::Function;
 use pyrefly_util::display::count;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::name::Name;
@@ -156,7 +157,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Instantiates a class or typed dictionary with fresh variables for its type parameters.
-    pub fn instantiate_fresh(&self, cls: &Class) -> Type {
+    pub fn instantiate_fresh_class(&self, cls: &Class) -> Type {
         self.solver()
             .fresh_quantified(
                 &self.get_class_tparams(cls),
@@ -166,9 +167,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .1
     }
 
-    pub fn instantiate_forall(&self, forall: Forall<Forallable>) -> (Vec<Var>, Type) {
+    pub fn instantiate_fresh_forall(&self, forall: Forall<Forallable>) -> (Vec<Var>, Type) {
         self.solver()
             .fresh_quantified(&forall.tparams, forall.body.as_type(), self.uniques)
+    }
+
+    pub fn instantiate_fresh_function(
+        &self,
+        tparams: &TParams,
+        func: Function,
+    ) -> (Vec<Var>, Function) {
+        let (qs, t) =
+            self.solver()
+                .fresh_quantified(tparams, Type::Function(Box::new(func)), self.uniques);
+        match t {
+            Type::Function(func) => (qs, *func),
+            // We passed a Function to fresh_quantified(), so we know we get a Function back out.
+            _ => unreachable!(),
+        }
     }
 
     /// Creates default type arguments for a class, falling back to Any for type parameters without defaults.

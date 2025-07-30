@@ -1,6 +1,6 @@
 [
   {
-    "schema_id": "54195d609c9195d2bc09d8fa05050bf7"
+    "schema_id": "e58db6a216a862a9e127d2986d1c377f"
   },
   {
     "predicate": "python.Name.4",
@@ -17,7 +17,7 @@
   {
     "predicate": "digest.FileDigest.1",
     "facts": [
-      {"id":0,"key":{"file":{"id":0,"key":"test/glean/func.py"},"digest":{"hash":"c54b00922e85fb731a0dd86157d146b71a3199fa6c83b2590a5d4f1df0a230c9","size":244}}}
+      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"digest":{"hash":"7439845ea8516f635b7ab80df59f30deedc9218d307e87e7a5cf0b62603ccf57","size":350}}}
     ]
   },
   {
@@ -30,16 +30,16 @@
   {
     "predicate": "python.DeclarationLocation.4",
     "facts": [
-      {"id":0,"key":{"declaration":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func"}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":0,"length":244}}},
-      {"id":0,"key":{"declaration":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator"}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":75,"length":82}}},
-      {"id":0,"key":{"declaration":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b"}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":171,"length":72}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.func"}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":89,"length":4}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.args"}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":95,"length":5}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.kargs"}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":102,"length":7}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.x"}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":183,"length":1}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.y"}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":194,"length":1}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.z"}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":200,"length":1}}},
-      {"id":0,"key":{"declaration":{"cls":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.C"}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":222,"length":21}}}
+      {"id":0,"key":{"declaration":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":0,"length":350}}},
+      {"id":0,"key":{"declaration":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":181,"length":82}}},
+      {"id":0,"key":{"declaration":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":277,"length":72}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.x"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":289,"length":1}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.y"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":300,"length":1}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.z"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":306,"length":1}}},
+      {"id":0,"key":{"declaration":{"cls":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.C"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":328,"length":21}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.func"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":195,"length":4}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.args"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":201,"length":5}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.kargs"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":208,"length":7}}}
     ]
   },
   {
@@ -48,37 +48,37 @@
       {"id":0,"key":{"declaration":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func"}}}}}},
       {"id":0,"key":{"declaration":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func"}}}}}},
       {"id":0,"key":{"declaration":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func"}}}}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.func"}}}},"container":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator"}}}}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.args"}}}},"container":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator"}}}}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.kargs"}}}},"container":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator"}}}}}},
       {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.x"}}}},"container":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b"}}}}}},
       {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.y"}}}},"container":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b"}}}}}},
       {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.z"}}}},"container":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b"}}}}}},
-      {"id":0,"key":{"declaration":{"cls":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.C"}}}},"container":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b"}}}}}}
+      {"id":0,"key":{"declaration":{"cls":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.C"}}}},"container":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b"}}}}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.func"}}}},"container":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator"}}}}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.args"}}}},"container":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator"}}}}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.kargs"}}}},"container":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator"}}}}}}
     ]
   },
   {
     "predicate": "python.DeclarationDocstring.4",
     "facts": [
-      {"id":0,"key":{"declaration":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator"}}}},"location":{"start":116,"length":25},"pretty_text":"Docstring"}}
+      {"id":0,"key":{"declaration":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator"}}}},"location":{"start":222,"length":25},"pretty_text":"Docstring"}}
     ]
   },
   {
     "predicate": "python.XRefsViaNameByFile.4",
     "facts": [
-      {"id":0,"key":{"file":{"id":0,"key":"test/glean/func.py"},"xrefs":[{"target":{"id":0,"key":"int"},"source":{"start":186,"length":3}},{"target":{"id":0,"key":"test.glean.func.decorator"},"source":{"start":161,"length":9}},{"target":{"id":0,"key":"None"},"source":{"start":206,"length":4}},{"target":{"id":0,"key":"str"},"source":{"start":213,"length":3}},{"target":{"id":0,"key":"test.glean.func.decorator.<locals>.func"},"source":{"start":153,"length":4}}]}}
+      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"xrefs":[{"target":{"id":0,"key":"int"},"source":{"start":292,"length":3}},{"target":{"id":0,"key":"test.glean.func.decorator"},"source":{"start":267,"length":9}},{"target":{"id":0,"key":"None"},"source":{"start":312,"length":4}},{"target":{"id":0,"key":"str"},"source":{"start":319,"length":3}},{"target":{"id":0,"key":"test.glean.func.decorator.<locals>.func"},"source":{"start":259,"length":4}}]}}
     ]
   },
   {
     "predicate": "src.FileLines.1",
     "facts": [
-      {"id":0,"key":{"file":{"id":0,"key":"test/glean/func.py"},"lengths":[73,1,1,37,8,14,8,16,1,1,11,47,13,13],"endsInNewline":true,"hasUnicodeOrTabs":false}}
+      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"lengths":[53,2,66,58,1,1,37,8,14,8,16,1,1,11,47,13,13],"endsInNewline":true,"hasUnicodeOrTabs":false}}
     ]
   },
   {
     "predicate": "src.FileLanguage.1",
     "facts": [
-      {"id":0,"key":{"file":{"id":0,"key":"test/glean/func.py"},"language":7}}
+      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"language":7}}
     ]
   },
   {
@@ -89,15 +89,15 @@
       {"id":0,"key":{"id":0,"key":"test.glean.func"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}},
       {"id":0,"key":{"id":0,"key":"test.glean.func.decorator"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"decorator"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}},
       {"id":0,"key":{"id":0,"key":"test.glean.func.b"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"b"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}},
-      {"id":0,"key":{"id":0,"key":"test.glean.func.decorator.<locals>"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"<locals>"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"decorator"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}},
-      {"id":0,"key":{"id":0,"key":"test.glean.func.decorator.<locals>.func"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"<locals>"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"decorator"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}}}},
-      {"id":0,"key":{"id":0,"key":"test.glean.func.decorator.<locals>.args"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"args"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"<locals>"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"decorator"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}}}},
-      {"id":0,"key":{"id":0,"key":"test.glean.func.decorator.<locals>.kargs"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"kargs"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"<locals>"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"decorator"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}}}},
       {"id":0,"key":{"id":0,"key":"test.glean.func.b.<locals>"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"<locals>"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"b"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}},
       {"id":0,"key":{"id":0,"key":"test.glean.func.b.<locals>.x"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"x"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"<locals>"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"b"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}}}},
       {"id":0,"key":{"id":0,"key":"test.glean.func.b.<locals>.y"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"y"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"<locals>"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"b"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}}}},
       {"id":0,"key":{"id":0,"key":"test.glean.func.b.<locals>.z"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"z"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"<locals>"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"b"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}}}},
       {"id":0,"key":{"id":0,"key":"test.glean.func.b.<locals>.C"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"C"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"<locals>"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"b"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.func.decorator.<locals>"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"<locals>"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"decorator"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.func.decorator.<locals>.func"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"<locals>"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"decorator"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.func.decorator.<locals>.args"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"args"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"<locals>"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"decorator"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.func.decorator.<locals>.kargs"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"kargs"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"<locals>"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"decorator"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"func"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}}}},
       {"id":0,"key":{"id":0,"key":"int"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"int"}}}},
       {"id":0,"key":{"id":0,"key":"None"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"None"}}}},
       {"id":0,"key":{"id":0,"key":"str"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"str"}}}},
@@ -107,16 +107,26 @@
   {
     "predicate": "python.DefinitionLocation.4",
     "facts": [
-      {"id":0,"key":{"definition":{"module":{"id":0,"key":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func"}}}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":0,"length":244}}},
-      {"id":0,"key":{"definition":{"func":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator"}}},"is_async":false,"params":[{"name":{"id":0,"key":"func"}}],"posonly_params":[],"kwonly_params":[],"star_arg":{"name":{"id":0,"key":"args"}},"star_kwarg":{"name":{"id":0,"key":"kargs"}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func"}}}}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":75,"length":82}}},
-      {"id":0,"key":{"definition":{"func":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b"}}},"is_async":true,"returnsInfo":{"displayType":{"id":0,"key":"None | str"},"xrefs":[{"target":{"id":0,"key":"None"},"source":{"start":0,"length":4}},{"target":{"id":0,"key":"str"},"source":{"start":7,"length":3}}]},"params":[{"name":{"id":0,"key":"y"}}],"posonly_params":[{"name":{"id":0,"key":"x"},"typeInfo":{"displayType":{"id":0,"key":"int"},"xrefs":[{"target":{"id":0,"key":"int"},"source":{"start":0,"length":3}}]}}],"kwonly_params":[{"name":{"id":0,"key":"z"}}],"decorators":["@decorator"],"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func"}}}}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":160,"length":83}}},
-      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.func"}}}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":89,"length":4}}},
-      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.args"}}}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":95,"length":5}}},
-      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.kargs"}}}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":102,"length":7}}},
-      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.x"}}}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":183,"length":1}}},
-      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.y"}}}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":194,"length":1}}},
-      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.z"}}}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":200,"length":1}}},
-      {"id":0,"key":{"definition":{"cls":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.C"}}},"bases":[],"container":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b"}}}}}}},"file":{"id":0,"key":"test/glean/func.py"},"span":{"start":222,"length":21}}}
+      {"id":0,"key":{"definition":{"module":{"id":0,"key":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func"}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":0,"length":350}}},
+      {"id":0,"key":{"definition":{"func":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator"}}},"is_async":false,"params":[{"name":{"id":0,"key":"func"}}],"posonly_params":[],"kwonly_params":[],"star_arg":{"name":{"id":0,"key":"args"}},"star_kwarg":{"name":{"id":0,"key":"kargs"}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func"}}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":181,"length":82}}},
+      {"id":0,"key":{"definition":{"func":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b"}}},"is_async":true,"returnsInfo":{"displayType":{"id":0,"key":"None | str"},"xrefs":[{"target":{"id":0,"key":"None"},"source":{"start":0,"length":4}},{"target":{"id":0,"key":"str"},"source":{"start":7,"length":3}}]},"params":[{"name":{"id":0,"key":"y"}}],"posonly_params":[{"name":{"id":0,"key":"x"},"typeInfo":{"displayType":{"id":0,"key":"int"},"xrefs":[{"target":{"id":0,"key":"int"},"source":{"start":0,"length":3}}]}}],"kwonly_params":[{"name":{"id":0,"key":"z"}}],"decorators":["@decorator"],"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func"}}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":266,"length":83}}},
+      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.x"}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":289,"length":1}}},
+      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.y"}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":300,"length":1}}},
+      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.z"}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":306,"length":1}}},
+      {"id":0,"key":{"definition":{"cls":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b.<locals>.C"}}},"bases":[],"container":{"func":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.b"}}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":328,"length":21}}},
+      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.func"}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":195,"length":4}}},
+      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.args"}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":201,"length":5}}},
+      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.func.decorator.<locals>.kargs"}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"span":{"start":208,"length":7}}}
+    ]
+  },
+  {
+    "predicate": "python.XRefsViaNameByTarget.4",
+    "facts": [
+      {"id":0,"key":{"target":{"id":0,"key":"int"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"spans":[{"start":292,"length":3}]}},
+      {"id":0,"key":{"target":{"id":0,"key":"test.glean.func.decorator"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"spans":[{"start":267,"length":9}]}},
+      {"id":0,"key":{"target":{"id":0,"key":"None"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"spans":[{"start":312,"length":4}]}},
+      {"id":0,"key":{"target":{"id":0,"key":"str"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"spans":[{"start":319,"length":3}]}},
+      {"id":0,"key":{"target":{"id":0,"key":"test.glean.func.decorator.<locals>.func"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/func.py"},"spans":[{"start":259,"length":4}]}}
     ]
   }
 ]

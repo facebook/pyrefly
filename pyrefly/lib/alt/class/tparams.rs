@@ -95,14 +95,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut protocol_tparams = SmallSet::new();
         for base in bases.iter() {
             match base {
-                BaseClass::Generic(ts) => {
+                BaseClass::Generic(ts, ..) => {
                     for t in ts {
                         if let Some(p) = lookup_tparam(t) {
                             generic_tparams.insert(p);
                         }
                     }
                 }
-                BaseClass::Protocol(ts) if !ts.is_empty() => {
+                BaseClass::Protocol(ts, ..) if !ts.is_empty() => {
                     for t in ts {
                         if let Some(p) = lookup_tparam(t) {
                             protocol_tparams.insert(p);

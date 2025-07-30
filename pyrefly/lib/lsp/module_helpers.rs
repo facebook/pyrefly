@@ -8,7 +8,9 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use lsp_types::Location;
 use lsp_types::Url;
+use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
@@ -60,4 +62,16 @@ pub fn handle_from_module_path(state: &State, path: ModulePath) -> Handle {
 pub fn make_open_handle(state: &State, path: &Path) -> Handle {
     let path = ModulePath::memory(path.to_owned());
     handle_from_module_path(state, path)
+}
+
+pub fn to_lsp_location(location: &TextRangeWithModule) -> Option<Location> {
+    let TextRangeWithModule {
+        module: definition_module_info,
+        range,
+    } = location;
+    let uri = module_info_to_uri(definition_module_info)?;
+    Some(Location {
+        uri,
+        range: definition_module_info.lined_buffer().to_lsp_range(*range),
+    })
 }

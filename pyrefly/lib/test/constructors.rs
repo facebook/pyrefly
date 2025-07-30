@@ -443,3 +443,17 @@ class C[T]:
 assert_type(C(0), C[int])
     "#,
 );
+
+testcase!(
+    test_specialize_in_init,
+    r#"
+from typing import assert_type
+class A[T]:
+    def __init__(self, x: type[T]):
+        self._x = x
+        self.f()
+    def f(self):
+        pass
+assert_type(A(int), A[int])
+    "#,
+);

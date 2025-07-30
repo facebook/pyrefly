@@ -553,7 +553,7 @@ impl<'a> BindingsBuilder<'a> {
             },
         );
 
-        self.bind_definition_current(
+        self.bind_current_as(
             &func_name,
             def_idx,
             Binding::Function(function_idx, pred_idx, metadata_key),

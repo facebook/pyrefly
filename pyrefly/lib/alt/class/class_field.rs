@@ -214,14 +214,6 @@ impl ClassField {
         }
     }
 
-    /// Get the raw type. Only suitable for use in this module, this type may
-    /// not correspond to the type of any actual operations on the attribute.
-    fn raw_type(&self) -> &Type {
-        match &self.0 {
-            ClassFieldInner::Simple { ty, .. } => ty,
-        }
-    }
-
     pub fn new_synthesized(ty: Type) -> Self {
         ClassField(ClassFieldInner::Simple {
             ty,
@@ -795,16 +787,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let (value_ty, inherited_annotation) = match value {
             ExprOrBinding::Expr(e) => {
-                let inherited_annot = if direct_annotation.is_some() {
-                    None
+                let (inherited_ty, inherited_annot) = if direct_annotation.is_some() {
+                    (None, None)
                 } else {
-                    let (found_field, annotation) = self.get_inherited_annotation(class, name);
-                    if !found_field {
+                    let (inherited_ty, annotation) =
+                        self.get_inherited_type_and_annotation(class, name);
+                    if inherited_ty.is_none() {
                         name_might_exist_in_inherited = false;
                     }
-                    annotation
+                    (inherited_ty, annotation)
                 };
-                let mut ty = if let Some(annot) = &inherited_annot {
+                let mut ty = if let Some(inherited_ty) = inherited_ty
+                    && matches!(initial_value, RawClassFieldInitialization::Method(_))
+                {
+                    // Inherit the previous type of the attribute if the only declaration-like
+                    // thing the current class does is assign to the attribute in a method.
+                    inherited_ty
+                } else if let Some(annot) = &inherited_annot {
                     let ctx: &dyn Fn() -> TypeCheckContext =
                         &|| TypeCheckContext::of_kind(TypeCheckKind::Attribute(name.clone()));
                     let hint = Some((annot.get_type(), ctx));
@@ -918,15 +917,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ty = match initial_value {
             RawClassFieldInitialization::ClassBody(_)
             | RawClassFieldInitialization::Uninitialized => ty,
-            RawClassFieldInitialization::Method(method) => self
-                .check_and_sanitize_method_scope_type_parameters(
-                    class,
-                    &method.method_name,
-                    ty,
-                    name,
-                    range,
-                    errors,
-                ),
+            RawClassFieldInitialization::Method(_) => {
+                self.check_and_sanitize_type_parameters(class, ty, name, range, errors)
+            }
         };
 
         // Enum handling:
@@ -1102,17 +1095,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         None
     }
 
-    /// Return (did you find any fields, first one with an annotation)
-    fn get_inherited_annotation(&self, class: &Class, name: &Name) -> (bool, Option<Annotation>) {
-        let mut found_field = false;
+    /// Return (type of first inherited field, first inherited annotation). May not be from the same class!
+    /// For example, in:
+    ///   class A:
+    ///     x: int
+    ///   class B(A):
+    ///     x = 0
+    ///   class C(B):
+    ///     x = 1
+    /// `get_inherited_type_and_annotation(C, 'x')` will get the type from `B` and the annotation from `A`.
+    fn get_inherited_type_and_annotation(
+        &self,
+        class: &Class,
+        name: &Name,
+    ) -> (Option<Type>, Option<Annotation>) {
+        let mut found_field = None;
         let annotation = self
             .get_mro_for_class(class)
             .ancestors(self.stdlib)
             .find_map(|parent| {
                 let parent_field =
                     self.get_field_from_current_class_only(parent.class_object(), name)?;
-                found_field = true;
-                let ClassField(ClassFieldInner::Simple { annotation, .. }) = &*parent_field;
+                let ClassField(ClassFieldInner::Simple { ty, annotation, .. }) = &*parent_field;
+                if found_field.is_none() {
+                    found_field = Some(ty.clone());
+                }
                 annotation.clone()
             });
         (found_field, annotation)
@@ -1183,7 +1190,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             || field.is_class_var() // Class variables are not dataclass fields
             || (!field.has_explicit_annotation()
                 && self
-                    .get_inherited_annotation(cls, name)
+                    .get_inherited_type_and_annotation(cls, name)
                     .1
                     .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar)))
         {
@@ -1198,54 +1205,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn check_and_sanitize_method_scope_type_parameters(
+    fn check_and_sanitize_type_parameters(
         &self,
         class: &Class,
-        method_name: &Name,
         ty: Type,
         name: &Name,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
-        if let Some(method_field) =
-            self.get_non_synthesized_field_from_current_class_only(class, method_name)
-            && !method_field.is_init_var()
-        {
-            match &method_field.raw_type() {
-                Type::Forall(box Forall { tparams, .. }) => {
-                    let mut qs = SmallSet::new();
-                    ty.collect_quantifieds(&mut qs);
-                    let ts = Owner::new();
-                    let gradual_fallbacks: SmallMap<_, _> = tparams
-                        .iter()
-                        .filter_map(|param| {
-                            let q = &param.quantified;
-                            if qs.contains(q) {
-                                self.error(
-                                    errors,
-                                    range,
-                                    ErrorInfo::Kind(ErrorKind::InvalidTypeVar,
-                            ),
-                                format!(
-                                        "Cannot initialize attribute `{}` to a value that depends on method-scoped type variable `{}`",
-                                        name,
-                                        param.name(),
-                                    ),
-                                );
-                                Some((q , ts.push(q.as_gradual_type())))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    drop(qs);
-                    ty.subst(&gradual_fallbacks)
-                }
-                _ => ty,
-            }
-        } else {
-            ty
+        let mut qs = SmallSet::new();
+        ty.collect_quantifieds(&mut qs);
+        if qs.is_empty() {
+            drop(qs);
+            return ty;
         }
+        let class_tparams = self.get_class_tparams(class);
+        let qs_owner = Owner::new();
+        let ts = Owner::new();
+        let gradual_fallbacks = qs
+            .difference(&class_tparams.quantifieds().collect())
+            .map(|q| {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                    format!(
+                        "Attribute `{}` cannot depend on type variable `{}`, which is not in the scope of class `{}`",
+                        name,
+                        q.name(),
+                        class.name(),
+                    ),
+                );
+                (qs_owner.push((*q).clone()), ts.push(q.as_gradual_type()))
+            })
+            .collect::<SmallMap<_, _>>();
+        drop(qs);
+        ty.subst(&gradual_fallbacks)
     }
 
     fn as_instance_attribute(&self, field: &ClassField, instance: &Instance) -> Attribute {

@@ -7,9 +7,10 @@
 
 use std::path::PathBuf;
 
-use notify::Event;
+use lsp_types::FileChangeType;
 use notify::EventKind;
 
+#[derive(Debug, Clone, Default)]
 pub struct CategorizedEvents {
     pub created: Vec<PathBuf>,
     pub modified: Vec<PathBuf>,
@@ -18,36 +19,34 @@ pub struct CategorizedEvents {
 }
 
 impl CategorizedEvents {
-    pub fn new(events: Vec<Event>) -> Self {
-        let mut created = Vec::new();
-        let mut modified = Vec::new();
-        let mut removed = Vec::new();
-        let mut unknown = Vec::new();
-
+    pub fn new_notify(events: Vec<notify::Event>) -> Self {
+        let mut res = Self::default();
         for event in events {
             match event.kind {
-                EventKind::Create(_) => {
-                    created.extend(event.paths);
-                }
-                EventKind::Modify(_) => {
-                    modified.extend(event.paths);
-                }
-                EventKind::Remove(_) => {
-                    removed.extend(event.paths);
-                }
-                EventKind::Any => {
-                    unknown.extend(event.paths);
-                }
+                EventKind::Create(_) => res.created.extend(event.paths),
+                EventKind::Modify(_) => res.modified.extend(event.paths),
+                EventKind::Remove(_) => res.removed.extend(event.paths),
+                EventKind::Any => res.unknown.extend(event.paths),
                 EventKind::Access(_) | EventKind::Other => {}
             }
         }
+        res
+    }
 
-        CategorizedEvents {
-            created,
-            modified,
-            removed,
-            unknown,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_lsp(events: Vec<lsp_types::FileEvent>) -> CategorizedEvents {
+        let mut res = CategorizedEvents::default();
+        for event in events {
+            if let Ok(path) = event.uri.to_file_path() {
+                match event.typ {
+                    FileChangeType::CREATED => res.created.push(path),
+                    FileChangeType::CHANGED => res.modified.push(path),
+                    FileChangeType::DELETED => res.removed.push(path),
+                    _ => res.unknown.push(path),
+                }
+            }
         }
+        res
     }
 
     pub fn is_empty(&self) -> bool {

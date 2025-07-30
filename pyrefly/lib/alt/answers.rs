@@ -616,6 +616,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self.current().solver
     }
 
+    pub fn record_overload_trace_from_type(&self, loc: TextRange, ty: Type) {
+        if let Some(trace) = &self.current().trace
+            && let Some(callable) = ty.to_callable()
+        {
+            trace.lock().overloaded_callees.insert(
+                loc,
+                OverloadedCallee {
+                    all_overloads: vec![callable.clone()],
+                    closest_overload: callable,
+                    is_closest_overload_chosen: true,
+                },
+            );
+        }
+    }
+
     /// Record all the overloads and the chosen overload.
     /// The trace will be used to power signature help and hover for overloaded functions.
     pub fn record_overload_trace(

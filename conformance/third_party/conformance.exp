@@ -2906,8 +2906,8 @@
     {
       "code": -2,
       "column": 23,
-      "concise_description": "Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Self@Class3` in function `accepts_callable`",
-      "description": "Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Self@Class3` in function `accepts_callable`",
+      "concise_description": "Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3` in function `accepts_callable`",
+      "description": "Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3` in function `accepts_callable`",
       "line": 62,
       "name": "bad-argument-type",
       "stop_column": 29,
@@ -2916,22 +2916,12 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "revealed type: (*args: Unknown, **kwargs: Unknown) -> Self@Class3",
-      "description": "revealed type: (*args: Unknown, **kwargs: Unknown) -> Self@Class3",
+      "concise_description": "revealed type: (*args: Unknown, **kwargs: Unknown) -> Class3",
+      "description": "revealed type: (*args: Unknown, **kwargs: Unknown) -> Class3",
       "line": 63,
       "name": "reveal-type",
       "stop_column": 16,
       "stop_line": 63
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Self, Class3) failed",
-      "description": "assert_type(Self, Class3) failed",
-      "line": 64,
-      "name": "assert-type",
-      "stop_column": 27,
-      "stop_line": 64
     },
     {
       "code": -2,
@@ -3066,8 +3056,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Self@Class8",
-      "description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Self@Class8",
+      "concise_description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Class8[Unknown]",
+      "description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Class8[Unknown]",
       "line": 182,
       "name": "reveal-type",
       "stop_column": 16,
@@ -3076,8 +3066,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "assert_type(Self, Class8[str]) failed",
-      "description": "assert_type(Self, Class8[str]) failed",
+      "concise_description": "assert_type(Class8[Any], Class8[str]) failed",
+      "description": "assert_type(Class8[Any], Class8[str]) failed",
       "line": 183,
       "name": "assert-type",
       "stop_column": 41,
@@ -3786,8 +3776,8 @@
     {
       "code": -2,
       "column": 14,
-      "concise_description": "`Self@str` is not assignable to `int`",
-      "description": "`Self@str` is not assignable to `int`",
+      "concise_description": "`str` is not assignable to `int`",
+      "description": "`str` is not assignable to `int`",
       "line": 88,
       "name": "bad-assignment",
       "stop_column": 40,

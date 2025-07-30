@@ -35,6 +35,7 @@ use crate::binding::binding::KeyExpect;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::RaisedException;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::bindings::LookupKind;
 use crate::binding::bindings::MutableCaptureLookupKind;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
@@ -428,7 +429,7 @@ impl<'a> BindingsBuilder<'a> {
                             _ => Initialized::Yes,
                         },
                     );
-                    let cannonical_ann_idx = match value {
+                    let canonical_ann_idx = match value {
                         Some(value) => self.bind_single_name_assign(
                             &name,
                             value,
@@ -445,14 +446,19 @@ impl<'a> BindingsBuilder<'a> {
                                     initial_value: maybe_ellipses,
                                 }
                             } else {
-                                FlowStyle::Uninitialized
+                                // A flow style might be already set for the
+                                // name, e.g. if it was defined previously.
+                                // If so, we use that style; otherwise, the flow
+                                // style lookup would return an uninitialized
+                                // flow style, which is what we want here.
+                                self.scopes.get_flow_style(&name.id, false).clone()
                             },
                         ),
                     };
                     // This assignment gets checked with the provided annotation. But if there exists a prior
                     // annotation, we might be invalidating it unless the annotations are the same. Insert a
                     // check that in that case the annotations match.
-                    if let Some(ann) = cannonical_ann_idx {
+                    if let Some(ann) = canonical_ann_idx {
                         self.insert_binding(
                             KeyExpect(name.range),
                             BindingExpect::Redefinition {
@@ -750,13 +756,13 @@ impl<'a> BindingsBuilder<'a> {
                     base = self.scopes.clone_current_flow();
                     let range = h.range();
                     let h = h.except_handler().unwrap(); // Only one variant for now
-                    match (h.name, h.type_) {
+                    match (&h.name, h.type_) {
                         (Some(name), Some(mut type_)) => {
                             let mut handler = self
-                                .declare_current_idx(Key::Definition(ShortIdentifier::new(&name)));
+                                .declare_current_idx(Key::Definition(ShortIdentifier::new(name)));
                             self.ensure_expr(&mut type_, handler.usage());
-                            self.bind_definition_current(
-                                &name,
+                            self.bind_current_as(
+                                name,
                                 handler,
                                 Binding::ExceptionHandler(type_, x.is_star),
                                 FlowStyle::Other,
@@ -773,9 +779,9 @@ impl<'a> BindingsBuilder<'a> {
                         (Some(name), None) => {
                             // Must be a syntax error. But make sure we bind name to something.
                             let handler = self
-                                .declare_current_idx(Key::Definition(ShortIdentifier::new(&name)));
-                            self.bind_definition_current(
-                                &name,
+                                .declare_current_idx(Key::Definition(ShortIdentifier::new(name)));
+                            self.bind_current_as(
+                                name,
                                 handler,
                                 Binding::Type(Type::any_error()),
                                 FlowStyle::Other,
@@ -783,7 +789,32 @@ impl<'a> BindingsBuilder<'a> {
                         }
                         (None, None) => {}
                     }
+
                     self.stmts(h.body);
+
+                    if let Some(name) = &h.name {
+                        // Mark the current caught exception name as
+                        // uninitialized in the current scope, so that it cannot
+                        // be used later.
+                        // https://docs.python.org/3/reference/compound_stmts.html#except-clause
+                        let idx = self.lookup_name(
+                            Hashed::new(&name.id),
+                            LookupKind::Regular,
+                            &mut Usage::MutableLookup,
+                        );
+                        if let Ok(idx) = idx {
+                            self.scopes.upsert_flow_info(
+                                Hashed::new(&name.id),
+                                idx,
+                                Some(FlowStyle::Uninitialized),
+                            );
+                        } else {
+                            panic!(
+                                "Should have found the exception name `{name}` in the current scope"
+                            );
+                        }
+                    }
+
                     self.scopes.swap_current_flow_with(&mut base);
                     branches.push(base);
                 }

@@ -373,9 +373,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 got,
                 Type::Callable(_) | Type::Function(_) | Type::BoundMethod(_)
             ) && name == dunder::CALL
-                && let Some(want) = self
-                    .type_order
-                    .try_lookup_instance_method(protocol.clone(), &dunder::CALL)
+                && let Some(want) = self.type_order.instance_as_dunder_call(&protocol)
             {
                 if let Type::BoundMethod(method) = &want
                     && let Some(want_no_self) = method.drop_self()
@@ -851,10 +849,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (
                 Type::ClassType(got),
                 Type::BoundMethod(_) | Type::Callable(_) | Type::Function(_),
-            ) if let Some(call_ty) = self
-                .type_order
-                .try_lookup_instance_method(got.clone(), &dunder::CALL) =>
-            {
+            ) if let Some(call_ty) = self.type_order.instance_as_dunder_call(got) => {
                 self.is_subset_eq(&call_ty, want)
             }
             // Constructors as callables
@@ -1019,7 +1014,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 self.is_subset_eq(got, &self.type_order.stdlib().none_type().clone().to_type())
             }
             (Type::Forall(forall), _) => {
-                let (_, got) = self.type_order.instantiate_forall((**forall).clone());
+                let (_, got) = self.type_order.instantiate_fresh_forall((**forall).clone());
                 self.is_subset_eq(&got, want)
             }
             (Type::TypeAlias(ta), _) => {

@@ -95,8 +95,8 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         }
     }
 
-    pub fn try_lookup_instance_method(self, class_type: ClassType, name: &Name) -> Option<Type> {
-        self.0.try_lookup_instance_method(class_type, name)
+    pub fn instance_as_dunder_call(self, class_type: &ClassType) -> Option<Type> {
+        self.0.instance_as_dunder_call(class_type)
     }
 
     pub fn is_protocol_subset_at_attr(
@@ -140,7 +140,7 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         self.0.constructor_to_callable(cls)
     }
 
-    pub fn instantiate_forall(self, forall: Forall<Forallable>) -> (Vec<Var>, Type) {
-        self.0.instantiate_forall(forall)
+    pub fn instantiate_fresh_forall(self, forall: Forall<Forallable>) -> (Vec<Var>, Type) {
+        self.0.instantiate_fresh_forall(forall)
     }
 }

@@ -254,3 +254,35 @@ def f(a: A):
     assert_type(A.h(), Coroutine[Any, Any, int])
     "#,
 );
+
+testcase!(
+    test_inherit_annotated_descriptor,
+    r#"
+class D:
+    def __get__(self, obj, classobj) -> int: ...
+    def __set__(self, obj, value: str) -> None: ...
+class A:
+    d: D = D()
+    def f(self):
+        self.d = "ok"
+class B(A):
+    def f(self):
+        self.d = "ok"
+    "#,
+);
+
+testcase!(
+    test_inherit_unannotated_descriptor,
+    r#"
+class D:
+    def __get__(self, obj, classobj) -> int: ...
+    def __set__(self, obj, value: str) -> None: ...
+class A:
+    d = D()
+    def f(self):
+        self.d = "ok"
+class B(A):
+    def f(self):
+        self.d = "ok"
+    "#,
+);

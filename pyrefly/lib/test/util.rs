@@ -97,6 +97,7 @@ pub struct TestEnv {
     modules: SmallMap<ModuleName, (ModulePath, Option<Arc<String>>)>,
     version: PythonVersion,
     untyped_def_behavior: UntypedDefBehavior,
+    site_package_path: Vec<PathBuf>,
 }
 
 impl TestEnv {
@@ -104,6 +105,12 @@ impl TestEnv {
         // We aim to init the tracing before now, but if not, better now than never
         init_test();
         Self::default()
+    }
+
+    pub fn new_with_site_package_path(path: &str) -> Self {
+        let mut res = Self::new();
+        res.site_package_path = vec![PathBuf::from(path)];
+        res
     }
 
     pub fn new_with_version(version: PythonVersion) -> Self {
@@ -177,7 +184,7 @@ impl TestEnv {
         let mut config = ConfigFile::default();
         config.python_environment.python_version = Some(self.version);
         config.python_environment.python_platform = Some(PythonPlatform::linux());
-        config.python_environment.site_package_path = Some(Vec::new());
+        config.python_environment.site_package_path = Some(self.site_package_path.clone());
         config.root.untyped_def_behavior = Some(self.untyped_def_behavior);
         for (name, (path, _)) in self.modules.iter() {
             config.custom_module_paths.insert(*name, path.clone());

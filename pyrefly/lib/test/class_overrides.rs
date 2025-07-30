@@ -392,3 +392,29 @@ class B(A):
     def test4(self, *args: int, x: int = 1): ...
     "#,
 );
+
+testcase!(
+    test_unannotated_descriptor_override_error,
+    r#"
+class D:
+    def __get__(self, obj, classobj) -> int: ...
+    def __set__(self, obj, value: str) -> None: ...
+class A:
+    d = D()
+class B(A):
+    d = 42  # E: `B.d` and `A.d` must both be descriptors
+    "#,
+);
+
+testcase!(
+    test_annotated_descriptor_override_error,
+    r#"
+class D:
+    def __get__(self, obj, classobj) -> int: ...
+    def __set__(self, obj, value: str) -> None: ...
+class A:
+    d: D = D()
+class B(A):
+    d: int = 42  # E: `B.d` and `A.d` must both be descriptors
+    "#,
+);

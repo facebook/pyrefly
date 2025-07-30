@@ -12,6 +12,7 @@ use std::io;
 use std::io::Write;
 
 use itertools::Itertools;
+use lsp_types::Diagnostic;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::number_thousands;
@@ -157,6 +158,26 @@ impl Error {
 
     pub fn severity(&self) -> Severity {
         self.severity
+    }
+
+    /// Create a diagnostic suitable for use in LSP.
+    pub fn to_diagnostic(&self) -> Diagnostic {
+        Diagnostic {
+            range: self.lined_buffer().to_lsp_range(self.range()),
+            severity: Some(match self.severity() {
+                Severity::Error => lsp_types::DiagnosticSeverity::ERROR,
+                Severity::Warn => lsp_types::DiagnosticSeverity::WARNING,
+                Severity::Info => lsp_types::DiagnosticSeverity::INFORMATION,
+                // Ignored errors shouldn't be here
+                Severity::Ignore => lsp_types::DiagnosticSeverity::INFORMATION,
+            }),
+            source: Some("Pyrefly".to_owned()),
+            message: self.msg().to_owned(),
+            code: Some(lsp_types::NumberOrString::String(
+                self.error_kind().to_name().to_owned(),
+            )),
+            ..Default::default()
+        }
     }
 }
 

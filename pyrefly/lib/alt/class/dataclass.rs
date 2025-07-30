@@ -334,7 +334,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn get_converter_param(&self, converter: &Type) -> Type {
         let converter = {
             if let Type::ClassDef(cls) = converter
-                && let Type::ClassType(instance) = self.instantiate_fresh(cls)
+                && let Type::ClassType(instance) = self.instantiate_fresh_class(cls)
             {
                 let callable = self.constructor_to_callable(&instance);
                 &self.distribute_over_union(&callable, |ty| {

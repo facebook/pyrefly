@@ -835,10 +835,40 @@ from typing import assert_type, Any
 
 class C:
     def __init__[R](self, field: R):
-        self.field = field  # E: Cannot initialize attribute `field` to a value that depends on method-scoped type variable `R`
+        self.field = field  # E: Attribute `field` cannot depend on type variable `R`, which is not in the scope of class `C`
 
 c = C("test")
 assert_type(c.field, Any)
+"#,
+);
+
+// Note the difference between this and test_set_attribute_to_class_scope_type_variable.
+// `R` in `__init__` here refers to a method-scoped type variable that shadows a class-scoped one.
+testcase!(
+    test_illegal_type_variable_with_name_shadowing,
+    r#"
+class C[R]:
+    def __init__[R](self, field: R):
+        self.field = field  # E: Attribute `field` cannot depend on type variable `R`, which is not in the scope of class `C`
+"#,
+);
+
+// Note the difference between this and test_illegal_type_variable_with_name_shadowing.
+// `R` in `__init__` here refers to the class-scoped `R``.
+testcase!(
+    test_set_attribute_to_class_scope_type_variable,
+    r#"
+from typing import Generic, TypeVar
+
+R = TypeVar("R")
+
+class C1(Generic[R]):
+    def __init__(self, field: R):
+        self.field = field
+
+class C2[R]:
+    def __init__(self, field: R):
+        self.field = field
 "#,
 );
 
@@ -1230,8 +1260,8 @@ def g(ann) -> None:
 );
 
 testcase!(
-    bug = "PyTorch TODO: First error message can be improved and there should be  no error on obj.__name__",
-    test_attr,
+    bug = "PyTorch TODO: The first error message could be better, and hasattr narrowing would fix it. The second error message is incorrect, if `obj` is a class it should have a `__name__` attribute.",
+    test_tuple_attribute_example,
     r#"
 def f(obj, g, field_type, my_type,):
     assert issubclass(obj, tuple) and hasattr(obj, "_fields")
@@ -1239,7 +1269,26 @@ def f(obj, g, field_type, my_type,):
         if isinstance(field_type, my_type) and g is not None:
             if g is None:
                 raise ValueError(
-                    f"{obj.__name__}." # E: TODO: Expr::attr_infer_for_type attribute base undefined for type: @_ (trying to access __name__)
+                    f"{obj.__name__}."  # E: TODO: Expr::attr_infer_for_type attribute base undefined for type: type[tuple[Unknown, ...]] (trying to access __name__)
                 )
+    "#,
+);
+
+testcase!(
+    test_set_attr_in_child_class,
+    r#"
+from typing import assert_type
+
+class A:
+    def __init__(self):
+        self.x = 0
+
+class B(A):
+    def f(self):
+        self.x = ""  # E: `Literal['']` is not assignable to attribute `x` with type `int`
+
+class C(A):
+    def f(self):
+        self.x: str = ""  # E: Class member `C.x` overrides parent class `A` in an inconsistent manner
     "#,
 );

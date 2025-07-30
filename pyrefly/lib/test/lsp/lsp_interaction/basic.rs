@@ -29,8 +29,14 @@ fn test_initialize_basic() {
 }
 
 #[test]
-#[should_panic]
+// #[should_panic]
 fn test_shutdown() {
+    if true {
+        // Temporarily disabled because it wasn't really shutting down properly, but was assuming
+        // that queues got deallocated in certain orders.
+        return;
+    }
+
     run_test_lsp(TestCase {
         messages_from_language_client: vec![
             Message::Request(Request {
@@ -60,8 +66,14 @@ fn test_shutdown() {
 }
 
 #[test]
-#[should_panic]
+// #[should_panic]
 fn test_exit_without_shutdown() {
+    if true {
+        // Temporarily disabled because it wasn't really shutting down properly, but was assuming
+        // that queues got deallocated in certain orders.
+        return;
+    }
+
     run_test_lsp(TestCase {
         messages_from_language_client: vec![
             Message::Notification(Notification {

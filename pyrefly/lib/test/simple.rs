@@ -200,13 +200,14 @@ x: "list" "[int]" = [] # E: Expected a type form
 testcase!(
     test_globals,
     r#"
-from typing import assert_type, Any
+from typing import assert_type, Any, MutableSequence
 assert_type(__file__, str)
 assert_type(__name__, str)
 assert_type(__debug__, bool)
 assert_type(__package__, str | None)
 assert_type(__annotations__, dict[str, Any])
 assert_type(__spec__, Any)
+assert_type(__path__, MutableSequence[str])
 "#,
 );
 
@@ -1703,4 +1704,15 @@ testcase!(
     r#"# Issue https://github.com/facebook/pyrefly/issues/455
 [a for [a for # E: Could # E: Parse # E: Could # E: Parse # E: Parse
 "#,
+);
+
+// Added to stress test cases that at one point panicked from duplicate
+// first-use linkage keys due to overlapping ranges.
+testcase!(
+    test_overlapping_link_keys,
+    r#"
+def f():
+    del yield  # E: # E: 
+    assert False, yield  # E:
+    "#,
 );

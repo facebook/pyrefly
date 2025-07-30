@@ -3,7 +3,7 @@
   "pass": 77,
   "fail": 59,
   "pass_rate": 0.57,
-  "differences": 271,
+  "differences": 270,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -96,7 +96,7 @@
     "classes_override.py": 1,
     "constructors_call_init.py": 3,
     "constructors_call_type.py": 4,
-    "constructors_callable.py": 12,
+    "constructors_callable.py": 11,
     "dataclasses_final.py": 1,
     "dataclasses_slots.py": 2,
     "directives_deprecated.py": 2,

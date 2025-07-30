@@ -11,10 +11,10 @@ use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionData;
 
-/// `IDETransactionManager` aims to always produce a transaction that contains the up-to-date
+/// `TransactionManager` aims to always produce a transaction that contains the up-to-date
 /// in-memory contents.
 #[derive(Default)]
-pub struct IDETransactionManager<'a> {
+pub struct TransactionManager<'a> {
     /// Invariant:
     /// If it's None, then the main `State` already contains up-to-date checked content
     /// of all in-memory files.
@@ -22,7 +22,7 @@ pub struct IDETransactionManager<'a> {
     saved_state: Option<TransactionData<'a>>,
 }
 
-impl<'a> IDETransactionManager<'a> {
+impl<'a> TransactionManager<'a> {
     #[expect(clippy::result_large_err)] // Both results are basically the same size
     /// Produce a possibly committable transaction in order to recheck in-memory files.
     pub fn get_possibly_committable_transaction(

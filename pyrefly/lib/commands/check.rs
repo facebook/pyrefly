@@ -422,7 +422,7 @@ struct RequireLevels {
 
 async fn get_watcher_events(watcher: &mut Watcher) -> anyhow::Result<CategorizedEvents> {
     loop {
-        let events = CategorizedEvents::new(
+        let events = CategorizedEvents::new_notify(
             watcher
                 .wait()
                 .await

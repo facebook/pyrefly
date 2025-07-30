@@ -84,29 +84,43 @@ pub enum ProjectLayout {
     Flat,
     /// Python packages live in a src/ subdirectory
     Src,
+    /// The parent directory of the project root is the import root
+    /// (this is how pandas is set up for some reason)
+    Parent,
 }
 
 impl ProjectLayout {
     pub fn new(project_root: &Path) -> Self {
+        let error = |path: PathBuf, error| {
+            debug!(
+                "Error checking for existence of path {}: {}",
+                path.display(),
+                error
+            );
+            Self::default()
+        };
         let src_subdir = project_root.join("src");
         match src_subdir.try_exists() {
-            Ok(true) => Self::Src,
-            Ok(false) => Self::Flat,
-            Err(e) => {
-                debug!(
-                    "Error checking for existence of path {}: {}",
-                    src_subdir.display(),
-                    e
-                );
-                Self::default()
+            Ok(true) => return Self::Src,
+            Ok(false) => (),
+            Err(e) => return error(src_subdir, e),
+        }
+        for suffix in ["py", "pyi"] {
+            let init_file = project_root.join(format!("__init__.{suffix}"));
+            match init_file.try_exists() {
+                Ok(true) => return Self::Parent,
+                Ok(false) => (),
+                Err(e) => return error(init_file, e),
             }
         }
+        Self::Flat
     }
 
     fn get_import_root(&self, project_root: &Path) -> PathBuf {
         match self {
             Self::Flat => project_root.to_path_buf(),
             Self::Src => project_root.join("src"),
+            Self::Parent => project_root.parent().unwrap_or(project_root).to_path_buf(),
         }
     }
 }
@@ -322,8 +336,7 @@ impl ConfigFile {
         let mut result = Self {
             project_includes: Self::default_project_includes(),
             project_excludes: Self::default_project_excludes(),
-            // Note that rewrite_with_path_to_config() converts "" to the config file's containing directory.
-            import_root: Some(layout.get_import_root(Path::new(""))),
+            import_root: Some(layout.get_import_root(root)),
             ..Default::default()
         };
         // ignore failures rewriting path to config, since we're trying to construct

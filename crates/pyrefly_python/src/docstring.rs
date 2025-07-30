@@ -56,6 +56,7 @@ impl Docstring {
         // Remove the shortest amount of whitespace from the beginning of each line
         let min_indent = result
             .lines()
+            .skip(1)
             .flat_map(|line| {
                 let spaces = line.bytes().take_while(|&c| c == b' ').count();
                 if spaces == line.len() {
@@ -69,7 +70,14 @@ impl Docstring {
 
         result
             .lines()
-            .map(|line| &line[min(min_indent, line.len())..])
+            .enumerate()
+            .map(|(i, line)| {
+                if i == 0 {
+                    line
+                } else {
+                    &line[min(min_indent, line.len())..]
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -144,13 +152,21 @@ mod tests {
     #[test]
     fn test_clean_trims_shortest_whitespace() {
         assert_eq!(
-            Docstring::clean("  hello\n    world\n  test").as_str(),
-            "hello\n  world\ntest"
+            Docstring::clean("\n  hello\n    world\n  test").as_str(),
+            "\nhello\n  world\ntest"
         );
     }
 
     #[test]
     fn test_docstring_panic() {
         Docstring::clean(" F\n\u{85}");
+    }
+
+    #[test]
+    fn test_docstring_multiline_starts_at_first() {
+        assert_eq!(
+            Docstring::clean("\"\"\"hello\n  world\n  test\"\"\"").as_str(),
+            "hello\nworld\ntest"
+        );
     }
 }

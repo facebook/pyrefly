@@ -1,3 +1,4 @@
 [env]
 ERROR_KINDS_DOC_PATH = { value = "website/docs/error-kinds.mdx", relative = true }
 TEST_FILES_PATH = { value = "pyrefly/lib/test/lsp/lsp_interaction/test_files", relative = true }
+PYDANTIC_TEST_PATH = { value = "pyrefly/lib/test/pydantic/stubs", relative = true }

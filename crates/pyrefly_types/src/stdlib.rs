@@ -47,6 +47,7 @@ pub struct Stdlib {
     tuple: StdlibResult<(Class, Arc<TParams>)>,
     iterable: StdlibResult<(Class, Arc<TParams>)>,
     async_iterable: StdlibResult<(Class, Arc<TParams>)>,
+    mutable_sequence: StdlibResult<(Class, Arc<TParams>)>,
     generator: StdlibResult<(Class, Arc<TParams>)>,
     async_generator: StdlibResult<(Class, Arc<TParams>)>,
     awaitable: StdlibResult<(Class, Arc<TParams>)>,
@@ -169,6 +170,7 @@ impl Stdlib {
             none_type: lookup_concrete(none_location, "NoneType"),
             iterable: lookup_generic(typing, "Iterable", 1),
             async_iterable: lookup_generic(typing, "AsyncIterable", 1),
+            mutable_sequence: lookup_generic(typing, "MutableSequence", 1),
             generator: lookup_generic(typing, "Generator", 3),
             async_generator: lookup_generic(typing, "AsyncGenerator", 2),
             awaitable: lookup_generic(typing, "Awaitable", 1),
@@ -343,6 +345,10 @@ impl Stdlib {
 
     pub fn async_iterable(&self, x: Type) -> ClassType {
         Self::apply(&self.async_iterable, vec![x])
+    }
+
+    pub fn mutable_sequence(&self, x: Type) -> ClassType {
+        Self::apply(&self.mutable_sequence, vec![x])
     }
 
     pub fn generator(&self, yield_ty: Type, send_ty: Type, return_ty: Type) -> ClassType {

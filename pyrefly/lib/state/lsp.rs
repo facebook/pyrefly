@@ -78,7 +78,6 @@ use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::callable::Params;
 use crate::types::module::ModuleType;
-use crate::types::types::BoundMethodType;
 use crate::types::types::Type;
 
 const RESOLVE_EXPORT_INITIAL_GAS: Gas = Gas::new(100);
@@ -727,11 +726,12 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn get_signature_help_at(
+    /// Finds the callable(s) (multiple if overloads exist) at position in document, returning them, chosen overload index, and arg index
+    fn get_callables_from_call(
         &self,
         handle: &Handle,
         position: TextSize,
-    ) -> Option<SignatureHelp> {
+    ) -> Option<(Vec<Type>, usize, usize)> {
         let mod_module = self.get_ast(handle)?;
         let mut res = None;
         mod_module.visit(&mut |x| Self::visit_finding_signature_range(x, position, &mut res));
@@ -740,26 +740,34 @@ impl<'a> Transaction<'a> {
         if let Some((overloads, chosen_overload_index)) =
             answers.get_all_overload_trace(call_args_range)
         {
-            let signatures = overloads.into_map(|callable| {
-                Self::create_signature_information(Type::Callable(Box::new(callable)), arg_index)
-            });
-            Some(SignatureHelp {
-                signatures,
-                active_signature: chosen_overload_index.map(|i| i as u32),
-                active_parameter: Some(arg_index as u32),
-            })
+            let callables = overloads.into_map(|callable| Type::Callable(Box::new(callable)));
+            Some((
+                callables,
+                chosen_overload_index.unwrap_or_default(),
+                arg_index,
+            ))
         } else {
             answers
                 .get_type_trace(callee_range)
-                .map(|callee_type| SignatureHelp {
-                    signatures: vec![Self::create_signature_information(
-                        callee_type.arc_clone(),
-                        arg_index,
-                    )],
-                    active_signature: Some(0),
-                    active_parameter: Some(arg_index as u32),
-                })
+                .map(|t| (vec![t.arc_clone()], 0, arg_index))
         }
+    }
+
+    pub fn get_signature_help_at(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+    ) -> Option<SignatureHelp> {
+        self.get_callables_from_call(handle, position).map(
+            |(callables, chosen_overload_index, arg_index)| SignatureHelp {
+                signatures: callables
+                    .into_iter()
+                    .map(|t| Self::create_signature_information(t, arg_index))
+                    .collect_vec(),
+                active_signature: Some(chosen_overload_index as u32),
+                active_parameter: Some(arg_index as u32),
+            },
+        )
     }
 
     fn create_signature_information(type_: Type, arg_index: usize) -> SignatureInformation {
@@ -791,21 +799,12 @@ impl<'a> Transaction<'a> {
     }
 
     fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<Param>> {
-        let callable = match type_ {
-            Type::Callable(callable) => Some(*callable),
-            Type::Function(function) => Some(function.signature),
-            Type::BoundMethod(bound_method) => match bound_method.func {
-                BoundMethodType::Function(function) => Some(function.signature),
-                BoundMethodType::Forall(forall) => Some(forall.body.signature),
-                BoundMethodType::Overload(_) => None,
-            },
-            _ => None,
-        }?;
+        let callable = type_.to_callable()?;
         // We will drop the self parameter for signature help
         if let Params::List(params_list) = callable.params {
             if let Some(Param::PosOnly(Some(name), _, _) | Param::Pos(name, _, _)) =
                 params_list.items().first()
-                && name.as_str() == "self"
+                && (name.as_str() == "self" || name.as_str() == "cls")
             {
                 let mut params = params_list.into_items();
                 params.remove(0);
@@ -1511,50 +1510,27 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
     ) {
-        let mod_module = match self.get_ast(handle) {
-            Some(module) => module,
-            None => return,
-        };
-
-        let mut call_context = None;
-        mod_module
-            .visit(&mut |x| Self::visit_finding_signature_range(x, position, &mut call_context));
-        let (callee_range, _call_args_range, _arg_index) = match call_context {
-            Some(context) => context,
-            None => return,
-        };
-
-        let answers = match self.get_answers(handle) {
-            Some(answers) => answers,
-            None => return,
-        };
-        let callee_type = match answers.get_type_trace(callee_range) {
-            Some(ty) => ty,
-            None => return,
-        };
-
-        let params =
-            match Self::normalize_singleton_function_type_into_params(callee_type.arc_clone()) {
-                Some(params) => params,
-                None => return,
-            };
-
-        for param in params {
-            match param {
-                Param::Pos(name, ty, _)
-                | Param::PosOnly(Some(name), ty, _)
-                | Param::KwOnly(name, ty, _)
-                | Param::VarArg(Some(name), ty) => {
-                    if name.as_str() != "self" {
-                        completions.push(CompletionItem {
-                            label: format!("{}=", name.as_str()),
-                            detail: Some(ty.to_string()),
-                            kind: Some(CompletionItemKind::VARIABLE),
-                            ..Default::default()
-                        });
+        if let Some((callables, overload_idx, _)) = self.get_callables_from_call(handle, position)
+            && let Some(callable) = callables.get(overload_idx).cloned()
+            && let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
+        {
+            for param in params {
+                match param {
+                    Param::Pos(name, ty, _)
+                    | Param::PosOnly(Some(name), ty, _)
+                    | Param::KwOnly(name, ty, _)
+                    | Param::VarArg(Some(name), ty) => {
+                        if name.as_str() != "self" {
+                            completions.push(CompletionItem {
+                                label: format!("{}=", name.as_str()),
+                                detail: Some(ty.to_string()),
+                                kind: Some(CompletionItemKind::VARIABLE),
+                                ..Default::default()
+                            });
+                        }
                     }
+                    Param::VarArg(None, _) | Param::Kwargs(_, _) | Param::PosOnly(None, _, _) => {}
                 }
-                Param::VarArg(None, _) | Param::Kwargs(_, _) | Param::PosOnly(None, _, _) => {}
             }
         }
     }

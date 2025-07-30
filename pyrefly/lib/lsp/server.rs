@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::iter::once;
 use std::num::NonZero;
 use std::path::Path;
 use std::path::PathBuf;
@@ -15,18 +16,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
-use crossbeam_channel::Sender;
 use dupe::Dupe;
-use itertools::__std_iter::once;
 use lsp_server::Connection;
 use lsp_server::ErrorCode;
 use lsp_server::Message;
-use lsp_server::Notification;
-use lsp_server::ProtocolError;
 use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_server::Response;
-use lsp_server::ResponseError;
 use lsp_types::CodeAction;
 use lsp_types::CodeActionKind;
 use lsp_types::CodeActionOptions;
@@ -98,7 +94,6 @@ use lsp_types::SignatureHelp;
 use lsp_types::SignatureHelpOptions;
 use lsp_types::SignatureHelpParams;
 use lsp_types::SymbolInformation;
-use lsp_types::TextDocumentContentChangeEvent;
 use lsp_types::TextDocumentPositionParams;
 use lsp_types::TextDocumentSyncCapability;
 use lsp_types::TextDocumentSyncKind;
@@ -155,26 +150,26 @@ use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::thread_pool::ThreadPool;
-use ruff_source_file::LineIndex;
-use ruff_source_file::OneIndexed;
-use ruff_source_file::SourceLocation;
-use ruff_text_size::Ranged;
-use serde::Deserialize;
-use serde::de::DeserializeOwned;
 use starlark_map::small_map::SmallMap;
 
 use crate::commands::lsp::IndexingMode;
-use crate::commands::lsp::LspArgs;
 use crate::config::config::ConfigFile;
-use crate::config::error_kind::Severity;
 use crate::error::error::Error;
 use crate::lsp::features::hover::get_hover;
+use crate::lsp::lsp::apply_change_events;
+use crate::lsp::lsp::as_notification;
+use crate::lsp::lsp::as_request;
+use crate::lsp::lsp::as_request_response_pair;
+use crate::lsp::lsp::new_notification;
+use crate::lsp::lsp::new_response;
 use crate::lsp::module_helpers::handle_from_module_path;
 use crate::lsp::module_helpers::make_open_handle;
 use crate::lsp::module_helpers::module_info_to_uri;
+use crate::lsp::module_helpers::to_lsp_location;
 use crate::lsp::module_helpers::to_real_path;
-use crate::lsp::transaction_manager::IDETransactionManager;
-use crate::lsp::workspace::PythonInfo;
+use crate::lsp::queue::LspEvent;
+use crate::lsp::queue::LspQueue;
+use crate::lsp::transaction_manager::TransactionManager;
 use crate::lsp::workspace::Workspace;
 use crate::lsp::workspace::Workspaces;
 use crate::module::from_path::module_from_path;
@@ -184,27 +179,6 @@ use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::state::State;
 use crate::state::state::Transaction;
-
-pub enum ServerEvent {
-    // Part 1: Events that the server should try to handle first.
-    /// Notify the server that recheck finishes, so server can revalidate all in-memory content
-    /// based on the latest `State`.
-    RecheckFinished,
-    /// Inform the server that a request is cancelled.
-    /// Server should know about this ASAP to avoid wasting time on cancelled requests.
-    CancelRequest(RequestId),
-    // Part 2: Events that can be queued in FIFO order and handled at a later time.
-    DidOpenTextDocument(DidOpenTextDocumentParams),
-    DidChangeTextDocument(DidChangeTextDocumentParams),
-    DidCloseTextDocument(DidCloseTextDocumentParams),
-    DidSaveTextDocument(DidSaveTextDocumentParams),
-    DidChangeWatchedFiles(DidChangeWatchedFilesParams),
-    DidChangeWorkspaceFolders(DidChangeWorkspaceFoldersParams),
-    DidChangeConfiguration(DidChangeConfigurationParams),
-    LspResponse(Response),
-    LspRequest(Request),
-    Exit,
-}
 
 #[derive(Clone, Dupe)]
 struct ServerConnection(Arc<Connection>);
@@ -237,11 +211,11 @@ impl ServerConnection {
     }
 }
 
-pub struct Server {
+struct Server {
     connection: ServerConnection,
     /// A thread pool of size one for heavy read operations on the State
     async_state_read_threads: ThreadPool,
-    priority_events_sender: Arc<Sender<ServerEvent>>,
+    lsp_queue: LspQueue,
     initialize_params: InitializeParams,
     indexing_mode: IndexingMode,
     state: Arc<State>,
@@ -250,9 +224,9 @@ pub struct Server {
     indexed_configs: Mutex<HashSet<ArcId<ConfigFile>>>,
     cancellation_handles: Arc<Mutex<HashMap<RequestId, CancellationHandle>>>,
     workspaces: Arc<Workspaces>,
-    outgoing_request_id: Arc<AtomicI32>,
+    outgoing_request_id: AtomicI32,
     outgoing_requests: Mutex<HashMap<RequestId, Request>>,
-    filewatcher_registered: Arc<AtomicBool>,
+    filewatcher_registered: AtomicBool,
     version_info: Mutex<HashMap<PathBuf, i32>>,
 }
 
@@ -265,11 +239,7 @@ pub struct Server {
 /// - priority_events includes those that should be handled as soon as possible (e.g. know that a
 ///   request is cancelled)
 /// - queued_events includes most of the other events.
-pub fn dispatch_lsp_events(
-    connection: &Connection,
-    priority_events_sender: Arc<Sender<ServerEvent>>,
-    queued_events_sender: Sender<ServerEvent>,
-) {
+fn dispatch_lsp_events(connection: &Connection, lsp_queue: LspQueue) {
     for msg in &connection.receiver {
         match msg {
             Message::Request(x) => {
@@ -283,44 +253,38 @@ pub fn dispatch_lsp_events(
                         return;
                     }
                 }
-                if queued_events_sender
-                    .send(ServerEvent::LspRequest(x))
-                    .is_err()
-                {
+                if lsp_queue.send(LspEvent::LspRequest(x)).is_err() {
                     return;
                 }
             }
             Message::Response(x) => {
-                if queued_events_sender
-                    .send(ServerEvent::LspResponse(x))
-                    .is_err()
-                {
+                if lsp_queue.send(LspEvent::LspResponse(x)).is_err() {
                     return;
                 }
             }
             Message::Notification(x) => {
                 let send_result = if let Some(params) = as_notification::<DidOpenTextDocument>(&x) {
-                    queued_events_sender.send(ServerEvent::DidOpenTextDocument(params))
+                    lsp_queue.send(LspEvent::DidOpenTextDocument(params))
                 } else if let Some(params) = as_notification::<DidChangeTextDocument>(&x) {
-                    queued_events_sender.send(ServerEvent::DidChangeTextDocument(params))
+                    lsp_queue.send(LspEvent::DidChangeTextDocument(params))
                 } else if let Some(params) = as_notification::<DidCloseTextDocument>(&x) {
-                    queued_events_sender.send(ServerEvent::DidCloseTextDocument(params))
+                    lsp_queue.send(LspEvent::DidCloseTextDocument(params))
                 } else if let Some(params) = as_notification::<DidSaveTextDocument>(&x) {
-                    queued_events_sender.send(ServerEvent::DidSaveTextDocument(params))
+                    lsp_queue.send(LspEvent::DidSaveTextDocument(params))
                 } else if let Some(params) = as_notification::<DidChangeWatchedFiles>(&x) {
-                    queued_events_sender.send(ServerEvent::DidChangeWatchedFiles(params))
+                    lsp_queue.send(LspEvent::DidChangeWatchedFiles(params))
                 } else if let Some(params) = as_notification::<DidChangeWorkspaceFolders>(&x) {
-                    queued_events_sender.send(ServerEvent::DidChangeWorkspaceFolders(params))
+                    lsp_queue.send(LspEvent::DidChangeWorkspaceFolders(params))
                 } else if let Some(params) = as_notification::<DidChangeConfiguration>(&x) {
-                    queued_events_sender.send(ServerEvent::DidChangeConfiguration(params))
+                    lsp_queue.send(LspEvent::DidChangeConfiguration(params))
                 } else if let Some(params) = as_notification::<Cancel>(&x) {
                     let id = match params.id {
                         NumberOrString::Number(i) => RequestId::from(i),
                         NumberOrString::String(s) => RequestId::from(s),
                     };
-                    priority_events_sender.send(ServerEvent::CancelRequest(id))
+                    lsp_queue.send(LspEvent::CancelRequest(id))
                 } else if as_notification::<Exit>(&x).is_some() {
-                    queued_events_sender.send(ServerEvent::Exit)
+                    lsp_queue.send(LspEvent::Exit)
                 } else {
                     eprintln!("Unhandled notification: {x:?}");
                     Ok(())
@@ -333,13 +297,10 @@ pub fn dispatch_lsp_events(
     }
 }
 
-pub fn initialize_connection(
-    connection: &Connection,
-    args: &LspArgs,
-) -> Result<InitializeParams, ProtocolError> {
-    let (request_id, initialization_params) = connection.initialize_start()?;
-    let initialization_params: InitializeParams =
-        serde_json::from_value(initialization_params).unwrap();
+pub fn capabilities(
+    indexing_mode: IndexingMode,
+    initialization_params: &InitializeParams,
+) -> ServerCapabilities {
     let augments_syntax_tokens = initialization_params
         .capabilities
         .text_document
@@ -347,8 +308,7 @@ pub fn initialize_connection(
         .and_then(|c| c.semantic_tokens.as_ref())
         .and_then(|c| c.augments_syntax_tokens)
         .unwrap_or(false);
-    // Run the server and wait for the two threads to end (typically by trigger LSP Exit event).
-    let server_capabilities = serde_json::to_value(&ServerCapabilities {
+    ServerCapabilities {
         position_encoding: Some(PositionEncodingKind::UTF16),
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
             TextDocumentSyncKind::INCREMENTAL,
@@ -364,13 +324,13 @@ pub fn initialize_connection(
         }),
         document_highlight_provider: Some(OneOf::Left(true)),
         // Find references won't work properly if we don't know all the files.
-        references_provider: match args.indexing_mode {
+        references_provider: match indexing_mode {
             IndexingMode::None => None,
             IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
                 Some(OneOf::Left(true))
             }
         },
-        rename_provider: match args.indexing_mode {
+        rename_provider: match indexing_mode {
             IndexingMode::None => None,
             IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
                 Some(OneOf::Right(RenameOptions {
@@ -412,91 +372,100 @@ pub fn initialize_connection(
             file_operations: None,
         }),
         ..Default::default()
-    })
-    .unwrap();
-    let initialize_data = serde_json::json!({
-        "capabilities": server_capabilities,
-    });
-
-    connection.initialize_finish(request_id, initialize_data)?;
-    Ok(initialization_params)
+    }
 }
 
-pub enum ProcessEvent {
+enum ProcessEvent {
     Continue,
     Exit,
 }
 
 const PYTHON_SECTION: &str = "python";
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PyreflyClientConfig {
-    disable_type_errors: Option<bool>,
-    disable_language_services: Option<bool>,
-    extra_paths: Option<Vec<PathBuf>>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LspConfig {
-    python_path: Option<String>,
-    pyrefly: Option<PyreflyClientConfig>,
+pub fn lsp_loop(
+    connection: Arc<Connection>,
+    initialization_params: InitializeParams,
+    indexing_mode: IndexingMode,
+) -> anyhow::Result<()> {
+    eprintln!("Reading messages");
+    let connection_for_dispatcher = connection.dupe();
+    let lsp_queue = LspQueue::new();
+    let server = Server::new(
+        connection,
+        lsp_queue.dupe(),
+        initialization_params,
+        indexing_mode,
+    );
+    let lsp_queue2 = lsp_queue.dupe();
+    std::thread::spawn(move || {
+        dispatch_lsp_events(&connection_for_dispatcher, lsp_queue2);
+    });
+    let mut ide_transaction_manager = TransactionManager::default();
+    let mut canceled_requests = HashSet::new();
+    while let Ok(event) = lsp_queue.recv() {
+        match server.process_event(&mut ide_transaction_manager, &mut canceled_requests, event)? {
+            ProcessEvent::Continue => {}
+            ProcessEvent::Exit => break,
+        }
+    }
+    eprintln!("waiting for connection to close");
+    drop(server); // close connection
+    Ok(())
 }
 
 impl Server {
     const FILEWATCHER_ID: &str = "FILEWATCHER";
 
     /// Process the event and return next step.
-    pub fn process_event<'a>(
+    fn process_event<'a>(
         &'a self,
-        ide_transaction_manager: &mut IDETransactionManager<'a>,
+        ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        event: ServerEvent,
+        event: LspEvent,
     ) -> anyhow::Result<ProcessEvent> {
         match event {
-            ServerEvent::Exit => {
+            LspEvent::Exit => {
                 return Ok(ProcessEvent::Exit);
             }
-            ServerEvent::RecheckFinished => {
+            LspEvent::RecheckFinished => {
                 self.validate_in_memory(ide_transaction_manager)?;
             }
-            ServerEvent::CancelRequest(id) => {
+            LspEvent::CancelRequest(id) => {
                 eprintln!("We should cancel request {id:?}");
                 if let Some(cancellation_handle) = self.cancellation_handles.lock().remove(&id) {
                     cancellation_handle.cancel();
                 }
                 canceled_requests.insert(id);
             }
-            ServerEvent::DidOpenTextDocument(params) => {
+            LspEvent::DidOpenTextDocument(params) => {
                 self.did_open(ide_transaction_manager, params)?;
             }
-            ServerEvent::DidChangeTextDocument(params) => {
+            LspEvent::DidChangeTextDocument(params) => {
                 self.did_change(ide_transaction_manager, params)?;
             }
-            ServerEvent::DidCloseTextDocument(params) => {
+            LspEvent::DidCloseTextDocument(params) => {
                 self.did_close(params)?;
             }
-            ServerEvent::DidSaveTextDocument(params) => {
+            LspEvent::DidSaveTextDocument(params) => {
                 self.did_save(params)?;
             }
-            ServerEvent::DidChangeWatchedFiles(params) => {
+            LspEvent::DidChangeWatchedFiles(params) => {
                 self.did_change_watched_files(params)?;
             }
-            ServerEvent::DidChangeWorkspaceFolders(params) => {
+            LspEvent::DidChangeWorkspaceFolders(params) => {
                 self.workspace_folders_changed(params);
             }
-            ServerEvent::DidChangeConfiguration(params) => {
+            LspEvent::DidChangeConfiguration(params) => {
                 self.did_change_configuration(ide_transaction_manager, params)?;
             }
-            ServerEvent::LspResponse(x) => {
+            LspEvent::LspResponse(x) => {
                 if let Some(request) = self.outgoing_requests.lock().remove(&x.id) {
                     self.handle_response(ide_transaction_manager, &request, &x)?;
                 } else {
                     eprintln!("Response for unknown request: {x:?}");
                 }
             }
-            ServerEvent::LspRequest(x) => {
+            LspEvent::LspRequest(x) => {
                 if canceled_requests.remove(&x.id) {
                     let message = format!("Request {} is canceled", x.id);
                     eprintln!("{message}");
@@ -645,9 +614,9 @@ impl Server {
         Ok(ProcessEvent::Continue)
     }
 
-    pub fn new(
+    fn new(
         connection: Arc<Connection>,
-        priority_events_sender: Arc<Sender<ServerEvent>>,
+        lsp_queue: LspQueue,
         initialize_params: InitializeParams,
         indexing_mode: IndexingMode,
     ) -> Self {
@@ -663,16 +632,15 @@ impl Server {
             Vec::new()
         };
 
-        let workspaces = Arc::new(Workspaces::new(Workspace::default()));
+        let workspaces = Arc::new(Workspaces::new(Workspace::default(), &folders));
 
-        let config_finder =
-            Workspaces::config_finder(&workspaces, workspaces.loaded_configs.clone());
+        let config_finder = Workspaces::config_finder(&workspaces);
         let s = Self {
             connection: ServerConnection(connection),
             async_state_read_threads: ThreadPool::with_thread_count(ThreadCount::NumThreads(
                 NonZero::new(1).unwrap(),
             )),
-            priority_events_sender,
+            lsp_queue,
             initialize_params,
             indexing_mode,
             state: Arc::new(State::new(config_finder)),
@@ -680,13 +648,13 @@ impl Server {
             indexed_configs: Mutex::new(HashSet::new()),
             cancellation_handles: Arc::new(Mutex::new(HashMap::new())),
             workspaces,
-            outgoing_request_id: Arc::new(AtomicI32::new(1)),
+            outgoing_request_id: AtomicI32::new(1),
             outgoing_requests: Mutex::new(HashMap::new()),
-            filewatcher_registered: Arc::new(AtomicBool::new(false)),
+            filewatcher_registered: AtomicBool::new(false),
             version_info: Mutex::new(HashMap::new()),
         };
-        s.configure(&folders, &[]);
-
+        s.setup_file_watcher_if_necessary();
+        s.request_settings_for_all_workspaces();
         s
     }
 
@@ -747,25 +715,7 @@ impl Server {
                     .workspaces
                     .get_with(path.to_path_buf(), |w| w.disable_type_errors)
             {
-                return Some((
-                    path.to_path_buf(),
-                    Diagnostic {
-                        range: e.lined_buffer().to_lsp_range(e.range()),
-                        severity: Some(match e.severity() {
-                            Severity::Error => lsp_types::DiagnosticSeverity::ERROR,
-                            Severity::Warn => lsp_types::DiagnosticSeverity::WARNING,
-                            Severity::Info => lsp_types::DiagnosticSeverity::INFORMATION,
-                            // Ignored errors shouldn't be here
-                            Severity::Ignore => lsp_types::DiagnosticSeverity::INFORMATION,
-                        }),
-                        source: Some("Pyrefly".to_owned()),
-                        message: e.msg().to_owned(),
-                        code: Some(lsp_types::NumberOrString::String(
-                            e.error_kind().to_name().to_owned(),
-                        )),
-                        ..Default::default()
-                    },
-                ));
+                return Some((path.to_path_buf(), e.to_diagnostic()));
             }
         }
         None
@@ -773,7 +723,7 @@ impl Server {
 
     fn validate_in_memory<'a>(
         &'a self,
-        ide_transaction_manager: &mut IDETransactionManager<'a>,
+        ide_transaction_manager: &mut TransactionManager<'a>,
     ) -> anyhow::Result<()> {
         let mut possibly_committable_transaction =
             ide_transaction_manager.get_possibly_committable_transaction(&self.state);
@@ -833,13 +783,9 @@ impl Server {
                 IndexingMode::LazyNonBlockingBackground => {
                     if self.indexed_configs.lock().insert(config.dupe()) {
                         let state = self.state.dupe();
-                        let priority_events_sender = self.priority_events_sender.dupe();
+                        let lsp_queue = self.lsp_queue.dupe();
                         std::thread::spawn(move || {
-                            Self::populate_all_project_files_in_config(
-                                config,
-                                state,
-                                priority_events_sender,
-                            );
+                            Self::populate_all_project_files_in_config(config, state, lsp_queue);
                         });
                     }
                 }
@@ -848,7 +794,7 @@ impl Server {
                         Self::populate_all_project_files_in_config(
                             config,
                             self.state.dupe(),
-                            self.priority_events_sender.dupe(),
+                            self.lsp_queue.dupe(),
                         );
                     }
                 }
@@ -860,7 +806,7 @@ impl Server {
     /// Runs asynchronously. Returns immediately and may wait a while for a committable transaction.
     fn invalidate(&self, f: impl FnOnce(&mut Transaction) + Send + 'static) {
         let state = self.state.dupe();
-        let priority_events_sender = self.priority_events_sender.dupe();
+        let lsp_queue = self.lsp_queue.dupe();
         let cancellation_handles = self.cancellation_handles.dupe();
         std::thread::spawn(move || {
             let mut transaction = state.new_committable_transaction(Require::Indexing, None);
@@ -876,15 +822,8 @@ impl Server {
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
-            let _ = priority_events_sender.send(ServerEvent::RecheckFinished);
+            let _ = lsp_queue.send(LspEvent::RecheckFinished);
         });
-    }
-
-    fn validate_with_disk_invalidation(&self, invalidate_disk: Vec<PathBuf>) -> anyhow::Result<()> {
-        if !invalidate_disk.is_empty() {
-            self.invalidate(move |t| t.invalidate_disk(&invalidate_disk));
-        }
-        Ok(())
     }
 
     /// Certain IDE features (e.g. find-references) require us to know the dependency graph of the
@@ -894,7 +833,7 @@ impl Server {
     fn populate_all_project_files_in_config(
         config: ArcId<ConfigFile>,
         state: Arc<State>,
-        priority_events_sender: Arc<Sender<ServerEvent>>,
+        lsp_queue: LspQueue,
     ) {
         let unknown = ModuleName::unknown();
 
@@ -924,18 +863,19 @@ impl Server {
         // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
         // the main event loop of the server. As a result, the server can do a revalidation of
         // all the in-memory files based on the fresh main State as soon as possible.
-        let _ = priority_events_sender.send(ServerEvent::RecheckFinished);
+        let _ = lsp_queue.send(LspEvent::RecheckFinished);
         eprintln!("Populated all files in the project path.");
     }
 
     fn did_save(&self, params: DidSaveTextDocumentParams) -> anyhow::Result<()> {
-        let uri = params.text_document.uri.to_file_path().unwrap();
-        self.validate_with_disk_invalidation(vec![uri])
+        let file = params.text_document.uri.to_file_path().unwrap();
+        self.invalidate(move |t| t.invalidate_disk(&[file]));
+        Ok(())
     }
 
     fn did_open<'a>(
         &'a self,
-        ide_transaction_manager: &mut IDETransactionManager<'a>,
+        ide_transaction_manager: &mut TransactionManager<'a>,
         params: DidOpenTextDocumentParams,
     ) -> anyhow::Result<()> {
         let uri = params.text_document.uri.to_file_path().unwrap();
@@ -955,41 +895,15 @@ impl Server {
         self.validate_in_memory(ide_transaction_manager)?;
         self.populate_project_files_if_necessary(config_to_populate_files);
         // rewatch files in case we loaded or dropped any configs
-        self.setup_file_watcher_if_necessary(
-            self.workspaces
-                .workspaces
-                .read()
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-                .as_slice(),
-        );
+        self.setup_file_watcher_if_necessary();
         Ok(())
     }
 
     fn did_change<'a>(
         &'a self,
-        ide_transaction_manager: &mut IDETransactionManager<'a>,
+        ide_transaction_manager: &mut TransactionManager<'a>,
         params: DidChangeTextDocumentParams,
     ) -> anyhow::Result<()> {
-        /// Convert lsp_types::Position to usize index for a given text.
-        fn position_to_usize(
-            position: lsp_types::Position,
-            index: &LineIndex,
-            source_text: &str,
-        ) -> usize {
-            let source_location = SourceLocation {
-                line: OneIndexed::from_zero_indexed(position.line as usize),
-                character_offset: OneIndexed::from_zero_indexed(position.character as usize),
-            };
-            let text_size = index.offset(
-                source_location,
-                source_text,
-                ruff_source_file::PositionEncoding::Utf16,
-            );
-            text_size.to_usize()
-        }
-
         let VersionedTextDocumentIdentifier { uri, version } = params.text_document;
         let file_path = uri.to_file_path().unwrap();
 
@@ -1001,72 +915,24 @@ impl Server {
             ));
         }
         version_info.insert(file_path.clone(), version);
-        let mut new_text = String::from(self.open_files.read().get(&file_path).unwrap().as_ref());
-        for change in params.content_changes {
-            let TextDocumentContentChangeEvent { range, text, .. } = change;
-            // If no range is given, we can full text replace.
-            let Some(range) = range else {
-                new_text = text;
-                continue;
-            };
-            let index = LineIndex::from_source_text(&new_text);
-            let start = position_to_usize(range.start, &index, &new_text);
-            let end = position_to_usize(range.end, &index, &new_text);
-            new_text.replace_range(start..end, &text);
-        }
-        self.open_files
-            .write()
-            .insert(file_path.clone(), Arc::new(new_text));
+        let mut lock = self.open_files.write();
+        let original = lock.get_mut(&file_path).unwrap();
+        *original = Arc::new(apply_change_events(
+            original.as_str(),
+            params.content_changes,
+        ));
+        drop(lock);
         self.validate_in_memory(ide_transaction_manager)
-    }
-
-    pub fn categorized_events(events: Vec<lsp_types::FileEvent>) -> CategorizedEvents {
-        let mut created = Vec::new();
-        let mut modified = Vec::new();
-        let mut removed = Vec::new();
-        let mut unknown = Vec::new();
-
-        for event in events {
-            match event.typ {
-                lsp_types::FileChangeType::CREATED => {
-                    created.push(event.uri.to_file_path().unwrap());
-                }
-                lsp_types::FileChangeType::CHANGED => {
-                    modified.push(event.uri.to_file_path().unwrap());
-                }
-                lsp_types::FileChangeType::DELETED => {
-                    removed.push(event.uri.to_file_path().unwrap());
-                }
-                _ => {
-                    unknown.push(event.uri.to_file_path().unwrap());
-                }
-            }
-        }
-
-        CategorizedEvents {
-            created,
-            modified,
-            removed,
-            unknown,
-        }
     }
 
     fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) -> anyhow::Result<()> {
         if !params.changes.is_empty() {
             self.invalidate(move |t| {
-                t.invalidate_events(&Self::categorized_events(params.changes))
+                t.invalidate_events(&CategorizedEvents::new_lsp(params.changes))
             });
         }
         // rewatch files in case we loaded or dropped any configs
-        self.setup_file_watcher_if_necessary(
-            self.workspaces
-                .workspaces
-                .read()
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-                .as_slice(),
-        );
+        self.setup_file_watcher_if_necessary();
         Ok(())
     }
 
@@ -1080,25 +946,14 @@ impl Server {
     }
 
     fn workspace_folders_changed(&self, params: DidChangeWorkspaceFoldersParams) {
-        let removed = params
-            .event
-            .removed
-            .iter()
-            .map(|x| x.uri.to_file_path().unwrap())
-            .collect::<Vec<_>>();
-        let added = params
-            .event
-            .added
-            .iter()
-            .map(|x| x.uri.to_file_path().unwrap())
-            .collect::<Vec<_>>();
-
-        self.configure(&added, &removed);
+        self.workspaces.changed(params.event);
+        self.setup_file_watcher_if_necessary();
+        self.request_settings_for_all_workspaces();
     }
 
     fn did_change_configuration<'a>(
         &'a self,
-        ide_transaction_manager: &mut IDETransactionManager<'a>,
+        ide_transaction_manager: &mut TransactionManager<'a>,
         params: DidChangeConfigurationParams,
     ) -> anyhow::Result<()> {
         if let Some(workspace) = &self.initialize_params.capabilities.workspace
@@ -1110,33 +965,15 @@ impl Server {
 
         let mut modified = false;
         if let Some(python) = params.settings.get(PYTHON_SECTION) {
-            let config: LspConfig = serde_json::from_value(python.clone())?;
-            self.apply_client_configuration(&mut modified, &None, config);
+            self.workspaces
+                .apply_client_configuration(&mut modified, &None, python.clone());
         }
 
         if modified {
+            self.invalidate_config();
             self.validate_in_memory(ide_transaction_manager)?;
         }
         Ok(())
-    }
-
-    /// Configure the server with a new set of workspace folders
-    fn configure(&self, workspace_paths_added: &[PathBuf], workspace_paths_removed: &[PathBuf]) {
-        let mut all_workspaces = Vec::new();
-        {
-            let mut workspaces = self.workspaces.workspaces.write();
-            for x in workspace_paths_added {
-                workspaces.insert(x.clone(), Workspace::new_with_default_env(x));
-            }
-            for x in workspace_paths_removed {
-                workspaces.shift_remove(x);
-            }
-            workspaces
-                .keys()
-                .for_each(|uri| all_workspaces.push(uri.clone()));
-        }
-        self.setup_file_watcher_if_necessary(all_workspaces.as_slice());
-        self.request_settings_for_all_workspaces();
     }
 
     /// Create a handle. Return None if the workspace has language services disabled (and thus you shouldn't do anything).
@@ -1157,18 +994,6 @@ impl Server {
         })
     }
 
-    fn to_lsp_location(&self, location: &TextRangeWithModule) -> Option<Location> {
-        let TextRangeWithModule {
-            module: definition_module_info,
-            range,
-        } = location;
-        let uri = module_info_to_uri(definition_module_info)?;
-        Some(Location {
-            uri,
-            range: definition_module_info.lined_buffer().to_lsp_range(*range),
-        })
-    }
-
     fn goto_definition(
         &self,
         transaction: &Transaction<'_>,
@@ -1182,8 +1007,8 @@ impl Server {
             .from_lsp_position(params.text_document_position_params.position);
         let targets = transaction.goto_definition(&handle, range);
         let mut lsp_targets = targets
-            .into_iter()
-            .filter_map(|t| self.to_lsp_location(&t))
+            .iter()
+            .filter_map(to_lsp_location)
             .collect::<Vec<_>>();
         if lsp_targets.is_empty() {
             None
@@ -1283,7 +1108,7 @@ impl Server {
     fn async_find_references_helper<'a, V: serde::Serialize>(
         &'a self,
         request_id: RequestId,
-        ide_transaction_manager: &mut IDETransactionManager<'a>,
+        ide_transaction_manager: &mut TransactionManager<'a>,
         uri: &Url,
         position: Position,
         map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + 'static,
@@ -1359,7 +1184,7 @@ impl Server {
     fn references<'a>(
         &'a self,
         request_id: RequestId,
-        ide_transaction_manager: &mut IDETransactionManager<'a>,
+        ide_transaction_manager: &mut TransactionManager<'a>,
         params: ReferenceParams,
     ) {
         self.async_find_references_helper(
@@ -1385,7 +1210,7 @@ impl Server {
     fn rename<'a>(
         &'a self,
         request_id: RequestId,
-        ide_transaction_manager: &mut IDETransactionManager<'a>,
+        ide_transaction_manager: &mut TransactionManager<'a>,
         params: RenameParams,
     ) {
         self.async_find_references_helper(
@@ -1547,15 +1372,14 @@ impl Server {
             .unwrap_or_default()
             .into_iter()
             .filter_map(|(name, kind, location)| {
-                self.to_lsp_location(&location)
-                    .map(|location| SymbolInformation {
-                        name,
-                        kind,
-                        location,
-                        tags: None,
-                        deprecated: None,
-                        container_name: None,
-                    })
+                to_lsp_location(&location).map(|location| SymbolInformation {
+                    name,
+                    kind,
+                    location,
+                    tags: None,
+                    deprecated: None,
+                    container_name: None,
+                })
             })
             .collect()
     }
@@ -1600,7 +1424,8 @@ impl Server {
         }
     }
 
-    fn setup_file_watcher_if_necessary(&self, roots: &[PathBuf]) {
+    fn setup_file_watcher_if_necessary(&self) {
+        let roots = self.workspaces.roots();
         match self.initialize_params.capabilities.workspace {
             Some(WorkspaceClientCapabilities {
                 did_change_watched_files:
@@ -1623,7 +1448,7 @@ impl Server {
                 // TODO(connernilsen): we need to dedup filewatcher patterns
                 // preferably by figuring out if they're under another wildcard pattern with the same suffix
                 let mut glob_patterns = Vec::new();
-                for root in roots {
+                for root in &roots {
                     PYTHON_EXTENSIONS.iter().for_each(|suffix| {
                         glob_patterns.push(Self::get_pattern_to_watch(
                             root,
@@ -1679,12 +1504,10 @@ impl Server {
         if let Some(workspace) = &self.initialize_params.capabilities.workspace
             && workspace.configuration == Some(true)
         {
+            let roots = self.workspaces.roots();
             self.send_request::<WorkspaceConfiguration>(ConfigurationParams {
-                items: self
-                    .workspaces
-                    .workspaces
-                    .read()
-                    .keys()
+                items: roots
+                    .iter()
                     .map(|uri| Some(Url::from_file_path(uri).unwrap()))
                     // add default workspace
                     .chain(once(None))
@@ -1699,7 +1522,7 @@ impl Server {
 
     fn handle_response<'a>(
         &'a self,
-        ide_transaction_manager: &mut IDETransactionManager<'a>,
+        ide_transaction_manager: &mut TransactionManager<'a>,
         request: &Request,
         response: &Response,
     ) -> anyhow::Result<()> {
@@ -1708,226 +1531,23 @@ impl Server {
         {
             let mut modified = false;
             for (i, id) in request.items.iter().enumerate() {
-                let config: LspConfig = if let Some(value) = response.get(i) {
-                    serde_json::from_value(value.clone()).unwrap_or_default()
-                } else {
-                    continue;
-                };
-                self.apply_client_configuration(&mut modified, &id.scope_uri, config);
+                if let Some(value) = response.get(i) {
+                    self.workspaces.apply_client_configuration(
+                        &mut modified,
+                        &id.scope_uri,
+                        value.clone(),
+                    );
+                }
             }
             if modified {
-                return self.validate_in_memory(ide_transaction_manager);
+                self.invalidate_config();
+                self.validate_in_memory(ide_transaction_manager)?;
             }
         }
         Ok(())
     }
 
-    /// Applies the LSP client configuration to the `scope_uri` (workspace) given.
-    ///
-    /// The `modified` flag is changed to `true` when the configuration gets applied to the
-    /// `scope_uri` matching a valid workspace
-    fn apply_client_configuration(
-        &self,
-        modified: &mut bool,
-        scope_uri: &Option<Url>,
-        config: LspConfig,
-    ) {
-        if let Some(python_path) = config.python_path {
-            self.update_pythonpath(modified, scope_uri, &python_path);
-        }
-
-        if let Some(pyrefly) = config.pyrefly {
-            if let Some(extra_paths) = pyrefly.extra_paths {
-                self.update_search_paths(modified, scope_uri, extra_paths);
-            }
-            if let Some(disable_language_services) = pyrefly.disable_language_services {
-                self.update_disable_language_services(scope_uri, disable_language_services);
-            }
-            if let Some(disable_type_errors) = pyrefly.disable_type_errors {
-                self.update_disable_type_errors(modified, scope_uri, disable_type_errors);
-            }
-        }
-    }
-
-    /// Update disableLanguageServices setting for scope_uri, None if default workspace
-    fn update_disable_language_services(
-        &self,
-        scope_uri: &Option<Url>,
-        disable_language_services: bool,
-    ) {
-        let mut workspaces = self.workspaces.workspaces.write();
-        match scope_uri {
-            Some(scope_uri) => {
-                if let Some(workspace) = workspaces.get_mut(&scope_uri.to_file_path().unwrap()) {
-                    workspace.disable_language_services = disable_language_services;
-                }
-            }
-            None => {
-                self.workspaces.default.write().disable_language_services =
-                    disable_language_services
-            }
-        }
-    }
-
-    /// Update typeCheckingMode setting for scope_uri, None if default workspace
-    fn update_disable_type_errors(
-        &self,
-        modified: &mut bool,
-        scope_uri: &Option<Url>,
-        disable_type_errors: bool,
-    ) {
-        let mut workspaces = self.workspaces.workspaces.write();
-        match scope_uri {
-            Some(scope_uri) => {
-                if let Some(workspace) = workspaces.get_mut(&scope_uri.to_file_path().unwrap()) {
-                    *modified = true;
-                    workspace.disable_type_errors = disable_type_errors;
-                }
-            }
-            None => {
-                *modified = true;
-                self.workspaces.default.write().disable_type_errors = disable_type_errors
-            }
-        }
-    }
-
     fn invalidate_config(&self) {
         self.invalidate(|t| t.invalidate_config());
-    }
-
-    /// Updates pythonpath with specified python path
-    /// scope_uri = None for default workspace
-    fn update_pythonpath(&self, modified: &mut bool, scope_uri: &Option<Url>, python_path: &str) {
-        let mut workspaces = self.workspaces.workspaces.write();
-        let interpreter = PathBuf::from(python_path);
-        let python_info = Some(PythonInfo::new(interpreter));
-        match scope_uri {
-            Some(scope_uri) => {
-                let workspace_path = scope_uri.to_file_path().unwrap();
-                if let Some(workspace) = workspaces.get_mut(&workspace_path) {
-                    *modified = true;
-                    workspace.python_info = python_info;
-                }
-            }
-            None => {
-                *modified = true;
-                self.workspaces.default.write().python_info = python_info;
-            }
-        }
-        self.invalidate_config();
-    }
-
-    // Updates search paths for scope uri.
-    fn update_search_paths(
-        &self,
-        modified: &mut bool,
-        scope_uri: &Option<Url>,
-        search_paths: Vec<PathBuf>,
-    ) {
-        let mut workspaces = self.workspaces.workspaces.write();
-        match scope_uri {
-            Some(scope_uri) => {
-                let workspace_path = scope_uri.to_file_path().unwrap();
-                if let Some(workspace) = workspaces.get_mut(&workspace_path) {
-                    *modified = true;
-                    workspace.search_path = Some(search_paths);
-                }
-            }
-            None => {
-                *modified = true;
-                self.workspaces.default.write().search_path = Some(search_paths);
-            }
-        }
-        self.invalidate_config();
-    }
-}
-
-fn as_notification<T>(x: &Notification) -> Option<T::Params>
-where
-    T: lsp_types::notification::Notification,
-    T::Params: DeserializeOwned,
-{
-    if x.method == T::METHOD {
-        let params = serde_json::from_value(x.params.clone()).unwrap_or_else(|err| {
-            panic!(
-                "Invalid notification\nMethod: {}\n error: {}",
-                x.method, err
-            )
-        });
-        Some(params)
-    } else {
-        None
-    }
-}
-
-fn as_request<T>(x: &Request) -> Option<T::Params>
-where
-    T: lsp_types::request::Request,
-    T::Params: DeserializeOwned,
-{
-    if x.method == T::METHOD {
-        let params = serde_json::from_value(x.params.clone()).unwrap_or_else(|err| {
-            panic!(
-                "Invalid request\n  method: {}\n  error: {}\n  request: {:?}\n",
-                x.method, err, x
-            )
-        });
-        Some(params)
-    } else {
-        None
-    }
-}
-
-fn as_request_response_pair<T>(
-    request: &Request,
-    response: &Response,
-) -> Option<(T::Params, T::Result)>
-where
-    T: lsp_types::request::Request,
-    T::Params: DeserializeOwned,
-{
-    if response.id != request.id {
-        return None;
-    }
-    let params = as_request::<T>(request)?;
-    let result = serde_json::from_value(response.result.clone()?).unwrap_or_else(|err| {
-        panic!(
-            "Invalid response\n  method: {}\n response:{:?}\n, response error:{:?}\n, error: {}\n",
-            request.method, response.result, response.error, err
-        )
-    });
-    Some((params, result))
-}
-
-/// Create a new `Notification` object with the correct name from the given params.
-fn new_notification<T>(params: T::Params) -> Notification
-where
-    T: lsp_types::notification::Notification,
-{
-    Notification {
-        method: T::METHOD.to_owned(),
-        params: serde_json::to_value(&params).unwrap(),
-    }
-}
-
-fn new_response<T>(id: RequestId, params: anyhow::Result<T>) -> Response
-where
-    T: serde::Serialize,
-{
-    match params {
-        Ok(params) => Response {
-            id,
-            result: Some(serde_json::to_value(params).unwrap()),
-            error: None,
-        },
-        Err(e) => Response {
-            id,
-            result: None,
-            error: Some(ResponseError {
-                code: 0,
-                message: format!("{e:#?}"),
-                data: None,
-            }),
-        },
     }
 }

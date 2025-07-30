@@ -152,8 +152,9 @@ assert_type(x, list[Any])
 "#,
 );
 
+// This used to fail when merging branches that all pointed to the same idx produced
+// a Forward, because the equality check wouldn't compose across nested branches.
 testcase!(
-    bug = "We produce too many bindings here, and lose track of the fact that `x` is unchanged between def and first use",
     test_inference_when_first_use_comes_after_nested_control_flow,
     r#"
 from typing import assert_type, Any
@@ -162,7 +163,7 @@ if True:
     if False:
         pass
 x.append(1)
-assert_type(x, list[Any])
+assert_type(x, list[int])
 "#,
 );
 

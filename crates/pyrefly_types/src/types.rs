@@ -1377,6 +1377,19 @@ impl Type {
             _ => None,
         }
     }
+
+    pub fn to_callable(self) -> Option<Callable> {
+        match self {
+            Type::Callable(callable) => Some(*callable),
+            Type::Function(function) => Some(function.signature),
+            Type::BoundMethod(bound_method) => match bound_method.func {
+                BoundMethodType::Function(function) => Some(function.signature),
+                BoundMethodType::Forall(forall) => Some(forall.body.signature),
+                BoundMethodType::Overload(_) => None,
+            },
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

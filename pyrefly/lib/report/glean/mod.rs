@@ -18,6 +18,6 @@ pub fn glean(transaction: &Transaction, handle: &Handle) -> String {
         Some(Glean::new(transaction, handle))
     }
 
-    let data = f(transaction, handle).expect("Glean data be ready");
+    let data = f(transaction, handle).expect("Glean data be ready").entries;
     serde_json::to_string_pretty(&data).unwrap()
 }

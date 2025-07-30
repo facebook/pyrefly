@@ -523,11 +523,18 @@ pub struct Scope {
     /// All flow bindings will have a static binding, _usually_ in this scope, but occasionally
     /// in a parent scope (e.g. for narrowing operations).
     pub flow: Flow,
-    /// Are Flow types above this unreachable.
-    /// Set when we enter something like a function, and can't guarantee what flow values are in scope.
+    /// Are Flow types from containing scopes unreachable from this scope?
+    ///
+    /// Set when we enter a scope like a function body with deferred evaluation, where the
+    /// values we might see from containing scopes may not match their current values.
     pub barrier: bool,
+    /// What kind of scope is this? Used for a few purposes, including propagating
+    /// information down from scopes (e.g. to figure out when we're in a class) and
+    /// storing data from the current AST traversal for later analysis, especially
+    /// self-attribute-assignments in methods.
     pub kind: ScopeKind,
-    /// Stack of for/while loops we're in. Does not include comprehensions.
+    /// Stack of for/while loops we're in. Does not include comprehensions, which
+    /// define a new scope.
     pub loops: Vec<Loop>,
 }
 

@@ -6,17 +6,20 @@
  */
 
 use std::collections::HashSet;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use dupe::Dupe;
 use itertools::Itertools;
+use lsp_types::Url;
+use lsp_types::WorkspaceFoldersChangeEvent;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::arc_id::WeakArcId;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
+use serde::Deserialize;
+use serde_json::Value;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::error;
@@ -51,41 +54,17 @@ impl PythonInfo {
 }
 
 /// LSP workspace settings: this is all that is necessary to run an LSP at a given root.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Workspace {
-    #[expect(dead_code)]
-    pub root: PathBuf,
-    pub python_info: Option<PythonInfo>,
-    pub search_path: Option<Vec<PathBuf>>,
+    python_info: Option<PythonInfo>,
+    search_path: Option<Vec<PathBuf>>,
     pub disable_language_services: bool,
     pub disable_type_errors: bool,
 }
 
 impl Workspace {
-    pub fn new(workspace_root: &Path, python_info: Option<PythonInfo>) -> Self {
-        Self {
-            root: workspace_root.to_path_buf(),
-            python_info,
-            search_path: None,
-            disable_language_services: false,
-            disable_type_errors: false,
-        }
-    }
-
-    pub fn new_with_default_env(workspace_root: &Path) -> Self {
-        Self::new(workspace_root, None)
-    }
-}
-
-impl Default for Workspace {
-    fn default() -> Self {
-        Self {
-            root: PathBuf::from("/"),
-            python_info: None,
-            search_path: None,
-            disable_language_services: Default::default(),
-            disable_type_errors: false,
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
@@ -151,18 +130,38 @@ impl WeakConfigCache {
     }
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PyreflyClientConfig {
+    disable_type_errors: Option<bool>,
+    disable_language_services: Option<bool>,
+    extra_paths: Option<Vec<PathBuf>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LspConfig {
+    python_path: Option<String>,
+    pyrefly: Option<PyreflyClientConfig>,
+}
+
 pub struct Workspaces {
     /// If a workspace is not found, this one is used. It contains every possible file on the system but is lowest priority.
-    pub default: RwLock<Workspace>,
+    default: RwLock<Workspace>,
     pub workspaces: RwLock<SmallMap<PathBuf, Workspace>>,
     pub loaded_configs: Arc<WeakConfigCache>,
 }
 
 impl Workspaces {
-    pub fn new(default: Workspace) -> Self {
+    pub fn new(default: Workspace, folders: &[PathBuf]) -> Self {
         Self {
             default: RwLock::new(default),
-            workspaces: RwLock::new(SmallMap::new()),
+            workspaces: RwLock::new(
+                folders
+                    .iter()
+                    .map(|x| (x.clone(), Workspace::new()))
+                    .collect(),
+            ),
             loaded_configs: Arc::new(WeakConfigCache::new()),
         }
     }
@@ -181,10 +180,7 @@ impl Workspaces {
         f(workspace.unwrap_or(&default_workspace))
     }
 
-    pub fn config_finder(
-        workspaces: &Arc<Workspaces>,
-        loaded_configs: Arc<WeakConfigCache>,
-    ) -> ConfigFinder {
+    pub fn config_finder(workspaces: &Arc<Workspaces>) -> ConfigFinder {
         let workspaces = workspaces.dupe();
         standard_config_finder(Arc::new(move |dir, mut config| {
             if let Some(dir) = dir
@@ -214,9 +210,138 @@ impl Workspaces {
             }
             let config = ArcId::new(config);
 
-            loaded_configs.insert(config.downgrade());
+            workspaces.loaded_configs.insert(config.downgrade());
 
             (config, Vec::new())
         }))
+    }
+
+    pub fn roots(&self) -> Vec<PathBuf> {
+        self.workspaces.read().keys().cloned().collect::<Vec<_>>()
+    }
+
+    pub fn changed(&self, event: WorkspaceFoldersChangeEvent) {
+        let mut workspaces = self.workspaces.write();
+        for x in event.removed {
+            workspaces.shift_remove(&x.uri.to_file_path().unwrap());
+        }
+        for x in event.added {
+            workspaces.insert(x.uri.to_file_path().unwrap(), Workspace::new());
+        }
+    }
+
+    /// Applies the LSP client configuration to the `scope_uri` (workspace) given.
+    ///
+    /// The `modified` flag is changed to `true` when the configuration gets applied to the
+    /// `scope_uri` matching a valid workspace
+    pub fn apply_client_configuration(
+        &self,
+        modified: &mut bool,
+        scope_uri: &Option<Url>,
+        config: Value,
+    ) {
+        let config = match serde_json::from_value::<LspConfig>(config) {
+            Err(_) => return,
+            Ok(x) => x,
+        };
+
+        if let Some(python_path) = config.python_path {
+            self.update_pythonpath(modified, scope_uri, &python_path);
+        }
+
+        if let Some(pyrefly) = config.pyrefly {
+            if let Some(extra_paths) = pyrefly.extra_paths {
+                self.update_search_paths(modified, scope_uri, extra_paths);
+            }
+            if let Some(disable_language_services) = pyrefly.disable_language_services {
+                self.update_disable_language_services(scope_uri, disable_language_services);
+            }
+            if let Some(disable_type_errors) = pyrefly.disable_type_errors {
+                self.update_disable_type_errors(modified, scope_uri, disable_type_errors);
+            }
+        }
+    }
+
+    /// Update disableLanguageServices setting for scope_uri, None if default workspace
+    fn update_disable_language_services(
+        &self,
+        scope_uri: &Option<Url>,
+        disable_language_services: bool,
+    ) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Some(workspace) = workspaces.get_mut(&scope_uri.to_file_path().unwrap()) {
+                    workspace.disable_language_services = disable_language_services;
+                }
+            }
+            None => self.default.write().disable_language_services = disable_language_services,
+        }
+    }
+
+    /// Update typeCheckingMode setting for scope_uri, None if default workspace
+    fn update_disable_type_errors(
+        &self,
+        modified: &mut bool,
+        scope_uri: &Option<Url>,
+        disable_type_errors: bool,
+    ) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Some(workspace) = workspaces.get_mut(&scope_uri.to_file_path().unwrap()) {
+                    *modified = true;
+                    workspace.disable_type_errors = disable_type_errors;
+                }
+            }
+            None => {
+                *modified = true;
+                self.default.write().disable_type_errors = disable_type_errors
+            }
+        }
+    }
+
+    /// Updates pythonpath with specified python path
+    /// scope_uri = None for default workspace
+    fn update_pythonpath(&self, modified: &mut bool, scope_uri: &Option<Url>, python_path: &str) {
+        let mut workspaces = self.workspaces.write();
+        let interpreter = PathBuf::from(python_path);
+        let python_info = Some(PythonInfo::new(interpreter));
+        match scope_uri {
+            Some(scope_uri) => {
+                let workspace_path = scope_uri.to_file_path().unwrap();
+                if let Some(workspace) = workspaces.get_mut(&workspace_path) {
+                    *modified = true;
+                    workspace.python_info = python_info;
+                }
+            }
+            None => {
+                *modified = true;
+                self.default.write().python_info = python_info;
+            }
+        }
+    }
+
+    // Updates search paths for scope uri.
+    fn update_search_paths(
+        &self,
+        modified: &mut bool,
+        scope_uri: &Option<Url>,
+        search_paths: Vec<PathBuf>,
+    ) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                let workspace_path = scope_uri.to_file_path().unwrap();
+                if let Some(workspace) = workspaces.get_mut(&workspace_path) {
+                    *modified = true;
+                    workspace.search_path = Some(search_paths);
+                }
+            }
+            None => {
+                *modified = true;
+                self.default.write().search_path = Some(search_paths);
+            }
+        }
     }
 }

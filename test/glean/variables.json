@@ -1,6 +1,6 @@
 [
   {
-    "schema_id": "54195d609c9195d2bc09d8fa05050bf7"
+    "schema_id": "e58db6a216a862a9e127d2986d1c377f"
   },
   {
     "predicate": "python.Name.4",
@@ -11,109 +11,129 @@
   {
     "predicate": "python.Module.4",
     "facts": [
-      {"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables"}}}
+      {"id":0,"key":{"name":{"id":0,"key":"test.glean.variables"}}}
     ]
   },
   {
     "predicate": "digest.FileDigest.1",
     "facts": [
-      {"id":0,"key":{"file":{"id":0,"key":"scripts/rubmary/variables.py"},"digest":{"hash":"3d602d44b4974dbcf39c45769169428e8e4252a96ad28296b407c1e7077900d5","size":231}}}
+      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"digest":{"hash":"113553045c04a0bea14ab0e7f33e84d1f56ecff26c643f3c6400bc072b2beba8","size":337}}}
     ]
   },
   {
     "predicate": "python.Module.4",
     "facts": [
-      {"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary"}}},
-      {"id":0,"key":{"name":{"id":0,"key":"scripts"}}}
+      {"id":0,"key":{"name":{"id":0,"key":"test.glean"}}},
+      {"id":0,"key":{"name":{"id":0,"key":"test"}}}
     ]
   },
   {
     "predicate": "python.DeclarationLocation.4",
     "facts": [
-      {"id":0,"key":{"declaration":{"module":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables"}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":0,"length":231}}},
-      {"id":0,"key":{"declaration":{"cls":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.B"}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":75,"length":27}}},
-      {"id":0,"key":{"declaration":{"cls":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.A"}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":105,"length":43}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.x"}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":151,"length":10}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.a"}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":162,"length":10}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.b_name"}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":173,"length":17}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.A.name"}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":118,"length":15}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.A.b"}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":138,"length":10}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.B.name"}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":88,"length":14}}}
+      {"id":0,"key":{"declaration":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":0,"length":337}}},
+      {"id":0,"key":{"declaration":{"cls":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.B"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":181,"length":27}}},
+      {"id":0,"key":{"declaration":{"cls":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.A"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":211,"length":43}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.x"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":257,"length":10}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.a"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":268,"length":10}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.b_name"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":279,"length":17}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.B.name"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":194,"length":14}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.A.name"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":224,"length":15}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.A.b"}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":244,"length":10}}}
     ]
   },
   {
     "predicate": "python.ContainingTopLevelDeclaration.4",
     "facts": [
-      {"id":0,"key":{"declaration":{"module":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables"}}}}}},
-      {"id":0,"key":{"declaration":{"cls":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.B"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables"}}}}}},
-      {"id":0,"key":{"declaration":{"cls":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.A"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables"}}}}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.x"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables"}}}}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.a"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables"}}}}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.b_name"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables"}}}}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.A.name"}}}},"container":{"cls":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.A"}}}}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.A.b"}}}},"container":{"cls":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.A"}}}}}},
-      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.B.name"}}}},"container":{"cls":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.B"}}}}}}
+      {"id":0,"key":{"declaration":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables"}}}}}},
+      {"id":0,"key":{"declaration":{"cls":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.B"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables"}}}}}},
+      {"id":0,"key":{"declaration":{"cls":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.A"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables"}}}}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.x"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables"}}}}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.a"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables"}}}}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.b_name"}}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables"}}}}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.B.name"}}}},"container":{"cls":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.B"}}}}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.A.name"}}}},"container":{"cls":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.A"}}}}}},
+      {"id":0,"key":{"declaration":{"variable":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.A.b"}}}},"container":{"cls":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.A"}}}}}}
     ]
   },
   {
     "predicate": "python.XRefsViaNameByFile.4",
     "facts": [
-      {"id":0,"key":{"file":{"id":0,"key":"scripts/rubmary/variables.py"},"xrefs":[{"target":{"id":0,"key":"int"},"source":{"start":154,"length":3}},{"target":{"id":0,"key":"scripts.rubmary.variables.A"},"source":{"start":165,"length":1}},{"target":{"id":0,"key":"scripts.rubmary.variables.A"},"source":{"start":165,"length":1}},{"target":{"id":0,"key":"scripts.rubmary.variables.A"},"source":{"start":169,"length":1}},{"target":{"id":0,"key":"scripts.rubmary.variables.a"},"source":{"start":182,"length":1}},{"target":{"id":0,"key":"scripts.rubmary.variables.A.b"},"source":{"start":184,"length":1}},{"target":{"id":0,"key":"scripts.rubmary.variables.B.name"},"source":{"start":186,"length":4}},{"target":{"id":0,"key":"scripts.rubmary.variables.a"},"source":{"start":191,"length":1}},{"target":{"id":0,"key":"scripts.rubmary.variables.A.name"},"source":{"start":193,"length":4}},{"target":{"id":0,"key":"str.capitalize"},"source":{"start":198,"length":10}},{"target":{"id":0,"key":"scripts.rubmary.variables.b_name"},"source":{"start":211,"length":6}},{"target":{"id":0,"key":"str.capitalize"},"source":{"start":218,"length":10}},{"target":{"id":0,"key":"str"},"source":{"start":94,"length":3}},{"target":{"id":0,"key":"str"},"source":{"start":124,"length":3}},{"target":{"id":0,"key":"scripts.rubmary.variables.B"},"source":{"start":141,"length":1}},{"target":{"id":0,"key":"scripts.rubmary.variables.B"},"source":{"start":141,"length":1}},{"target":{"id":0,"key":"scripts.rubmary.variables.B"},"source":{"start":145,"length":1}}]}}
+      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"xrefs":[{"target":{"id":0,"key":"int"},"source":{"start":260,"length":3}},{"target":{"id":0,"key":"test.glean.variables.A"},"source":{"start":271,"length":1}},{"target":{"id":0,"key":"test.glean.variables.A"},"source":{"start":271,"length":1}},{"target":{"id":0,"key":"test.glean.variables.A"},"source":{"start":275,"length":1}},{"target":{"id":0,"key":"test.glean.variables.a"},"source":{"start":288,"length":1}},{"target":{"id":0,"key":"test.glean.variables.a.b"},"source":{"start":290,"length":1}},{"target":{"id":0,"key":"test.glean.variables.a.b.name"},"source":{"start":292,"length":4}},{"target":{"id":0,"key":"test.glean.variables.a"},"source":{"start":297,"length":1}},{"target":{"id":0,"key":"test.glean.variables.a.name"},"source":{"start":299,"length":4}},{"target":{"id":0,"key":"test.glean.variables.a.name.capitalize"},"source":{"start":304,"length":10}},{"target":{"id":0,"key":"test.glean.variables.b_name"},"source":{"start":317,"length":6}},{"target":{"id":0,"key":"test.glean.variables.b_name.capitalize"},"source":{"start":324,"length":10}},{"target":{"id":0,"key":"str"},"source":{"start":230,"length":3}},{"target":{"id":0,"key":"test.glean.variables.B"},"source":{"start":247,"length":1}},{"target":{"id":0,"key":"test.glean.variables.B"},"source":{"start":247,"length":1}},{"target":{"id":0,"key":"test.glean.variables.B"},"source":{"start":251,"length":1}},{"target":{"id":0,"key":"str"},"source":{"start":200,"length":3}}]}}
     ]
   },
   {
     "predicate": "src.FileLines.1",
     "facts": [
-      {"id":0,"key":{"file":{"id":0,"key":"scripts/rubmary/variables.py"},"lengths":[73,1,1,9,19,1,1,9,20,15,1,1,11,11,18,20,20],"endsInNewline":true,"hasUnicodeOrTabs":false}}
+      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"lengths":[53,2,66,58,1,1,9,19,1,1,9,20,15,1,1,11,11,18,20,20],"endsInNewline":true,"hasUnicodeOrTabs":false}}
     ]
   },
   {
     "predicate": "src.FileLanguage.1",
     "facts": [
-      {"id":0,"key":{"file":{"id":0,"key":"scripts/rubmary/variables.py"},"language":7}}
+      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"language":7}}
     ]
   },
   {
     "predicate": "python.NameToSName.4",
     "facts": [
-      {"id":0,"key":{"id":0,"key":"scripts"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"scripts"}}}},
-      {"id":0,"key":{"id":0,"key":"scripts.rubmary"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"rubmary"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"scripts"}}}}}},
-      {"id":0,"key":{"id":0,"key":"scripts.rubmary.variables"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"rubmary"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"scripts"}}}}}}}},
-      {"id":0,"key":{"id":0,"key":"scripts.rubmary.variables.B"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"B"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"rubmary"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"scripts"}}}}}}}}}},
-      {"id":0,"key":{"id":0,"key":"scripts.rubmary.variables.A"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"A"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"rubmary"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"scripts"}}}}}}}}}},
-      {"id":0,"key":{"id":0,"key":"scripts.rubmary.variables.x"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"x"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"rubmary"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"scripts"}}}}}}}}}},
-      {"id":0,"key":{"id":0,"key":"scripts.rubmary.variables.a"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"a"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"rubmary"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"scripts"}}}}}}}}}},
-      {"id":0,"key":{"id":0,"key":"scripts.rubmary.variables.b_name"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"b_name"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"rubmary"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"scripts"}}}}}}}}}},
-      {"id":0,"key":{"id":0,"key":"scripts.rubmary.variables.A.name"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"name"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"A"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"rubmary"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"scripts"}}}}}}}}}}}},
-      {"id":0,"key":{"id":0,"key":"scripts.rubmary.variables.A.b"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"b"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"A"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"rubmary"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"scripts"}}}}}}}}}}}},
-      {"id":0,"key":{"id":0,"key":"scripts.rubmary.variables.B.name"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"name"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"B"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"rubmary"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"scripts"}}}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.variables"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.variables.B"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"B"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.variables.A"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"A"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.variables.x"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"x"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.variables.a"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"a"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.variables.b_name"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"b_name"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.variables.B.name"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"name"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"B"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.variables.A.name"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"name"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"A"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.variables.A.b"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"b"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"A"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}},
       {"id":0,"key":{"id":0,"key":"int"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"int"}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.variables.a.b"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"b"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"a"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.variables.a.b.name"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"name"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"b"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"a"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.variables.a.name"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"name"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"a"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.variables.a.name.capitalize"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"capitalize"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"name"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"a"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}}}},
+      {"id":0,"key":{"id":0,"key":"test.glean.variables.b_name.capitalize"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"capitalize"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"b_name"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"variables"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"glean"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"test"}}}}}}}}}}}},
       {"id":0,"key":{"id":0,"key":"str"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"str"}}}},
-      {"id":0,"key":{"id":0,"key":"str.capitalize"},"value":{"id":0,"key":{"local_name":{"id":0,"key":"capitalize"},"parent":{"id":0,"key":{"local_name":{"id":0,"key":"str"}}}}}},
       {"id":0,"key":{"id":0,"key":""},"value":{"id":0,"key":{"local_name":{"id":0,"key":""}}}}
     ]
   },
   {
     "predicate": "python.DefinitionLocation.4",
     "facts": [
-      {"id":0,"key":{"definition":{"module":{"id":0,"key":{"module":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables"}}}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":0,"length":231}}},
-      {"id":0,"key":{"definition":{"cls":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.B"}}},"bases":[],"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables"}}}}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":75,"length":27}}},
-      {"id":0,"key":{"definition":{"cls":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.A"}}},"bases":[],"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables"}}}}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":105,"length":43}}},
-      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.x"}}},"typeInfo":{"displayType":{"id":0,"key":"int"},"xrefs":[{"target":{"id":0,"key":"int"},"source":{"start":0,"length":3}}]},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables"}}}}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":151,"length":10}}},
-      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.a"}}},"typeInfo":{"displayType":{"id":0,"key":"A"},"xrefs":[{"target":{"id":0,"key":"scripts.rubmary.variables.A"},"source":{"start":0,"length":1}}]},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables"}}}}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":162,"length":10}}},
-      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.b_name"}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables"}}}}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":173,"length":17}}},
-      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.A.name"}}},"typeInfo":{"displayType":{"id":0,"key":"str"},"xrefs":[{"target":{"id":0,"key":"str"},"source":{"start":0,"length":3}}]},"container":{"cls":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.A"}}}}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":118,"length":15}}},
-      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.A.b"}}},"typeInfo":{"displayType":{"id":0,"key":"B"},"xrefs":[{"target":{"id":0,"key":"scripts.rubmary.variables.B"},"source":{"start":0,"length":1}}]},"container":{"cls":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.A"}}}}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":138,"length":10}}},
-      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.B.name"}}},"typeInfo":{"displayType":{"id":0,"key":"str"},"xrefs":[{"target":{"id":0,"key":"str"},"source":{"start":0,"length":3}}]},"container":{"cls":{"id":0,"key":{"name":{"id":0,"key":"scripts.rubmary.variables.B"}}}}}}},"file":{"id":0,"key":"scripts/rubmary/variables.py"},"span":{"start":88,"length":14}}}
+      {"id":0,"key":{"definition":{"module":{"id":0,"key":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables"}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":0,"length":337}}},
+      {"id":0,"key":{"definition":{"cls":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.B"}}},"bases":[],"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables"}}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":181,"length":27}}},
+      {"id":0,"key":{"definition":{"cls":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.A"}}},"bases":[],"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables"}}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":211,"length":43}}},
+      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.x"}}},"typeInfo":{"displayType":{"id":0,"key":"int"},"xrefs":[{"target":{"id":0,"key":"int"},"source":{"start":0,"length":3}}]},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables"}}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":257,"length":10}}},
+      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.a"}}},"typeInfo":{"displayType":{"id":0,"key":"A"},"xrefs":[{"target":{"id":0,"key":"test.glean.variables.A"},"source":{"start":0,"length":1}}]},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables"}}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":268,"length":10}}},
+      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.b_name"}}},"container":{"module":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables"}}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":279,"length":17}}},
+      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.B.name"}}},"typeInfo":{"displayType":{"id":0,"key":"str"},"xrefs":[{"target":{"id":0,"key":"str"},"source":{"start":0,"length":3}}]},"container":{"cls":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.B"}}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":194,"length":14}}},
+      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.A.name"}}},"typeInfo":{"displayType":{"id":0,"key":"str"},"xrefs":[{"target":{"id":0,"key":"str"},"source":{"start":0,"length":3}}]},"container":{"cls":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.A"}}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":224,"length":15}}},
+      {"id":0,"key":{"definition":{"variable":{"id":0,"key":{"declaration":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.A.b"}}},"typeInfo":{"displayType":{"id":0,"key":"B"},"xrefs":[{"target":{"id":0,"key":"test.glean.variables.B"},"source":{"start":0,"length":1}}]},"container":{"cls":{"id":0,"key":{"name":{"id":0,"key":"test.glean.variables.A"}}}}}}},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"span":{"start":244,"length":10}}}
     ]
   },
   {
     "predicate": "python.FileCall.4",
     "facts": [
-      {"id":0,"key":{"file":{"id":0,"key":"scripts/rubmary/variables.py"},"callee_span":{"start":145,"length":3},"call_args":[]}},
-      {"id":0,"key":{"file":{"id":0,"key":"scripts/rubmary/variables.py"},"callee_span":{"start":169,"length":3},"call_args":[]}},
-      {"id":0,"key":{"file":{"id":0,"key":"scripts/rubmary/variables.py"},"callee_span":{"start":191,"length":19},"call_args":[]}},
-      {"id":0,"key":{"file":{"id":0,"key":"scripts/rubmary/variables.py"},"callee_span":{"start":211,"length":19},"call_args":[]}}
+      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"callee_span":{"start":251,"length":3},"call_args":[]}},
+      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"callee_span":{"start":275,"length":3},"call_args":[]}},
+      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"callee_span":{"start":297,"length":19},"call_args":[]}},
+      {"id":0,"key":{"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"callee_span":{"start":317,"length":19},"call_args":[]}}
+    ]
+  },
+  {
+    "predicate": "python.XRefsViaNameByTarget.4",
+    "facts": [
+      {"id":0,"key":{"target":{"id":0,"key":"int"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"spans":[{"start":260,"length":3}]}},
+      {"id":0,"key":{"target":{"id":0,"key":"test.glean.variables.A"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"spans":[{"start":271,"length":1},{"start":271,"length":1},{"start":275,"length":1}]}},
+      {"id":0,"key":{"target":{"id":0,"key":"test.glean.variables.a"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"spans":[{"start":288,"length":1},{"start":297,"length":1}]}},
+      {"id":0,"key":{"target":{"id":0,"key":"test.glean.variables.a.b"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"spans":[{"start":290,"length":1}]}},
+      {"id":0,"key":{"target":{"id":0,"key":"test.glean.variables.a.b.name"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"spans":[{"start":292,"length":4}]}},
+      {"id":0,"key":{"target":{"id":0,"key":"test.glean.variables.a.name"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"spans":[{"start":299,"length":4}]}},
+      {"id":0,"key":{"target":{"id":0,"key":"test.glean.variables.a.name.capitalize"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"spans":[{"start":304,"length":10}]}},
+      {"id":0,"key":{"target":{"id":0,"key":"test.glean.variables.b_name"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"spans":[{"start":317,"length":6}]}},
+      {"id":0,"key":{"target":{"id":0,"key":"test.glean.variables.b_name.capitalize"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"spans":[{"start":324,"length":10}]}},
+      {"id":0,"key":{"target":{"id":0,"key":"str"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"spans":[{"start":230,"length":3},{"start":200,"length":3}]}},
+      {"id":0,"key":{"target":{"id":0,"key":"test.glean.variables.B"},"file":{"id":0,"key":"fbcode/pyrefly/test/glean/variables.py"},"spans":[{"start":247,"length":1},{"start":247,"length":1},{"start":251,"length":1}]}}
     ]
   }
 ]

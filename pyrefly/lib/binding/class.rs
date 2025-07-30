@@ -312,7 +312,7 @@ impl<'a> BindingsBuilder<'a> {
         let decorator_keys = decorators_with_ranges
             .map(|(idx, _)| *idx)
             .into_boxed_slice();
-        self.bind_definition_current(
+        self.bind_current_as(
             &x.name,
             class_object,
             Binding::ClassDef(class_indices.class_idx, decorator_keys),
@@ -550,7 +550,7 @@ impl<'a> BindingsBuilder<'a> {
             );
             key_class_fields.insert(idx);
         }
-        self.bind_definition_current(
+        self.bind_current_as(
             &class_name,
             class_object,
             Binding::ClassDef(class_indices.class_idx, Box::new([])),

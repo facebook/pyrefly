@@ -360,3 +360,17 @@ assert_type(A().x, B)
 assert_type(B().x, B)
 "#,
 );
+
+testcase!(
+    test_init_cycle,
+    r#"
+from typing import reveal_type
+class A:
+    def __init__(self):
+        self.x = 42
+        self.f()
+    def f(self):
+        pass
+reveal_type(A.__init__)  # E: revealed type: (self: Self@A) -> None
+    "#,
+);

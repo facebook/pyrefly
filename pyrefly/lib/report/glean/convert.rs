@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashMap;
+use std::env::current_dir;
 
 use num_traits::ToPrimitive;
 use pyrefly_python::docstring::Docstring;
@@ -44,7 +45,7 @@ fn hash(x: &[u8]) -> String {
 struct Facts {
     file: src::File,
     module: python::Module,
-    module_name: String,
+    module_name: ModuleName,
     module_info: ModuleInfo,
     none_name: Name,
     bindings: Bindings,
@@ -86,7 +87,7 @@ impl Facts {
         Facts {
             file,
             module,
-            module_name: module_info.name().to_string(),
+            module_name: module_info.name(),
             module_info,
             none_name: "None".into(),
             bindings,
@@ -106,24 +107,18 @@ impl Facts {
     fn get_binding_key_at_position(
         &self,
         position: ruff_text_size::TextSize,
-    ) -> crate::binding::binding::Key {
-        self.bindings
-            .definition_at_position(position)
-            .unwrap_or_else(|| {
-                panic!("Glean error: Could not find binding at position {position:?}")
-            })
-            .clone()
+    ) -> Option<crate::binding::binding::Key> {
+        self.bindings.definition_at_position(position).cloned()
     }
 
     fn module_facts(
         &mut self,
-        module_name: ModuleName,
         module_fact: &python::Module,
         range: TextRange,
         top_level_decl: &python::Declaration,
         module_docstring_range: Option<TextRange>,
     ) {
-        let components = module_name.components();
+        let components = self.module_name.components();
         let mut module = None;
 
         for component in components.into_iter() {
@@ -221,7 +216,7 @@ impl Facts {
     fn class_facts(
         &mut self,
         cls: &StmtClassDef,
-        cls_binding: BindingClass,
+        cls_binding: Option<BindingClass>,
         cls_declaration: python::ClassDeclaration,
         container: python::DeclarationContainer,
     ) -> DeclarationInfo {
@@ -241,8 +236,8 @@ impl Facts {
         let declaration = python::Declaration::cls(cls_declaration.clone());
 
         let cls_docstring_range = match cls_binding {
-            BindingClass::ClassDef(class_binding) => class_binding.docstring_range,
-            BindingClass::FunctionalClassDef(_, _, _) => None,
+            Some(BindingClass::ClassDef(class_binding)) => class_binding.docstring_range,
+            _ => None,
         };
 
         let cls_definition = python::ClassDefinition::new(
@@ -382,14 +377,14 @@ impl Facts {
     fn function_facts(
         &mut self,
         func: &StmtFunctionDef,
-        binding_func: &BindingFunction,
+        binding_func: Option<BindingFunction>,
         func_declaration: python::FunctionDeclaration,
         container: python::DeclarationContainer,
         params_top_level_decl: Option<&python::Declaration>,
     ) -> Vec<DeclarationInfo> {
         let declaration = python::Declaration::func(func_declaration.clone());
 
-        let function_docstring_range = binding_func.docstring_range;
+        let function_docstring_range = binding_func.and_then(|bf| bf.docstring_range);
 
         let params = &func.parameters;
 
@@ -469,14 +464,19 @@ impl Facts {
     fn import_facts(
         &mut self,
         imports: &Vec<Alias>,
-        from_module_id: &Option<Identifier>,
+        from_module_id: Option<&Identifier>,
+        level: u32,
     ) -> Vec<DeclarationInfo> {
-        //TODO(@rubmary) Handle level for imports. Ex from ..a import A
+        let from_module_name = from_module_id.map(|x| x.id());
+        let from_module = if level > 0 {
+            self.module_name
+                .new_maybe_relative(self.module_info.path().is_init(), level, from_module_name)
+                .map(|x| x.to_string())
+        } else {
+            from_module_name.map(|x| x.to_string())
+        };
 
-        let from_module = from_module_id.as_ref().map(|module| module.id());
-        let from_module_fact = from_module.map_or(python::Name::new("".to_owned()), |module| {
-            self.make_fq_name(module, None)
-        });
+        let from_module_fact = python::Name::new(from_module.clone().unwrap_or_default());
         if let Some(module) = from_module_id {
             self.add_xref(python::XRefViaName {
                 target: from_module_fact.clone(),
@@ -501,7 +501,7 @@ impl Facts {
             } else {
                 let as_name = import.asname.as_ref().map_or(from_name, |x| &x.id);
 
-                let from_name_fact = self.make_fq_name(from_name, from_module.map(|x| x.as_str()));
+                let from_name_fact = self.make_fq_name(from_name, from_module.as_deref());
                 self.add_xref(python::XRefViaName {
                     target: from_name_fact.clone(),
                     source: to_span(import.name.range()),
@@ -509,7 +509,7 @@ impl Facts {
 
                 let import_fact = python::ImportStatement::new(
                     from_name_fact,
-                    self.make_fq_name(as_name, Some(&self.module_name)),
+                    self.make_fq_name(as_name, Some(&self.module_name.to_string())),
                 );
 
                 decl_infos.push(DeclarationInfo {
@@ -613,11 +613,14 @@ impl Facts {
                     python::ClassDeclaration::new(self.make_fq_name(&cls.name.id, None), None);
 
                 let class_key = self.get_binding_key_at_position(cls.name.range.start());
-                let key_cls_idx = match self.bindings.get(self.bindings.key_to_idx(&class_key)) {
-                    Binding::ClassDef(key_cls_idx, _) => *key_cls_idx,
-                    _ => panic!("Glean error: Expected class binding for key: {class_key:?}"),
-                };
-                let cls_binding = self.bindings.get(key_cls_idx).clone();
+                let cls_binding = class_key.and_then(|key| {
+                    match self.bindings.get(self.bindings.key_to_idx(&key)) {
+                        Binding::ClassDef(key_cls_idx, _) => {
+                            Some(self.bindings.get(*key_cls_idx).clone())
+                        }
+                        _ => None,
+                    }
+                });
 
                 let decl_info =
                     self.class_facts(cls, cls_binding, cls_declaration.clone(), container.clone());
@@ -639,17 +642,17 @@ impl Facts {
                 }
 
                 let function_key = self.get_binding_key_at_position(func.name.range.start());
-
-                let key_function_idx =
-                    match self.bindings.get(self.bindings.key_to_idx(&function_key)) {
-                        Binding::Function(key_function_idx, _, _) => *key_function_idx,
-                        _ => panic!("Expected function binding for key: {function_key:?}"),
-                    };
-                let func_binding = self.bindings.get(key_function_idx).clone();
+                let key_function_idx = function_key.and_then(|key| {
+                    match self.bindings.get(self.bindings.key_to_idx(&key)) {
+                        Binding::Function(key_function_idx, _, _) => Some(*key_function_idx),
+                        _ => None,
+                    }
+                });
+                let func_binding = key_function_idx.map(|idx| self.bindings.get(idx).clone());
 
                 let mut func_decl_infos = self.function_facts(
                     func,
-                    &func_binding,
+                    func_binding,
                     func_declaration.clone(),
                     container.clone(),
                     new_top_level_decl.as_ref(),
@@ -682,11 +685,12 @@ impl Facts {
                 self.visit_exprs(&assign.value, container);
             }
             Stmt::Import(import) => {
-                let mut imp_decl_infos = self.import_facts(&import.names, &None);
+                let mut imp_decl_infos = self.import_facts(&import.names, None, 0);
                 decl_infos.append(&mut imp_decl_infos);
             }
             Stmt::ImportFrom(import) => {
-                let mut imp_decl_infos = self.import_facts(&import.names, &import.module);
+                let mut imp_decl_infos =
+                    self.import_facts(&import.names, import.module.as_ref(), import.level);
                 decl_infos.append(&mut imp_decl_infos);
             }
             Stmt::For(stmt_for) => {
@@ -743,10 +747,16 @@ impl Glean {
         let module_info = &transaction.get_module_info(handle).unwrap();
         let ast = &*transaction.get_ast(handle).unwrap();
         let bindings = &transaction.get_bindings(handle).unwrap();
+        let file_path = module_info.path().as_path();
+        let relative_path = file_path
+            .strip_prefix(current_dir().unwrap_or_default())
+            .unwrap_or(file_path)
+            .to_str()
+            .unwrap();
 
         let module_name = module_info.name();
         let module_fact = python::Module::new(python::Name::new(module_name.to_string()));
-        let file_fact = src::File::new(module_info.path().to_string());
+        let file_fact = src::File::new(relative_path.to_owned());
         let container = python::DeclarationContainer::module(module_fact.clone());
         let top_level_decl = python::Declaration::module(module_fact.clone());
         let file_language_fact = src::FileLanguage::new(file_fact.clone(), src::Language::Python);
@@ -764,7 +774,6 @@ impl Glean {
         let module_docstring_range = transaction.get_module_docstring_range(handle);
 
         facts.module_facts(
-            module_name,
             &module_fact,
             ast.range,
             &top_level_decl,
@@ -805,7 +814,7 @@ impl Glean {
             },
             GleanEntry::Predicate {
                 predicate: python::Module::GLEAN_name(),
-                facts: vec![facts.modules.into_iter().map(json).collect()],
+                facts: facts.modules.into_iter().map(json).collect(),
             },
             GleanEntry::Predicate {
                 predicate: src::FileLanguage::GLEAN_name(),

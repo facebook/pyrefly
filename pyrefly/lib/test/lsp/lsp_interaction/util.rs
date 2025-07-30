@@ -6,6 +6,7 @@
  */
 
 use core::panic;
+use std::iter::once;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,6 +36,8 @@ use lsp_types::TextDocumentSyncKind;
 use lsp_types::Url;
 use lsp_types::WorkspaceFoldersServerCapabilities;
 use lsp_types::WorkspaceServerCapabilities;
+use lsp_types::notification::Exit;
+use lsp_types::notification::Notification as _;
 use pretty_assertions::assert_eq;
 use pyrefly_util::fs_anyhow;
 use tempfile::TempDir;
@@ -85,16 +88,17 @@ pub fn run_test_lsp(test_case: TestCase) {
     thread::scope(|scope| {
         // this thread runs the language server
         scope.spawn(move || {
-            run_lsp(Arc::new(connection), || Ok(()), args)
+            run_lsp(Arc::new(connection), args)
                 .map(|_| ())
                 .map_err(|e| std::io::Error::other(e.to_string()))
         });
         // this thread sends messages to the language server (from test case)
         scope.spawn(move || {
-            for msg in
+            for  msg in
                 get_initialize_messages(&test_case.workspace_folders, test_case.configuration, test_case.file_watch)
                     .into_iter()
                     .chain(test_case.messages_from_language_client)
+                     .chain(once(Message::Notification(Notification {method: Exit::METHOD.to_owned(), params: serde_json::json!(null)})))
             {
                 let send = || {
                     eprintln!("client--->server {}", serde_json::to_string(&msg).unwrap());

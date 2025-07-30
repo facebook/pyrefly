@@ -413,7 +413,7 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn record_yield(&mut self, mut x: ExprYield) {
-        let mut yield_link = self.declare_current_idx(Key::UsageLink(x.range));
+        let mut yield_link = self.declare_current_idx(Key::YieldLink(x.range));
         let idx = self.idx_for_promise(KeyYield(x.range));
         self.ensure_expr_opt(x.value.as_deref_mut(), yield_link.usage());
         if let Err(oops_top_level) = self.scopes.record_or_reject_yield(idx, x) {
@@ -423,7 +423,7 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn record_yield_from(&mut self, mut x: ExprYieldFrom) {
-        let mut yield_from_link = self.declare_current_idx(Key::UsageLink(x.range));
+        let mut yield_from_link = self.declare_current_idx(Key::YieldLink(x.range));
         let idx = self.idx_for_promise(KeyYieldFrom(x.range));
         self.ensure_expr(&mut x.value, yield_from_link.usage());
         if let Err(oops_top_level) = self.scopes.record_or_reject_yield_from(idx, x) {

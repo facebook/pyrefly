@@ -81,6 +81,8 @@ impl QNameInfo {
 #[derive(Debug, Default)]
 pub struct TypeDisplayContext<'a> {
     qnames: SmallMap<&'a Name, QNameInfo>,
+    /// Should we display for IDE Hover? This makes type names more readable but less precise.
+    hover: bool,
 }
 
 impl<'a> TypeDisplayContext<'a> {
@@ -118,8 +120,18 @@ impl<'a> TypeDisplayContext<'a> {
         }
     }
 
+    /// Set the context to display for hover. This makes type names more readable but less precise.
+    pub fn set_display_mode_to_hover(&mut self) {
+        self.hover = true;
+    }
+
     pub fn display(&'a self, t: &'a Type) -> impl Display + 'a {
         Fmt(|f| self.fmt(t, f))
+    }
+
+    // Private method for internal use
+    fn display_internal(&'a self, t: &'a Type) -> impl Display + 'a {
+        Fmt(|f| self.fmt_helper(t, f, false))
     }
 
     fn fmt_targ(&self, param: &TParam, arg: &Type, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -130,7 +142,7 @@ impl<'a> TypeDisplayContext<'a> {
                 Tuple::Concrete(elts) if !elts.is_empty() => write!(
                     f,
                     "{}",
-                    commas_iter(|| elts.iter().map(|elt| self.display(elt)))
+                    commas_iter(|| elts.iter().map(|elt| self.display_internal(elt)))
                 ),
                 Tuple::Unpacked(box (prefix, middle, suffix)) => {
                     let unpacked_middle = Type::Unpack(Box::new(middle.clone()));
@@ -142,16 +154,16 @@ impl<'a> TypeDisplayContext<'a> {
                                 .iter()
                                 .chain(std::iter::once(&unpacked_middle))
                                 .chain(suffix.iter())
-                                .map(|elt| self.display(elt))
+                                .map(|elt| self.display_internal(elt))
                         })
                     )
                 }
                 _ => {
-                    write!(f, "*{}", self.display(arg))
+                    write!(f, "*{}", self.display_internal(arg))
                 }
             }
         } else {
-            write!(f, "{}", self.display(arg))
+            write!(f, "{}", self.display_internal(arg))
         }
     }
 
@@ -177,6 +189,15 @@ impl<'a> TypeDisplayContext<'a> {
     }
 
     fn fmt<'b>(&self, t: &'b Type, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_helper(t, f, true)
+    }
+
+    fn fmt_helper<'b>(
+        &self,
+        t: &'b Type,
+        f: &mut fmt::Formatter<'_>,
+        is_toplevel: bool,
+    ) -> fmt::Result {
         match t {
             // Things that have QName's and need qualifying
             Type::ClassDef(cls) => {
@@ -193,7 +214,7 @@ impl<'a> TypeDisplayContext<'a> {
                 write!(
                     f,
                     "[{}, ...]",
-                    self.display(&class_type.targs().as_slice()[0])
+                    self.display_internal(&class_type.targs().as_slice()[0])
                 )
             }
             Type::ClassType(class_type) => {
@@ -239,30 +260,40 @@ impl<'a> TypeDisplayContext<'a> {
             | Type::Function(box Function {
                 signature: c,
                 metadata: _,
-            }) => c.fmt_with_type(f, &|t| self.display(t)),
+            }) => {
+                if self.hover && is_toplevel {
+                    c.fmt_with_type_with_newlines(f, &|t| self.display_internal(t))
+                } else {
+                    c.fmt_with_type(f, &|t| self.display(t))
+                }
+            }
             Type::Overload(overload) => {
                 write!(
                     f,
                     "Overload[{}",
-                    self.display(&overload.signatures.first().as_type())
+                    self.display_internal(&overload.signatures.first().as_type())
                 )?;
                 for sig in overload.signatures.iter().skip(1) {
-                    write!(f, ", {}", self.display(&sig.as_type()))?;
+                    write!(f, ", {}", self.display_internal(&sig.as_type()))?;
                 }
                 write!(f, "]")
             }
             Type::ParamSpecValue(x) => {
                 write!(f, "[")?;
-                x.fmt_with_type(f, &|t| self.display(t))?;
+                x.fmt_with_type(f, &|t| self.display_internal(t))?;
                 write!(f, "]")
             }
             Type::BoundMethod(box BoundMethod { obj, func }) => {
-                write!(
-                    f,
-                    "BoundMethod[{}, {}]",
-                    self.display(obj),
-                    self.display(&func.clone().as_type())
-                )
+                if self.hover {
+                    write!(f, "{}", self.display_internal(&func.clone().as_type()))
+                } else {
+                    write!(
+                        f,
+                        "BoundMethod[{}, {}]",
+                        self.display_internal(obj),
+                        self.display_internal(&func.clone().as_type())
+                    )
+                }
             }
             Type::Never(NeverStyle::NoReturn) => write!(f, "NoReturn"),
             Type::Never(NeverStyle::Never) => write!(f, "Never"),
@@ -281,9 +312,9 @@ impl<'a> TypeDisplayContext<'a> {
                             literals.push(lit)
                         }
                         Type::Callable(_) | Type::Function(_) => {
-                            display_types.push(format!("({})", self.display(t)))
+                            display_types.push(format!("({})", self.display_internal(t)))
                         }
-                        _ => display_types.push(format!("{}", self.display(t))),
+                        _ => display_types.push(format!("{}", self.display_internal(t))),
                     }
                 }
                 if let Some(i) = literal_idx {
@@ -295,10 +326,10 @@ impl<'a> TypeDisplayContext<'a> {
                 write!(
                     f,
                     "Intersect[{}]",
-                    commas_iter(|| types.iter().map(|t| self.display(t)))
+                    commas_iter(|| types.iter().map(|t| self.display_internal(t)))
                 )
             }
-            Type::Tuple(t) => t.fmt_with_type(f, |t| self.display(t)),
+            Type::Tuple(t) => t.fmt_with_type(f, |t| self.display_internal(t)),
             Type::Forall(box Forall {
                 tparams,
                 body: body @ Forallable::Function(_),
@@ -307,18 +338,20 @@ impl<'a> TypeDisplayContext<'a> {
                     f,
                     "[{}]{}",
                     commas_iter(|| tparams.iter()),
-                    self.display(&body.clone().as_type()),
+                    self.display_internal(&body.clone().as_type()),
                 )
             }
             Type::Forall(box Forall {
                 tparams,
                 body: Forallable::TypeAlias(ta),
-            }) => ta.fmt_with_type(f, &|t| self.display(t), Some(tparams)),
-            Type::Type(ty) => write!(f, "type[{}]", self.display(ty)),
-            Type::TypeGuard(ty) => write!(f, "TypeGuard[{}]", self.display(ty)),
-            Type::TypeIs(ty) => write!(f, "TypeIs[{}]", self.display(ty)),
-            Type::Unpack(box ty @ Type::TypedDict(_)) => write!(f, "Unpack[{}]", self.display(ty)),
-            Type::Unpack(ty) => write!(f, "*{}", self.display(ty)),
+            }) => ta.fmt_with_type(f, &|t| self.display_internal(t), Some(tparams)),
+            Type::Type(ty) => write!(f, "type[{}]", self.display_internal(ty)),
+            Type::TypeGuard(ty) => write!(f, "TypeGuard[{}]", self.display_internal(ty)),
+            Type::TypeIs(ty) => write!(f, "TypeIs[{}]", self.display_internal(ty)),
+            Type::Unpack(box ty @ Type::TypedDict(_)) => {
+                write!(f, "Unpack[{}]", self.display_internal(ty))
+            }
+            Type::Unpack(ty) => write!(f, "*{}", self.display_internal(ty)),
             Type::Concatenate(args, pspec) => write!(
                 f,
                 "Concatenate[{}]",
@@ -339,7 +372,7 @@ impl<'a> TypeDisplayContext<'a> {
                 AnyStyle::Explicit => write!(f, "Any"),
                 AnyStyle::Implicit | AnyStyle::Error => write!(f, "Unknown"),
             },
-            Type::TypeAlias(ta) => ta.fmt_with_type(f, &|t| self.display(t), None),
+            Type::TypeAlias(ta) => ta.fmt_with_type(f, &|t| self.display_internal(t), None),
             Type::SuperInstance(box (cls, obj)) => {
                 write!(f, "super[")?;
                 self.fmt_qname(cls.qname(), f)?;
@@ -355,7 +388,7 @@ impl<'a> TypeDisplayContext<'a> {
                 }
                 write!(f, "]")
             }
-            Type::KwCall(call) => self.fmt(&call.return_ty, f),
+            Type::KwCall(call) => self.fmt_helper(&call.return_ty, f, false),
             Type::None => write!(f, "None"),
         }
     }
@@ -397,6 +430,7 @@ pub mod tests {
 
     use super::*;
     use crate::callable::Callable;
+    use crate::callable::FuncMetadata;
     use crate::callable::Param;
     use crate::callable::ParamList;
     use crate::callable::Required;
@@ -412,6 +446,7 @@ pub mod tests {
     use crate::type_var::Restriction;
     use crate::type_var::TypeVar;
     use crate::typed_dict::TypedDict;
+    use crate::types::BoundMethodType;
     use crate::types::TParam;
     use crate::types::TParams;
 
@@ -463,6 +498,30 @@ pub mod tests {
             None,
             PreInferenceVariance::PInvariant,
         )
+    }
+
+    fn fake_bound_method(method_name: &str, class_name: &str, module_name_str: &str) -> Type {
+        let module_name = ModuleName::from_str(module_name_str);
+        let class = fake_class(class_name, module_name_str, 10);
+        let method = Callable::list(
+            ParamList::new(vec![Param::Pos(
+                Name::new_static("self"),
+                Type::any_explicit(),
+                Required::Required,
+            )]),
+            Type::None,
+        );
+        Type::BoundMethod(Box::new(BoundMethod {
+            obj: Type::ClassDef(class),
+            func: BoundMethodType::Function(Function {
+                signature: method,
+                metadata: FuncMetadata::def(
+                    module_name,
+                    Name::new(class_name),
+                    Name::new(method_name),
+                ),
+            }),
+        }))
     }
 
     #[test]
@@ -646,13 +705,41 @@ pub mod tests {
     }
 
     #[test]
+    fn test_display_single_param_callable() {
+        let param1 = Param::Pos(Name::new_static("hello"), Type::None, Required::Required);
+        let callable = Callable::list(ParamList::new(vec![param1]), Type::None);
+        let callable_type = Type::Callable(Box::new(callable));
+        let mut ctx = TypeDisplayContext::new(&[&callable_type]);
+        assert_eq!(
+            ctx.display(&callable_type).to_string(),
+            "(hello: None) -> None"
+        );
+        ctx.set_display_mode_to_hover();
+        assert_eq!(
+            ctx.display(&callable_type).to_string(),
+            "(hello: None) -> None"
+        );
+    }
+
+    #[test]
     fn test_display_callable() {
         let param1 = Param::Pos(Name::new_static("hello"), Type::None, Required::Required);
         let param2 = Param::KwOnly(Name::new_static("world"), Type::None, Required::Required);
         let callable = Callable::list(ParamList::new(vec![param1, param2]), Type::None);
+        let callable_type = Type::Callable(Box::new(callable));
+        let mut ctx = TypeDisplayContext::new(&[&callable_type]);
         assert_eq!(
-            Type::Callable(Box::new(callable)).to_string(),
+            ctx.display(&callable_type).to_string(),
             "(hello: None, *, world: None) -> None"
+        );
+        ctx.set_display_mode_to_hover();
+        assert_eq!(
+            ctx.display(&callable_type).to_string(),
+            r#"(
+    hello: None,
+    *,
+    world: None
+) -> None"#
         );
     }
 
@@ -661,9 +748,38 @@ pub mod tests {
         let args = Param::VarArg(Some(Name::new_static("my_args")), Type::any_implicit());
         let kwargs = Param::Kwargs(Some(Name::new_static("my_kwargs")), Type::any_implicit());
         let callable = Callable::list(ParamList::new(vec![args, kwargs]), Type::None);
+        let callable_type = Type::Callable(Box::new(callable));
+        let mut ctx = TypeDisplayContext::new(&[&callable_type]);
         assert_eq!(
-            Type::Callable(Box::new(callable)).to_string(),
+            ctx.display(&callable_type).to_string(),
             "(*my_args: Unknown, **my_kwargs: Unknown) -> None"
+        );
+        ctx.set_display_mode_to_hover();
+        assert_eq!(
+            ctx.display(&callable_type).to_string(),
+            r#"(
+    *my_args: Unknown,
+    **my_kwargs: Unknown
+) -> None"#
+        );
+    }
+
+    #[test]
+    fn test_display_callable_in_container() {
+        let param1 = Param::Pos(Name::new_static("hello"), Type::None, Required::Required);
+        let param2 = Param::KwOnly(Name::new_static("world"), Type::None, Required::Required);
+        let callable = Callable::list(ParamList::new(vec![param1, param2]), Type::None);
+        let callable_type = Type::Callable(Box::new(callable));
+        let tuple = Type::Tuple(Tuple::concrete(vec![callable_type.clone()]));
+        let mut ctx = TypeDisplayContext::new(&[&tuple]);
+        assert_eq!(
+            ctx.display(&tuple).to_string(),
+            "tuple[(hello: None, *, world: None) -> None]"
+        );
+        ctx.set_display_mode_to_hover();
+        assert_eq!(
+            ctx.display(&tuple).to_string(),
+            "tuple[(hello: None, *, world: None) -> None]"
         );
     }
 
@@ -685,9 +801,21 @@ pub mod tests {
             Required::Optional(Some(Type::None)),
         );
         let callable = Callable::list(ParamList::new(vec![param1, param2, param3]), Type::None);
+        let callable_type = Type::Callable(Box::new(callable));
+        let mut ctx = TypeDisplayContext::new(&[&callable_type]);
         assert_eq!(
-            Type::Callable(Box::new(callable)).to_string(),
+            ctx.display(&callable_type).to_string(),
             "(x: Any = ..., /, y: Any = True, z: Any = None) -> None"
+        );
+        ctx.set_display_mode_to_hover();
+        assert_eq!(
+            ctx.display(&callable_type).to_string(),
+            r#"(
+    x: Any = ...,
+    /,
+    y: Any = True,
+    z: Any = None
+) -> None"#
         );
     }
 
@@ -699,8 +827,15 @@ pub mod tests {
             Required::Required,
         );
         let callable = Callable::list(ParamList::new(vec![param]), Type::None);
+        let callable_type = Type::Callable(Box::new(callable));
+        let mut ctx = TypeDisplayContext::new(&[&callable_type]);
         assert_eq!(
-            Type::Callable(Box::new(callable)).to_string(),
+            ctx.display(&callable_type).to_string(),
+            "(x: Any, /) -> None"
+        );
+        ctx.set_display_mode_to_hover();
+        assert_eq!(
+            ctx.display(&callable_type).to_string(),
             "(x: Any, /) -> None"
         );
     }
@@ -710,9 +845,19 @@ pub mod tests {
         let param1 = Param::PosOnly(None, Type::any_explicit(), Required::Required);
         let param2 = Param::PosOnly(None, Type::any_explicit(), Required::Optional(None));
         let callable = Callable::list(ParamList::new(vec![param1, param2]), Type::None);
+        let callable_type = Type::Callable(Box::new(callable));
+        let mut ctx = TypeDisplayContext::new(&[&callable_type]);
         assert_eq!(
-            Type::Callable(Box::new(callable)).to_string(),
+            ctx.display(&callable_type).to_string(),
             "(Any, _: Any = ...) -> None"
+        );
+        ctx.set_display_mode_to_hover();
+        assert_eq!(
+            ctx.display(&callable_type).to_string(),
+            r#"(
+    Any,
+    _: Any = ...
+) -> None"#
         );
     }
 
@@ -725,5 +870,21 @@ pub mod tests {
         let targs = TArgs::new(tparams.dupe(), vec![t]);
         let td = TypedDict::new(cls, targs);
         assert_eq!(Type::TypedDict(td).to_string(), "TypedDict[C[None]]");
+    }
+
+    #[test]
+    fn test_display_bound_method_for_hover() {
+        let bound_method = fake_bound_method("foo", "MyClass", "my.module");
+        let mut ctx = TypeDisplayContext::new(&[&bound_method]);
+
+        assert_eq!(
+            ctx.display(&bound_method).to_string(),
+            "BoundMethod[type[MyClass], (self: Any) -> None]"
+        );
+        ctx.set_display_mode_to_hover();
+        assert_eq!(
+            ctx.display(&bound_method).to_string(),
+            "(self: Any) -> None"
+        );
     }
 }

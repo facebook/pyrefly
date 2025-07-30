@@ -333,8 +333,10 @@ pub enum Key {
     SuperInstance(TextRange),
     /// The intermediate used in an unpacking assignment.
     Unpack(TextRange),
-    /// A usage link - a placeholder used for first-usage type inference.
+    /// A usage link - a placeholder used for first-usage type inference in statements.
     UsageLink(TextRange),
+    /// A yield link - a placeholder used for first-usage type inference specifically for yield expressions.
+    YieldLink(TextRange),
     /// A use of `typing.Self` in an expression. Used to redirect to the appropriate type (which is aware of the current class).
     SelfTypeLiteral(TextRange),
 }
@@ -362,6 +364,7 @@ impl Ranged for Key {
             Self::SuperInstance(r) => *r,
             Self::Unpack(r) => *r,
             Self::UsageLink(r) => *r,
+            Self::YieldLink(r) => *r,
             Self::SelfTypeLiteral(r) => *r,
             Self::PatternNarrow(r) => *r,
         }
@@ -402,6 +405,7 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::SuperInstance(r) => write!(f, "Key::SuperInstance({})", ctx.display(r)),
             Self::Unpack(r) => write!(f, "Key::Unpack({})", ctx.display(r)),
             Self::UsageLink(r) => write!(f, "Key::UsageLink({})", ctx.display(r)),
+            Self::YieldLink(r) => write!(f, "Key::YieldLink({})", ctx.display(r)),
             Self::SelfTypeLiteral(r) => write!(f, "Key::SelfTypeLiteral({})", ctx.display(r)),
             Self::PatternNarrow(r) => write!(f, "Key::PatternNarrow({})", ctx.display(r)),
         }

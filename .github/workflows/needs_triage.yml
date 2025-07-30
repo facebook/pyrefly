@@ -39,12 +39,12 @@ jobs:
 
             // Select issues that:
             // 1. Were created before the cutoff date
-            // 2. Do not have the 'question' label
+            // 2. Do not have the 'question' or 'needs-discussion' label
             // 3. Are not pull requests
             const oldIssues = issues.filter(issue => {
               const createdAt = new Date(issue.created_at);
               return createdAt < twoDaysAgo &&
-                     !issue.labels.some((label) => label.name == 'question') &&
+                     !issue.labels.some((label) => label.name == 'question' || label.name == 'needs-discussion') &&
                      !issue.pull_request;
             });
 
