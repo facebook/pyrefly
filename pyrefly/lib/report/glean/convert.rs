@@ -26,6 +26,7 @@ use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingClass;
@@ -59,6 +60,13 @@ struct Facts {
     xrefs_via_name: Vec<python::XRefViaName>,
     xrefs_by_target: HashMap<python::Name, Vec<src::ByteSpan>>,
     declaration_docstrings: Vec<python::DeclarationDocstring>,
+}
+fn range_without_decorators(range: TextRange, decorators: &[Decorator]) -> TextRange {
+    let decorators_range = decorators
+        .first()
+        .map(|first| first.range().cover(decorators.last().unwrap().range()));
+
+    decorators_range.map_or(range, |x| range.add_start(x.len() + TextSize::from(1)))
 }
 
 fn to_span(range: TextRange) -> src::ByteSpan {
@@ -250,7 +258,7 @@ impl Facts {
 
         DeclarationInfo {
             declaration,
-            decl_span: to_span(cls.range),
+            decl_span: to_span(range_without_decorators(cls.range, &cls.decorator_list)),
             definition: Some(python::Definition::cls(cls_definition)),
             def_span: Some(to_span(cls.range)),
             top_level_decl: None,
@@ -432,7 +440,7 @@ impl Facts {
 
         decl_infos.push(DeclarationInfo {
             declaration,
-            decl_span: to_span(func.range),
+            decl_span: to_span(range_without_decorators(func.range, &func.decorator_list)),
             definition: Some(python::Definition::func(func_definition)),
             def_span: Some(to_span(func.range)),
             top_level_decl: None,
@@ -445,6 +453,7 @@ impl Facts {
     fn variable_facts(
         &mut self,
         expr: &Expr,
+        range: TextRange,
         annotation: Option<&Expr>,
         container: &python::DeclarationContainer,
         def_infos: &mut Vec<DeclarationInfo>,
@@ -452,18 +461,21 @@ impl Facts {
         if let Some(name) = expr.as_name_expr() {
             def_infos.push(self.variable_info(
                 &name.id,
-                name.range,
+                range,
                 Some(container),
                 self.type_info(annotation),
                 None,
             ));
         }
-        expr.recurse(&mut |expr| self.variable_facts(expr, annotation, container, def_infos));
+        expr.recurse(&mut |expr| {
+            self.variable_facts(expr, range, annotation, container, def_infos)
+        });
     }
 
     fn import_facts(
         &mut self,
         imports: &Vec<Alias>,
+        range: TextRange,
         from_module_id: Option<&Identifier>,
         level: u32,
     ) -> Vec<DeclarationInfo> {
@@ -496,7 +508,7 @@ impl Facts {
                     .push(python::ImportStarLocation::new(
                         import_star,
                         self.file.clone(),
-                        to_span(import.range()),
+                        to_span(range),
                     ));
             } else {
                 let as_name = import.asname.as_ref().map_or(from_name, |x| &x.id);
@@ -514,7 +526,7 @@ impl Facts {
 
                 decl_infos.push(DeclarationInfo {
                     declaration: python::Declaration::imp(import_fact),
-                    decl_span: to_span(import.range()),
+                    decl_span: to_span(import.name.range),
                     definition: None,
                     def_span: None,
                     top_level_decl: None,
@@ -533,7 +545,7 @@ impl Facts {
     }
 
     fn file_call_facts(&mut self, call: &ExprCall) {
-        let callee_span = to_span(call.func.range());
+        let callee_span = to_span(call.range());
         let mut call_args: Vec<python::CallArgument> = call
             .arguments
             .args
@@ -666,13 +678,14 @@ impl Facts {
             }
             Stmt::Assign(assign) => {
                 assign.targets.visit(&mut |target| {
-                    self.variable_facts(target, None, container, &mut decl_infos)
+                    self.variable_facts(target, assign.range(), None, container, &mut decl_infos)
                 });
                 self.visit_exprs(&assign.value, container);
             }
             Stmt::AnnAssign(assign) => {
                 self.variable_facts(
                     &assign.target,
+                    assign.range(),
                     Some(&assign.annotation),
                     container,
                     &mut decl_infos,
@@ -681,21 +694,31 @@ impl Facts {
                 self.visit_exprs(&assign.value, container);
             }
             Stmt::AugAssign(assign) => {
-                self.variable_facts(&assign.target, None, container, &mut decl_infos);
+                self.variable_facts(
+                    &assign.target,
+                    assign.range(),
+                    None,
+                    container,
+                    &mut decl_infos,
+                );
                 self.visit_exprs(&assign.value, container);
             }
             Stmt::Import(import) => {
-                let mut imp_decl_infos = self.import_facts(&import.names, None, 0);
+                let mut imp_decl_infos = self.import_facts(&import.names, import.range, None, 0);
                 decl_infos.append(&mut imp_decl_infos);
             }
             Stmt::ImportFrom(import) => {
-                let mut imp_decl_infos =
-                    self.import_facts(&import.names, import.module.as_ref(), import.level);
+                let mut imp_decl_infos = self.import_facts(
+                    &import.names,
+                    import.range,
+                    import.module.as_ref(),
+                    import.level,
+                );
                 decl_infos.append(&mut imp_decl_infos);
             }
             Stmt::For(stmt_for) => {
                 stmt_for.target.visit(&mut |target| {
-                    self.variable_facts(target, None, container, &mut decl_infos)
+                    self.variable_facts(target, target.range(), None, container, &mut decl_infos)
                 });
                 self.visit_exprs(&stmt_for.iter, container);
             }
@@ -710,7 +733,13 @@ impl Facts {
                 for item in &stmt_with.items {
                     self.visit_exprs(&item.context_expr, container);
                     item.optional_vars.visit(&mut |target| {
-                        self.variable_facts(target, None, container, &mut decl_infos)
+                        self.variable_facts(
+                            target,
+                            target.range(),
+                            None,
+                            container,
+                            &mut decl_infos,
+                        )
                     });
                 }
             }
