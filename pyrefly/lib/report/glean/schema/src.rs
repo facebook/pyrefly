@@ -13,6 +13,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use serde_repr::*;
 
 use crate::report::glean::schema::*;
 
@@ -205,7 +206,8 @@ pub struct Loc {
     pub column: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize_repr, Eq, Hash, PartialEq, Serialize_repr)]
+#[repr(u8)]
 pub enum Language {
     Buck,
     C,
@@ -220,7 +222,8 @@ pub enum Language {
     GraphQL,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize_repr, Eq, Hash, PartialEq, Serialize_repr)]
+#[repr(u8)]
 pub enum IndexFailureReason {
     CompileError,
     BuildSystemError,

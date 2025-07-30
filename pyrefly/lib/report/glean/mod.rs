@@ -21,3 +21,174 @@ pub fn glean(transaction: &Transaction, handle: &Handle) -> String {
     let data = f(transaction, handle).expect("Glean data be ready").entries;
     serde_json::to_string_pretty(&data).unwrap()
 }
+
+#[test]
+fn snapshot_test() {
+    use std::env;
+    use std::fs;
+
+    use crate::test::util::mk_multi_file_state_assert_no_errors;
+
+    // Helper function to sort JSON for deterministic comparison
+    fn normalize_json(json_str: &str) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(json_str).expect("Failed to parse JSON");
+
+        fn sort_arrays(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::Array(arr) => {
+                    for item in arr.iter_mut() {
+                        sort_arrays(item);
+                    }
+                    arr.sort_by(|a, b| {
+                        serde_json::to_string(a)
+                            .unwrap_or_default()
+                            .cmp(&serde_json::to_string(b).unwrap_or_default())
+                    });
+                }
+                serde_json::Value::Object(obj) => {
+                    for (_, v) in obj.iter_mut() {
+                        sort_arrays(v);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        sort_arrays(&mut value);
+        serde_json::to_string_pretty(&value).unwrap()
+    }
+
+    // Simple line-by-line diff like git/source control
+    fn create_simple_diff(expected: &str, actual: &str) -> String {
+        let expected_lines: Vec<&str> = expected.lines().collect();
+        let actual_lines: Vec<&str> = actual.lines().collect();
+
+        let mut diff_lines = Vec::new();
+        let max_lines = expected_lines.len().max(actual_lines.len());
+
+        for i in 0..max_lines {
+            match (expected_lines.get(i), actual_lines.get(i)) {
+                (Some(exp_line), Some(act_line)) if exp_line != act_line => {
+                    diff_lines.push(format!("- {exp_line}"));
+                    diff_lines.push(format!("+ {act_line}"));
+                }
+                (Some(exp_line), None) => {
+                    diff_lines.push(format!("- {exp_line}"));
+                }
+                (None, Some(act_line)) => {
+                    diff_lines.push(format!("+ {act_line}"));
+                }
+                _ => {} // Lines are the same or both None
+            }
+        }
+
+        if diff_lines.is_empty() {
+            "No differences found".to_owned()
+        } else {
+            format!("Diff (- expected, + actual):\n{}", diff_lines.join("\n"))
+        }
+    }
+
+    let simple_code = r#"def hello_world():
+    return "Hello, World!"
+
+x = 42
+y = hello_world()"#;
+
+    let classes_code = r#"class Animal:
+    def __init__(self, name: str):
+        self.name = name
+
+    def speak(self) -> str:
+        return f"{self.name} makes a sound"
+
+class Dog(Animal):
+    def speak(self) -> str:
+        return f"{self.name} barks"
+
+dog = Dog("Buddy")
+sound = dog.speak()"#;
+
+    let imports_code = r#"import os
+from typing import List
+from .simple import hello_world
+
+def process_files(paths: List[str]) -> int:
+    """Count files in given paths."""
+    count = 0
+    for path in paths:
+        if os.path.exists(path):
+            count += 1
+    return count
+
+# Use relative import
+greeting = hello_world()
+result = process_files(["/tmp", "/home"])"#;
+
+    let files = [
+        ("simple", simple_code),
+        ("classes", classes_code),
+        ("imports", imports_code),
+    ];
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files);
+    let transaction = state.transaction();
+
+    let update_snapshots = env::var("GLEAN_SNAPSHOTS_WRITE_PATH").is_ok();
+
+    let snapshots_path = if !update_snapshots {
+        env::var("GLEAN_SNAPSHOTS_PATH")
+            .expect("GLEAN_SNAPSHOTS_PATH env var not set: buck should set this automatically")
+    } else {
+        env::var("GLEAN_SNAPSHOTS_WRITE_PATH").unwrap()
+    };
+
+    let mut snapshot_dir = std::env::current_dir().expect("Failed to get current directory");
+    snapshot_dir.push(snapshots_path);
+
+    for (filename, _) in &files {
+        let handle = handles
+            .get(filename)
+            .expect("Handle should exist for test file");
+        let glean_output = glean(&transaction, handle);
+        let output_path = snapshot_dir.join(format!("{filename}.json"));
+
+        if update_snapshots {
+            let normalized_output = normalize_json(&glean_output);
+            let output_with_header = &normalized_output;
+            fs::write(&output_path, output_with_header).expect("Failed to write JSON output");
+            println!(
+                "Updated snapshot for {} -> {}",
+                filename,
+                output_path.display()
+            );
+            continue;
+        }
+
+        assert!(
+            output_path.exists(),
+            "Snapshot file does not exist: {}\nRun with GLEAN_SNAPSHOTS_WRITE_PATH set to update snapshots.",
+            output_path.display()
+        );
+
+        let expected_content =
+            fs::read_to_string(&output_path).expect("Failed to read existing snapshot");
+
+        let normalized_actual = normalize_json(&glean_output);
+        let normalized_expected = normalize_json(&expected_content);
+
+        assert!(
+            normalized_actual.trim() == normalized_expected.trim(),
+            "Snapshot mismatch for {filename}!\n\n{}\n\nTo update snapshots, run with GLEAN_SNAPSHOTS_WRITE_PATH set. If using buck, add -- --env GLEAN_SNAPSHOTS_WRITE_PATH=\"path\" to the command.",
+            create_simple_diff(&normalized_expected, &normalized_actual)
+        );
+
+        println!("✓ Snapshot matches for {filename}");
+    }
+
+    if update_snapshots {
+        println!("All snapshots updated successfully!");
+    } else {
+        println!("All snapshots match!");
+    }
+}
