@@ -492,7 +492,7 @@ impl Server {
                 self.workspace_folders_changed(params);
             }
             LspEvent::DidChangeConfiguration(params) => {
-                self.did_change_configuration(ide_transaction_manager, subsequent_mutation, params);
+                self.did_change_configuration(ide_transaction_manager, params);
             }
             LspEvent::LspResponse(x) => {
                 if let Some(request) = self.outgoing_requests.lock().remove(&x.id) {
@@ -503,7 +503,6 @@ impl Server {
                             ide_transaction_manager,
                             &request,
                             &response,
-                            subsequent_mutation,
                         );
                     }
                 } else {
@@ -1095,7 +1094,6 @@ impl Server {
     fn did_change_configuration<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
-        subsequent_mutation: bool,
         params: DidChangeConfigurationParams,
     ) {
         if let Some(workspace) = &self.initialize_params.capabilities.workspace
@@ -1113,7 +1111,9 @@ impl Server {
 
         if modified {
             self.invalidate_config();
-            self.validate_in_memory(ide_transaction_manager, subsequent_mutation);
+            // We expect infrequent config changes so the subsequent mutation optimization is not necessary.
+            // If disable_type_errors has changed, we want that to take effect immediately.
+            self.validate_in_memory(ide_transaction_manager, false);
         }
     }
 
@@ -1122,7 +1122,6 @@ impl Server {
         ide_transaction_manager: &mut TransactionManager<'a>,
         request: &ConfigurationParams,
         response: &[Value],
-        subsequent_mutation: bool,
     ) {
         let mut modified = false;
         for (i, id) in request.items.iter().enumerate() {
@@ -1136,7 +1135,9 @@ impl Server {
         }
         if modified {
             self.invalidate_config();
-            self.validate_in_memory(ide_transaction_manager, subsequent_mutation);
+            // We expect infrequent config changes so the subsequent mutation optimization is not necessary.
+            // If disable_type_errors has changed, we want that to take effect immediately.
+            self.validate_in_memory(ide_transaction_manager, false);
         }
     }
 
