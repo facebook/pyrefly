@@ -393,7 +393,6 @@ fn test_disable_type_errors_language_services_still_work() {
     });
 }
 
-#[ignore] // TODO: Fix this!
 #[test]
 fn test_disable_type_errors_workspace_folder() {
     let test_files_root = get_test_files_root();
@@ -432,14 +431,14 @@ fn test_disable_type_errors_workspace_folder() {
             params: serde_json::json!({"settings": {}}),
         }),
         Message::Response(Response {
-            id: RequestId::from(2),
+            id: RequestId::from(3),
             result: Some(
                 serde_json::json!([{"pyrefly": {"disableTypeErrors": true}}, {"pyrefly": {"disableTypeErrors": true}}]),
             ),
             error: None,
         }),
         Message::from(Request {
-            id: RequestId::from(3),
+            id: RequestId::from(4),
             method: "textDocument/diagnostic".to_owned(),
             params: serde_json::json!({
             "textDocument": {
@@ -459,12 +458,12 @@ fn test_disable_type_errors_workspace_folder() {
             error: None,
         }),
         Message::Request(Request {
-            id: RequestId::from(2),
+            id: RequestId::from(3),
             method: WorkspaceConfiguration::METHOD.to_owned(),
             params: configuration_request_params,
         }),
         Message::Response(Response {
-            id: RequestId::from(3),
+            id: RequestId::from(4),
             result: Some(serde_json::json!({"items": [], "kind": "full"})),
             error: None,
         }),
