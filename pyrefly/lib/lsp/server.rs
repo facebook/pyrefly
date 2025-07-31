@@ -152,6 +152,7 @@ use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::thread_pool::ThreadPool;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 use starlark_map::small_map::SmallMap;
 
 use crate::commands::lsp::IndexingMode;
@@ -495,12 +496,16 @@ impl Server {
             }
             LspEvent::LspResponse(x) => {
                 if let Some(request) = self.outgoing_requests.lock().remove(&x.id) {
-                    self.handle_response(
-                        ide_transaction_manager,
-                        subsequent_mutation,
-                        &request,
-                        &x,
-                    );
+                    if let Some((request, response)) =
+                        as_request_response_pair::<WorkspaceConfiguration>(&request, &x)
+                    {
+                        self.workspace_configuration_response(
+                            ide_transaction_manager,
+                            &request,
+                            &response,
+                            subsequent_mutation,
+                        );
+                    }
                 } else {
                     eprintln!("Response for unknown request: {x:?}");
                 }
@@ -1112,6 +1117,29 @@ impl Server {
         }
     }
 
+    fn workspace_configuration_response<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        request: &ConfigurationParams,
+        response: &[Value],
+        subsequent_mutation: bool,
+    ) {
+        let mut modified = false;
+        for (i, id) in request.items.iter().enumerate() {
+            if let Some(value) = response.get(i) {
+                self.workspaces.apply_client_configuration(
+                    &mut modified,
+                    &id.scope_uri,
+                    value.clone(),
+                );
+            }
+        }
+        if modified {
+            self.invalidate_config();
+            self.validate_in_memory(ide_transaction_manager, subsequent_mutation);
+        }
+    }
+
     /// Create a handle. Return None if the workspace has language services disabled (and thus you shouldn't do anything).
     fn make_handle_if_enabled(&self, uri: &Url) -> Option<Handle> {
         let path = uri.to_file_path().unwrap();
@@ -1669,33 +1697,6 @@ impl Server {
                     })
                     .collect::<Vec<_>>(),
             });
-        }
-    }
-
-    fn handle_response<'a>(
-        &'a self,
-        ide_transaction_manager: &mut TransactionManager<'a>,
-        subsequent_mutation: bool,
-        request: &Request,
-        response: &Response,
-    ) {
-        if let Some((request, response)) =
-            as_request_response_pair::<WorkspaceConfiguration>(request, response)
-        {
-            let mut modified = false;
-            for (i, id) in request.items.iter().enumerate() {
-                if let Some(value) = response.get(i) {
-                    self.workspaces.apply_client_configuration(
-                        &mut modified,
-                        &id.scope_uri,
-                        value.clone(),
-                    );
-                }
-            }
-            if modified {
-                self.invalidate_config();
-                self.validate_in_memory(ide_transaction_manager, subsequent_mutation);
-            }
         }
     }
 
