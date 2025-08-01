@@ -1784,7 +1784,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Check if a class inherits from abc.ABC
-    /// 
+    ///
     /// This recursively traverses the class hierarchy to determine if the class
     /// inherits from Python's abstract base class (abc.ABC). Only classes that
     /// inherit from abc.ABC can be considered abstract in Python.
@@ -1808,11 +1808,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Check if a class has any unimplemented abstract methods
-    /// 
+    ///
     /// Returns true if the class:
     /// 1. Inherits from abc.ABC (or is abc.ABC itself)
     /// 2. Has abstract methods in its hierarchy that are not implemented
-    /// 
+    ///
     /// This method is used to prevent instantiation of abstract classes.
     pub fn has_abstract_methods(&self, cls: &ClassType) -> bool {
         // Only classes that inherit from abc.ABC can be abstract
@@ -1827,17 +1827,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Check if a class has unimplemented abstract methods
     fn has_unimplemented_abstract_methods(&self, cls: &ClassType) -> bool {
         let mut abstract_methods = SmallSet::new();
-        
+
         // Collect all abstract methods from the hierarchy
         self.collect_abstract_methods_from_class(cls, &mut abstract_methods);
-        
+
         // Check each abstract method for concrete implementation
         for method_name in &abstract_methods {
             if !self.class_provides_concrete_implementation(cls, method_name) {
                 return true;
             }
         }
-        
+
         false
     }
 
