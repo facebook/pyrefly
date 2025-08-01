@@ -39,6 +39,7 @@ pub struct Export {
     pub location: TextRange,
     pub symbol_kind: Option<SymbolKind>,
     pub docstring_range: Option<TextRange>,
+    pub is_deprecated: bool,
 }
 
 /// Where is this export defined?
@@ -158,22 +159,26 @@ impl Exports {
         let f = || {
             let mut result: SmallMap<Name, ExportLocation> = SmallMap::new();
             for (name, definition) in self.0.definitions.definitions.iter_hashed() {
+                let is_deprecated = self.0.definitions.deprecated.contains_hashed(name);
                 let export = match definition.style {
                     DefinitionStyle::Local(symbol_kind) => ExportLocation::ThisModule(Export {
                         location: definition.range,
                         symbol_kind: Some(symbol_kind),
                         docstring_range: definition.docstring_range,
+                        is_deprecated,
                     }),
                     // If the import is invalid, the final location is this module.
                     DefinitionStyle::ImportInvalidRelative => ExportLocation::ThisModule(Export {
                         location: definition.range,
                         symbol_kind: None,
                         docstring_range: definition.docstring_range,
+                        is_deprecated,
                     }),
                     DefinitionStyle::Global => ExportLocation::ThisModule(Export {
                         location: definition.range,
                         symbol_kind: Some(SymbolKind::Constant),
                         docstring_range: None,
+                        is_deprecated,
                     }),
                     DefinitionStyle::ImportAs(from)
                     | DefinitionStyle::ImportAsEq(from)
