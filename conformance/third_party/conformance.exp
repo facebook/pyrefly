@@ -8227,6 +8227,16 @@
       "name": "bad-assignment",
       "stop_column": 36,
       "stop_line": 56
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Cannot instantiate abstract class `Concrete7B`",
+      "description": "Cannot instantiate abstract class `Concrete7B`",
+      "line": 172,
+      "name": "bad-instantiation",
+      "stop_column": 19,
+      "stop_line": 172
     }
   ],
   "protocols_generic.py": [

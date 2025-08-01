@@ -362,7 +362,8 @@
     "Line 90: Expected 1 errors",
     "Line 110: Expected 1 errors",
     "Line 135: Expected 1 errors",
-    "Line 165: Expected 1 errors"
+    "Line 165: Expected 1 errors",
+    "Line 172: Unexpected errors ['Cannot instantiate abstract class `Concrete7B`']"
   ],
   "protocols_generic.py": [
     "Line 144: Unexpected errors ['`ConcreteHasProperty1` is not assignable to `HasPropertyProto`']"

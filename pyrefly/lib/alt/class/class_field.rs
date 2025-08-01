@@ -1782,4 +1782,117 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .and_then(|ty| make_bound_method(Type::type_form(cls.clone().to_type()), ty).ok())
         }
     }
+
+    /// Check if a class inherits from abc.ABC
+    /// 
+    /// This recursively traverses the class hierarchy to determine if the class
+    /// inherits from Python's abstract base class (abc.ABC). Only classes that
+    /// inherit from abc.ABC can be considered abstract in Python.
+    fn inherits_from_abc(&self, cls: &ClassType) -> bool {
+        let class_obj = cls.class_object();
+
+        // Check if this class is abc.ABC itself
+        if class_obj.module_name().as_str() == "abc" && class_obj.name().as_str() == "ABC" {
+            return true;
+        }
+
+        // Recursively check base classes
+        let metadata = self.get_metadata_for_class(class_obj);
+        for base in metadata.bases_with_metadata() {
+            if self.inherits_from_abc(&base.0) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Check if a class has any unimplemented abstract methods
+    /// 
+    /// Returns true if the class:
+    /// 1. Inherits from abc.ABC (or is abc.ABC itself)
+    /// 2. Has abstract methods in its hierarchy that are not implemented
+    /// 
+    /// This method is used to prevent instantiation of abstract classes.
+    pub fn has_abstract_methods(&self, cls: &ClassType) -> bool {
+        // Only classes that inherit from abc.ABC can be abstract
+        if !self.inherits_from_abc(cls) {
+            return false;
+        }
+
+        // Check for unimplemented abstract methods with early exit
+        self.has_unimplemented_abstract_methods(cls)
+    }
+
+    /// Check if a class has unimplemented abstract methods
+    fn has_unimplemented_abstract_methods(&self, cls: &ClassType) -> bool {
+        let mut abstract_methods = SmallSet::new();
+        
+        // Collect all abstract methods from the hierarchy
+        self.collect_abstract_methods_from_class(cls, &mut abstract_methods);
+        
+        // Check each abstract method for concrete implementation
+        for method_name in &abstract_methods {
+            if !self.class_provides_concrete_implementation(cls, method_name) {
+                return true;
+            }
+        }
+        
+        false
+    }
+
+    /// Recursively collect abstract methods from a class and its bases
+    fn collect_abstract_methods_from_class(
+        &self,
+        cls: &ClassType,
+        abstract_methods: &mut SmallSet<Name>,
+    ) {
+        let class_obj = cls.class_object();
+        let metadata = self.get_metadata_for_class(class_obj);
+
+        // First collect from base classes
+        for base in metadata.bases_with_metadata() {
+            self.collect_abstract_methods_from_class(&base.0, abstract_methods);
+        }
+
+        // Then collect abstract methods from this class
+        for field_name in class_obj.fields() {
+            if let Some(field) = self.get_from_class(
+                class_obj,
+                &KeyClassField(class_obj.index(), field_name.clone()),
+            ) {
+                match &field.0 {
+                    ClassFieldInner::Simple { ty, .. } => {
+                        if let Type::Function(function) = ty {
+                            if function.metadata.flags.is_abstract_method {
+                                abstract_methods.insert(field_name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Check if a class provides a concrete (non-abstract) implementation of a method
+    fn class_provides_concrete_implementation(&self, cls: &ClassType, method_name: &Name) -> bool {
+        let class_obj = cls.class_object();
+
+        // Check if the class has this method
+        if let Some(field) = self.get_from_class(
+            class_obj,
+            &KeyClassField(class_obj.index(), method_name.clone()),
+        ) {
+            match &field.0 {
+                ClassFieldInner::Simple { ty, .. } => {
+                    if let Type::Function(function) = ty {
+                        // Method exists - check if it's concrete (not abstract)
+                        return !function.metadata.flags.is_abstract_method;
+                    }
+                }
+            }
+        }
+
+        false // Method not found or not a function
+    }
 }

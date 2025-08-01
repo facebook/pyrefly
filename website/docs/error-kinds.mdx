@@ -170,12 +170,19 @@ For example, argument order is enforced by the parser, so `def f(x: int = 1, y: 
 
 ## bad-instantiation
 
-This error occurs when attempting to instantiate a class that cannot be instantiated, such as a protocol:
+This error occurs when attempting to instantiate a class that cannot be instantiated, such as a protocol or an abstract class:
 
 ```python
 from typing import Protocol
 class C(Protocol): ...
 C()  # bad-instantiation
+
+from abc import ABC, abstractmethod
+class Shape(ABC):
+    @abstractmethod
+    def area(self) -> float:
+        pass
+Shape()  # bad-instantiation
 ```
 
 ## bad-keyword-argument

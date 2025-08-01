@@ -382,6 +382,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         // Based on https://typing.readthedocs.io/en/latest/spec/constructors.html.
         let instance_ty = Type::ClassType(cls.clone());
+
+        // Check if trying to instantiate an abstract class
+        if self.has_abstract_methods(&cls) {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::BadInstantiation),
+                format!("Cannot instantiate abstract class `{}`", cls.name()),
+            );
+        }
+
         let mut overall_ret = None;
         if let Some(ret) = self.call_metaclass(&cls, range, args, keywords, errors, context, hint)
             && !self.is_compatible_constructor_return(&ret, cls.class_object())
