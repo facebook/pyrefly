@@ -6,6 +6,8 @@
  */
 
 use itertools::Itertools;
+use pyrefly_python::dunder;
+use pyrefly_types::types::TArgs;
 use pyrefly_util::display::count;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
@@ -908,17 +910,47 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // for overload matching.
     pub fn callable_infer(
         &self,
-        callable: Callable,
+        mut callable: Callable,
         callable_name: Option<FuncId>,
-        self_obj: Option<Type>,
-        args: &[CallArg],
+        mut self_obj: Option<Type>,
+        mut args: &[CallArg],
         keywords: &[CallKeyword],
         range: TextRange,
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         _hint: Option<&Type>,
+        mut ctor_targs: Option<&mut TArgs>,
     ) -> Type {
+        if let Some(targs) = ctor_targs.as_mut() {
+            self.solver().freshen_class_targs(targs, self.uniques);
+            let substitution = targs.substitution();
+            let mp = substitution.as_map();
+            match &mut callable.params {
+                Params::List(params) => {
+                    params
+                        .items_mut()
+                        .iter_mut()
+                        .for_each(|p| p.as_type_mut().subst_mut(mp));
+                }
+                Params::ParamSpec(prefix, param_spec) => {
+                    prefix.iter_mut().for_each(|t| t.subst_mut(mp));
+                    param_spec.subst_mut(mp);
+                }
+                Params::Ellipsis => {}
+            }
+            if let Some(obj) = self_obj.as_mut() {
+                obj.subst_mut(mp);
+            } else if let Some(id) = callable_name.as_ref()
+                && id.func == dunder::NEW
+                && let Some((first, rest)) = args.split_first()
+                && let CallArg::Arg(TypeOrExpr::Type(obj, _)) = first
+            {
+                // hack: we inserted a class type into the args list, but we need to substitute it
+                self_obj = Some((*obj).clone().subst(mp));
+                args = rest;
+            }
+        }
         let self_arg = self_obj.as_ref().map(|ty| CallArg::ty(ty, range));
         match callable.params {
             Params::List(params) => {
@@ -1016,6 +1048,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         };
+        if let Some(targs) = ctor_targs {
+            self.solver().generalize_class_targs(targs);
+        }
         self.solver().expand(callable.ret)
     }
 }

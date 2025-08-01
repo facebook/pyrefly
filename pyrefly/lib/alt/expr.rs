@@ -712,6 +712,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 errors,
                                 None,
                                 hint,
+                                None,
                             )
                         }
                     })
@@ -1327,7 +1328,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let call_target =
             self.as_call_target_or_error(ty_decorator, CallStyle::FreeForm, range, errors, None);
         let arg = CallArg::ty(&decoratee, range);
-        self.call_infer(call_target, &[arg], &[], range, errors, None, None)
+        self.call_infer(call_target, &[arg], &[], range, errors, None, None, None)
     }
 
     /// Helper to infer element types for a list or set.

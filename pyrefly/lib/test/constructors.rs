@@ -32,7 +32,7 @@ def test(f: type[A | B]) -> A | B:
 testcase!(
     test_generic_class,
     r#"
-from typing import assert_type
+from typing import assert_type, reveal_type
 class Box[T]:
     def __init__(self, x: T): pass
 
@@ -281,13 +281,26 @@ assert_type(x, int)
 );
 
 testcase!(
+    test_new_returns_something_else_generic,
+    r#"
+from typing import assert_type
+class C[T]:
+    def __new__(cls, x: T) -> list[T]:
+        return []
+x = C(0)
+assert_type(x, list[int])
+    "#,
+);
+
+testcase!(
     test_generic_new,
     r#"
+from typing import Self, assert_type
 class C[T]:
-    def __new__(cls, x: T): ...
-C(0)  # T is implicitly Any
-C[bool](True)
-C[bool](0)  # E: Argument `Literal[0]` is not assignable to parameter `x` with type `bool`
+    def __new__(cls, x: T) -> Self: ...
+assert_type(C(0), C[int])
+assert_type(C[bool](True), C[bool])
+assert_type(C[bool](0), C[bool])  # E: Argument `Literal[0]` is not assignable to parameter `x` with type `bool`
     "#,
 );
 
@@ -455,5 +468,54 @@ class A[T]:
     def f(self):
         pass
 assert_type(A(int), A[int])
+    "#,
+);
+
+testcase!(
+    test_overload_init,
+    r#"
+from typing import overload, assert_type
+class C[T]:
+    @overload
+    def __init__(self, x: T, y: int): ... # E: Overloaded function must have an implementation
+    @overload
+    def __init__(self, x: int, y: T): ...
+assert_type(C(0, "foo"), C[str])
+"#,
+);
+
+testcase!(
+    test_new_and_init_generic,
+    r#"
+from typing import Self,assert_type
+
+class Class2[T]:
+    def __new__(cls, *args, **kwargs) -> Self: ...
+    def __init__(self, x: T) -> None: ...
+
+assert_type(Class2(1), Class2[int])
+    "#,
+);
+
+// Per the typing spec:
+// > If any class-scoped type variables are not solved when evaluating the __new__ method call
+// > using the supplied arguments, these type variables should be left unsolved, allowing the
+// >__init__ method (if applicable) to be used to solve them.
+//
+// However, neither mypy nor pyright pass this test, so either the spec wording is imprecise,
+// or the other type checkers are incorrect.
+testcase!(
+    test_new_and_init_partial_instantiation,
+    r#"
+from typing import Any, Self, assert_type
+
+class C[T, U]:
+    def __new__(cls, x: T, y: Any) -> Self:
+        return super().__new__(cls)
+
+    def __init__(self, x: Any, y: U):
+        pass
+
+assert_type(C(0, ""), C[int, str])
     "#,
 );

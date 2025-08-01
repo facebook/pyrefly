@@ -19,6 +19,7 @@ use starlark_map::small_set::SmallSet;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::base_class::BaseClass;
+use crate::alt::solve::TypeFormContext;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTParams;
 use crate::config::error_kind::ErrorKind;
@@ -95,16 +96,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut protocol_tparams = SmallSet::new();
         for base in bases.iter() {
             match base {
-                BaseClass::Generic(ts, ..) => {
-                    for t in ts {
-                        if let Some(p) = lookup_tparam(t) {
+                BaseClass::Generic(xs, ..) => {
+                    for x in xs {
+                        let ty = self.expr_untype(x, TypeFormContext::GenericBase, errors);
+                        if let Some(p) = lookup_tparam(&ty) {
                             generic_tparams.insert(p);
                         }
                     }
                 }
-                BaseClass::Protocol(ts, ..) if !ts.is_empty() => {
-                    for t in ts {
-                        if let Some(p) = lookup_tparam(t) {
+                BaseClass::Protocol(xs, ..) => {
+                    for x in xs {
+                        let ty = self.expr_untype(x, TypeFormContext::GenericBase, errors);
+                        if let Some(p) = lookup_tparam(&ty) {
                             protocol_tparams.insert(p);
                         }
                     }

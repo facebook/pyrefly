@@ -67,4 +67,12 @@ impl TypedDict {
     pub fn targs(&self) -> &TArgs {
         &self.args
     }
+
+    pub fn targs_mut(&mut self) -> &mut TArgs {
+        &mut self.args
+    }
+
+    pub fn to_type(self) -> Type {
+        Type::TypedDict(self)
+    }
 }

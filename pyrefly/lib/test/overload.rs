@@ -353,7 +353,7 @@ std_aggs[0][1].append('foo')
 );
 
 testcase!(
-    test_constructor_overload,
+    test_constructor_overload_with_hint,
     r#"
 from typing import Callable, overload
 class defaulty[K, V]:

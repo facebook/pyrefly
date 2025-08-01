@@ -104,9 +104,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     BaseClass::NamedTuple(..) => {
                         Some((self.stdlib.named_tuple_fallback().clone().to_type(), range))
                     }
-                    // Skip over empty generic. Empty protocol is only relevant for `protocol_metadata`, defined
-                    // above so we can skip it here.
-                    BaseClass::Generic(..) | BaseClass::Protocol(..) | BaseClass::TypedDict(..) => {
+                    BaseClass::TypedDict(..) => {
                         if is_new_type {
                             self.error(
                                 errors,
@@ -114,6 +112,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ErrorInfo::Kind(ErrorKind::InvalidArgument),
                                 "Second argument to NewType is invalid".to_owned(),
                             );
+                        }
+                        None
+                    }
+                    BaseClass::Generic(args, _) | BaseClass::Protocol(args, _) => {
+                        if is_new_type {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                "Second argument to NewType is invalid".to_owned(),
+                            );
+                        } else {
+                            let mut type_var_tuple_count = 0;
+                            args.iter().for_each(|x| {
+                                let ty = self.expr_untype(x, TypeFormContext::GenericBase, errors);
+                                if let Type::Unpack(unpacked) = &ty
+                                    && unpacked.is_kind_type_var_tuple()
+                                {
+                                    if type_var_tuple_count == 1 {
+                                        self.error(
+                                            errors,
+                                            x.range(),
+                                            ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                                            "There cannot be more than one TypeVarTuple type parameter".to_owned(),
+                                        );
+                                    }
+                                    type_var_tuple_count += 1;
+                                }
+                            });
                         }
                         None
                     }

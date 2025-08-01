@@ -60,6 +60,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             errors,
             Some(context),
             None,
+            None,
         )
     }
 

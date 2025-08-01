@@ -189,6 +189,10 @@ impl TArgs {
         self.0.0.iter().zip(self.0.1.iter())
     }
 
+    pub fn iter_paired_mut(&mut self) -> impl ExactSizeIterator<Item = (&TParam, &mut Type)> {
+        self.0.0.iter().zip(self.0.1.iter_mut())
+    }
+
     pub fn len(&self) -> usize {
         self.0.1.len()
     }
@@ -239,6 +243,10 @@ pub struct Substitution<'a>(SmallMap<&'a Quantified, &'a Type>);
 impl<'a> Substitution<'a> {
     pub fn substitute(&self, ty: Type) -> Type {
         ty.subst(&self.0)
+    }
+
+    pub fn as_map(&self) -> &SmallMap<&Quantified, &Type> {
+        &self.0
     }
 }
 

@@ -276,6 +276,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
                 None,
                 None,
+                None,
             )
             .1
         } else {

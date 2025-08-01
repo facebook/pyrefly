@@ -10,6 +10,7 @@ use std::fmt::Display;
 use std::mem;
 
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::types::TArgs;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::SliceExt;
@@ -364,6 +365,99 @@ impl Solver {
                 *e = Variable::Contained;
             }
         }
+    }
+
+    /// Given targs which contain quantified (as come from `instantiate`), replace the quantifieds
+    /// with fresh vars. We can avoid substitution because tparams can not appear in the bounds of
+    /// another tparam. tparams can appear in the default, but those are not in quantified form yet.
+    pub fn freshen_class_targs(&self, targs: &mut TArgs, uniques: &UniqueFactory) {
+        let mut lock = self.variables.write();
+        targs.iter_paired_mut().for_each(|(param, t)| {
+            if let Type::Quantified(q) = t
+                && **q == param.quantified
+            {
+                let v = Var::new(uniques);
+                *t = v.to_type();
+                lock.insert(v, Variable::Quantified(param.quantified.clone()));
+            }
+        })
+    }
+
+    /// Solve each fresh var created in freshen_class_targs. If we still have a Var, we do not
+    /// yet have an instantiation, but one might come later. E.g., __new__ did not provide an
+    /// instantiation, but __init__ will.
+    pub fn generalize_class_targs(&self, targs: &mut TArgs) {
+        // Expanding targs might require the variables lock, so do that first.
+        targs.as_mut().iter_mut().for_each(|t| self.expand_mut(t));
+        let lock = self.variables.read();
+        targs.iter_paired_mut().for_each(|(param, t)| {
+            if let Type::Var(v) = t
+                && let Some(Variable::Quantified(q)) = lock.get(v)
+                && *q == param.quantified
+            {
+                *t = param.quantified.clone().to_type();
+            }
+        })
+    }
+
+    /// Finalize the tparam instantiations. Any targs which don't yet have an instantiation
+    /// will resolve to their default, if one exists. Otherwise, create a "contained" var and
+    /// try to find an instantiation at the first use, like finish_quantified.
+    pub fn finish_class_targs(&self, targs: &mut TArgs, uniques: &UniqueFactory) {
+        // The default can refer to a tparam from earlier in the list, so we maintain a
+        // small scope data structure during the traversal.
+        let mut seen_params = SmallMap::new();
+        let mut new_targs: Vec<Option<Type>> = Vec::with_capacity(targs.len());
+        targs.iter_paired().enumerate().for_each(|(i, (param, t))| {
+            let new_targ = if let Type::Quantified(q) = t
+                && **q == param.quantified
+            {
+                if let Some(default) = param.default() {
+                    // Note that TypeVars are stored in Type::TypeVar form, and have not yet been
+                    // converted to Quantified form, so we do that now.
+                    // TODO: deal with code duplication in get_tparam_default
+                    let mut t = default.clone();
+                    t.transform_mut(&mut |t| {
+                        let name = match t {
+                            Type::TypeVar(t) => Some(t.qname().id()),
+                            Type::TypeVarTuple(t) => Some(t.qname().id()),
+                            Type::ParamSpec(p) => Some(p.qname().id()),
+                            Type::Quantified(q) => Some(q.name()),
+                            _ => None,
+                        };
+                        if let Some(name) = name {
+                            *t = if let Some(i) = seen_params.get(name) {
+                                let new_targ: &Option<Type> = &new_targs[*i];
+                                new_targ
+                                    .as_ref()
+                                    .unwrap_or_else(|| &targs.as_slice()[*i])
+                                    .clone()
+                            } else {
+                                param.quantified.as_gradual_type()
+                            }
+                        }
+                    });
+                    Some(t)
+                } else {
+                    let v = Var::new(uniques);
+                    self.variables.write().insert(v, Variable::Contained);
+                    Some(v.to_type())
+                }
+            } else {
+                None
+            };
+            seen_params.insert(param.name(), i);
+            new_targs.push(new_targ);
+        });
+        drop(seen_params);
+        new_targs
+            .into_iter()
+            .zip(targs.as_mut().iter_mut())
+            .for_each(|(new_targ, targ)| {
+                if let Some(new_targ) = new_targ {
+                    *targ = new_targ;
+                }
+            })
     }
 
     /// Generate a fresh variable used to tie recursive bindings.

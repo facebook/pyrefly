@@ -481,7 +481,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
-                    let ret = self.call_infer(call_target, &args, &kws, range, errors, None, None);
+                    let ret =
+                        self.call_infer(call_target, &args, &kws, range, errors, None, None, None);
                     if let Type::TypeGuard(t) = ret {
                         return *t;
                     }
@@ -493,7 +494,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
-                    let ret = self.call_infer(call_target, &args, &kws, range, errors, None, None);
+                    let ret =
+                        self.call_infer(call_target, &args, &kws, range, errors, None, None, None);
                     if let Type::TypeIs(t) = ret {
                         return self.intersect(ty, &t);
                     }
@@ -504,7 +506,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
-                    let ret = self.call_infer(call_target, &args, &kws, range, errors, None, None);
+                    let ret =
+                        self.call_infer(call_target, &args, &kws, range, errors, None, None, None);
                     if let Type::TypeIs(t) = ret {
                         return self.subtract(ty, &t);
                     }

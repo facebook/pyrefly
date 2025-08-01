@@ -6,17 +6,13 @@
  */
 
 use pyrefly_python::ast::Ast;
-use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Expr;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
-use crate::alt::solve::TypeFormContext;
-use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::types::special_form::SpecialForm;
 use crate::types::types::Type;
 
@@ -26,8 +22,8 @@ use crate::types::types::Type;
 #[derive(Debug, Clone)]
 pub enum BaseClass {
     TypedDict(TextRange),
-    Generic(Vec<Type>, TextRange),
-    Protocol(Vec<Type>, TextRange),
+    Generic(Vec<Expr>, TextRange),
+    Protocol(Vec<Expr>, TextRange),
     Expr(Expr),
     NamedTuple(TextRange),
 }
@@ -37,7 +33,7 @@ impl BaseClass {
         matches!(self, BaseClass::Generic(..) | BaseClass::Protocol(..))
     }
 
-    pub fn apply(&mut self, args: Vec<Type>) {
+    pub fn apply(&mut self, args: Vec<Expr>) {
         match self {
             BaseClass::Generic(xs, ..) | BaseClass::Protocol(xs, ..) => {
                 xs.extend(args);
@@ -101,25 +97,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && special_base_class.can_apply()
         {
             // This branch handles `Generic[...]` and `Protocol[...]`
-            let mut type_var_tuple_count = 0;
-            let args = Ast::unpack_slice(&subscript.slice).map(|x| {
-                let ty = self.expr_untype(x, TypeFormContext::GenericBase, errors);
-                if let Type::Unpack(unpacked) = &ty
-                    && unpacked.is_kind_type_var_tuple()
-                {
-                    if type_var_tuple_count == 1 {
-                        self.error(
-                            errors,
-                            x.range(),
-                            ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                            "There cannot be more than one TypeVarTuple type parameter".to_owned(),
-                        );
-                    }
-                    type_var_tuple_count += 1;
-                }
-                ty
-            });
-            special_base_class.apply(args);
+            special_base_class.apply(Ast::unpack_slice(&subscript.slice).to_owned());
             special_base_class
         } else {
             // This branch handles all other base classes.
