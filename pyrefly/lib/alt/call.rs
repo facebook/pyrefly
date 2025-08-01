@@ -408,7 +408,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
 
-        let mut overall_ret = None;
         if let Some(hint) = hint {
             self.solver()
                 .freshen_class_targs(cls.targs_mut(), self.uniques);
