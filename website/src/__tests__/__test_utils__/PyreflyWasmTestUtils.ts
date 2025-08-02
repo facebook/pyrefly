@@ -33,7 +33,7 @@ export async function createPyreflyWasmModule() {
  */
 export async function createPyreflyState(): Promise<PyreflyState> {
     const pyreflyWasmModule = await createPyreflyWasmModule();
-    return new pyreflyWasmModule.State();
+    return new pyreflyWasmModule.State('3.12');
 }
 
 /**
