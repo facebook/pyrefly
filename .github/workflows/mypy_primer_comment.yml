@@ -1,12 +1,11 @@
 name: Comment with mypy_primer diff
 
-# Disabled for now, because it generates a lot of spurious errors.
-# on:  # zizmor: ignore[dangerous-triggers]
-#   workflow_run:
-#     workflows:
-#       - Run mypy_primer
-#     types:
-#       - completed
+on:  # zizmor: ignore[dangerous-triggers]
+  workflow_run:
+    workflows:
+      - Run mypy_primer
+    types:
+      - completed
 
 permissions: {}
 
@@ -17,7 +16,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # Temporarily disabled because it is often not that helpful
+    if: false
+    # if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Download diffs
         uses: actions/github-script@v7
