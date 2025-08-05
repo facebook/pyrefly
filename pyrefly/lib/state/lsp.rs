@@ -1643,29 +1643,31 @@ impl<'a> Transaction<'a> {
         {
             for idx in bindings.available_definitions(position) {
                 let key = bindings.idx_to_key(idx);
-                if let Key::Definition(id) = key {
-                    let label = module_info.code_at(id.range());
-                    if let Some(identifier) = identifier
-                        && SkimMatcherV2::default()
-                            .fuzzy_match(label, identifier.as_str())
-                            .is_none()
-                    {
-                        continue;
-                    }
-                    let binding = bindings.get(idx);
-                    let detail = self.get_type(handle, key).map(|t| t.to_string());
-                    has_added_any = true;
-                    completions.push(CompletionItem {
-                        label: label.to_owned(),
-                        detail,
-                        kind: binding
-                            .symbol_kind()
-                            .map_or(Some(CompletionItemKind::VARIABLE), |k| {
-                                Some(k.to_lsp_completion_item_kind())
-                            }),
-                        ..Default::default()
-                    })
+                let label = match key {
+                    Key::Definition(id) => module_info.code_at(id.range()),
+                    Key::Anywhere(id, _) => id,
+                    _ => continue,
+                };
+                if let Some(identifier) = identifier
+                    && SkimMatcherV2::default()
+                        .fuzzy_match(label, identifier.as_str())
+                        .is_none()
+                {
+                    continue;
                 }
+                let binding = bindings.get(idx);
+                let detail = self.get_type(handle, key).map(|t| t.to_string());
+                has_added_any = true;
+                completions.push(CompletionItem {
+                    label: label.to_owned(),
+                    detail,
+                    kind: binding
+                        .symbol_kind()
+                        .map_or(Some(CompletionItemKind::VARIABLE), |k| {
+                            Some(k.to_lsp_completion_item_kind())
+                        }),
+                    ..Default::default()
+                })
             }
         }
         has_added_any

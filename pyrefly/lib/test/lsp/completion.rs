@@ -1225,7 +1225,6 @@ Completion Results:
     );
 }
 
-// todo(kylei): completion on redeclaration of variables
 #[test]
 fn redeclaration() {
     let code = r#"
@@ -1242,6 +1241,7 @@ ff
 4 | ff
      ^
 Completion Results:
+- (Variable) fff: int
 "#
         .trim(),
         report.trim(),
