@@ -233,3 +233,31 @@ References:
         report.trim(),
     );
 }
+
+// TODO(kylei): fix bug with extra references appearing
+#[test]
+fn extra_references_bug() {
+    let code = r#"
+xyz = "test"
+# ^
+if len(xyz) < 5:
+    ...
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | xyz = "test"
+      ^
+References:
+2 | xyz = "test"
+    ^^^
+4 | if len(xyz) < 5:
+           ^^^
+4 | if len(xyz) < 5:
+                  ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
