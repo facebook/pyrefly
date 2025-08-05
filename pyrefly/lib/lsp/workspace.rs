@@ -195,9 +195,10 @@ impl Workspaces {
                         mut env,
                     }) = w.python_info.clone()
                     {
-                        let site_package_path = config.python_environment.site_package_path.take();
+                        let site_package_path: Option<Vec<PathBuf>> =
+                            config.python_environment.site_package_path.take();
                         env.site_package_path = site_package_path;
-                        config.interpreters.set_python_interpreter(interpreter);
+                        config.interpreters.set_lsp_python_interpreter(interpreter);
                         config.python_environment = env;
                     }
                 })

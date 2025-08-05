@@ -45,6 +45,10 @@ pub(crate) enum ConfigOrigin<T> {
     #[serde(skip)]
     Auto(T),
 
+    /// This value was explicitly provided by the IDE using "workspace.configuration" using LSP protocol.
+    #[serde(skip)]
+    Lsp(T),
+
     /// This value was provided by a [`ConfigFile`], either explicitly or implicitly.
     ConfigFile(T),
 }
@@ -81,7 +85,10 @@ impl<T> Deref for ConfigOrigin<T> {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            Self::CommandLine(value) | Self::ConfigFile(value) | Self::Auto(value) => value,
+            Self::CommandLine(value)
+            | Self::ConfigFile(value)
+            | Self::Auto(value)
+            | Self::Lsp(value) => value,
         }
     }
 }
@@ -89,7 +96,10 @@ impl<T> Deref for ConfigOrigin<T> {
 impl<T> DerefMut for ConfigOrigin<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self {
-            Self::CommandLine(value) | Self::ConfigFile(value) | Self::Auto(value) => value,
+            Self::CommandLine(value)
+            | Self::ConfigFile(value)
+            | Self::Auto(value)
+            | Self::Lsp(value) => value,
         }
     }
 }
@@ -116,6 +126,11 @@ impl<T> ConfigOrigin<T> {
         Self::Auto(value)
     }
 
+    /// Construct a new [`ConfigOrigin::Lsp`] with the given value.
+    pub(crate) fn lsp(value: T) -> Self {
+        Self::Lsp(value)
+    }
+
     /// Consume the [`ConfigOrigin`], mapping the internal value with the
     /// given function, and inserting it into a new [`ConfigOrigin`] of the same
     /// variant.
@@ -127,6 +142,7 @@ impl<T> ConfigOrigin<T> {
             ConfigOrigin::ConfigFile(value) => ConfigOrigin::ConfigFile(f(value)),
             ConfigOrigin::CommandLine(value) => ConfigOrigin::CommandLine(f(value)),
             ConfigOrigin::Auto(value) => ConfigOrigin::Auto(f(value)),
+            ConfigOrigin::Lsp(value) => ConfigOrigin::Lsp(f(value)),
         }
     }
 
@@ -135,6 +151,7 @@ impl<T> ConfigOrigin<T> {
             ConfigOrigin::ConfigFile(ref value) => ConfigOrigin::ConfigFile(value),
             ConfigOrigin::CommandLine(ref value) => ConfigOrigin::CommandLine(value),
             ConfigOrigin::Auto(ref value) => ConfigOrigin::Auto(value),
+            ConfigOrigin::Lsp(ref value) => ConfigOrigin::Lsp(value),
         }
     }
 
@@ -154,9 +171,11 @@ impl<T, E> ConfigOrigin<Result<T, E>> {
             ConfigOrigin::ConfigFile(Ok(value)) => Ok(ConfigOrigin::ConfigFile(value)),
             ConfigOrigin::CommandLine(Ok(value)) => Ok(ConfigOrigin::CommandLine(value)),
             ConfigOrigin::Auto(Ok(value)) => Ok(ConfigOrigin::Auto(value)),
+            ConfigOrigin::Lsp(Ok(value)) => Ok(ConfigOrigin::Lsp(value)),
             ConfigOrigin::ConfigFile(Err(err))
             | ConfigOrigin::CommandLine(Err(err))
-            | ConfigOrigin::Auto(Err(err)) => Err(err),
+            | ConfigOrigin::Auto(Err(err))
+            | ConfigOrigin::Lsp(Err(err)) => Err(err),
         }
     }
 }

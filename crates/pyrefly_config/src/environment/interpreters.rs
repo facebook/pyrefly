@@ -78,8 +78,8 @@ impl Interpreters {
         self.python_interpreter.is_none() && self.conda_environment.is_none()
     }
 
-    pub fn set_python_interpreter(&mut self, interpreter: PathBuf) {
-        self.python_interpreter = Some(ConfigOrigin::auto(interpreter));
+    pub fn set_lsp_python_interpreter(&mut self, interpreter: PathBuf) {
+        self.python_interpreter = Some(ConfigOrigin::lsp(interpreter));
     }
 
     /// Finds interpreters by searching in prioritized locations for the given project
@@ -87,17 +87,22 @@ impl Interpreters {
     ///
     /// The priorities are:
     /// 1. Check for an overridden `--python-interpreter` or `--conda-environment`
-    /// 2. Check for an active venv or Conda environment
-    /// 3. Check for a configured `python-interpreter`
-    /// 4. Check for a configured `conda-environment`
-    /// 5. Check for a `venv` in the current project
-    /// 6. Use an interpreter we can find on the `$PATH`
-    /// 7. Give up and return an error
+    /// 2. Check for an IDE / LSP provided `python-interpreter`.
+    /// 3. Check for an active venv or Conda environment
+    /// 4. Check for a configured `python-interpreter`
+    /// 5. Check for a configured `conda-environment`
+    /// 6. Check for a `venv` in the current project
+    /// 7. Use an interpreter we can find on the `$PATH`
+    /// 8. Give up and return an error
     pub(crate) fn find_interpreter(
         &self,
         path: Option<&Path>,
     ) -> anyhow::Result<ConfigOrigin<PathBuf>> {
         if let Some(interpreter @ ConfigOrigin::CommandLine(_)) = &self.python_interpreter {
+            return Ok(interpreter.clone());
+        }
+
+        if let Some(interpreter @ ConfigOrigin::Lsp(_)) = &self.python_interpreter {
             return Ok(interpreter.clone());
         }
 
@@ -196,6 +201,23 @@ mod test {
         let tempdir = setup_test_dir();
 
         let python_interpreter = ConfigOrigin::cli(PathBuf::from("asdf"));
+
+        let interpreters = Interpreters {
+            python_interpreter: Some(python_interpreter.clone()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            interpreters.find_interpreter(Some(tempdir.path())).unwrap(),
+            python_interpreter
+        );
+    }
+
+    #[test]
+    fn test_find_interpreter_precedence_lsp_highest_priority() {
+        let tempdir = setup_test_dir();
+
+        let python_interpreter = ConfigOrigin::lsp(PathBuf::from("asdf"));
 
         let interpreters = Interpreters {
             python_interpreter: Some(python_interpreter.clone()),
