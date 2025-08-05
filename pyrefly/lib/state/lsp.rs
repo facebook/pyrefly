@@ -1496,8 +1496,8 @@ impl<'a> Transaction<'a> {
         let mut named_bindings = Vec::new();
         for idx in bindings.keys::<Key>() {
             let key = bindings.idx_to_key(idx);
-            if let Key::Phi(..) = key {
-                // Phi keys are always synthetic and never serves as a name definition.
+            if matches!(key, Key::Phi(..) | Key::Narrow(..)) {
+                // These keys are always synthetic and never serves as a name definition.
                 continue;
             }
             if let Some((definition_handle, definition_export)) =

@@ -234,9 +234,8 @@ References:
     );
 }
 
-// TODO(kylei): fix bug with extra references appearing
 #[test]
-fn extra_references_bug() {
+fn narrowing_keys() {
     let code = r#"
 xyz = "test"
 # ^
@@ -254,8 +253,6 @@ References:
     ^^^
 4 | if len(xyz) < 5:
            ^^^
-4 | if len(xyz) < 5:
-                  ^
 "#
         .trim(),
         report.trim(),
