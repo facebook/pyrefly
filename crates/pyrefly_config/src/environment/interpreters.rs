@@ -87,9 +87,9 @@ impl Interpreters {
     ///
     /// The priorities are:
     /// 1. Check for an overridden `--python-interpreter` or `--conda-environment`
-    /// 2. Check for a configured `python-interpreter`
-    /// 3. Check for a configured `conda-environment`
-    /// 4. Check for an active venv or Conda environment
+    /// 2. Check for an active venv or Conda environment
+    /// 3. Check for a configured `python-interpreter`
+    /// 4. Check for a configured `conda-environment`
     /// 5. Check for a `venv` in the current project
     /// 6. Use an interpreter we can find on the `$PATH`
     /// 7. Give up and return an error
@@ -108,6 +108,10 @@ impl Interpreters {
                 .transpose_err();
         }
 
+        if let Some(active_env) = ActiveEnvironment::find() {
+            return Ok(ConfigOrigin::auto(active_env));
+        }
+
         if let Some(interpreter) = &self.python_interpreter {
             return Ok(interpreter.clone());
         }
@@ -117,13 +121,6 @@ impl Interpreters {
                 .as_deref()
                 .map(conda::find_interpreter_from_env)
                 .transpose_err();
-        }
-
-        // Configuration options should take precedence over environment variables, otherwise
-        // overriding project interpreter settings becomes much harder, espcially when used in
-        // IDEs.
-        if let Some(active_env) = ActiveEnvironment::find() {
-            return Ok(ConfigOrigin::auto(active_env));
         }
 
         if let Some(start_path) = path
