@@ -293,25 +293,21 @@ where
         [first, rest @ ..] => {
             // First try finding the module in `-stubs`.
             let stub_first = Name::new(format!("{first}-stubs"));
-            let stub_result =
-                find_one_part(&stub_first, include.clone()).and_then(|start_result| {
-                    continue_find_module(start_result.0, rest).map(|x| x.module_path())
-                });
+            let stub_result = find_module_components(&stub_first, rest, include.clone());
             if let Some(Ok(stub_result)) = stub_result {
                 return Ok(Some(stub_result));
-            }
+            };
 
-            // If we couldn't find it in a `-stubs` module, look normally.
-            let result = find_one_part(first, include)
-                .and_then(|start_result| {
-                    continue_find_module(start_result.0, rest).map(|x| x.module_path())
-                })
-                .transpose()?;
-            Ok(result)
+            // If we couldn't find it in a `-stubs` module or we want to check for missing stubs, look normally.
+            let normal_result = find_module_components(first, rest, include);
+
+            match (normal_result, stub_result) {
+                (Some(_), Some(Ok(stub_result))) => Ok(Some(stub_result)),
+                (normal_result, _) => normal_result.transpose(),
+            }
         }
     }
 }
-
 /// Search for the given [`ModuleName`] in the given `include`, which is
 /// a list of paths denoting import roots. A [`FindError`] result indicates
 /// searching should be discontinued because of a special condition, whereas
@@ -342,17 +338,14 @@ where
 
     let mut found_stubs = None;
     for stub_module_import in stub_module_imports {
-        if let Some(stub_result) = continue_find_module(stub_module_import.0, rest)
-            .map(|x| x.module_path())
-            .transpose()?
-        {
+        if let Some(stub_result) = continue_find_module(stub_module_import.0, rest) {
             found_stubs = Some(stub_result);
             break;
         }
     }
 
     if found_stubs.is_some() && ignore_missing_source {
-        return Ok(found_stubs);
+        return found_stubs.map(|x| x.module_path()).transpose();
     }
 
     let mut fallback_modules = include
@@ -362,7 +355,7 @@ where
 
     // check if there's an existing library backing the stubs we have
     if found_stubs.is_some() && fallback_modules.peek().is_some() {
-        return Ok(found_stubs);
+        return found_stubs.map(|x| x.module_path()).transpose();
     } else if found_stubs.is_some() {
         return Err(FindError::NoSource(module));
     }
@@ -1308,10 +1301,9 @@ mod tests {
         let start_result = find_one_part(&Name::new("subdir"), [root.to_path_buf()].iter())
             .unwrap()
             .0;
-        let module_path = continue_find_module(start_result.clone(), &[Name::new("nested_module")])
-            .unwrap()
-            .module_path();
-        assert!(matches!(module_path, Err(FindError::Ignored)));
+        let module_path =
+            continue_find_module(start_result.clone(), &[Name::new("nested_module")]).unwrap();
+        assert!(matches!(module_path, FindResult::CompiledModule(_)));
         let module_path = continue_find_module(start_result, &[Name::new("another_nested_module")])
             .unwrap()
             .module_path()
