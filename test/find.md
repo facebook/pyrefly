@@ -56,3 +56,16 @@ $ mkdir $TMPDIR/test-stubs && touch $TMPDIR/test-stubs/utils.pyi && touch $TMPDI
 > $PYREFLY check --python-version 3.13.0 "$TMPDIR/test-stubs/main.pyi"
 [0]
 ```
+
+## Pyi files are preferred over py files, even if they occur later in the search path
+
+```scrut
+$ mkdir $TMPDIR/pyi-order && mkdir $TMPDIR/pyi-order/pyi && \
+> echo "x: int = 1" > $TMPDIR/pyi-order/pyi/lib.pyi && \
+> mkdir $TMPDIR/pyi-order/py && echo "x: str = '1'" > $TMPDIR/pyi-order/py/lib.py && \
+> echo "from typing_extensions import reveal_type; from lib import x; reveal_type(x)" > $TMPDIR/pyi-order/test.py && \
+> $PYREFLY check --python-version 3.13.0 $TMPDIR/pyi-order/test.py \
+> --search-path $TMPDIR/pyi-order/py --search-path $TMPDIR/pyi-order/pyi --output-format=min-text
+ INFO */pyi-order/test.py* revealed type: int * (glob)
+[0]
+```
