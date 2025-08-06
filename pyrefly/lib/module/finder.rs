@@ -66,6 +66,21 @@ impl FindResult {
             (FindResult::NamespacePackage(_), _) => a,
         }
     }
+
+    /// Converts a `FindResult` into a [`ModulePath`], returning a [`FindError`] instead
+    /// if the module is not reachable.
+    fn module_path(self) -> Result<ModulePath, FindError> {
+        match self {
+            FindResult::SingleFilePyiModule(path)
+            | FindResult::SingleFilePyModule(path)
+            | FindResult::RegularPackage(path, _) => Ok(ModulePath::filesystem(path)),
+            FindResult::NamespacePackage(roots) => {
+                // TODO(grievejia): Preserving all info in the list instead of dropping all but the first one.
+                Ok(ModulePath::namespace(roots.first().clone()))
+            }
+            FindResult::CompiledModule(_) => Err(FindError::Ignored),
+        }
+    }
 }
 
 /// In the given root, attempt to find a match for the given [`Name`].
@@ -225,16 +240,7 @@ fn continue_find_module(
             }
         }
     }
-    current_result.map_or(Ok(None), |x| match x {
-        FindResult::SingleFilePyiModule(path)
-        | FindResult::SingleFilePyModule(path)
-        | FindResult::RegularPackage(path, _) => Ok(Some(ModulePath::filesystem(path))),
-        FindResult::NamespacePackage(roots) => {
-            // TODO(grievejia): Preserving all info in the list instead of dropping all but the first one.
-            Ok(Some(ModulePath::namespace(roots.first().clone())))
-        }
-        FindResult::CompiledModule(_) => Err(FindError::Ignored),
-    })
+    current_result.map_or(Ok(None), |x| Some(x.module_path()).transpose())
 }
 
 /// Search for the given [`ModuleName`] in the given `include`, which is
