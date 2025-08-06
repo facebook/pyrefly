@@ -39,10 +39,6 @@ impl FindError {
         Self::NotFound(module, Arc::new(vec1![format!("{err:#}")]))
     }
 
-    pub fn no_source(module: ModuleName) -> Self {
-        Self::NoSource(module)
-    }
-
     pub fn import_lookup_path(
         path: Vec<ImportLookupPathPart>,
         module: ModuleName,

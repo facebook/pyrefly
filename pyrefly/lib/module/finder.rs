@@ -214,10 +214,7 @@ fn find_one_part_prefix<'a>(
 }
 
 /// Find a module from a single package. Returns None if no module is found.
-fn continue_find_module(
-    start_result: FindResult,
-    components_rest: &[Name],
-) -> Result<Option<ModulePath>, FindError> {
+fn continue_find_module(start_result: FindResult, components_rest: &[Name]) -> Option<FindResult> {
     let mut current_result = Some(start_result);
     for part in components_rest.iter() {
         match current_result {
@@ -240,7 +237,37 @@ fn continue_find_module(
             }
         }
     }
-    current_result.map_or(Ok(None), |x| Some(x.module_path()).transpose())
+    current_result
+}
+
+/// Attempt to find the given module from its first component (which might have
+/// `-stubs` appended) and remaining components in the given `includes`.
+/// If a result is found that might have a more preferable option later in the
+/// includes, continue searching for it and return the best option.
+fn find_module_components<'a, I>(
+    first: &Name,
+    components_rest: &[Name],
+    include: I,
+) -> Option<Result<ModulePath, FindError>>
+where
+    I: Iterator<Item = &'a PathBuf> + Clone,
+{
+    let (first_component_result, fallback_search) = find_one_part(first, include.clone())?;
+
+    let current_result = continue_find_module(first_component_result, components_rest)?;
+
+    let final_result = match current_result {
+        FindResult::SingleFilePyiModule(_) | FindResult::RegularPackage(..) => Some(current_result),
+        _ => Some(
+            fallback_search
+                .into_iter()
+                .filter_map(|s| Some(find_one_part(first, [s].iter())?.0))
+                .filter_map(|first| continue_find_module(first.clone(), components_rest))
+                .fold(current_result, FindResult::best_result),
+        ),
+    };
+
+    final_result.map(|r| r.module_path())
 }
 
 /// Search for the given [`ModuleName`] in the given `include`, which is
@@ -266,17 +293,19 @@ where
         [first, rest @ ..] => {
             // First try finding the module in `-stubs`.
             let stub_first = Name::new(format!("{first}-stubs"));
-            let stub_result = find_one_part(&stub_first, include.clone())
-                .map(|start_result| continue_find_module(start_result.0, rest))
-                .transpose()?
-                .flatten();
-            if let Some(stub_result) = stub_result {
+            let stub_result =
+                find_one_part(&stub_first, include.clone()).and_then(|start_result| {
+                    continue_find_module(start_result.0, rest).map(|x| x.module_path())
+                });
+            if let Some(Ok(stub_result)) = stub_result {
                 return Ok(Some(stub_result));
             }
 
             // If we couldn't find it in a `-stubs` module, look normally.
             let result = find_one_part(first, include)
-                .and_then(|start_result| continue_find_module(start_result.0, rest).transpose())
+                .and_then(|start_result| {
+                    continue_find_module(start_result.0, rest).map(|x| x.module_path())
+                })
                 .transpose()?;
             Ok(result)
         }
@@ -313,7 +342,10 @@ where
 
     let mut found_stubs = None;
     for stub_module_import in stub_module_imports {
-        if let Some(stub_result) = continue_find_module(stub_module_import.0, rest)? {
+        if let Some(stub_result) = continue_find_module(stub_module_import.0, rest)
+            .map(|x| x.module_path())
+            .transpose()?
+        {
             found_stubs = Some(stub_result);
             break;
         }
@@ -332,11 +364,14 @@ where
     if found_stubs.is_some() && fallback_modules.peek().is_some() {
         return Ok(found_stubs);
     } else if found_stubs.is_some() {
-        return Err(FindError::no_source(module));
+        return Err(FindError::NoSource(module));
     }
 
     for module in fallback_modules {
-        if let Some(module_result) = continue_find_module(module.0, rest)? {
+        if let Some(module_result) = continue_find_module(module.0, rest)
+            .map(|x| x.module_path())
+            .transpose()?
+        {
             return Ok(Some(module_result));
         }
     }
@@ -681,6 +716,93 @@ mod tests {
             // We will find `a.c` because `a` is a namespace package whose search roots
             // include both `search_root0/a/` and `search_root1/a/`.
             Some(ModulePath::filesystem(root.join("search_root1/a/c.py")))
+        );
+    }
+
+    #[test]
+    fn test_find_precedence_in_all_roots() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "foo",
+                    vec![
+                        TestPath::file("__init__.py"),
+                        TestPath::file("baz.py"),
+                        TestPath::dir(
+                            "compiled",
+                            vec![TestPath::file("__init__.py"), TestPath::file("a.pyc")],
+                        ),
+                        TestPath::dir("namespace", vec![]),
+                    ],
+                ),
+                TestPath::dir(
+                    "bar",
+                    vec![
+                        TestPath::file("__init__.py"),
+                        TestPath::file("baz.pyi"),
+                        TestPath::dir(
+                            "compiled",
+                            vec![TestPath::file("__init__.py"), TestPath::file("a.py")],
+                        ),
+                        TestPath::file("namespace.py"),
+                    ],
+                ),
+            ],
+        );
+        let roots = [root.join("foo"), root.join("bar")];
+
+        // pyi preferred over py
+        assert_eq!(
+            find_one_part(&Name::new("baz"), roots.iter()),
+            Some((
+                FindResult::SingleFilePyModule(root.join("foo/baz.py")),
+                vec![root.join("bar")]
+            ))
+        );
+        assert_eq!(
+            continue_find_module(
+                FindResult::SingleFilePyiModule(root.join("foo/baz.py")),
+                &[]
+            ),
+            Some(FindResult::SingleFilePyiModule(root.join("foo/baz.py")))
+        );
+        assert_eq!(
+            find_module_components(&Name::new("baz"), &[], roots.iter(),)
+                .unwrap()
+                .unwrap(),
+            ModulePath::filesystem(root.join("bar/baz.pyi"))
+        );
+
+        // py preferred over pyc
+        assert_eq!(
+            find_one_part(&Name::new("compiled"), roots.iter()),
+            Some((
+                FindResult::RegularPackage(
+                    root.join("foo/compiled/__init__.py"),
+                    root.join("foo/compiled")
+                ),
+                vec![root.join("bar")]
+            ))
+        );
+        assert_eq!(
+            continue_find_module(
+                FindResult::RegularPackage(
+                    root.join("foo/compiled/__init__.py"),
+                    root.join("foo/compiled")
+                ),
+                &[Name::new("a")]
+            )
+            .unwrap(),
+            FindResult::CompiledModule(root.join("foo/compiled/a.pyc"))
+        );
+        assert_eq!(
+            find_module_components(&Name::new("compiled"), &[Name::new("a")], roots.iter(),)
+                .unwrap()
+                .unwrap(),
+            ModulePath::filesystem(root.join("bar/compiled/a.py"))
         );
     }
 
@@ -1186,15 +1308,17 @@ mod tests {
         let start_result = find_one_part(&Name::new("subdir"), [root.to_path_buf()].iter())
             .unwrap()
             .0;
-        let module_path = continue_find_module(start_result.clone(), &[Name::new("nested_module")]);
+        let module_path = continue_find_module(start_result.clone(), &[Name::new("nested_module")])
+            .unwrap()
+            .module_path();
         assert!(matches!(module_path, Err(FindError::Ignored)));
-        let module_path =
-            continue_find_module(start_result, &[Name::new("another_nested_module")]).unwrap();
+        let module_path = continue_find_module(start_result, &[Name::new("another_nested_module")])
+            .unwrap()
+            .module_path()
+            .unwrap();
         assert_eq!(
             module_path,
-            Some(ModulePath::filesystem(
-                root.join("subdir/another_nested_module.py")
-            ))
+            ModulePath::filesystem(root.join("subdir/another_nested_module.py"))
         );
     }
 
@@ -1203,10 +1327,7 @@ mod tests {
         let start_result =
             FindResult::RegularPackage(PathBuf::from("path/to/init.py"), PathBuf::from("path/to"));
         let components_rest = vec![Name::new("test_module")];
-        let result: Result<Option<ModulePath>, FindError> =
-            continue_find_module(start_result, &components_rest);
-        let unwrapped_result = result.unwrap();
-        assert_eq!(unwrapped_result, None);
+        assert!(continue_find_module(start_result, &components_rest).is_none());
     }
 
     #[test]
@@ -1217,7 +1338,9 @@ mod tests {
         let start_result = find_one_part(&Name::new("module"), [root.to_path_buf()].iter())
             .unwrap()
             .0;
-        let result = continue_find_module(start_result, &[]);
+        let result = continue_find_module(start_result, &[])
+            .unwrap()
+            .module_path();
         assert!(matches!(result, Err(FindError::Ignored)));
     }
 }
