@@ -111,7 +111,7 @@ impl LoaderFindCache {
         path: Option<&Path>,
     ) -> Result<ModulePath, FindError> {
         self.cache
-            .ensure(&module, || find_import(&self.config, module, path))
+            .ensure(&module, || find_import(&self.config, module, path, true))
             .dupe()
     }
 }
