@@ -16,6 +16,7 @@ import abc
 import argparse
 import dataclasses
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -64,6 +65,7 @@ def timing() -> Generator[None, None, None]:
 def run(
     args: Iterable[str],
     capture_output: bool = False,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """
     Runs a command (args) in a new process.
@@ -85,6 +87,7 @@ def run(
             stderr=subprocess.PIPE if capture_output else sys.stderr,
             check=True,
             encoding="utf-8",
+            env=env,
         )
         return result
     except subprocess.CalledProcessError as e:
@@ -133,6 +136,28 @@ class CargoExecutor(Executor):
     def test(self) -> None:
         run(["cargo", "build"])
         run(["cargo", "test"])
+        script_dir = SCRIPT_PATH.absolute()
+        scrut_path = shutil.which("scrut")
+        jq_path = shutil.which("jq")
+        if scrut_path is not None:
+            run(
+                [scrut_path, "test", "test"],
+                env={
+                    "PYREFLY": str(script_dir / "target" / "debug" / "pyrefly"),
+                    "TYPESHED_ROOT": str(
+                        script_dir / "crates" / "pyrefly_bundled" / "third_party"
+                    ),
+                    "JQ": jq_path if jq_path else "",
+                    "TEST_PY": str(script_dir / "test.py"),
+                    "PATH": os.environ.get("PATH", ""),
+                },
+            )
+        else:
+            print(
+                Colors.WARNING.value
+                + "Scrut is not installed, skipping scrut tests."
+                + Colors.ENDC.value
+            )
 
     def conformance(self) -> None:
         cargo_target_dir = os.environ.get("CARGO_TARGET_DIR", "target")
