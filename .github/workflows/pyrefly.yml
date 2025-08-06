@@ -27,6 +27,8 @@ jobs:
       # by Cargo have long paths and will cause builds/tests to fail
       if: ${{ matrix.os == 'windows-latest' }}
       run: echo "CARGO_HOME=C:\\cargo" >> ${{ matrix.github_env }}
+    - name: install Scrut
+      run: curl --proto '=https' --tlsv1.2 -sSf https://facebookincubator.github.io/scrut/install.sh | sh
     - name: set up rust cache
       uses: Swatinem/rust-cache@v2
       with:
@@ -39,3 +41,10 @@ jobs:
     - run: cargo clippy --release
     - run: cargo build --release
     - run: cargo test --release
+    - name: Scrut tests
+      env:
+        PYREFLY: ${{ github.workspace }}/target/release/pyrefly
+        TYPESHED_ROOT: ${{ github.workspace }}/crates/pyrefly_bundled/third_party
+        JQ: jq
+        TEST_PY: ${{ github.workspace }}/test.py
+      run: scrut test test
