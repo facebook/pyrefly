@@ -28,7 +28,7 @@ jobs:
       if: ${{ matrix.os == 'windows-latest' }}
       run: echo "CARGO_HOME=C:\\cargo" >> ${{ matrix.github_env }}
     - name: install Scrut
-      run: curl --proto '=https' --tlsv1.2 -sSf https://facebookincubator.github.io/scrut/install.sh | sh
+      run: curl --proto '=https' --tlsv1.2 -sSf https://facebookincubator.github.io/scrut/install.sh | bash
     - name: set up rust cache
       uses: Swatinem/rust-cache@v2
       with:
