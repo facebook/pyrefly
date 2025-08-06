@@ -327,49 +327,26 @@ fn find_module_in_site_package_path<'a, I>(
 where
     I: Iterator<Item = &'a PathBuf> + Clone,
 {
-    let components = module.components();
-    let first = &components[0];
-    let rest = &components[1..];
-    let stub_first = Name::new(format!("{first}-stubs"));
+    match module.components().as_slice() {
+        [] => Ok(None),
+        [first, rest @ ..] => {
+            // First try finding the module in `-stubs`.
+            let stub_first = Name::new(format!("{first}-stubs"));
+            let stub_result = find_module_components(&stub_first, rest, include.clone());
+            if ignore_missing_source && let Some(Ok(stub_result)) = stub_result {
+                return Ok(Some(stub_result));
+            }
 
-    let stub_module_imports = include
-        .clone()
-        .filter_map(|root| find_one_part(&stub_first, iter::once(root)));
+            // If we couldn't find it in a `-stubs` module or we want to check for missing stubs, look normally.
+            let normal_result = find_module_components(first, rest, include);
 
-    let mut found_stubs = None;
-    for stub_module_import in stub_module_imports {
-        if let Some(stub_result) = continue_find_module(stub_module_import.0, rest) {
-            found_stubs = Some(stub_result);
-            break;
+            match (normal_result, stub_result) {
+                (None, Some(Ok(_))) if !ignore_missing_source => Err(FindError::NoSource(module)),
+                (Some(_), Some(Ok(stub_result))) => Ok(Some(stub_result)),
+                (normal_result, _) => normal_result.transpose(),
+            }
         }
     }
-
-    if found_stubs.is_some() && ignore_missing_source {
-        return found_stubs.map(|x| x.module_path()).transpose();
-    }
-
-    let mut fallback_modules = include
-        .clone()
-        .filter_map(|root| find_one_part(first, iter::once(root)))
-        .peekable();
-
-    // check if there's an existing library backing the stubs we have
-    if found_stubs.is_some() && fallback_modules.peek().is_some() {
-        return found_stubs.map(|x| x.module_path()).transpose();
-    } else if found_stubs.is_some() {
-        return Err(FindError::NoSource(module));
-    }
-
-    for module in fallback_modules {
-        if let Some(module_result) = continue_find_module(module.0, rest)
-            .map(|x| x.module_path())
-            .transpose()?
-        {
-            return Ok(Some(module_result));
-        }
-    }
-
-    Ok(None)
 }
 
 fn find_module_prefixes<'a>(
@@ -1040,15 +1017,13 @@ mod tests {
             .unwrap(),
             ModulePath::filesystem(root.join("foo-stubs/bar/__init__.py")),
         );
-        assert_eq!(
+        assert!(
             find_module_in_site_package_path(
                 ModuleName::from_str("baz.qux"),
                 [root.to_path_buf()].iter(),
                 false,
             )
-            .unwrap()
-            .unwrap(),
-            ModulePath::filesystem(root.join("baz-stubs/qux/__init__.py")),
+            .is_err()
         );
     }
 
@@ -1298,16 +1273,21 @@ mod tests {
                 ],
             )],
         );
-        let start_result = find_one_part(&Name::new("subdir"), [root.to_path_buf()].iter())
-            .unwrap()
-            .0;
-        let module_path =
-            continue_find_module(start_result.clone(), &[Name::new("nested_module")]).unwrap();
-        assert!(matches!(module_path, FindResult::CompiledModule(_)));
-        let module_path = continue_find_module(start_result, &[Name::new("another_nested_module")])
-            .unwrap()
-            .module_path()
-            .unwrap();
+        let first = Name::new("subdir");
+        let module_path = find_module_components(
+            &first,
+            &[Name::new("nested_module")],
+            [root.to_path_buf()].iter(),
+        )
+        .unwrap();
+        assert!(matches!(module_path, Err(FindError::Ignored)));
+        let module_path = find_module_components(
+            &first,
+            &[Name::new("another_nested_module")],
+            [root.to_path_buf()].iter(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             module_path,
             ModulePath::filesystem(root.join("subdir/another_nested_module.py"))
@@ -1330,9 +1310,9 @@ mod tests {
         let start_result = find_one_part(&Name::new("module"), [root.to_path_buf()].iter())
             .unwrap()
             .0;
-        let result = continue_find_module(start_result, &[])
-            .unwrap()
-            .module_path();
-        assert!(matches!(result, Err(FindError::Ignored)));
+        assert!(matches!(
+            continue_find_module(start_result, &[]).unwrap(),
+            FindResult::CompiledModule(_)
+        ));
     }
 }
