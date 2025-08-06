@@ -19,7 +19,7 @@ use crate::config::config::ConfigFile;
 use crate::module::typeshed::typeshed;
 use crate::state::loader::FindError;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 enum FindResult {
     /// Found a single-file .pyi module. The path must not point to an __init__ file.
     SingleFilePyiModule(PathBuf),
@@ -88,25 +88,27 @@ fn find_one_part_in_root(name: &Name, root: &Path) -> Option<FindResult> {
 /// Finds the first package (regular, single file, or namespace) in all search roots.
 /// Returns None if no module is found. If `name` is `__pycache__`, we always
 /// return `None`.
-fn find_one_part<'a>(name: &Name, roots: impl Iterator<Item = &'a PathBuf>) -> Option<FindResult> {
+fn find_one_part<'a>(
+    name: &Name,
+    mut roots: impl Iterator<Item = &'a PathBuf>,
+) -> Option<(FindResult, Vec<PathBuf>)> {
     // skip looking in `__pycache__`, since those modules are not accessible
     if name == &Name::new_static("__pycache__") {
         return None;
     }
     let mut namespace_roots = Vec::new();
-    for root in roots {
+    while let Some(root) = roots.next() {
         match find_one_part_in_root(name, root) {
             None => (),
             Some(FindResult::NamespacePackage(package)) => {
                 namespace_roots.push(package.first().clone())
             }
-            result @ Some(FindResult::RegularPackage(..)) => return result,
-            result @ Some(_) => return result,
+            Some(result) => return Some((result, roots.cloned().collect::<Vec<_>>())),
         }
     }
     match Vec1::try_from_vec(namespace_roots) {
         Err(_) => None,
-        Ok(namespace_roots) => Some(FindResult::NamespacePackage(namespace_roots)),
+        Ok(namespace_roots) => Some((FindResult::NamespacePackage(namespace_roots), vec![])),
     }
 }
 
@@ -199,10 +201,10 @@ fn continue_find_module(
                 break;
             }
             Some(FindResult::RegularPackage(_, next_root)) => {
-                current_result = find_one_part(part, [next_root].iter());
+                current_result = find_one_part(part, [next_root].iter()).map(|x| x.0);
             }
             Some(FindResult::NamespacePackage(next_roots)) => {
-                current_result = find_one_part(part, next_roots.iter());
+                current_result = find_one_part(part, next_roots.iter()).map(|x| x.0);
             }
         }
     }
@@ -242,7 +244,7 @@ where
             // First try finding the module in `-stubs`.
             let stub_first = Name::new(format!("{first}-stubs"));
             let stub_result = find_one_part(&stub_first, include.clone())
-                .map(|start_result| continue_find_module(start_result, rest))
+                .map(|start_result| continue_find_module(start_result.0, rest))
                 .transpose()?
                 .flatten();
             if let Some(stub_result) = stub_result {
@@ -251,7 +253,7 @@ where
 
             // If we couldn't find it in a `-stubs` module, look normally.
             let result = find_one_part(first, include)
-                .and_then(|start_result| continue_find_module(start_result, rest).transpose())
+                .and_then(|start_result| continue_find_module(start_result.0, rest).transpose())
                 .transpose()?;
             Ok(result)
         }
@@ -288,7 +290,7 @@ where
 
     let mut found_stubs = None;
     for stub_module_import in stub_module_imports {
-        if let Some(stub_result) = continue_find_module(stub_module_import, rest)? {
+        if let Some(stub_result) = continue_find_module(stub_module_import.0, rest)? {
             found_stubs = Some(stub_result);
             break;
         }
@@ -311,7 +313,7 @@ where
     }
 
     for module in fallback_modules {
-        if let Some(module_result) = continue_find_module(module, rest)? {
+        if let Some(module_result) = continue_find_module(module.0, rest)? {
             return Ok(Some(module_result));
         }
     }
@@ -330,7 +332,7 @@ fn find_module_prefixes<'a>(
     if rest.is_empty() {
         results = find_one_part_prefix(first, include)
     } else {
-        let mut current_result = find_one_part(first, include);
+        let mut current_result = find_one_part(first, include).map(|x| x.0);
         for (i, part) in rest.iter().enumerate() {
             let is_last = i == rest.len() - 1;
             match current_result {
@@ -349,7 +351,7 @@ fn find_module_prefixes<'a>(
                         results = find_one_part_prefix(part, iter::once(&next_root));
                         break;
                     } else {
-                        current_result = find_one_part(part, iter::once(&next_root));
+                        current_result = find_one_part(part, iter::once(&next_root)).map(|x| x.0);
                     }
                 }
                 Some(FindResult::NamespacePackage(next_roots)) => {
@@ -357,7 +359,7 @@ fn find_module_prefixes<'a>(
                         results = find_one_part_prefix(part, next_roots.iter());
                         break;
                     } else {
-                        current_result = find_one_part(part, next_roots.iter());
+                        current_result = find_one_part(part, next_roots.iter()).map(|x| x.0);
                     }
                 }
             }
@@ -1111,30 +1113,36 @@ mod tests {
                 TestPath::file("windows_dll.pyd"),
             ],
         );
-        let result = find_one_part(&Name::new("nested_module"), [root.to_path_buf()].iter());
+        let result = find_one_part(&Name::new("nested_module"), [root.to_path_buf()].iter())
+            .unwrap()
+            .0;
         assert_eq!(
             result,
-            Some(FindResult::CompiledModule(root.join("nested_module.pyc")))
+            FindResult::CompiledModule(root.join("nested_module.pyc"))
         );
-        let result = find_one_part(&Name::new("cython_module"), [root.to_path_buf()].iter());
+        let result = find_one_part(&Name::new("cython_module"), [root.to_path_buf()].iter())
+            .unwrap()
+            .0;
         assert_eq!(
             result,
-            Some(FindResult::CompiledModule(root.join("cython_module.pyx")))
+            FindResult::CompiledModule(root.join("cython_module.pyx"))
         );
-        let result = find_one_part(&Name::new("windows_dll"), [root.to_path_buf()].iter());
+        let result = find_one_part(&Name::new("windows_dll"), [root.to_path_buf()].iter())
+            .unwrap()
+            .0;
         assert_eq!(
             result,
-            Some(FindResult::CompiledModule(root.join("windows_dll.pyd")))
+            FindResult::CompiledModule(root.join("windows_dll.pyd"))
         );
         let result = find_one_part(
             &Name::new("another_nested_module"),
             [root.to_path_buf()].iter(),
-        );
+        )
+        .unwrap()
+        .0;
         assert_eq!(
             result,
-            Some(FindResult::SingleFilePyModule(
-                root.join("another_nested_module.py")
-            ))
+            FindResult::SingleFilePyModule(root.join("another_nested_module.py"))
         );
     }
 
@@ -1152,12 +1160,11 @@ mod tests {
                 ],
             )],
         );
-        let start_result =
-            find_one_part(&Name::new("subdir"), [root.to_path_buf()].iter()).unwrap();
-        let module_path = continue_find_module(start_result, &[Name::new("nested_module")]);
+        let start_result = find_one_part(&Name::new("subdir"), [root.to_path_buf()].iter())
+            .unwrap()
+            .0;
+        let module_path = continue_find_module(start_result.clone(), &[Name::new("nested_module")]);
         assert!(matches!(module_path, Err(FindError::Ignored)));
-        let start_result =
-            find_one_part(&Name::new("subdir"), [root.to_path_buf()].iter()).unwrap();
         let module_path =
             continue_find_module(start_result, &[Name::new("another_nested_module")]).unwrap();
         assert_eq!(
@@ -1184,8 +1191,9 @@ mod tests {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
         TestPath::setup_test_directory(root, vec![TestPath::file("module.pyc")]);
-        let start_result =
-            find_one_part(&Name::new("module"), [root.to_path_buf()].iter()).unwrap();
+        let start_result = find_one_part(&Name::new("module"), [root.to_path_buf()].iter())
+            .unwrap()
+            .0;
         let result = continue_find_module(start_result, &[]);
         assert!(matches!(result, Err(FindError::Ignored)));
     }
