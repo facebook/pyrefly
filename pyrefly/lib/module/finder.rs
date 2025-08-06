@@ -49,6 +49,23 @@ impl FindResult {
             Self::SingleFilePyModule(path)
         }
     }
+
+    /// Compares the given `FindResult`s, taking the variant with the highest priority,
+    /// and preferring variant `a` (the 'earlier' variant). The contents of the variants
+    /// are not compared.
+    fn best_result(a: FindResult, b: FindResult) -> Self {
+        match (&a, &b) {
+            (FindResult::RegularPackage(..), _) => a,
+            (_, FindResult::RegularPackage(..)) => b,
+            (FindResult::SingleFilePyiModule(_), _) => a,
+            (_, FindResult::SingleFilePyiModule(_)) => b,
+            (FindResult::SingleFilePyModule(_), _) => a,
+            (_, FindResult::SingleFilePyModule(_)) => b,
+            (FindResult::CompiledModule(_), _) => a,
+            (_, FindResult::CompiledModule(_)) => b,
+            (FindResult::NamespacePackage(_), _) => a,
+        }
+    }
 }
 
 /// In the given root, attempt to find a match for the given [`Name`].
