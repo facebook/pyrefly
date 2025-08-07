@@ -7,6 +7,7 @@
 
 #![cfg(test)]
 
+mod abstract_class_instantiation;
 mod assign;
 mod attribute_narrow;
 mod attributes;
