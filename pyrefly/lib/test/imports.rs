@@ -18,29 +18,6 @@ x: X = X()
     )
 }
 
-fn env_class_x_deprecated() -> TestEnv {
-    TestEnv::one(
-        "foo",
-        r#"
-from warnings import deprecated
-@deprecated("Don't use this")
-class X: ...
-x: X = X()
-"#,
-    )
-}
-
-fn env_func_x_deprecated() -> TestEnv {
-    TestEnv::one(
-        "foo",
-        r#"
-from warnings import deprecated
-@deprecated("Don't use this")
-def x(): ...
-"#,
-    )
-}
-
 fn env_class_x_deeper() -> TestEnv {
     let mut t = TestEnv::new();
     t.add_with_path("foo", "foo/__init__.pyi", "");
@@ -787,6 +764,18 @@ from . import foo  # E: Could not find import of `.`
     "#,
 );
 
+fn env_class_x_deprecated() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+from warnings import deprecated
+@deprecated("Don't use this")
+class X: ...
+x: X = X()
+"#,
+    )
+}
+
 testcase!(
     test_import_deprecated_class_warn,
     env_class_x_deprecated(),
@@ -807,6 +796,17 @@ x = X()
 "#,
 );
 
+fn env_func_x_deprecated() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+from warnings import deprecated
+@deprecated("Don't use this")
+def x(): ...
+"#,
+    )
+}
+
 testcase!(
     test_import_deprecated_func_warn,
     env_func_x_deprecated(),
@@ -824,5 +824,58 @@ testcase!(
 from foo import * # E: Import of deprecated name `x`
 
 x()  # E: Call to deprecated function `foo.x`
+"#,
+);
+
+fn env_func_x_deprecated_conditionally() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+from warnings import deprecated
+import sys
+
+if sys.version_info >= (3, 10):
+    @deprecated("Don't use this")
+    def x(): ...
+else:
+    def x(): ...
+"#,
+    )
+}
+
+fn env_func_x_deprecated_conditionally_no_deprecation() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+from warnings import deprecated
+import sys
+
+if sys.version_info < (3, 10):
+    @deprecated("Don't use this")
+    def x(): ...
+else:
+    def x(): ...
+"#,
+    )
+}
+
+testcase!(
+    test_import_conditionally_deprecated_func_warn,
+    env_func_x_deprecated_conditionally(),
+    r#"
+from foo import x # E: Import of deprecated name `x`
+
+x()  # E: Call to deprecated function `foo.x`
+"#,
+);
+
+testcase!(
+    test_import_conditionally_deprecated_func_no_warn,
+    env_func_x_deprecated_conditionally_no_deprecation(),
+    r#"
+from foo import x
+# No warning for import, since the function is not deprecated in this context
+
+x()
 "#,
 );
