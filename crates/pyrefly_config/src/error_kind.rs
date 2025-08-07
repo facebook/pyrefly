@@ -83,6 +83,9 @@ impl Severity {
 #[derive(Display, Sequence, Deserialize, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum ErrorKind {
+    /// Attempting to call an abstract method directly.
+    /// Abstract methods must be implemented in concrete subclasses.
+    AbstractMethodCall,
     /// Attempting to annotate a name with incompatible annotations.
     /// e.g. when a name is annotated in multiple branches of an if statement
     AnnotationMismatch,
