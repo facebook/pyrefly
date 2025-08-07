@@ -879,3 +879,32 @@ from foo import x
 x()
 "#,
 );
+
+fn env_func_x_deprecated_overload_only() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+from warnings import deprecated
+from typing import Any, overload
+@overload
+def x(y: int) -> int: ...
+
+@deprecated("Don't use this")
+@overload
+def x(y: str) -> str: ...
+
+def x(y: Any) -> Any: ...
+"#,
+    )
+}
+
+testcase!(
+    test_import_deprecated_overload_no_warn,
+    env_func_x_deprecated_overload_only(),
+    r#"
+from foo import x
+# No warning for import, since only the overload is deprecated
+
+x("hello")  # E: Call to deprecated overload `x`
+"#,
+);
