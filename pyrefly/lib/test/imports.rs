@@ -905,6 +905,6 @@ testcase!(
 from foo import x
 # No warning for import, since only the overload is deprecated
 
-x("hello")  # E: Call to deprecated overload `x`
+x("hello")  # E: Call to deprecated overload `foo.x`
 "#,
 );
