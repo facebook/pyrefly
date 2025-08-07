@@ -168,11 +168,10 @@ fn is_deprecated_decorator(decorator: &Decorator) -> bool {
 }
 
 fn is_overload_decorator(decorator: &Decorator) -> bool {
-    decorator.expression.as_call_expr().is_some_and(|x| {
-        x.func
-            .as_name_expr()
-            .is_some_and(|x| x.id == "overload" || x.id == "typing.overload")
-    })
+    decorator
+        .expression
+        .as_name_expr()
+        .is_some_and(|x| x.id == "overload" || x.id == "typing.overload")
 }
 
 impl Definitions {
