@@ -539,6 +539,46 @@ impl<'a> Transaction<'a> {
         res
     }
 
+    /// Computes line count split between user-owned and dependency modules.
+    /// Returns (user_lines, dependency_lines).
+    pub fn split_line_count(&self, user_handles: &HashSet<Handle>) -> (usize, usize) {
+        let mut user_lines = 0;
+        let mut dep_lines = 0;
+
+        if self.data.updated_modules.is_empty() {
+            for (handle, module) in self.readable.modules.iter() {
+                let lines = module.state.steps.line_count();
+                if user_handles.contains(handle) {
+                    user_lines += lines;
+                } else {
+                    dep_lines += lines;
+                }
+            }
+        } else {
+            for (handle, module) in self.data.updated_modules.iter_unordered() {
+                let lines = module.state.read().steps.line_count();
+                if user_handles.contains(handle) {
+                    user_lines += lines;
+                } else {
+                    dep_lines += lines;
+                }
+            }
+
+            for (handle, module) in self.readable.modules.iter() {
+                if self.data.updated_modules.get(handle).is_none() {
+                    let lines = module.state.steps.line_count();
+                    if user_handles.contains(handle) {
+                        user_lines += lines;
+                    } else {
+                        dep_lines += lines;
+                    }
+                }
+            }
+        }
+
+        (user_lines, dep_lines)
+    }
+
     /// Create a handle for import `module` within the handle `handle`
     pub fn import_handle(
         &self,
