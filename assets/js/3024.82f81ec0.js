@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunknew_website=self.webpackChunknew_website||[]).push([[3024],{33024:e=>{e.exports=JSON.parse('{"authors":[{"name":"Aaron Pollack","url":"https://github.com/lolpack","key":"aaronp","page":null,"count":1},{"name":"Abby Mitchell","url":"https://github.com/javabster","key":"abbym","page":null,"count":0}]}')}}]);

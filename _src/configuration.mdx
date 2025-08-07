@@ -249,13 +249,6 @@ A file path describing a root from which imports should
 be found and imported from. This takes the lowest priority in import
 resolution, after [`search-path`](#search-path) and `typeshed`.
 
-`site-package-path` entries have special rules around when they can be imported,
-according to the typing specification. See
-[Site Package Path Typing Rules](./import-resolution.mdx#site-package-path-typing-rules)
-for more information, and [`use-untyped-imports`](#use-untyped-imports) and
-[`ignore-missing-source`](#ignore-missing-source) for details on how to configure
-that behavior.
-
 - Type: list of directories
 - Default: result from [Environment Autoconfiguration](#environment-autoconfiguration), or
   `[]` if the Python interpreter cannot be queried
@@ -418,19 +411,6 @@ the substring '<span>&#64;</span>generated'.
 - Default: `false`
 - Flag equivalent: `--ignore-errors-in-generated-code`
 - Equivalent configs: none
-
-### `use-untyped-imports`
-
-Whether to search imports in [`site-package-path`](#site-package-path) that do not have a
-`py.typed` file unconditionally. When this is true, we skip any checks for `py.typed` files,
-and return the first valid import we can find. See
-[Site Package Path Typing Rules](./import-resolution.mdx#site-package-path-typing-rules) for
-more information on when a `site-package-path` cannot be used for typing information.
-
-- Type: bool
-- Default: `true`
-- Flag equivalent: `--use-untyped-imports`
-- Equivalent configs: `useLibraryCodeForTypes` in Pyright, `follow_untyped_imports` in mypy
 
 ### `ignore-missing-source`
 
@@ -717,7 +697,6 @@ python-version = "3.13"
 
 replace-imports-with-any = []
 ignore-errors-in-generated-code = false
-use-untyped-imports = false
 ignore-missing-source = false
 
 [errors]
@@ -743,7 +722,6 @@ replace-imports-with-any = [
   "*.series",
 ]
 ignore-errors-in-generated-code = true
-use-untyped-imports = true
 ignore-missing-source = true
 
 # disable `bad-assignment` and `invalid-argument` for the whole project
@@ -787,27 +765,27 @@ With the above config, here are the actual config values some files would use:
   - `replace-imports-with-any`: `["unittest.*"]`
   - `errors`: `{assert-type = true}`
   - `ignore-errors-in-generated-code`: `true`
-  - `use-untyped-imports`: `true`
+  - `ignore-missing-source`: `true`
 - `sub/project/tests/another_file.py`
   - `replace-imports-with-any`: `["pytest.*"]`
   - `errors`: `{assert-type = true}`
   - `ignore-errors-in-generated-code`: `true`
-  - `use-untyped-imports`: `true`
+  - `ignore-missing-source`: `true`
 - `sub/project/non_test_file.py`
   - `replace-imports-with-any`: `["sympy.*", "*.series"]`
   - `errors`: `{assert-type = true}`
   - `ignore-errors-in-generated-code`: `true`
-  - `use-untyped-imports`: `true`
+  - `ignore-missing-source`: `true`
 - `sub/sub_file.py`
   - `replace-imports-with-any`: `["sympy.*", "*.series"]`
   - `errors`: `{assert-type = false}`
   - `ignore-errors-in-generated-code`: `true`
-  - `use-untyped-imports`: `true`
+  - `ignore-missing-source`: `true`
 - `top_level_file.py`
   - `replace-imports-with-any`: `["sympy.*", "*.series"]`
   - `errors`: `{assert-type = true, bad-assignment = false, invalid-argument = false}`
   - `ignore-errors-in-generated-code`: `true`
-  - `use-untyped-imports`: `true`
+  - `ignore-missing-source`: `true`
 
 ### Example `pyproject.toml`
 
@@ -835,7 +813,6 @@ replace-imports-with-any = [
 ]
 
 ignore-errors-in-generated-code = true
-use-untyped-imports = true
 ignore-missing-source = true
 
 [tool.pyrefly.errors]

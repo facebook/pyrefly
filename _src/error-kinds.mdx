@@ -840,3 +840,17 @@ This error arises when attempting to perform an operation between values of two 
 if "hello" in 1:  # int doesn't support `in`!
   ...
 ```
+
+## unused-coroutine
+
+If the result of an async function call is not awaited or used, we will raise an error.
+
+```python
+async def foo():
+    return 1
+
+async def bar():
+    foo()  # error
+    await foo()  # ok
+    x = foo()  # ok
+```
