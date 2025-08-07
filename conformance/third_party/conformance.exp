@@ -3962,8 +3962,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "Call to deprecated overload `foo`",
-      "description": "Call to deprecated overload `foo`",
+      "concise_description": "Call to deprecated overload `_directives_deprecated_library.foo`",
+      "description": "Call to deprecated overload `_directives_deprecated_library.foo`",
       "line": 30,
       "name": "deprecated",
       "stop_column": 15,
