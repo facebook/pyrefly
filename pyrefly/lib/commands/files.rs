@@ -92,7 +92,7 @@ fn get_globs_and_config_for_project(
     project_excludes: Option<Globs>,
     args: &ConfigOverrideArgs,
 ) -> anyhow::Result<(FilteredGlobs, ConfigFinder)> {
-    let (config, errors) = match config {
+    let (config, mut errors) = match config {
         Some(explicit) => get_explicit_config(&explicit, args),
         None => {
             let current_dir = std::env::current_dir().context("cannot identify current dir")?;
@@ -126,11 +126,19 @@ fn get_globs_and_config_for_project(
 
     // We want our config_finder to never actually
     let config_finder = ConfigFinder::new_constant(config.dupe());
-    add_config_errors(&config_finder, errors)?;
 
     debug!("Config is: {}", config);
 
-    Ok((config.get_filtered_globs(project_excludes), config_finder))
+    let mut filtered_globs = config.get_filtered_globs(project_excludes);
+    filtered_globs
+        .errors()
+        .into_iter()
+        .map(ConfigError::warn)
+        .for_each(|e| errors.push(e));
+
+    add_config_errors(&config_finder, errors)?;
+
+    Ok((filtered_globs, config_finder))
 }
 
 /// Get inputs for a per-file check. If an explicit config is passed in, we use it; otherwise, we

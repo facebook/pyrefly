@@ -475,12 +475,12 @@ impl Globs {
 ///    positive or negative match (`!`) is used
 /// 3. `.ignore`: if it exists, behaves similar to `.gitignore`
 /// 4. `.git/info/excludes`: if it exists, behaves similar to `.gitignore`
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct GlobFilter {
     excludes: Globs,
     ignores: Vec<Gitignore>,
     ignore_paths: Vec<PathBuf>,
-    errors: Arc<Vec<anyhow::Error>>,
+    errors: Vec<anyhow::Error>,
 }
 
 impl Display for GlobFilter {
@@ -525,7 +525,7 @@ impl GlobFilter {
             excludes,
             ignores,
             ignore_paths,
-            errors: Arc::new(errors),
+            errors,
         }
     }
 
@@ -534,7 +534,7 @@ impl GlobFilter {
             excludes: Globs::empty(),
             ignores: vec![],
             ignore_paths: vec![],
-            errors: Arc::new(vec![]),
+            errors: vec![],
         }
     }
 
@@ -578,12 +578,12 @@ impl GlobFilter {
     }
 
     /// Get the errors from this glob, replacing them with an empty list.
-    pub fn errors(&self) -> &[anyhow::Error] {
-        &self.errors
+    pub fn errors(&mut self) -> Vec<anyhow::Error> {
+        std::mem::take(&mut self.errors)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct FilteredGlobs {
     includes: Globs,
     filter: GlobFilter,
@@ -612,6 +612,10 @@ impl FilteredGlobs {
 
     pub fn covers(&self, path: &Path) -> bool {
         self.includes.covers(path) && !self.filter.is_excluded(path)
+    }
+
+    pub fn errors(&mut self) -> Vec<anyhow::Error> {
+        self.filter.errors()
     }
 }
 
