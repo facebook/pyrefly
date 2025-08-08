@@ -6,6 +6,7 @@
  */
 
 use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::fmt;
 use std::fmt::Display;
 use std::hash::Hash;
@@ -16,12 +17,14 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use anyhow::Context;
 use bstr::ByteSlice;
 use glob::Pattern;
 use ignore::Match;
 use ignore::gitignore::Gitignore;
+use ignore::gitignore::GitignoreBuilder;
 use itertools::Itertools;
 use serde::Deserialize;
 use serde::Serialize;
@@ -34,6 +37,25 @@ use crate::absolutize::Absolutize as _;
 use crate::fs_anyhow;
 use crate::prelude::SliceExt;
 use crate::prelude::VecExt;
+use crate::upward_search::UpwardSearch;
+
+static IGNORE_FILES_SEARCH: LazyLock<Vec<UpwardSearch<Arc<(PathBuf, PathBuf)>>>> =
+    LazyLock::new(|| {
+        [".gitignore", ".ignore", ".git/info/exclude"]
+            .iter()
+            .map(|f| {
+                UpwardSearch::new(vec![OsString::from(f)], |p| {
+                    let mut ignore_root = p.to_path_buf();
+                    ignore_root.pop();
+                    if *f == ".git/info/exclude" {
+                        ignore_root.pop();
+                        ignore_root.pop();
+                    }
+                    Arc::new((p.to_path_buf(), ignore_root))
+                })
+            })
+            .collect::<Vec<_>>()
+    });
 
 #[derive(Debug, Clone, Eq, Default)]
 
@@ -448,12 +470,12 @@ impl Globs {
 /// 2. `.gitignore`: if one exists from an upward search from `root`, the first
 ///    positive or negative match (`!`) is used
 /// 3. `.ignore`: if it exists, behaves similar to `.gitignore`
-/// 4. `.git/excludes`: if it exists, behaves similar to `.gitignore`
+/// 4. `.git/info/excludes`: if it exists, behaves similar to `.gitignore`
 #[derive(Debug, Clone)]
 pub struct GlobFilter {
     excludes: Globs,
     ignores: Vec<Gitignore>,
-    ignore_paths: SmallSet<PathBuf>,
+    ignore_paths: Vec<PathBuf>,
     errors: Arc<Vec<anyhow::Error>>,
 }
 
@@ -480,7 +502,7 @@ impl Eq for GlobFilter {}
 impl Hash for GlobFilter {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.excludes.hash(state);
-        self.ignore_paths.hash_ordered(state);
+        self.ignore_paths.hash(state);
     }
 }
 
@@ -489,8 +511,8 @@ impl GlobFilter {
     /// If `ignore_file_search_start` is provided, it is where the upward search for
     /// ignore files will originate from. Typically, this should be your project root.
     pub fn new(excludes: Globs, ignore_file_search_start: Option<&Path>) -> Self {
-        let (ignores, errors, ignore_paths) = if let Some(_root) = ignore_file_search_start {
-            (vec![], vec![], vec![])
+        let (ignores, errors, ignore_paths) = if let Some(root) = ignore_file_search_start {
+            Self::ignore_files(root)
         } else {
             (vec![], vec![], vec![])
         };
@@ -498,7 +520,7 @@ impl GlobFilter {
         Self {
             excludes,
             ignores,
-            ignore_paths: SmallSet::from_iter(ignore_paths),
+            ignore_paths,
             errors: Arc::new(errors),
         }
     }
@@ -507,9 +529,31 @@ impl GlobFilter {
         Self {
             excludes: Globs::empty(),
             ignores: vec![],
-            ignore_paths: SmallSet::new(),
+            ignore_paths: vec![],
             errors: Arc::new(vec![]),
         }
+    }
+
+    pub fn ignore_files(root: &Path) -> (Vec<Gitignore>, Vec<anyhow::Error>, Vec<PathBuf>) {
+        let found_ignores = IGNORE_FILES_SEARCH
+            .iter()
+            .filter_map(|s| s.directory_absolute(root));
+        let mut errors = vec![];
+        let mut ignores = vec![];
+        let mut ignore_paths = vec![];
+        for item in found_ignores {
+            let (ignore_file, ignore_root) = &*item;
+            let mut builder = GitignoreBuilder::new(ignore_root);
+            if let Some(error) = builder.add(ignore_file) {
+                errors.push(error.into());
+            }
+            match builder.build() {
+                Ok(ignore) => ignores.push(ignore),
+                Err(error) => errors.push(error.into()),
+            }
+            ignore_paths.push(ignore_file.to_owned());
+        }
+        (ignores, errors, ignore_paths)
     }
 
     // Does this path match (either positively or negatively), the `excludes` or ignore
@@ -1163,5 +1207,112 @@ mod tests {
             .unwrap(),
             vec![root.join("a/c.py")],
         );
+    }
+
+    #[test]
+    fn test_globfilter_finds_ignorefiles() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file_with_contents(
+                    ".gitignore",
+                    "**/gitignore_exclude\n!**/gitignore_include/**",
+                ),
+                TestPath::dir(
+                    ".git",
+                    vec![TestPath::dir(
+                        "info",
+                        vec![TestPath::file_with_contents(
+                            "exclude",
+                            "**/gitexclude_exclude",
+                        )],
+                    )],
+                ),
+                TestPath::dir(
+                    "project",
+                    vec![
+                        TestPath::file("pyrefly.toml"),
+                        TestPath::file_with_contents(
+                            ".ignore",
+                            // added gitignore_include here to show that .gitignore's allowlist,
+                            // which will be found first will be preferred over anything later
+                            "**/gitignore_include/**\nignore_exclude",
+                        ),
+                    ],
+                ),
+            ],
+        );
+        let filter = GlobFilter::new(Globs::empty(), Some(&root.join("project")));
+
+        assert_eq!(
+            filter.ignore_paths,
+            vec![
+                root.join(".gitignore"),
+                root.join("project/.ignore"),
+                root.join(".git/info/exclude"),
+            ],
+        );
+        assert_eq!(filter.errors.len(), 0);
+        assert_eq!(filter.ignores.len(), 3);
+    }
+
+    #[test]
+    fn test_gitignore_globfilter() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file_with_contents(
+                    ".gitignore",
+                    "**/*.gitignore_exclude\n!**/include/**",
+                ),
+                TestPath::dir(
+                    ".git",
+                    vec![TestPath::dir(
+                        "info",
+                        vec![TestPath::file_with_contents("exclude", "**/*.gitexclude")],
+                    )],
+                ),
+                TestPath::dir(
+                    "project",
+                    vec![
+                        TestPath::file("pyrefly.toml"),
+                        TestPath::file_with_contents(
+                            ".ignore",
+                            // added gitignore_include here to show that .gitignore's allowlist,
+                            // which will be found first will be preferred over anything later
+                            "**/include/**\n**/*.ignore_exclude",
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        let project_root = root.join("project");
+        let filter = GlobFilter::new(
+            Globs::new_with_root(&project_root, vec!["exclude_glob/**".to_owned()]).unwrap(),
+            Some(&project_root),
+        );
+
+        // do non-excluded files get excluded
+        assert!(!filter.is_excluded(&project_root.join("my_file.py")));
+
+        // test exclude globs
+        assert!(filter.is_excluded(&project_root.join("exclude_glob/my_file.py")));
+
+        // test `.gitignore`
+        assert!(filter.is_excluded(&project_root.join("my_file.gitignore_exclude")));
+        // Even though this is included in `.ignore`'s excludes, `.gitignore` takes priority,
+        // which allowlists it
+        assert!(!filter.is_excluded(&project_root.join("include/test.gitignore_exclude")));
+
+        // test `.ignore`
+        assert!(filter.is_excluded(&project_root.join("test/my_file.ignore_exclude")));
+
+        // test `.git/info/exclude`
+        assert!(filter.is_excluded(&project_root.join("my_file.gitexclude")));
     }
 }
