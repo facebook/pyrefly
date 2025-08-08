@@ -19,7 +19,8 @@ use crate::lock::RwLock;
 
 /// A cached way to search the file system upwards for specific files.
 pub struct UpwardSearch<T> {
-    /// The filenames we are looking for.
+    /// The filenames we are looking for. Multi-component paths are supported, such as
+    /// `.git/info/exclude`.
     filenames: Vec<OsString>,
     /// The cached state, with previously found entries.
     state: RwLock<SmallMap<PathBuf, Option<T>>>,
@@ -80,13 +81,16 @@ impl<T: Dupe + Debug> UpwardSearch<T> {
         let mut buffer = dir.to_owned();
         'outer: for i in 0..cache_answer.as_ref().map_or(FULL_PATH, |x| x.0) {
             for stem in &self.filenames {
+                let stem_length = PathBuf::from(stem).components().count();
                 buffer.push(stem);
                 if buffer.exists() {
                     let c = Some((self.load)(&buffer));
                     found_answer = Some((i + 1, c));
                     break 'outer;
                 }
-                buffer.pop();
+                for _ in 0..stem_length {
+                    buffer.pop();
+                }
             }
             if !buffer.pop() {
                 break;
@@ -185,6 +189,25 @@ mod tests {
                 ("foo/bar", "foo"),
                 ("bar/magic", ""),
             ],
+        );
+    }
+
+    #[test]
+    fn test_multi_component_path() {
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("a/b/c")).unwrap();
+        fs::write(root.path().join("a/b/c/d.test"), "").unwrap();
+        fs::create_dir_all(root.path().join("a/e/f/g")).unwrap();
+
+        let upward_search = UpwardSearch::new(vec![OsString::from("a/b/c/d.test")], |p| {
+            Arc::new(p.to_path_buf())
+        });
+
+        assert_eq!(
+            &*upward_search
+                .directory_absolute(&root.path().join("a/e/f/g"))
+                .unwrap(),
+            &root.path().join("a/b/c/d.test")
         );
     }
 }
