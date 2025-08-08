@@ -2917,7 +2917,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             BindingYieldFrom::YieldFrom(annot, x) => {
                 // TODO: Error if the function is async
                 let annot = annot.map(|k| self.get_idx(k));
-                let want = annot.as_ref().and_then(|x| x.ty(self.stdlib));
+                let want = annot
+                    .as_ref()
+                    .and_then(|x| x.ty(self.stdlib))
+                    .and_then(|ty| self.decompose_generator(&ty));
 
                 let mut ty = self.expr_infer(&x.value, errors);
                 let res = if let Some(generator) = self.unwrap_generator(&ty) {
@@ -2945,7 +2948,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                     YieldFromResult::any_error()
                 };
-                if let Some(want) = want {
+                if let Some((want_yield, want_send, _)) = want {
+                    // We don't need to be compatible with the expected generator return type.
+                    let want = self
+                        .stdlib
+                        .generator(want_yield, want_send, Type::any_implicit())
+                        .to_type();
                     self.check_type(&want, &ty, x.range, errors, &|| {
                         TypeCheckContext::of_kind(TypeCheckKind::YieldFrom)
                     });
