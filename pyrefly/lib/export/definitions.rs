@@ -16,6 +16,7 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::visit::Visit;
+use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -25,7 +26,9 @@ use ruff_python_ast::Identifier;
 use ruff_python_ast::Operator;
 use ruff_python_ast::Pattern;
 use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtExpr;
+use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
@@ -90,6 +93,8 @@ pub struct Definitions {
     /// that are guaranteed to be imported under `foo` when `foo` is itself imported in downstream
     /// files.
     pub implicitly_imported_submodules: SmallSet<Name>,
+    /// Deprecated names that are defined in this module.
+    pub deprecated: SmallSet<Name>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -152,6 +157,21 @@ fn implicitly_imported_submodule(
         .strip_prefix(importing_module_name.components().as_slice())
         .and_then(|components| components.first())
         .cloned()
+}
+
+fn is_deprecated_decorator(decorator: &Decorator) -> bool {
+    decorator.expression.as_call_expr().is_some_and(|x| {
+        x.func
+            .as_name_expr()
+            .is_some_and(|x| x.id == "deprecated" || x.id == "warnings.deprecated")
+    })
+}
+
+fn is_overload_decorator(decorator: &Decorator) -> bool {
+    decorator
+        .expression
+        .as_name_expr()
+        .is_some_and(|x| x.id == "overload" || x.id == "typing.overload")
 }
 
 impl Definitions {
@@ -369,11 +389,24 @@ impl<'a> DefinitionsBuilder<'a> {
                     }
                 }
             }
-            Stmt::ClassDef(x) => {
+            Stmt::ClassDef(StmtClassDef {
+                name,
+                body,
+                decorator_list,
+                ..
+            }) => {
+                // If the class is decorated with `@deprecated`, we mark it as deprecated.
+                let mut is_deprecated = false;
+                for d in decorator_list {
+                    is_deprecated = is_deprecated || is_deprecated_decorator(d);
+                }
+                if is_deprecated {
+                    self.inner.deprecated.insert(name.id.clone());
+                }
                 self.add_identifier_with_body(
-                    &x.name,
+                    name,
                     DefinitionStyle::Local(SymbolKind::Class),
-                    Some(&x.body),
+                    Some(body),
                 );
                 return; // These things are inside a scope
             }
@@ -468,11 +501,27 @@ impl<'a> DefinitionsBuilder<'a> {
                     self.expr_lvalue(&x.name)
                 }
             }
-            Stmt::FunctionDef(x) => {
+            Stmt::FunctionDef(StmtFunctionDef {
+                name,
+                body,
+                decorator_list,
+                ..
+            }) => {
+                let mut is_overload = false;
+                let mut is_deprecated = false;
+                for d in decorator_list {
+                    is_overload = is_overload || is_overload_decorator(d);
+                    is_deprecated = is_deprecated || is_deprecated_decorator(d);
+                }
+                // If the function is not an overload and decorated with
+                // `@deprecated`, we mark it as deprecated.
+                if is_deprecated && !is_overload {
+                    self.inner.deprecated.insert(name.id.clone());
+                }
                 self.add_identifier_with_body(
-                    &x.name,
+                    name,
                     DefinitionStyle::Local(SymbolKind::Function),
-                    Some(&x.body),
+                    Some(body),
                 );
                 return; // don't recurse because a separate scope
             }

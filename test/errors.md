@@ -23,6 +23,7 @@ $ echo "x: str = 12" > $TMPDIR/shown1.py && \
 > echo "import shown1; y: int = shown1.x" > $TMPDIR/shown2.py && \
 > $PYREFLY check --python-version 3.13.0 $TMPDIR/shown2.py --check-all --output-format=min-text
 */shown*.py:1:* (glob)
+ WARN importlib/_bootstrap_external.pyi:1:40-41: Import of deprecated name `WindowsRegistryFinder` [deprecated]
 */shown*.py:1:* (glob)
 [1]
 ```
