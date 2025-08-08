@@ -51,7 +51,11 @@ impl Docstring {
                 break; // Stop after first match to avoid over-trimming
             }
         }
-        let result = result.replace("\r", "").replace("\t", "    ");
+        let result = result
+            .replace("\r", "")
+            .replace("\t", "    ")
+            .replace("[", r"\[")
+            .replace("]", r"\]");
 
         // Remove the shortest amount of whitespace from the beginning of each line
         let min_indent = result
@@ -99,6 +103,7 @@ mod tests {
             "test docstring"
         );
     }
+
     #[test]
     fn test_clean_removes_multiline_single_quotes() {
         assert_eq!(
@@ -168,5 +173,10 @@ mod tests {
             Docstring::clean("\"\"\"hello\n  world\n  test\"\"\"").as_str(),
             "hello\nworld\ntest"
         );
+    }
+
+    #[test]
+    fn test_brackets() {
+        assert_eq!(Docstring::clean("tuple[test]").as_str(), r"tuple\[test\]");
     }
 }
