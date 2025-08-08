@@ -30,6 +30,49 @@ $ PYREFLY_STDLIB_SEARCH_PATH=$TYPESHED_ROOT/typeshed/stdlib $PYREFLY check --pyt
 [0]
 ```
 
+## Ignore files are found correctly
+
+```scrut {output_stream: stderr}
+$ mkdir $TMPDIR/ignores && echo "*" > $TMPDIR/ignores/.gitignore && \
+> touch $TMPDIR/ignores/.ignore && mkdir -p $TMPDIR/ignores/.git/info && \
+> touch $TMPDIR/ignores/.git/info/exclude && \
+> echo "x: str = 12" > $TMPDIR/ignores/test.py && \
+> touch $TMPDIR/ignores/pyrefly.toml && \
+> $PYREFLY check --python-version 3.13.0 -c $TMPDIR/ignores/pyrefly.toml --output-format=min-text
+ INFO Checking project configured at * (glob)
+Pattern * is matched by `project-excludes` or ignore file. (glob)
+`project-excludes`: [*], ignore files [*/.gitignore, */.ignore, */.git/info/exclude] (glob)
+[1]
+```
+
+## Ignore files filter results
+
+```scrut
+$ mkdir $TMPDIR/gitignore && echo "error.py" > $TMPDIR/gitignore/.gitignore && \
+> echo "from typing_extensions import reveal_type; reveal_type(1)" > $TMPDIR/gitignore/test.py && \
+> echo "reveal_type(2)" > $TMPDIR/gitignore/error.py && \
+> touch $TMPDIR/gitignore/pyrefly.toml && \
+> $PYREFLY check --python-version 3.13.0 -c $TMPDIR/gitignore/pyrefly.toml --output-format=min-text
+ INFO */gitignore/test.py* revealed type: Literal[1] * (glob)
+[0]
+```
+
+## Ignore files work relative to their directory
+
+```scrut
+$ mkdir $TMPDIR/relative_ignore && \
+> echo "my_project/gitignore_error.py" > $TMPDIR/relative_ignore/.gitignore && \
+> mkdir -p $TMPDIR/relative_ignore/.git/info && \
+> echo "my_project/gitexclude_error.py" > $TMPDIR/relative_ignore/.git/info/exclude && \
+> mkdir $TMPDIR/relative_ignore/my_project && \
+> echo "x: str = 1" > $TMPDIR/relative_ignore/my_project/gitignore_error.py && \
+> echo "y: str = 2" > $TMPDIR/relative_ignore/my_project/gitexclude_error.py && \
+> echo "x: int = 3" > $TMPDIR/relative_ignore/my_project/clean.py && \
+> touch $TMPDIR/relative_ignore/my_project/pyrefly.toml && \
+> $PYREFLY check --python-version 3.13.0 -c $TMPDIR/relative_ignore/my_project/pyrefly.toml --output-format=min-text
+[0]
+```
+
 ## Src layout
 
 ```scrut {output_stream: stderr}
