@@ -333,7 +333,7 @@ mod test {
         t.add(&path.display().to_string(), input);
         let includes =
             Globs::new(vec![format!("{}/**/*", tdir.path().display()).to_owned()]).unwrap();
-        let f_globs = FilteredGlobs::new(includes, Globs::empty());
+        let f_globs = FilteredGlobs::new(includes, Globs::empty(), None);
         let config_finder = t.config_finder();
         let result = InferArgs::run_inner(f_globs, config_finder, flags);
         assert!(

@@ -171,7 +171,7 @@ fn get_globs_and_config_for_files(
     };
     add_config_errors(&config_finder, errors)?;
     Ok((
-        FilteredGlobs::new(files_to_check, project_excludes),
+        FilteredGlobs::new(files_to_check, project_excludes, None),
         config_finder,
     ))
 }

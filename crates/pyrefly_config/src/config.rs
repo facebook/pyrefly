@@ -362,7 +362,12 @@ impl ConfigFile {
                 .filter_map(|pattern| Glob::new(pattern.to_string_lossy().to_string()).ok())
                 .collect::<Vec<_>>(),
         );
-        FilteredGlobs::new(self.project_includes.clone(), project_excludes)
+        let root = if self.use_ignore_files {
+            self.import_root.as_deref()
+        } else {
+            None
+        };
+        FilteredGlobs::new(self.project_includes.clone(), project_excludes, root)
     }
 }
 
@@ -1435,6 +1440,7 @@ mod tests {
                         .collect::<Vec<_>>()
                 )
                 .unwrap(),
+                None,
             )
         );
         assert_eq!(
@@ -1450,6 +1456,7 @@ mod tests {
                         .collect::<Vec<_>>()
                 )
                 .unwrap(),
+                None,
             )
         );
     }

@@ -514,8 +514,8 @@ impl GlobFilter {
     /// Create a new `GlobFilter` with the given `Globs` as highest-priority excludes.
     /// If `ignore_file_search_start` is provided, it is where the upward search for
     /// ignore files will originate from. Typically, this should be your project root.
-    pub fn new(excludes: Globs, ignore_file_search_start: Option<&Path>) -> Self {
-        let (ignores, errors, ignore_paths) = if let Some(root) = ignore_file_search_start {
+    pub fn new(excludes: Globs, ignorefile_search_start: Option<&Path>) -> Self {
+        let (ignores, errors, ignore_paths) = if let Some(root) = ignorefile_search_start {
             Self::ignore_files(root)
         } else {
             (vec![], vec![], vec![])
@@ -590,10 +590,14 @@ pub struct FilteredGlobs {
 }
 
 impl FilteredGlobs {
-    pub fn new(includes: Globs, excludes: Globs) -> Self {
+    /// Build a new `FilteredGlobs` from the given `includes` and `excludes`.
+    /// If an `ignorefile_search_start` is provided, it is the path from which we will
+    /// perform an upward search for applicable ignore files, which will be used when
+    /// filtering out files from our glob search.
+    pub fn new(includes: Globs, excludes: Globs, ignorefile_search_start: Option<&Path>) -> Self {
         Self {
             includes,
-            filter: GlobFilter::new(excludes, None),
+            filter: GlobFilter::new(excludes, ignorefile_search_start),
         }
     }
 
