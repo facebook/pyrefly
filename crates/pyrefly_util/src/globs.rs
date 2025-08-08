@@ -164,9 +164,9 @@ impl Glob {
     fn resolve_path(
         path: PathBuf,
         results: &mut Vec<PathBuf>,
-        filter: &Globs,
+        filter: &GlobFilter,
     ) -> anyhow::Result<()> {
-        if filter.matches(&path) {
+        if filter.is_excluded(&path) {
             return Ok(());
         }
         if path.is_dir() {
@@ -177,7 +177,11 @@ impl Glob {
         Ok(())
     }
 
-    fn resolve_dir(path: &Path, results: &mut Vec<PathBuf>, filter: &Globs) -> anyhow::Result<()> {
+    fn resolve_dir(
+        path: &Path,
+        results: &mut Vec<PathBuf>,
+        filter: &GlobFilter,
+    ) -> anyhow::Result<()> {
         for entry in fs_anyhow::read_dir(path)? {
             let entry = entry
                 .with_context(|| format!("When iterating over directory `{}`", path.display()))?;
@@ -187,7 +191,7 @@ impl Glob {
         Ok(())
     }
 
-    fn resolve_pattern(pattern: &str, filter: &Globs) -> anyhow::Result<Vec<PathBuf>> {
+    fn resolve_pattern(pattern: &str, filter: &GlobFilter) -> anyhow::Result<Vec<PathBuf>> {
         let mut result = Vec::new();
         let paths = glob::glob(pattern)?;
         for path in paths {
@@ -284,13 +288,13 @@ impl PartialEq for Glob {
 }
 
 impl Glob {
-    fn files(&self, filter: &Globs) -> anyhow::Result<Vec<PathBuf>> {
+    fn files(&self, filter: &GlobFilter) -> anyhow::Result<Vec<PathBuf>> {
         let pattern = &self.0;
-        if filter.matches(self.as_path()) {
+        if filter.is_excluded(self.as_path()) {
             return Err(anyhow::anyhow!(
-                "Pattern {} is matched by `project-excludes`.\n`project-excludes`: {}",
+                "Pattern {} is matched by `project-excludes` or ignore file.\n{}",
                 pattern.as_str(),
-                filter.0.iter().map(|p| p.to_string()).join(", "),
+                filter
             ));
         }
         let pattern_str = pattern.as_str().to_owned();
@@ -382,7 +386,7 @@ impl Display for Globs {
 const USE_EDEN: bool = cfg!(fbcode_build);
 
 impl Globs {
-    pub fn files_eden(&self, filter: &Globs) -> anyhow::Result<Vec<PathBuf>> {
+    pub fn files_eden(&self, filter: &GlobFilter) -> anyhow::Result<Vec<PathBuf>> {
         fn hg_root() -> anyhow::Result<PathBuf> {
             let output = Command::new("hg")
                 .arg("root")
@@ -421,7 +425,7 @@ impl Globs {
                         line.to_str_lossy()
                     )
                 })?;
-                Glob::resolve_path(root.join(path), &mut result, &Globs::empty())?;
+                Glob::resolve_path(root.join(path), &mut result, &GlobFilter::empty())?;
             }
             Ok(result)
         }
@@ -429,11 +433,11 @@ impl Globs {
         let root = hg_root()?;
         let globs = self.0.try_map(|g| g.as_path().strip_prefix(&root))?;
         let mut result = eden_glob(root, globs)?;
-        result.retain(|p| !filter.matches(p));
+        result.retain(|p| !filter.is_excluded(p));
         Ok(result)
     }
 
-    fn filtered_files(&self, filter: &Globs) -> anyhow::Result<Vec<PathBuf>> {
+    fn filtered_files(&self, filter: &GlobFilter) -> anyhow::Result<Vec<PathBuf>> {
         if USE_EDEN {
             match self.files_eden(filter) {
                 Ok(files) if files.is_empty() => {
@@ -455,7 +459,7 @@ impl Globs {
     }
 
     pub fn files(&self) -> anyhow::Result<Vec<PathBuf>> {
-        self.filtered_files(&Globs::empty())
+        self.filtered_files(&GlobFilter::empty())
     }
 
     pub fn covers(&self, path: &Path) -> bool {
@@ -582,12 +586,15 @@ impl GlobFilter {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FilteredGlobs {
     includes: Globs,
-    excludes: Globs,
+    filter: GlobFilter,
 }
 
 impl FilteredGlobs {
     pub fn new(includes: Globs, excludes: Globs) -> Self {
-        Self { includes, excludes }
+        Self {
+            includes,
+            filter: GlobFilter::new(excludes, None),
+        }
     }
 
     /// Given a glob pattern, return the directories that can contain files that match the pattern.
@@ -596,11 +603,11 @@ impl FilteredGlobs {
     }
 
     pub fn files(&self) -> anyhow::Result<Vec<PathBuf>> {
-        self.includes.filtered_files(&self.excludes)
+        self.includes.filtered_files(&self.filter)
     }
 
     pub fn covers(&self, path: &Path) -> bool {
-        self.includes.covers(path) && !self.excludes.covers(path)
+        self.includes.covers(path) && !self.filter.is_excluded(path)
     }
 }
 
@@ -943,7 +950,7 @@ mod tests {
         let glob_files_match = |pattern: &str, expected: &[&str]| -> anyhow::Result<()> {
             let glob_files = Glob::new_with_root(root, pattern.to_owned())
                 .unwrap()
-                .files(&Globs::empty())?;
+                .files(&GlobFilter::empty())?;
             let mut glob_files = glob_files
                 .iter()
                 .map(|p| p.strip_prefix(root))
@@ -1109,7 +1116,7 @@ mod tests {
         let assert_empty_glob = |pattern_str: &str, description: &str| {
             let found_files = Glob::new_with_root(root, pattern_str.to_owned())
                 .unwrap()
-                .files(&Globs::empty())
+                .files(&GlobFilter::empty())
                 .unwrap_or_else(|_| Vec::new());
             assert!(
                 found_files.is_empty(),
@@ -1127,7 +1134,7 @@ mod tests {
         // Verify that normal files are still found
         let normal_files = Glob::new_with_root(root, "**/*.py".to_owned())
             .unwrap()
-            .files(&Globs::empty())
+            .files(&GlobFilter::empty())
             .unwrap();
         assert!(
             !normal_files.is_empty(),
@@ -1159,13 +1166,16 @@ mod tests {
 
         let pattern = root.join("**").to_string_lossy().to_string();
 
-        let mut sorted_globs = Glob::resolve_pattern(&pattern, &Globs::empty()).unwrap();
+        let mut sorted_globs = Glob::resolve_pattern(&pattern, &GlobFilter::empty()).unwrap();
         sorted_globs.sort();
         assert_eq!(sorted_globs, vec![root.join("a/b.py"), root.join("a/c.py")]);
         assert_eq!(
             Glob::resolve_pattern(
                 &pattern,
-                &Globs::new(vec![root.join("**").to_string_lossy().to_string()]).unwrap()
+                &GlobFilter::new(
+                    Globs::new(vec![root.join("**").to_string_lossy().to_string()]).unwrap(),
+                    None
+                ),
             )
             .unwrap(),
             Vec::<PathBuf>::new()
@@ -1173,20 +1183,29 @@ mod tests {
         assert!(
             Glob::new(pattern.clone())
                 .unwrap()
-                .files(&Globs::new(vec![root.join("**").to_string_lossy().to_string()]).unwrap())
+                .files(&GlobFilter::new(
+                    Globs::new(vec![root.join("**").to_string_lossy().to_string()]).unwrap(),
+                    None
+                ))
                 .is_err()
         );
         // double check that <path>/** will also match <path>
         assert!(
             Glob::new(root.to_string_lossy().to_string())
                 .unwrap()
-                .files(&Globs::new(vec![root.join("**").to_string_lossy().to_string()]).unwrap())
+                .files(&GlobFilter::new(
+                    Globs::new(vec![root.join("**").to_string_lossy().to_string()]).unwrap(),
+                    None
+                ))
                 .is_err()
         );
         assert_eq!(
             Glob::resolve_pattern(
                 &pattern,
-                &Globs::new(vec![root.join("a/c.py").to_string_lossy().to_string()]).unwrap()
+                &GlobFilter::new(
+                    Globs::new(vec![root.join("a/c.py").to_string_lossy().to_string()]).unwrap(),
+                    None
+                )
             )
             .unwrap(),
             vec![root.join("a/b.py")],
@@ -1194,7 +1213,10 @@ mod tests {
         assert_eq!(
             Glob::resolve_pattern(
                 &pattern,
-                &Globs::new(vec![root.join("a").to_string_lossy().to_string()]).unwrap()
+                &GlobFilter::new(
+                    Globs::new(vec![root.join("a").to_string_lossy().to_string()]).unwrap(),
+                    None
+                )
             )
             .unwrap(),
             Vec::<PathBuf>::new()
@@ -1202,7 +1224,10 @@ mod tests {
         assert_eq!(
             Glob::resolve_pattern(
                 &pattern,
-                &Globs::new(vec![root.join("a/b*").to_string_lossy().to_string()]).unwrap()
+                &GlobFilter::new(
+                    Globs::new(vec![root.join("a/b*").to_string_lossy().to_string()]).unwrap(),
+                    None
+                ),
             )
             .unwrap(),
             vec![root.join("a/c.py")],
