@@ -28,7 +28,7 @@ jobs:
       if: ${{ matrix.os == 'windows-latest' }}
       run: echo "CARGO_HOME=C:\\cargo" >> ${{ matrix.github_env }}
     - name: install Scrut
-      run: curl --proto '=https' --tlsv1.2 -sSf https://facebookincubator.github.io/scrut/install.sh | bash
+      run: curl --proto '=https' --retry 10 --retry-delay 10 --retry-all-errors --tlsv1.2 -sSf https://facebookincubator.github.io/scrut/install.sh | bash
       # Scrut doesn't support Windows yet
       if: ${{ matrix.os != 'windows-latest' }}
     - name: set up rust cache
