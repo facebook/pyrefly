@@ -83,30 +83,50 @@ def my_generator() -> Generator[Yield, Send, Return]:
 );
 
 testcase!(
-    test_nested_generator_error,
+    test_nested_generator_annot,
     r#"
-
 from typing import Generator, assert_type
 
-class Yield: pass
-class Send: pass
-class Return: pass
+class Y: pass
+class S: pass
+class R: pass
 
-class Yield2: pass
+class Y2(Y): pass
+class S2(S): pass
 
-def my_generator_nested() -> Generator[Yield2, Send, Return]:
-    yield Yield() # E: Type of yielded value `Yield` is not assignable to declared return type `Yield2`
-    return Return()
+def foo(b: bool) -> Generator[Y2, S, R]:
+    s1 = yield Y() # E: Type of yielded value `Y` is not assignable to declared return type `Y2`
+    s2 = yield Y2()
+    s3 = yield None # E: Type of yielded value `None` is not assignable to declared return type `Y2`
 
-def my_generator() -> Generator[Yield, Send, Return]:
-    s = yield Yield()
-    y = yield from  my_generator_nested() # E: Cannot yield from a generator of type `Generator[Yield2, Send, Return]`
+    assert_type(s1, S)
+    assert_type(s2, S)
+    assert_type(s3, S)
 
-    assert_type(s, Send)
-    assert_type(y, Return)
+    if b:
+        return None # E: Returned type `None` is not assignable to declared return type `R`
+    else:
+        return R()
 
-    return Return()
+def bar() -> Generator[Y, S2, None]:
+    s1 = yield Y()
+    s2 = yield Y2()
+    s3 = yield None # E: Type of yielded value `None` is not assignable to declared return type `Y`
 
+    r = yield from foo(True) # OK
+
+    assert_type(s1, S2)
+    assert_type(s2, S2)
+    assert_type(s3, S2)
+    assert_type(r, R)
+
+def baz() -> Generator[Y2, S2, None]:
+    s = yield from bar() # E: Cannot yield from a generator of type `Generator[Y, S2, None]` because it does not match the declared return type `Generator[Y2, S2, Unknown]`
+    assert_type(s, None)
+
+def qux() -> Generator[Y, S, None]:
+    s = yield from bar() # E: Cannot yield from a generator of type `Generator[Y, S2, None]` because it does not match the declared return type `Generator[Y, S, Unknown]`
+    assert_type(s, None)
 "#,
 );
 
@@ -125,7 +145,7 @@ assert_type(gen_numbers(), Iterator[int])
 );
 
 testcase!(
-    test_nested_generator,
+    test_nested_generator_infer,
     r#"
 from typing import Generator, assert_type, Literal, Any
 
