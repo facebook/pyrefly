@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Display;
 use std::fs::File;
@@ -716,14 +717,19 @@ impl CheckArgs {
             };
         }
         if self.output.summary == Summary::Full {
+            let user_handles: HashSet<Handle> = handles.iter().map(|(h, _)| h.clone()).collect();
+            let (user_lines, dep_lines) = transaction.split_line_count(&user_handles);
             info!(
-                "{} ({}, {}); took {timings}; memory ({})",
+                "{} ({}); {} ({} in your project, {} in dependencies); \
+                took {timings}; memory ({})",
                 count(handles.len(), "module"),
                 count(
                     transaction.module_count() - handles.len(),
                     "dependent module"
                 ),
-                count(transaction.line_count(), "line"),
+                count(user_lines + dep_lines, "line"),
+                count(user_lines, "line"),
+                count(dep_lines, "line"),
                 memory_trace.peak()
             );
         }
