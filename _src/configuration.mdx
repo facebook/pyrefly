@@ -466,7 +466,7 @@ See [Migrating from Mypy](migrating-from-mypy.mdx#mypy-config-migration) for mor
 
 - Type: one of `"check-and-infer-return-type"`, `"check-and-infer-return-any"`,
   `"skip-and-infer-return-any"`
-- Default: `"check-and-infer-return-type"
+- Default: `"check-and-infer-return-type"`
 - Flag equivalent: `--untyped-def-behavior`
 - Equivalent configs:
   - The `"check-and-infer-return-type"` behavior emulates Pyright's default
@@ -475,6 +475,28 @@ See [Migrating from Mypy](migrating-from-mypy.mdx#mypy-config-migration) for mor
   - The `"check-and-infer-return-any"` behavior emulates mypy's
     `check_untyped_defs` flag.
 
+### `use-ignore-files`
+
+Whether to allow Pyrefly to use ignore files in your project and automatically
+add excluded files and directories to your [`project-excludes`](#project-excludes).
+Similar to `project-excludes`, when explicitly specifying files to check, ignore files
+are not used.
+
+Pyrefly automatically searches for ignore files such as `.gitignore`, `.ignore`,
+and `.git/info/excludes` in an upward search from your project root. Only the first of each
+type of ignore file will be used, so if you have a `.gitignore` and `.git/info/excludes`
+available, in different directories, Pyrefly will use both of them. Pyrefly will not
+use global ignore files.
+
+When multiple ignore files are found, Pyrefly checks them for excludes matches when
+determining the files to type check in the order of `.gitignore`, `.ignore`, and
+`.git/info/excludes`, taking the result of the first ignore file that has a match (either
+allowlist or denylist). Regular
+[`.gitignore`-style allowlist/denylist matching rules](https://git-scm.com/docs/gitignore) apply.
+
+- Type: `bool`
+- Default: `true`
+- Flag equivalent: `--use-ignore-files`
 
 ### `permissive-ignores`
 
@@ -678,9 +700,14 @@ interpreter installed, some of these values may be overridden.
 project-includes = ["."]
 # exclude dotfiles
 project-excludes = ["**/.[!/.]*", "**/*venv/**"]
+# perform an upward search for `.gitignore`, `.ignore`, and `.git/info/exclude`, and
+# add those to `project-excludes` automatically
+use-ignore-files = true
 # import project files from "."
 search-path = ["."]
-# do not include any third-party packages
+# let Pyrefly try to guess your search path
+disable-search-path-heuristics = false
+# do not include any third-party packages (except those provided by an interpreter)
 site-package-path = []
 
 ###### configuring your python environment
@@ -689,15 +716,27 @@ site-package-path = []
 python-platform = "linux"
 # assume the Python version we're using is 3.13, without querying an interpreter
 python-version = "3.13"
+# is Pyrefly disallowed from querying for an interpreter to automatically determine your
+# `python-platform`, `python-version`, and extra entries to `site-package-path`?
+skip-interpreter-query = false
 # query the default Python interpreter on your system, if installed and `python_platform`,
 # `python-version`, or `site-package-path` are unset.
 # python-interpreter = null # this is commented out because there are no `null` values in TOML
 
 #### configuring your type check settings
 
+# wildcards for which Pyrefly will unconditionally replace the import with `typing.Any`
 replace-imports-with-any = []
+# wildcards for which Pyrefly will replace the import with `typing.Any` if it can't be found
+ignore-missing-imports = []
+# should Pyrefly skip type checking if "@generated" is found in a file?
 ignore-errors-in-generated-code = false
+# should Pyrefly do a check to see if a `<library>-stubs` library also has `<library>` installed?
 ignore-missing-source = false
+# what should Pyrefly do when it encounters a function that is untyped?
+untyped-def-behavior = "check-and-infer-return-type"
+# can Pyrefly recognize ignore directives other than `# pyrefly: ignore` and `# type: ignore`
+permissive-ignores = false
 
 [errors]
 # this is an empty table, meaning all errors are enabled by default
