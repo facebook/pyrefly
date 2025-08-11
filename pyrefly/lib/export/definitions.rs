@@ -548,7 +548,11 @@ impl<'a> DefinitionsBuilder<'a> {
             Expr::Named(expr_named) => {
                 self.expr_lvalue(&expr_named.target);
             }
-            Expr::Lambda(..) | Expr::SetComp(..) | Expr::DictComp(..) | Expr::ListComp(..) => {
+            Expr::Lambda(..)
+            | Expr::SetComp(..)
+            | Expr::DictComp(..)
+            | Expr::ListComp(..)
+            | Expr::Generator(..) => {
                 // These expressions define a scope, so walrus operators only define a name
                 // within that scope, not in the surrounding statement's scope.
             }
@@ -712,7 +716,10 @@ assert (x9 := 42), (x10 := "oops")
 type y = (x11 := int)
 # Named expressions inside expression-level scopes should not appear in definitions.
 lambda x: (z := 42)
+{z := "str" for _ in [1]}
+{(z := "str"):1 for _ in [1]}
 [z for x in [1, 2, 3] if z := x > 2]
+(z := "str" for _ in [1])
 "#,
         );
         assert_definition_names(
