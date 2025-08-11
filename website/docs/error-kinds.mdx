@@ -12,6 +12,38 @@ that an error is related to. Every error has exactly one kind.
 The main use of error kinds is as short names ("slugs") that can be used in
 error suppression comments.
 
+## abstract-method-call
+
+This error is raised when attempting to call an abstract method directly.
+Abstract methods, decorated with `@abc.abstractmethod`, must be implemented
+in concrete subclasses before they can be called.
+
+```python
+from abc import ABC, abstractmethod
+
+class Shape(ABC):
+    @abstractmethod
+    def area(self) -> float:
+        pass
+
+shape = Shape()  # This would fail at runtime
+shape.area()  # Cannot call abstract method `area` - must be implemented in a subclass [abstract-method-call]
+```
+
+To fix this error, create a concrete subclass that implements the abstract method:
+
+```python
+class Circle(Shape):
+    def __init__(self, radius: float):
+        self.radius = radius
+    
+    def area(self) -> float:
+        return 3.14159 * self.radius ** 2
+
+circle = Circle(5.0)
+circle.area()  # This is valid
+```
+
 ## annotation-mismatch
 
 This error indicates a mismatch between multiple annotations for a single
