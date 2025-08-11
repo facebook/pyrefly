@@ -48,7 +48,7 @@ export async function initializePyreflyWasm(): Promise<any> {
     const pyreflyWasmUninitializedPromise =
         typeof window !== 'undefined'
             ? import('../sandbox/pyrefly_wasm')
-            : new Promise<any>((_resolve) => {});
+            : new Promise<any>((_resolve) => { });
 
     try {
         const mod = await pyreflyWasmUninitializedPromise;
@@ -117,7 +117,7 @@ export default function Sandbox({
         pyreflyWasmInitializedPromise
             .then((pyrefly) => {
                 try {
-                    setPyreService(new pyrefly.State(pythonVersion));
+                    setPyreService(pyrefly.State.new(pythonVersion));
                     setLoading(false);
                     setInternalError('');
                 } catch (e) {
