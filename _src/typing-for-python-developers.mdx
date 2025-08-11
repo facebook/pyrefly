@@ -184,9 +184,9 @@ This behavior is governed by variance:
 - Invariant types require an exact match.
 
 
-Before [PEP 695](https://peps.python.org/pep-0695/)   variance had to be declared manually — a process that was often verbose and error-prone.
-PEP 695 introduced automatic variance inference as part of the new generic class syntax.
-We fully support this behavior: our type checker analyzes how each type parameter is used — in method arguments, return values, attributes, and base classes — and infers its correct variance automatically.
+Before [PEP 695](https://peps.python.org/pep-0695/), variance had to be declared manually and was often confusing.
+Pyrefly infers the variance automatically based on how each type parameter is used - in method arguments, return values, attributes, and base classes.
+
 
 
 **Example 1:** Covariance from Immutable Attributes (`Final`)

@@ -31,8 +31,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.409aac25.css">
-<script src="/assets/js/runtime~main.e0a6f553.js" defer="defer"></script>
-<script src="/assets/js/main.2bad6add.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.e779d0b1.js" defer="defer"></script>
+<script src="/assets/js/main.27903702.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -94,7 +94,7 @@
 <video src="/videos/semantic-highlighting.mp4" width="720" muted="" loop="" autoplay="" playsinline="" preload="metadata"></video>
 <hr>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="inlay-hints"><a href="https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_inlayHint" target="_blank" rel="noopener noreferrer">Inlay hints</a><a href="#inlay-hints" class="hash-link" aria-label="Direct link to inlay-hints" title="Direct link to inlay-hints">​</a></h3>
-<p>Inline hints for types, parameter names, and return values.</p>
+<p>Inline hints for types, parameter names, and return values. This is enabled by default; you can disable them using the <a href="https://code.visualstudio.com/docs/editing/editingevolved#_inlay-hints" target="_blank" rel="noopener noreferrer">VSCode Setting</a>.</p>
 <video src="/videos/inlay-hints.mp4" width="720" muted="" loop="" autoplay="" playsinline="" preload="metadata"></video>
 <hr>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="notebook-support"><a href="https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#notebookDocument" target="_blank" rel="noopener noreferrer">Notebook support</a><a href="#notebook-support" class="hash-link" aria-label="Direct link to notebook-support" title="Direct link to notebook-support">​</a></h3>
@@ -117,8 +117,13 @@
 </li>
 <li>Specify a custom Pyrefly Binary (lspPath)<!-- -->
 <ul>
-<li><code>pyrefly.lspPath</code> [string: &#x27;&#x27;]: If your platform is not supported, you can build pyrefly from source and specify the binary path with the <code>lspPath</code> config.
-If the project configuration does not specify the Python interpreter, Pyrefly will use the <a href="https://code.visualstudio.com/docs/python/environments" target="_blank" rel="noopener noreferrer">interpreter selected in VSCode</a>.</li>
+<li><code>pyrefly.lspPath</code> [string: &#x27;&#x27;]: If your platform is not supported, you can build pyrefly from source and specify the binary path with the <code>lspPath</code> config.</li>
+</ul>
+</li>
+<li>Use a specific interpreter<!-- -->
+<ul>
+<li>If the <a href="https://marketplace.visualstudio.com/items?itemName=ms-python.python" target="_blank" rel="noopener noreferrer"><code>Python</code></a> VSCode extension is installed, <a href="https://code.visualstudio.com/docs/python/environments" target="_blank" rel="noopener noreferrer">selecting an interpreter</a> will override the interpreter and settings Pyrefly uses to type check your project, even if one is specified in your Pyrefly configuration.</li>
+<li><code>python.defaultInterpreterPath</code> will override the default interpreter selected by VSCode for your workspace.</li>
 </ul>
 </li>
 </ul>

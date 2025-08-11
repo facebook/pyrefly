@@ -2,7 +2,7 @@
 
 ## Docs
 
-- [Autotype](autotype): Pyrefly autotype feature and documentation
+- [Infer](autotype): Pyrefly infer feature and documentation
 - [Configuration](configuration): Configure Pyrefly settings and options
 - [Error Kinds](error-kinds): Pyrefly error categories and suppression codes
 - [Error Suppressions](error-suppressions): How to suppress errors in Pyrefly
