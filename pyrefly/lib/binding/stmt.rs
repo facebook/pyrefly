@@ -912,7 +912,7 @@ impl<'a> BindingsBuilder<'a> {
                                             self.error(
                                                 x.range,
                                                 ErrorInfo::Kind(ErrorKind::Deprecated),
-                                                format!("Import of deprecated name `{name}`"),
+                                                format!("`{name}` is deprecated"),
                                             );
                                         }
                                         let val = if exported.contains_key_hashed(name) {
@@ -959,7 +959,7 @@ impl<'a> BindingsBuilder<'a> {
                                             self.error(
                                                 x.range,
                                                 ErrorInfo::Kind(ErrorKind::Deprecated),
-                                                format!("Import of deprecated name `{asname}`"),
+                                                format!("`{}` is deprecated", x.name),
                                             );
                                         }
                                         Binding::Import(m, x.name.id.clone(), original_name_range)

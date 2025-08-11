@@ -780,7 +780,7 @@ testcase!(
     test_import_deprecated_class_warn,
     env_class_x_deprecated(),
     r#"
-from foo import X # E: Import of deprecated name `X`
+from foo import X # E: `X` is deprecated
 
 x = X()
 "#,
@@ -790,7 +790,7 @@ testcase!(
     test_import_star_deprecated_class_warn,
     env_class_x_deprecated(),
     r#"
-from foo import * # E: Import of deprecated name `X`
+from foo import * # E: `X` is deprecated
 
 x = X()
 "#,
@@ -811,9 +811,19 @@ testcase!(
     test_import_deprecated_func_warn,
     env_func_x_deprecated(),
     r#"
-from foo import x # E: Import of deprecated name `x`
+from foo import x # E: `x` is deprecated
 
 x()  # E: Call to deprecated function `foo.x`
+"#,
+);
+
+testcase!(
+    test_import_as_deprecated_func_warn,
+    env_func_x_deprecated(),
+    r#"
+from foo import x as y # E: `x` is deprecated
+
+y()  # E: Call to deprecated function `foo.x`
 "#,
 );
 
@@ -821,7 +831,7 @@ testcase!(
     test_import_star_deprecated_func_warn,
     env_func_x_deprecated(),
     r#"
-from foo import * # E: Import of deprecated name `x`
+from foo import * # E: `x` is deprecated
 
 x()  # E: Call to deprecated function `foo.x`
 "#,
@@ -863,7 +873,7 @@ testcase!(
     test_import_conditionally_deprecated_func_warn,
     env_func_x_deprecated_conditionally(),
     r#"
-from foo import x # E: Import of deprecated name `x`
+from foo import x # E: `x` is deprecated
 
 x()  # E: Call to deprecated function `foo.x`
 "#,

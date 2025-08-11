@@ -3952,8 +3952,8 @@
     {
       "code": -2,
       "column": 44,
-      "concise_description": "Import of deprecated name `Ham`",
-      "description": "Import of deprecated name `Ham`",
+      "concise_description": "`Ham` is deprecated",
+      "description": "`Ham` is deprecated",
       "line": 18,
       "name": "deprecated",
       "stop_column": 47,
@@ -3972,8 +3972,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "Call to deprecated overload `foo`",
-      "description": "Call to deprecated overload `foo`",
+      "concise_description": "Call to deprecated overload `_directives_deprecated_library.foo`",
+      "description": "Call to deprecated overload `_directives_deprecated_library.foo`",
       "line": 30,
       "name": "deprecated",
       "stop_column": 15,
