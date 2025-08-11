@@ -137,7 +137,7 @@ mod tests {
             Severity::Ignore
         );
         assert_eq!(
-            errors.severity(ErrorKind::InvalidOverload),
+            errors.severity(ErrorKind::NoMatchingOverload),
             Severity::Ignore
         );
     }
