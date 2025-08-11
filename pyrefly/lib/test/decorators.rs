@@ -209,7 +209,7 @@ testcase!(
     test_invalid_top_level_function_decorators,
     r#"
 from typing import *
-from abc import abstractstaticmethod, abstractmethod
+from abc import abstractstaticmethod, abstractmethod # E: `abstractstaticmethod` is deprecated
 from enum import member, nonmember
 
 @member  # E: can only be used on methods
@@ -497,13 +497,13 @@ testcase!(
     r#"
 from typing import overload, Any
 @overload
-def foo(a: int) -> int: ...  
+def foo(a: int) -> int: ...
 @overload
 def foo(a: str) -> str:
     """Docstring"""
 def foo(*args, **kwargs) -> Any:
     pass
-    
+
     "#,
 );
 
@@ -512,14 +512,14 @@ testcase!(
     r#"
 from typing import overload, Any
 @overload
-def foo(a: int) -> int: ...  
+def foo(a: int) -> int: ...
 @overload
-def foo(a: str) -> str: 
+def foo(a: str) -> str:
     """Docstring"""
     return 123             # E: Returned type `Literal[123]` is not assignable to declared return type `str`
 def foo(*args, **kwargs) -> Any:
     pass
-    
+
     "#,
 );
 
