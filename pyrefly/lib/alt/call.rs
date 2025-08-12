@@ -746,7 +746,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ctor_targs: Option<&mut TArgs>,
     ) -> (Type, Callable) {
         // There may be Expr values in args and keywords.
-        // If we infer them for each overload, we may end up infering them multiple times.
+        // If we infer them for each overload, we may end up inferring them multiple times.
         // If those overloads contain nested overloads, then we can easily end up with O(2^n) perf.
         // Therefore, flatten all TypeOrExpr's into Type before we start
         let call = CallWithTypes::new();

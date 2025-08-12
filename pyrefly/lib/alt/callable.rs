@@ -48,7 +48,7 @@ use crate::types::types::Type;
 use crate::types::types::Var;
 
 /// Structure to turn TypeOrExprs into Types.
-/// This is used to avoid re-infering types for arguments multiple types.
+/// This is used to avoid re-inferring types for arguments multiple types.
 ///
 /// Implemented by keeping an `Owner` to hand out references to `Type`.
 pub struct CallWithTypes(Owner<Type>);

@@ -470,7 +470,7 @@ impl Globs {
 /// A struct which allows filtering by matching a high-priority [`Globs`] of excludes
 /// and several ignore files. The first positive (ignore) or negative (allowlist)
 /// match that's found from the following order is what's used.
-/// 1. `excludes`: user-provied paths, either from a config or CLI.
+/// 1. `excludes`: user-provided paths, either from a config or CLI.
 /// 2. `.gitignore`: if one exists from an upward search from `root`, the first
 ///    positive or negative match (`!`) is used
 /// 3. `.ignore`: if it exists, behaves similar to `.gitignore`

@@ -427,7 +427,7 @@ assert_type(C().f(None, 1), int)
 // because the default value can be overridden by instance assignment.
 //
 // Our behavior is compatible, but the underlying implementation is not, we are
-// behaving this way based on how we treate the Callable type rather than based
+// behaving this way based on how we treat the Callable type rather than based
 // on the absence of `ClassVar`.
 //
 // See https://discuss.python.org/t/when-should-we-assume-callable-types-are-method-descriptors/92938

@@ -59,7 +59,7 @@ impl MergeItem {
         // We are promising to bind this key at the end of the merge (see `merged_flow_info`).
         //
         // Note that in loops, the speculative phi logic may have already inserted this key,
-        // in which case `idx_for_promise` will just give us back the idx we aready created.
+        // in which case `idx_for_promise` will just give us back the idx we already created.
         let phi_idx = idx_for_promise(Key::Phi(name, range));
         let mut myself = Self {
             phi_idx,

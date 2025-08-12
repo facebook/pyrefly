@@ -222,7 +222,7 @@ impl<'a> BindingsBuilder<'a> {
     /// - Information about what binding it is being used in, which is used both
     ///   - to track first-use to get deterministic inference of placeholder
     ///     types like empty list
-    ///   - to determin when we are in a static typing usage
+    ///   - to determine when we are in a static typing usage
     /// - The lookup kind, which is used to distinguish between normal lookups,
     ///   which allow uses of nonlocals, versus mutable lookups that do not
     ///   (unless the nonlocal was explicitly mutably captured by a `global`

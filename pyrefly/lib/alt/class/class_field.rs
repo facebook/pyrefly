@@ -731,7 +731,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> ClassField {
         // TODO(stroxler): Clean this up, as we convert more of the class field logic to using enums.
         //
-        // It's a mess becasue we are relying on refs to fields that don't make sense for some cases,
+        // It's a mess because we are relying on refs to fields that don't make sense for some cases,
         // which requires us having a place to store synthesized dummy values until we've refactored more.
         let value_storage = Owner::new();
         let initial_value_storage = Owner::new();

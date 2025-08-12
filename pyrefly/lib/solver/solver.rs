@@ -54,7 +54,7 @@ const INITIAL_GAS: Gas = Gas::new(25);
 enum Variable {
     /// A variable in a container with an unspecified element type, e.g. `[]: list[V]`
     Contained,
-    /// A variable due to generic instantitation, `def f[T](x: T): T` with `f(1)`
+    /// A variable due to generic instantiation, `def f[T](x: T): T` with `f(1)`
     Quantified(Quantified),
     /// A variable caused by recursion, e.g. `x = f(); def f(): return x`.
     /// The second value is the default value of the Var, if one exists.

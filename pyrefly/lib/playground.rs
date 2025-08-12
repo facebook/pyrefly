@@ -54,7 +54,7 @@ impl Position {
         }
     }
 
-    // This should always succeed, but we are being convervative
+    // This should always succeed, but we are being conservative
     fn to_display_pos(&self) -> Option<DisplayPos> {
         Some(DisplayPos {
             line: LineNumber::new(u32::try_from(self.line).ok()?)?,

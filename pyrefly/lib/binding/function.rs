@@ -287,7 +287,7 @@ impl<'a> BindingsBuilder<'a> {
             .push_function_scope(range, func_name, class_key.is_some());
         self.parameters(parameters, class_key);
         self.scopes.pop();
-        // If we are in a class, use a simple visiter to find `self.<attr>` assignments.
+        // If we are in a class, use a simple visitor to find `self.<attr>` assignments.
         if class_key.is_some() {
             SelfAttrNames::find(func_name, parameters, body)
         } else {

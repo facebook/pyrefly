@@ -17,7 +17,7 @@
 //! Note that Pyright will only honor such codes after `# pyright: ignore[code]`.
 //!
 //! You can also use `# mypy: ignore-errors`, `# pyrefly: ignore-errors`
-//! or `# type: ignore` at the beginning of a file to surpress all errors.
+//! or `# type: ignore` at the beginning of a file to suppress all errors.
 //!
 //! For Pyre compatibility we also allow `# pyre-ignore` and `# pyre-fixme`
 //! as equivalents to `pyre: ignore`, and `# pyre-ignore-all-errors` as

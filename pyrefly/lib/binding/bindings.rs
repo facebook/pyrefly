@@ -929,7 +929,7 @@ impl<'a> BindingsBuilder<'a> {
     /// binding. The loop follows `Forward` nodes backward, and returns:
     /// - Some(...) if we find either a legacy type variable or an import (in which case it *might*
     ///   be a legacy type variable, so we'll let the solve stage decide)
-    /// - None if we find somethign that is definitely not a legacy type variable.
+    /// - None if we find something that is definitely not a legacy type variable.
     fn lookup_legacy_tparam_from_idx(
         &mut self,
         name: &Identifier,

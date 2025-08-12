@@ -23,7 +23,7 @@ use crate::graph::index::Idx;
 /// Debugging helpers for the AnswersSolver.
 ///
 /// These are all string-returning functions, which make them potentially less efficient
-/// but more convienient than `Display` implementations because they are easy to use
+/// but more convenient than `Display` implementations because they are easy to use
 /// for string-based comparisons for filtered debugging.
 ///
 /// For example, one useful snippet in unit tests is:

@@ -2005,7 +2005,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Binding::Pin(unpinned_idx, first_use) => {
-                // Calclulate the first use for its side-effects (it might pin `Var`s)
+                // Calculate the first use for its side-effects (it might pin `Var`s)
                 match first_use {
                     FirstUse::UsedBy(idx) => {
                         self.get_idx(*idx);

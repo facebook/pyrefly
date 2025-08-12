@@ -670,42 +670,42 @@ impl<'a> Transaction<'a> {
                 identifier: _,
                 context: IdentifierContext::FunctionDef { docstring_range: _ },
             }) => {
-                // TODO(grievejia): Handle defintions of functions
+                // TODO(grievejia): Handle definitions of functions
                 None
             }
             Some(IdentifierWithContext {
                 identifier: _,
                 context: IdentifierContext::ClassDef { docstring_range: _ },
             }) => {
-                // TODO(grievejia): Handle defintions of classes
+                // TODO(grievejia): Handle definitions of classes
                 None
             }
             Some(IdentifierWithContext {
                 identifier: _,
                 context: IdentifierContext::Parameter,
             }) => {
-                // TODO(grievejia): Handle defintions of params
+                // TODO(grievejia): Handle definitions of params
                 None
             }
             Some(IdentifierWithContext {
                 identifier: _,
                 context: IdentifierContext::TypeParameter,
             }) => {
-                // TODO(grievejia): Handle defintions of type params
+                // TODO(grievejia): Handle definitions of type params
                 None
             }
             Some(IdentifierWithContext {
                 identifier: _,
                 context: IdentifierContext::ExceptionHandler,
             }) => {
-                // TODO(grievejia): Handle defintions of exception names
+                // TODO(grievejia): Handle definitions of exception names
                 None
             }
             Some(IdentifierWithContext {
                 identifier: _,
                 context: IdentifierContext::PatternMatch(_),
             }) => {
-                // TODO(grievejia): Handle defintions of pattern-introduced names
+                // TODO(grievejia): Handle definitions of pattern-introduced names
                 None
             }
             Some(IdentifierWithContext {

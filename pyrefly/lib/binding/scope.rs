@@ -1080,7 +1080,7 @@ impl Scopes {
         }
     }
 
-    /// Insert an annotation pulled from some ancester scope for a name
+    /// Insert an annotation pulled from some ancestor scope for a name
     /// defined by a `global` or `nonlocal` declaration.
     pub fn set_annotation_for_mutable_capture(
         &mut self,

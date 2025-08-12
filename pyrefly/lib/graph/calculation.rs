@@ -48,7 +48,7 @@ pub enum ProposalResult<T, R> {
     CycleDetected,
     /// The current thread has encountered a cycle, this is the recursive placeholder.
     CycleBroken(R),
-    /// A final reasult is already available.
+    /// A final result is already available.
     Calculated(T),
 }
 

@@ -130,8 +130,8 @@ impl Ast {
             s = &buffer;
             add += TextSize::new(1); // 3 for the quotes, minus 1 for the bracket, minus 1 for the raw quote
         }
-        // Make sure the range is precise, so that we get the right UTF8 indicies.
-        // We might have a problem with \ escapes moving indicies, but if necessary we can ban those.
+        // Make sure the range is precise, so that we get the right UTF8 indices.
+        // We might have a problem with \ escapes moving indices, but if necessary we can ban those.
         Ast::parse_expr(s, x.range.start() + add)
     }
 
