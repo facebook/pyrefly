@@ -717,7 +717,7 @@ impl CheckArgs {
             };
         }
         if self.output.summary == Summary::Full {
-            let user_handles: HashSet<Handle> = handles.iter().map(|(h, _)| h.clone()).collect();
+            let user_handles: HashSet<&Handle> = handles.iter().map(|(h, _)| h).collect();
             let (user_lines, dep_lines) = transaction.split_line_count(&user_handles);
             info!(
                 "{} ({}); {} ({} in your project, {} in dependencies); \
