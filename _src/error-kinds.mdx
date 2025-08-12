@@ -405,6 +405,17 @@ if isinstance(1, UserId):
   ...
 ```
 
+## invalid-decorator
+
+This error indicates that a decorator was used incorrectly. For example, using `@typing.final` on a non-method function.
+
+```python
+from typing import final
+@final
+def f() -> None:
+  pass
+```
+
 ## invalid-inheritance
 
 An error caused by incorrect inheritance in a class or type definition.
