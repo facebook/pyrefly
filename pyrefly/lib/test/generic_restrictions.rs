@@ -389,3 +389,27 @@ class Foo[T: (A, B)]:
         del self.y.x
     "#,
 );
+
+testcase!(
+    test_generic_union_constraint_with_property_access,
+    r#"
+from collections import defaultdict
+
+class A:
+
+    @property
+    def attr(self) -> str:
+        return "A"
+
+class B:
+
+    @property
+    def attr(self) -> str:
+        return "B"
+
+def foo[T: A | B](items: list[T]) -> None:
+    results: defaultdict[str, list[T]] = defaultdict(list)
+    for item in items:
+        results[item.attr].append(item)
+    "#,
+);
