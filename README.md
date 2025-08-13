@@ -1,6 +1,8 @@
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
 # Pyrefly: A fast type checker and IDE for Python
+
+[![PyPI](https://img.shields.io/pypi/v/pyrefly.svg?color=blue)](https://pypi.python.org/pypi/pyrefly)
+[![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?logo=discord&logoColor=white)](https://discord.gg/Cf7mFQtW7W)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 Currently under active development with known issues. Please open an issue if
 you find bugs.
