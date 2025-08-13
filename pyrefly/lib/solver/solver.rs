@@ -44,7 +44,7 @@ use crate::types::types::Var;
 /// Error message when a variable has leaked from one module to another.
 ///
 /// We have a rule that `Var`'s should not leak from one module to another, but it has happened.
-/// The easiest debugging technique is to look at the `Solutions` and see if there is a `Var(Unique`
+/// The easiest debugging technique is to look at the `Solutions` and see if there is a `VarUnique`
 /// in the output. The usual cause is that we failed to visit all the necessary `Type` fields.
 const VAR_LEAK: &str = "Internal error: a variable has leaked from one module to another.";
 
@@ -633,7 +633,7 @@ impl Solver {
     }
 }
 
-/// A helper to implement subset erogonomically.
+/// A helper to implement subset ergonomically.
 /// Should only be used within `crate::subset`, which implements part of it.
 pub struct Subset<'a, Ans: LookupAnswer> {
     solver: &'a Solver,

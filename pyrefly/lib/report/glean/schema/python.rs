@@ -603,20 +603,20 @@ impl MethodOverrides {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct MethodOverriden {
+pub struct MethodOverridden {
     pub id: u64,
-    pub key: Box<MethodOverriden_key>,
+    pub key: Box<MethodOverridden_key>,
 }
 
-impl MethodOverriden {
+impl MethodOverridden {
     pub fn GLEAN_name() -> String {
-        String::from("python.MethodOverriden.4")
+        String::from("python.MethodOverridden.4")
     }
 
     pub fn new(base: FunctionDeclaration, derived: FunctionDeclaration) -> Self {
-        MethodOverriden {
+        MethodOverridden {
             id: 0,
-            key: Box::new(MethodOverriden_key {
+            key: Box::new(MethodOverridden_key {
                 base,
                 derived
             }),
@@ -1693,7 +1693,7 @@ pub struct MethodOverrides_key {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct MethodOverriden_key {
+pub struct MethodOverridden_key {
     pub base: FunctionDeclaration,
     pub derived: FunctionDeclaration,
 }

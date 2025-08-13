@@ -65,7 +65,7 @@ fn read_and_validate_file(path: &Path) -> anyhow::Result<String> {
 }
 
 /// Adds error suppressions for the given errors in the given files.
-/// Returns a list of files that failed to be be patched, and a list of files that were patched.
+/// Returns a list of files that failed to be patched, and a list of files that were patched.
 /// The list of failures includes the error that occurred, which may be a read or write error.
 fn add_suppressions(
     path_errors: &SmallMap<PathBuf, Vec<Error>>,
@@ -384,7 +384,7 @@ x: int = foo("Hello")
     }
 
     #[test]
-    fn test_add_suppressions_unparseable_line_break() {
+    fn test_add_suppressions_unparsable_line_break() {
         assert_suppress_errors(
             r#"
 def foo() -> None:

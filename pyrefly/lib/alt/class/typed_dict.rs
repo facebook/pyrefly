@@ -527,7 +527,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Required::Required,
             );
 
-            // Construct an an overload of the form: (self, key: Literal["field_name"]) -> None
+            // Construct an overload of the form: (self, key: Literal["field_name"]) -> None
             literal_signatures.push(OverloadType::Function(Function {
                 signature: Callable::list(
                     ParamList::new(vec![self_param.clone(), key_param]),

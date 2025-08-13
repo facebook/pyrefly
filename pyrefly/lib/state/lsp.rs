@@ -156,7 +156,7 @@ enum PatternMatchParameterKind {
     // Name defined using `as`
     // ex: `x` in `case ... as x: ...`, or `x` in `case x: ...`
     AsName,
-    // Name defined using keyword argument partten
+    // Name defined using keyword argument pattern
     // ex: `x` in `case Foo(x=1): ...`
     KeywordArgName,
     // Name defined using `*` pattern
@@ -222,7 +222,7 @@ enum IdentifierContext {
     /// ex: `e` in `try ... except Exception as e: ...`
     ExceptionHandler,
     /// An identifier appeared as the name introduced via a `case` branch in a `match` statement.
-    /// See [`PatternMatchParaameterKind`] for examples.
+    /// See [`PatternMatchParameterKind`] for examples.
     #[expect(dead_code)]
     PatternMatch(PatternMatchParameterKind),
 }

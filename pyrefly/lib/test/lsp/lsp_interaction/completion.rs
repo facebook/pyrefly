@@ -234,7 +234,7 @@ fn test_completion_with_autoimport_in_defined_module() {
                 }),
             }),
         ],
-        // This response should contain no textedits because it's defined locally in the module
+        // This response should contain no text edits because it's defined locally in the module
         expected_messages_from_language_server: vec![make_sorted_completion_result_with_all_keywords(
             2,
             vec![

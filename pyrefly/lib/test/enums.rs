@@ -356,7 +356,7 @@ assert_type(f(True, MyEnum.X, MyEnum.X), MyEnum)
 "#,
 );
 
-// In 3.10 and lower versions, _magic_enum_attr is a different type than in 3.11+"
+// In 3.10 and lower versions, _magic_enum_attr is a different type than in 3.11+
 testcase!(
     test_magic_enum_attr_3_10,
     TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),

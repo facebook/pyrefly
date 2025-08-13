@@ -385,7 +385,7 @@ impl LookupResult {
     /// This means we assume it is both readable and writable with that type.
     ///
     /// TODO(stroxler) The uses of this eventually need to be audited, but we
-    /// need to prioiritize the class logic first.
+    /// need to prioritize the class logic first.
     fn found_type(ty: Type) -> Self {
         Self::Found(Attribute::read_write(ty))
     }
@@ -989,7 +989,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///
     /// The `is_subset` function (which in most cases will just behave as the
     /// usual subset function) is provided as a callback because we need a way
-    /// to track the recursive hypthothesis.
+    /// to track the recursive hypothesis.
     pub fn is_protocol_subset_at_attr(
         &self,
         got: &Type,
@@ -1441,7 +1441,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None => LookupResult::NotFound(NotFound::ModuleExport(module)),
             },
             AttributeBase::TypeVar(q, bound) => match (q.kind(), attr_name.as_str()) {
-                // Note that is is for cases like `P.args` where `P` is a param spec, or `T.x` where
+                // Note that is for cases like `P.args` where `P` is a param spec, or `T.x` where
                 // `T` is a type variable (the latter is illegal, but a user could write it). It is
                 // not for cases where `base` is a term with a quantified type.
                 (QuantifiedKind::ParamSpec, "args") => {

@@ -320,7 +320,7 @@ pub enum Key {
     /// I am the pinned version of a definition corresponding to a name assignment.
     ///
     /// Used in cases where the raw definition might introduce placeholder `Var` types
-    /// that need to hidden from all lookups except the first usage to avoid nondeterminism.
+    /// that need to be hidden from all lookups except the first usage to avoid nondeterminism.
     PinnedDefinition(ShortIdentifier),
     /// I am a name with possible attribute/subscript narrowing coming from an assignment at this location.
     FacetAssign(ShortIdentifier),
@@ -334,7 +334,7 @@ pub enum Key {
     BoundName(ShortIdentifier),
     /// I am an expression that does not have a simple name but needs its type inferred.
     Anon(TextRange),
-    /// I am a a narrowing operation created by a pattern in a match statement
+    /// I am a narrowing operation created by a pattern in a match statement
     PatternNarrow(TextRange),
     /// I am an expression that appears in a statement. The range for this key is the range of the expr itself, which is different than the range of the stmt expr.
     StmtExpr(TextRange),
@@ -852,7 +852,7 @@ pub enum UnpackedPosition {
     ReverseIndex(usize),
     /// Slice represented as an index from the front to an index from the back.
     /// Note that even though the second index is conceptually negative, we can
-    /// represent it as a usize because it is always negative.
+    /// represent it as an usize because it is always negative.
     Slice(usize, usize),
 }
 
@@ -1003,7 +1003,7 @@ pub struct ReturnType {
 
 #[derive(Clone, Dupe, Copy, Debug)]
 pub enum LastStmt {
-    /// The last statement is a expression
+    /// The last statement is an expression
     Expr,
     /// The last statement is a `with`, with the following context,
     /// which might (if exit is true) catch an exception
@@ -1862,7 +1862,7 @@ impl DisplayWith<Bindings> for BindingConsistentOverrideCheck {
     }
 }
 
-/// Binding for the class's metadata (anything obtained directly from base classes,
+/// Binding for the class's metadata anything obtained directly from base classes,
 /// except for the MRO which is kept separate to avoid cycles.
 #[derive(Clone, Debug)]
 pub struct BindingClassMetadata {
@@ -1895,7 +1895,7 @@ impl DisplayWith<Bindings> for BindingClassMetadata {
 }
 
 /// Binding for the class's MRO
-/// This rerquires base classes; these should match what `BindingClassMetadata` has.
+/// This requires base classes; these should match what `BindingClassMetadata` has.
 #[derive(Clone, Debug)]
 pub struct BindingClassMro {
     pub class_idx: Idx<KeyClass>,

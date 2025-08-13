@@ -261,7 +261,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     _ if decorator_ty.is_property_setter_decorator() => {
                         // When the `setter` attribute is accessed on a property, we return the type
                         // of the raw getter function, but with the `is_property_setter_decorator`
-                        // flag set to true; the type does does not accurately model the runtime
+                        // flag set to true; the type does not accurately model the runtime
                         // (calling the `.setter` decorator does not invoke a getter function),
                         // but makes it convenient to construct the property getter and setter
                         // in our class field logic.

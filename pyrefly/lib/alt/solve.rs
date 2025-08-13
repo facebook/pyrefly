@@ -138,7 +138,7 @@ pub enum TypeFormContext {
     ReturnAnnotation,
     /// Type argument for a generic
     TypeArgument,
-    /// Type argument for `bulitins.type`
+    /// Type argument for `builtins.type`
     TypeArgumentForType,
     /// Type argument for the return position of a Callable type
     TypeArgumentCallableReturn,

@@ -402,7 +402,7 @@ def f(foo: Foo, condition: Callable[[], bool]):
 );
 
 testcase!(
-    test_propagate_through_futher_narrowing_control_flow,
+    test_propagate_through_further_narrowing_control_flow,
     r#"
 from typing import assert_type, Callable
 class Foo:

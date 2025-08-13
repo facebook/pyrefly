@@ -1267,7 +1267,7 @@ class B: pass
 class C(A, B): pass  # not used, but demonstrates why the narrow is not Never
 def f(x: A):
     if isinstance(x, B):
-        # In theory we could use `A & B` here; any common sublcass like `C` is possible.
+        # In theory we could use `A & B` here; any common subclass like `C` is possible.
         # Given that we don't have intersections, we follow Pyre's lead and use `B`
         assert_type(x, B)
 "#,

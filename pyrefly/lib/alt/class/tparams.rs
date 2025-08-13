@@ -88,7 +88,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
 
         // TODO(stroxler): There are a lot of checks, such as that `Generic` only appears once
-        // and no non-type-vars are used, that we can more easily detect in a dedictated class
+        // and no non-type-vars are used, that we can more easily detect in a dedicated class
         // validation step that validates all the bases. We are deferring these for now.
         let mut generic_tparams = SmallSet::new();
         let mut protocol_tparams = SmallSet::new();

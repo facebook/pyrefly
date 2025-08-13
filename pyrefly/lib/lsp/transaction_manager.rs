@@ -18,7 +18,7 @@ pub struct TransactionManager<'a> {
     /// Invariant:
     /// If it's None, then the main `State` already contains up-to-date checked content
     /// of all in-memory files.
-    /// Otherwise, it will contains up-to-date checked content of all in-memory files.
+    /// Otherwise, it will contain up-to-date checked content of all in-memory files.
     saved_state: Option<TransactionData<'a>>,
 }
 
@@ -33,16 +33,16 @@ impl<'a> TransactionManager<'a> {
         // the in-memory changes into the main state.
         if let Some(transaction) = state.try_new_committable_transaction(Require::Indexing, None) {
             // If we can commit in-memory changes, then there is no point of holding the
-            // non-commitable transaction with a possibly outdated view of the `ReadableState`
+            // non-committable transaction with a possibly outdated view of the `ReadableState`
             // so we can destroy the saved state.
             self.saved_state = None;
             Ok(transaction)
         } else {
             // If there is an ongoing recheck, trying to get a committable transaction will block
             // until the recheck is finished. This is bad for perceived perf. Therefore, we will
-            // temporarily use a non-commitable transaction to hold the information that's necessary
+            // temporarily use a non-committable transaction to hold the information that's necessary
             // to power IDE services.
-            Err(self.non_commitable_transaction(state))
+            Err(self.non_committable_transaction(state))
         }
     }
 
@@ -52,7 +52,7 @@ impl<'a> TransactionManager<'a> {
     ///
     /// The `Transaction` will always contain the handles of all open files with the latest content.
     /// It might be created fresh from state, or reused from previously saved state.
-    pub fn non_commitable_transaction(&mut self, state: &'a State) -> Transaction<'a> {
+    pub fn non_committable_transaction(&mut self, state: &'a State) -> Transaction<'a> {
         if let Some(saved_state) = self.saved_state.take() {
             saved_state.into_transaction()
         } else {

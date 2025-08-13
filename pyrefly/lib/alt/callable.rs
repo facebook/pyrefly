@@ -235,7 +235,7 @@ impl<'a> CallArg<'a> {
 }
 
 // Pre-evaluated args are iterable. Type/Expr/Star variants iterate once (tracked via bool field),
-// Fixed variant iterates over the the vec (tracked via usize field).
+// Fixed variant iterates over the vec (tracked via usize field).
 #[derive(Clone, Debug)]
 enum CallArgPreEval<'a> {
     Type(&'a Type, bool),
@@ -927,7 +927,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         mut ctor_targs: Option<&mut TArgs>,
     ) -> Type {
         let (qs, mut callable) = if let Some(tparams) = tparams {
-            // If we have a hint, we want to try to instantiate against it first, so we cancontextually type
+            // If we have a hint, we want to try to instantiate against it first, so we can contextually type
             // arguments. If we don't match the hint, we need to throw away any instantiations we might have made.
             // By invariant, hint will be None if we are calling a constructor.
             if let Some(hint) = hint {

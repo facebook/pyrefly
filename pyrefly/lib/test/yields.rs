@@ -389,7 +389,7 @@ async def test() -> None:
 );
 
 testcase!(
-    bug = "We don't understand yield in lambda, and mis-attribute the yield to the surrounding function",
+    bug = "We don't understand yield in lambda, and misattribute the yield to the surrounding function",
     test_lambda_yield,
     r#"
 from typing import assert_type

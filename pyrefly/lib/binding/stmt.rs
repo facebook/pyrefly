@@ -629,7 +629,7 @@ impl<'a> BindingsBuilder<'a> {
                 self.ensure_expr(&mut x.test, &mut Usage::Narrowing);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
                 self.setup_loop(x.range, &narrow_ops);
-                // Note that is is important we ensure *after* we set up the loop, so that both the
+                // Note that is important we ensure *after* we set up the loop, so that both the
                 // narrowing and type checking are aware that the test might be impacted by changes
                 // made in the loop (e.g. if we reassign the test variable).
                 // Typecheck the test condition during solving.

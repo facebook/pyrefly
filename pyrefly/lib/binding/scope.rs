@@ -354,7 +354,7 @@ impl FlowInfo {
     }
 }
 
-/// Because of compliciations related both to recursion in the binding graph and to
+/// Because of complications related both to recursion in the binding graph and to
 /// the need for efficient representations, Pyrefly relies on multiple different integer
 /// indexes used to refer to classes and retrieve different kinds of binding information.
 ///

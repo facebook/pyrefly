@@ -66,7 +66,7 @@ pub struct Definition {
     /// The number is the distinct times this variable was defined.
     pub count: usize,
     /// If the first statement in a definition (class, function) is a string literal, PEP 257 convention
-    /// states that is is the docstring.
+    /// states that is the docstring.
     pub docstring_range: Option<TextRange>,
 }
 
@@ -211,7 +211,7 @@ impl Definitions {
         }
     }
 
-    /// Add these names to `duner_all`, if they are defined in the module.
+    /// Add these names to `dunder_all`, if they are defined in the module.
     pub fn extend_dunder_all(&mut self, extra: &[Name]) {
         for name in extra {
             if let Some(def) = self.definitions.get(name) {

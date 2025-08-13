@@ -268,7 +268,7 @@ mod tests {
     use crate::types::Type;
 
     #[test]
-    fn test_flatten_nevers() {
+    fn test_flatten_never() {
         let xs = vec![
             Type::Never(NeverStyle::Never),
             Type::Never(NeverStyle::NoReturn),

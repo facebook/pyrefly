@@ -62,7 +62,7 @@ struct ParsedBaseClass {
 enum BaseClassParseResult {
     /// We can successfully extract the class object and metadata from the base class
     Parsed(ParsedBaseClass),
-    /// We can't parse the base class because its correpsponding `BaseClass` is not valid (e.g. base is a `TypedDict`
+    /// We can't parse the base class because its corresponding `BaseClass` is not valid (e.g. base is a `TypedDict`
     /// when is_new_type is true)
     InvalidBase(TextRange),
     /// We can't parse the base class because its expression is not recognized to be a valid base class expression

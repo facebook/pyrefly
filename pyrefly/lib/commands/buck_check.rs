@@ -39,7 +39,7 @@ pub struct BuckCheckArgs {
     /// Path to input JSON manifest.
     input_path: PathBuf,
 
-    /// Path to output JSON file containing Pyrefly Pyrefly type check results.
+    /// Path to output JSON file containing Pyrefly type check results.
     #[arg(long = "output", short = 'o', value_name = "FILE")]
     output_path: Option<PathBuf>,
 }
