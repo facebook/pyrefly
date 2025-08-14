@@ -510,10 +510,10 @@ By default, respects `# pyrefly: ignore` and `# type: ignore`.
 ### `sub-config`
 
 Override specific config values for matched paths in your project. See
-[`SubConfigs`](#subconfigs) for more information on the structure
+[SubConfigs](#subconfigs) for more information on the structure
 and values that can be overridden here.
 
-- Type: [TOML array of tables](https://toml.io/en/v1.0.0#array-of-tables) with a [`SubConfig` structure](#subconfigs)
+- Type: [TOML array of tables](https://toml.io/en/v1.0.0#array-of-tables) with a [SubConfig structure](#subconfigs)
 - Default: `[]`
 - Flag equivalent: none
 - Equivalent configs: `executionEnvironments` in Pyright, per-module config options in mypy
@@ -618,47 +618,120 @@ Examples:
   - `this.is.my.module`
   - `this.is`
 
-### `SubConfigs`
+### `Sub-Configs`
 
-`SubConfigs` are a method for overriding one or more config options for specific files based on
+`Sub-Configs` are a method for overriding one or more config options for specific files based on
 filepath glob matching. Only certain config options are allowed to be overridden, and a need
 to override other configs means you likely need to use a separate config file for your subdirectory.
-You can have as many `SubConfigs` as you want in a project, and even multiple separate `SubConfigs`
+You can have as many SubConfigs as you want in a project, and even multiple separate SubConfigs
 that can apply to a given file when the `matches` glob pattern matches.
 
-#### **`SubConfig` Allowed Overrides**
+#### **SubConfig Allowed Overrides**
 
-We currently allow the following config options to be overridden in a `SubConfig`:
+We currently allow the following config options to be overridden in a SubConfig:
 - `errors`
 - `replace-imports-with-any`
 - `untyped-def-behavior`
 - `ignore-errors-in-generated-code`
 
-All `SubConfig` overrides *replace* the values appearing in the 'root' or top-level of the
+All SubConfig overrides *replace* the values appearing in the 'root' or top-level of the
 Pyrefly configuration.
 
 Any configs that change the list of files we're type checking, Python environment, or where we look
-for imports cannot be included in `SubConfigs`. Some other configs we also do not include because
+for imports cannot be included in SubConfigs. Some other configs we also do not include because
 we think they make it difficult to reason about your project type checks, but you can
 [open an issue](https://github.com/facebook/pyrefly/issues) or make a pull request if you disagree
 and would like to see the option supported.
 
-#### **`SubConfig` Table Structure**
+#### **SubConfig Table Structure**
 
-A `SubConfig` has two or more entries:
+A SubConfig has two or more entries:
 - a `matches` key, with a [Filesystem Glob](#filesystem-globbing) detailing which files the config
   applies to.
-- at least one of the [`SubConfig` allowed overrides](#subconfig-allowed-overrides)
+- at least one of the [SubConfig allowed overrides](#subconfig-allowed-overrides)
 
-#### **`SubConfig` Option Selection**
+#### **SubConfig Option Selection**
 
-Since you can have more than one `SubConfig` matching a file, we need to define a resolution order
-to determine which `SubConfig`'s option should be selected. Pyrefly does this by filtering
-`SubConfig`s whose `matches` does not match the given file, then takes the first non-null
-value that can be found in the order the `SubConfig`s appear in your configuration.
+Since you can have more than one SubConfig matching a file, we need to define a resolution order
+to determine which SubConfig's option should be selected. Pyrefly does this by filtering
+SubConfigs whose `matches` does not match the given file, then takes the first non-null
+value that can be found in the order the SubConfigs appear in your configuration.
 
-If no `SubConfig`s match, or there are no non-null config options present, then we take
+If no SubConfigs match, or there are no non-null config options present, then we take
 the value in the 'root'/top-level Pyrefly config (or Pyrefly default if no value is specified).
+
+#### **SubConfig Example**
+
+For the following config, this how options would be resolved.
+
+```toml
+replace-imports-with-any = [
+  "sympy.*",
+  "*.series",
+]
+ignore-errors-in-generated-code = true
+
+# disable `bad-assignment` and `invalid-argument` for the whole project
+[errors]
+bad-assignment = false
+invalid-argument = false
+
+[[sub-config]]
+# apply this to `sub/project/tests/file.py`
+matches = "sub/project/tests/file.py"
+
+# any unittest imports will by typed as `typing.Any`
+replace-imports-with-any = ["unittest.*"]
+
+[[sub-config]]
+# apply this config to all files in `sub/project`
+matches = "sub/project/**"
+
+# enable `assert-type` errors in `sub/project`
+[sub-config.errors]
+assert-type = true
+
+[[sub-config]]
+# apply this config to all files in `sub`
+matches = "sub/**`
+
+# disable `assert-type` errors in `sub`
+[sub-config.errors]
+assert-type = false
+
+[[sub-config]]
+# apply this config to all files under `tests` dirs in `sub/`
+matches = "sub/**/tests/**"
+
+# any pytest imports will be typed as `typing.Any`
+replace-imports-with-any = ["pytest.*"]
+```
+
+- `sub/project/tests/file.py`
+  - `replace-imports-with-any`: `["unittest.*"]`
+  - `errors`: `{assert-type = true}`
+  - `ignore-errors-in-generated-code`: `true`
+  - `ignore-missing-source`: `true`
+- `sub/project/tests/another_file.py`
+  - `replace-imports-with-any`: `["pytest.*"]`
+  - `errors`: `{assert-type = true}`
+  - `ignore-errors-in-generated-code`: `true`
+  - `ignore-missing-source`: `true`
+- `sub/project/non_test_file.py`
+  - `replace-imports-with-any`: `["sympy.*", "*.series"]`
+  - `errors`: `{assert-type = true}`
+  - `ignore-errors-in-generated-code`: `true`
+  - `ignore-missing-source`: `true`
+- `sub/sub_file.py`
+  - `replace-imports-with-any`: `["sympy.*", "*.series"]`
+  - `errors`: `{assert-type = false}`
+  - `ignore-errors-in-generated-code`: `true`
+  - `ignore-missing-source`: `true`
+- `top_level_file.py`
+  - `replace-imports-with-any`: `["sympy.*", "*.series"]`
+  - `errors`: `{assert-type = true, bad-assignment = false, invalid-argument = false}`
+  - `ignore-errors-in-generated-code`: `true`
+  - `ignore-missing-source`: `true`
 
 ### Conda and Venv Support
 
@@ -729,7 +802,7 @@ skip-interpreter-query = false
 replace-imports-with-any = []
 # wildcards for which Pyrefly will replace the import with `typing.Any` if it can't be found
 ignore-missing-imports = []
-# should Pyrefly skip type checking if "@generated" is found in a file?
+# should Pyrefly skip type checking if we find a generated file?
 ignore-errors-in-generated-code = false
 # should Pyrefly do a check to see if a `<library>-stubs` library also has `<library>` installed?
 ignore-missing-source = false
@@ -782,49 +855,7 @@ matches = "sub/project/**"
 # enable `assert-type` errors in `sub/project`
 [sub-config.errors]
 assert-type = true
-
-[[sub-config]]
-# apply this config to all files in `sub`
-matches = "sub/**`
-
-# disable `assert-type` errors in `sub`
-[sub-config.errors]
-assert-type = false
-
-[[sub-config]]
-# apply this config to all files under `tests` dirs in `sub/`
-matches = "sub/**/tests/**"
-
-# any pytest imports will be typed as `typing.Any`
-replace-imports-with-any = ["pytest.*"]
 ```
-
-With the above config, here are the actual config values some files would use:
-- `sub/project/tests/file.py`
-  - `replace-imports-with-any`: `["unittest.*"]`
-  - `errors`: `{assert-type = true}`
-  - `ignore-errors-in-generated-code`: `true`
-  - `ignore-missing-source`: `true`
-- `sub/project/tests/another_file.py`
-  - `replace-imports-with-any`: `["pytest.*"]`
-  - `errors`: `{assert-type = true}`
-  - `ignore-errors-in-generated-code`: `true`
-  - `ignore-missing-source`: `true`
-- `sub/project/non_test_file.py`
-  - `replace-imports-with-any`: `["sympy.*", "*.series"]`
-  - `errors`: `{assert-type = true}`
-  - `ignore-errors-in-generated-code`: `true`
-  - `ignore-missing-source`: `true`
-- `sub/sub_file.py`
-  - `replace-imports-with-any`: `["sympy.*", "*.series"]`
-  - `errors`: `{assert-type = false}`
-  - `ignore-errors-in-generated-code`: `true`
-  - `ignore-missing-source`: `true`
-- `top_level_file.py`
-  - `replace-imports-with-any`: `["sympy.*", "*.series"]`
-  - `errors`: `{assert-type = true, bad-assignment = false, invalid-argument = false}`
-  - `ignore-errors-in-generated-code`: `true`
-  - `ignore-missing-source`: `true`
 
 ### Example `pyproject.toml`
 
