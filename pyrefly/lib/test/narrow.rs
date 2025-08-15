@@ -119,6 +119,17 @@ def f(x: type[A]):
 );
 
 testcase!(
+    test_isinstance_any_type,
+    r#"
+from typing import assert_type, Literal
+def test(flag: bool, t: type) -> None:
+    x = 1 if flag else "foo"
+    if isinstance(x, t):
+        assert_type(x, Literal[1, "foo"])
+    "#,
+);
+
+testcase!(
     test_is_never,
     r#"
 from typing import assert_type, Never
