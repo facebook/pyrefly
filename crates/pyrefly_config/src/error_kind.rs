@@ -200,6 +200,8 @@ pub enum ErrorKind {
     ParseError,
     /// The attribute exists but cannot be modified.
     ReadOnly,
+    /// Warning when casting a value to a type it is already compatible with.
+    RedundantCast,
     /// Attempting to use value that is equivalent to True or always False in boolean context.
     RedundantCondition,
     /// Raised by a call to reveal_type().
@@ -261,6 +263,7 @@ impl ErrorKind {
         match self {
             ErrorKind::RevealType => Severity::Info,
             ErrorKind::Deprecated => Severity::Warn,
+            ErrorKind::RedundantCast => Severity::Warn,
             _ => Severity::Error,
         }
     }
