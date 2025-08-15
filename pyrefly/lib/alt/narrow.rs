@@ -154,8 +154,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn narrow_isinstance(&self, left: &Type, right: &Type) -> Type {
         let mut res = Vec::new();
         for right in self.as_class_info(right.clone()) {
-            if let Some(right) = self.unwrap_class_object_silently(&right) {
-                res.push(self.intersect_with_fallback(left, &right, || right.clone()))
+            if let Some(right_ty) = self.unwrap_class_object_silently(&right)
+                && right_ty != Type::any_implicit()
+            {
+                res.push(self.intersect_with_fallback(left, &right_ty, || right_ty.clone()))
             } else {
                 res.push(left.clone());
             }
