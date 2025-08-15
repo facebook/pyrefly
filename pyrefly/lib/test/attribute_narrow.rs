@@ -490,3 +490,23 @@ def f(foo: Foo):
             assert_type(x, int)
 "#,
 );
+
+testcase!(
+    test_hasattr_narrowing,
+    r#"
+from typing import reveal_type, assert_type, Any
+class Y:
+    something: Any
+class X:
+    baz: Y
+x = X()
+
+if hasattr(x, "foo"):
+    x.foo
+    x.fi # E: Object of class `X` has no attribute `fi`
+
+if hasattr(x.baz, "bar"):
+    assert_type(x.baz, Y)
+    assert_type(x.baz.bar, Any)
+    "#,
+);
