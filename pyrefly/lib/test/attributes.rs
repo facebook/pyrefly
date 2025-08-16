@@ -1257,12 +1257,11 @@ def g(ann) -> None:
 );
 
 testcase!(
-    bug = "PyTorch TODO: this would be fixed by hasattr narrowing",
     test_tuple_attribute_example,
     r#"
 def f(obj, g, field_type, my_type,):
     assert issubclass(obj, tuple) and hasattr(obj, "_fields")
-    for f in obj._fields:  # E: Class `tuple` has no class attribute `_fields`
+    for f in obj._fields:
         if isinstance(field_type, my_type) and g is not None:
             if g is None:
                 raise ValueError(

@@ -56,6 +56,8 @@ pub enum AtomicNarrowOp {
     IsNotInstance(Expr),
     IsSubclass(Expr),
     IsNotSubclass(Expr),
+    HasAttr(Expr),
+    NotHasAttr(Expr),
     TypeGuard(Type, Arguments),
     NotTypeGuard(Type, Arguments),
     TypeIs(Type, Arguments),
@@ -108,6 +110,8 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
             AtomicNarrowOp::IsNotSubclass(expr) => {
                 write!(f, "IsNotSubclass({})", expr.display_with(ctx))
             }
+            AtomicNarrowOp::HasAttr(expr) => write!(f, "HasAttr({})", expr.display_with(ctx)),
+            AtomicNarrowOp::NotHasAttr(expr) => write!(f, "NotHasAttr({})", expr.display_with(ctx)),
             AtomicNarrowOp::TypeGuard(t, arguments) => {
                 write!(f, "TypeGuard({t}, {})", arguments.display_with(ctx))
             }
@@ -183,6 +187,8 @@ impl AtomicNarrowOp {
             Self::IsNotInstance(v) => Self::IsInstance(v.clone()),
             Self::IsSubclass(v) => Self::IsNotSubclass(v.clone()),
             Self::IsNotSubclass(v) => Self::IsSubclass(v.clone()),
+            Self::HasAttr(v) => Self::NotHasAttr(v.clone()),
+            Self::NotHasAttr(v) => Self::HasAttr(v.clone()),
             Self::Eq(v) => Self::NotEq(v.clone()),
             Self::NotEq(v) => Self::Eq(v.clone()),
             Self::In(v) => Self::NotIn(v.clone()),

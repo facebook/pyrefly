@@ -6,6 +6,7 @@
  */
 
 use num_traits::ToPrimitive;
+use pyrefly_types::types::AnyStyle;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
@@ -20,6 +21,7 @@ use ruff_python_ast::StringLiteralValue;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -45,6 +47,15 @@ use crate::types::types::Type;
 /// But the cost to create such a type (and then probably knock individual elements out of it)
 /// is very high.
 const NARROW_ENUM_LIMIT: usize = 100;
+
+// FIXME: I don't this is correct?, and we should prob error when there's a chain inside the string literal
+fn extract_string_literal_attr_name(expr: &Expr) -> Option<Name> {
+    if let Expr::StringLiteral(ExprStringLiteral { value, .. }) = expr {
+        Some(Name::new(value.to_string()))
+    } else {
+        None
+    }
+}
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // Get the union of all members of an enum, minus the specified member
@@ -135,6 +146,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Some(CalleeKind::Function(FunctionKind::IsSubclass)) => {
                     Some(AtomicNarrowOp::IsSubclass(second_arg.clone()))
+                }
+                Some(CalleeKind::Function(FunctionKind::HasAttr)) => {
+                    Some(AtomicNarrowOp::HasAttr(second_arg.clone()))
                 }
                 _ => None,
             };
@@ -478,6 +492,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let right = self.expr_infer(v, errors);
                 self.narrow_is_not_subclass(ty, &right, v.range())
             }
+            AtomicNarrowOp::HasAttr(_) => Type::Any(AnyStyle::Implicit),
+            AtomicNarrowOp::NotHasAttr(_) => ty.clone(),
             AtomicNarrowOp::TypeGuard(t, arguments) => {
                 if let Some(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
@@ -689,6 +705,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Check if an operation is a HasAttr operation
+    fn is_hasattr_op(&self, op: &AtomicNarrowOp, errors: &ErrorCollector) -> bool {
+        match op {
+            AtomicNarrowOp::HasAttr(_) => true,
+            AtomicNarrowOp::Call(func, args) => {
+                matches!(
+                    self.resolve_narrowing_call(func, args, errors),
+                    Some(AtomicNarrowOp::HasAttr(_))
+                )
+            }
+            _ => false,
+        }
+    }
+
     pub fn narrow(
         &self,
         type_info: &TypeInfo,
@@ -697,10 +727,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> TypeInfo {
         match op {
+            NarrowOp::Atomic(subject, op) if self.is_hasattr_op(op, errors) => {
+                let base_ty = match subject {
+                    Some(facet_chain) => self.get_facet_chain_type(type_info, facet_chain, range),
+                    None => type_info.ty().clone(),
+                };
+                let ty = self.atomic_narrow(&base_ty, op, range, errors);
+
+                match (subject, self.get_optional_x_attr_facet(errors, op)) {
+                    (Some(existing_chain), Some(attr_facet)) => {
+                        let extended_chain = FacetChain::new(Vec1::from_vec_push(
+                            existing_chain.facets().clone().into_vec(),
+                            attr_facet,
+                        ));
+                        type_info.with_narrow(extended_chain.facets(), ty)
+                    }
+                    (None, Some(attr_facet)) => {
+                        let new_chain = FacetChain::new(Vec1::new(attr_facet));
+                        type_info.with_narrow(new_chain.facets(), ty)
+                    }
+                    (Some(facet_chain), None) => type_info.with_narrow(facet_chain.facets(), ty),
+                    (None, None) => type_info.clone().with_ty(ty),
+                }
+            }
             NarrowOp::Atomic(None, op) => {
-                type_info
-                    .clone()
-                    .with_ty(self.atomic_narrow(type_info.ty(), op, range, errors))
+                let ty = self.atomic_narrow(type_info.ty(), op, range, errors);
+                type_info.clone().with_ty(ty)
             }
             NarrowOp::Atomic(Some(facet_chain), op) => {
                 let ty = self.atomic_narrow(
@@ -727,6 +779,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ops.map(|op| self.narrow(type_info, op, range, errors)),
                 &|tys| self.unions(tys),
             ),
+        }
+    }
+
+    /// Provides a new facet if applicable
+    ///
+    /// getattr() and hasattr() provide narrowing information for a facet outside of the original subject of the binding
+    fn get_optional_x_attr_facet(
+        &self,
+        errors: &ErrorCollector,
+        op: &AtomicNarrowOp,
+    ) -> Option<FacetKind> {
+        if let AtomicNarrowOp::Call(func, args) = op
+            && let Some(AtomicNarrowOp::HasAttr(expr)) =
+                self.resolve_narrowing_call(func, args, errors)
+            && let Some(attr_name) = extract_string_literal_attr_name(&expr)
+        {
+            Some(FacetKind::Attribute(attr_name))
+        } else {
+            None
         }
     }
 }
