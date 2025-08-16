@@ -200,6 +200,24 @@ print(json.dumps({'python_platform': platform, 'python_version': version, 'site_
             Self::get_interpreter_env(path).0
         })
     }
+
+    /// Get the site package paths configured for this environment
+    pub fn site_package_path(&self) -> &Option<Vec<PathBuf>> {
+        &self.site_package_path
+    }
+
+    /// Get the interpreter-discovered site package paths
+    pub fn interpreter_site_package_path(&self) -> &Vec<PathBuf> {
+        &self.interpreter_site_package_path
+    }
+
+    /// Get all site package paths (both configured and interpreter-discovered)
+    pub fn all_site_package_paths(&self) -> impl Iterator<Item = &PathBuf> {
+        self.site_package_path
+            .iter()
+            .flatten()
+            .chain(self.interpreter_site_package_path.iter())
+    }
 }
 
 impl Display for PythonEnvironment {

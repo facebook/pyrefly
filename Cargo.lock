@@ -2100,6 +2100,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "tsp_types",
  "vec1",
  "yansi 1.0.1",
 ]
@@ -3242,6 +3243,17 @@ checksum = "859eb650cfee7434994602c3a68b25d77ad9e68c8a6cd491616ef86661382eb3"
 dependencies = [
  "serde",
  "stable_deref_trait",
+]
+
+[[package]]
+name = "tsp_types"
+version = "0.1.0"
+dependencies = [
+ "lsp-server",
+ "lsp-types",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

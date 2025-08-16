@@ -18,4 +18,6 @@ pub mod init;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lsp;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod tsp;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod util;

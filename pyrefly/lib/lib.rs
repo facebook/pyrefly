@@ -47,6 +47,7 @@ mod report;
 mod solver;
 mod state;
 mod test;
+mod tsp;
 
 pub(crate) use compat::*;
 

@@ -24,6 +24,8 @@ use std::sync::Arc;
 use std::sync::MutexGuard;
 use std::sync::RwLockReadGuard;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -34,6 +36,7 @@ use enum_iterator::Sequence;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
+use lsp_types;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -119,6 +122,19 @@ use crate::types::class::Class;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::TParams;
 use crate::types::types::Type;
+
+/// Data stored for declaration handles - contains the metadata needed to reconstruct declarations
+#[derive(Clone)]
+#[allow(dead_code)] // Fields will be used when declaration handles are implemented
+pub struct DeclarationData {
+    pub definition_metadata: crate::state::lsp::DefinitionMetadata,
+    pub position: ruff_text_size::TextSize,
+    pub name: String,
+    pub node_range: lsp_types::Range,
+    pub node_uri: lsp_types::Url,
+    pub type_info: Option<crate::types::types::Type>,
+    pub definition_module_name: pyrefly_python::module_name::ModuleName,
+}
 
 /// `ModuleData` is a snapshot of `ArcId<ModuleDataMut>` in the main state.
 /// The snapshot is readonly most of the times. It will only be overwritten with updated information
@@ -294,6 +310,11 @@ impl<'a> Transaction<'a> {
         let Transaction { data, readable } = self;
         drop(readable);
         data
+    }
+
+    /// Get access to the underlying state for operations like handle registration
+    pub fn state(&self) -> &State {
+        self.data.state
     }
 
     pub fn set_subscriber(&mut self, subscriber: Option<Box<dyn Subscriber>>) {
@@ -672,6 +693,7 @@ impl<'a> Transaction<'a> {
                     old_load.errors.style(),
                     code,
                     self_error,
+                    self.data.state.next_load_version(),
                 )));
                 rebuild(write, true);
                 return;
@@ -686,6 +708,7 @@ impl<'a> Transaction<'a> {
             write.steps.load = Some(Arc::new(Load {
                 errors: ErrorCollector::new(old_load.module_info.dupe(), old_load.errors.style()),
                 module_info: old_load.module_info.clone(),
+                version: self.data.state.next_load_version(),
             }));
             rebuild(write, false);
             return;
@@ -775,6 +798,7 @@ impl<'a> Transaction<'a> {
                     .config
                     .read()
                     .untyped_def_behavior(module_data.handle.path().as_path()),
+                next_load_version: &|| self.data.state.next_load_version(),
             });
             {
                 let mut changed = false;
@@ -1393,6 +1417,7 @@ impl<'a> Transaction<'a> {
                     .config
                     .read()
                     .untyped_def_behavior(m.handle.path().as_path()),
+                next_load_version: &|| self.data.state.next_load_version(),
             };
             let mut step = Step::Load; // Start at AST (Load.next)
             alt.load = lock.steps.load.dupe();
@@ -1617,6 +1642,17 @@ pub struct State {
     state: RwLock<StateData>,
     run_count: AtomicUsize,
     committing_transaction_lock: Mutex<()>,
+    snapshot_counter: AtomicI32,
+    /// Counter for tracking load data versions (diagnostics versioning)
+    load_version_counter: AtomicU32,
+    /// Type registry for TSP type handles using index-based storage
+    /// This is cleared whenever the snapshot increments
+    /// Format: (snapshot_id, type_storage, next_index)
+    type_handle_registry: RwLock<(i32, Vec<Option<crate::types::types::Type>>, usize)>,
+    /// Declaration registry for TSP declaration handles using index-based storage
+    /// This is cleared whenever the snapshot increments
+    /// Format: (snapshot_id, declaration_storage, next_index)
+    declaration_handle_registry: RwLock<(i32, Vec<DeclarationData>)>,
 }
 
 impl State {
@@ -1628,11 +1664,158 @@ impl State {
             state: RwLock::new(StateData::new()),
             run_count: AtomicUsize::new(0),
             committing_transaction_lock: Mutex::new(()),
+            snapshot_counter: AtomicI32::new(1),     // Start at 1
+            load_version_counter: AtomicU32::new(1), // Start at 1
+            type_handle_registry: RwLock::new((0, Vec::new(), 0)),
+            declaration_handle_registry: RwLock::new((0, Vec::new())),
         }
     }
 
     pub fn config_finder(&self) -> &ConfigFinder {
         &self.config_finder
+    }
+
+    pub fn current_snapshot(&self) -> i32 {
+        self.snapshot_counter.load(Ordering::Acquire)
+    }
+
+    pub fn increment_snapshot(&self) -> i32 {
+        let result = self.snapshot_counter.fetch_add(1, Ordering::AcqRel) + 1;
+        // Clear the type registry when incrementing the snapshot
+        let mut type_registry = self.type_handle_registry.write();
+        type_registry.0 = result;
+        type_registry.1.clear();
+        type_registry.2 = 0;
+        drop(type_registry);
+
+        // Clear the declaration registry when incrementing the snapshot
+        let mut decl_registry = self.declaration_handle_registry.write();
+        decl_registry.0 = result;
+        decl_registry.1.clear();
+        drop(decl_registry);
+
+        result
+    }
+
+    /// Get the next load version number for tracking diagnostics versions
+    pub fn next_load_version(&self) -> u32 {
+        self.load_version_counter.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    /// Registers a type in the registry and returns an index-based handle
+    /// The returned handle is stable within a snapshot and can be used multiple times
+    pub fn register_type_handle(&self, py_type: crate::types::types::Type) -> String {
+        let current_snapshot = self.current_snapshot();
+        let mut registry = self.type_handle_registry.write();
+
+        // Clear the registry if snapshot has changed
+        if registry.0 != current_snapshot {
+            registry.1.clear();
+            registry.2 = 0;
+            registry.0 = current_snapshot;
+        }
+
+        // Find the next available index
+        let index = registry.2;
+        registry.2 += 1;
+
+        // Ensure the vector is large enough
+        if registry.1.len() <= index {
+            registry.1.resize(index + 1, None);
+        }
+
+        // Store the type at this index
+        registry.1[index] = Some(py_type);
+
+        // Return the index as a string handle
+        format!("{current_snapshot}:{index}")
+    }
+
+    /// Looks up a pyrefly type from a TSP type handle (format: "snapshot:index")
+    pub fn lookup_type_from_handle(&self, handle: &str) -> Option<crate::types::types::Type> {
+        // Parse the handle format "snapshot:index"
+        let parts: Vec<&str> = handle.split(':').collect();
+        if parts.len() != 2 {
+            return None;
+        }
+
+        let handle_snapshot: i32 = parts[0].parse().ok()?;
+        let index: usize = parts[1].parse().ok()?;
+
+        let current_snapshot = self.current_snapshot();
+        let mut registry = self.type_handle_registry.write();
+
+        // Clear the registry if snapshot has changed
+        if registry.0 != current_snapshot {
+            registry.1.clear();
+            registry.2 = 0;
+            registry.0 = current_snapshot;
+            return None;
+        }
+
+        // Check if the handle is from the current snapshot
+        if handle_snapshot != current_snapshot {
+            return None;
+        }
+
+        // Look up the type by index
+        registry.1.get(index)?.as_ref().cloned()
+    }
+
+    /// Registers a declaration with the declaration handle registry and returns a stable handle
+    pub fn register_declaration_handle(&self, declaration_data: DeclarationData) -> String {
+        let current_snapshot = self.current_snapshot();
+        let mut registry = self.declaration_handle_registry.write();
+
+        // Clear the registry if snapshot has changed
+        if registry.0 != current_snapshot {
+            registry.1.clear();
+            registry.0 = current_snapshot;
+        }
+
+        // Find the next available index
+        let index = registry.1.len();
+
+        // Store the declaration data
+        registry.1.push(declaration_data);
+
+        // Return the index as a string handle
+        format!("decl_{current_snapshot}:{index}")
+    }
+
+    /// Looks up declaration data from a TSP declaration handle (format: "decl_snapshot:index")
+    #[allow(dead_code)] // Will be used when declaration handle lookup is implemented
+    pub fn lookup_declaration_from_handle(&self, handle: &str) -> Option<DeclarationData> {
+        // Parse the handle format "decl_snapshot:index"
+        if !handle.starts_with("decl_") {
+            return None;
+        }
+
+        let parts: Vec<&str> = handle[5..].split(':').collect(); // Skip "decl_" prefix
+        if parts.len() != 2 {
+            return None;
+        }
+
+        let handle_snapshot: i32 = parts[0].parse().ok()?;
+        let index: usize = parts[1].parse().ok()?;
+
+        let current_snapshot = self.current_snapshot();
+        let mut registry = self.declaration_handle_registry.write();
+
+        // Clear the registry if snapshot has changed
+        if registry.0 != current_snapshot {
+            registry.1.clear();
+            registry.0 = current_snapshot;
+            return None;
+        }
+
+        // Check if the handle is from the current snapshot
+        if handle_snapshot != current_snapshot {
+            return None;
+        }
+
+        // Look up the declaration by index
+        registry.1.get(index).cloned()
     }
 
     fn get_config(&self, name: ModuleName, path: &ModulePath) -> ArcId<ConfigFile> {

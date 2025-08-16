@@ -14,6 +14,7 @@ use crate::commands::dump_config::DumpConfigArgs;
 use crate::commands::infer::InferArgs;
 use crate::commands::init::InitArgs;
 use crate::commands::lsp::LspArgs;
+use crate::commands::tsp::TspArgs;
 use crate::commands::util::CommandExitStatus;
 
 /// Subcommands to run Pyrefly with.
@@ -39,6 +40,9 @@ pub enum Command {
     /// Start an LSP server
     Lsp(LspArgs),
 
+    /// Start a TSP server
+    Tsp(TspArgs),
+
     /// Automatically add type annotations to a file or directory.
     Infer(InferArgs),
 }
@@ -50,6 +54,7 @@ impl Command {
             Command::Snippet(args) => args.run(allow_forget).await,
             Command::BuckCheck(args) => args.run(),
             Command::Lsp(args) => args.run(),
+            Command::Tsp(args) => args.run(),
             Command::Init(args) => args.run(),
             Command::Infer(args) => args.run(),
             Command::DumpConfig(args) => args.run(),

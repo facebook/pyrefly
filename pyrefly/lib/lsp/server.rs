@@ -219,19 +219,19 @@ impl ServerConnection {
     }
 }
 
-struct Server {
+pub struct Server {
     connection: ServerConnection,
     /// A thread pool of size one for heavy read operations on the State
     async_state_read_threads: ThreadPool,
     lsp_queue: LspQueue,
     initialize_params: InitializeParams,
     indexing_mode: IndexingMode,
-    state: Arc<State>,
-    open_files: Arc<RwLock<HashMap<PathBuf, Arc<String>>>>,
+    pub state: Arc<State>,
+    pub open_files: Arc<RwLock<HashMap<PathBuf, Arc<String>>>>,
     /// A set of configs where we have already indexed all the files within the config.
     indexed_configs: Mutex<HashSet<ArcId<ConfigFile>>>,
     cancellation_handles: Arc<Mutex<HashMap<RequestId, CancellationHandle>>>,
-    workspaces: Arc<Workspaces>,
+    pub workspaces: Arc<Workspaces>,
     outgoing_request_id: AtomicI32,
     outgoing_requests: Mutex<HashMap<RequestId, Request>>,
     filewatcher_registered: AtomicBool,
@@ -247,7 +247,7 @@ struct Server {
 /// - priority_events includes those that should be handled as soon as possible (e.g. know that a
 ///   request is cancelled)
 /// - queued_events includes most of the other events.
-fn dispatch_lsp_events(connection: &Connection, lsp_queue: LspQueue) {
+pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: LspQueue) {
     for msg in &connection.receiver {
         match msg {
             Message::Request(x) => {
@@ -389,7 +389,7 @@ pub fn capabilities(
     }
 }
 
-enum ProcessEvent {
+pub enum ProcessEvent {
     Continue,
     Exit,
 }
@@ -435,7 +435,7 @@ pub fn lsp_loop(
 impl Server {
     const FILEWATCHER_ID: &str = "FILEWATCHER";
 
-    fn extract_request_params_or_send_err_response<T>(
+    pub fn extract_request_params_or_send_err_response<T>(
         &self,
         params: Result<T::Params, serde_json::Error>,
         id: &RequestId,
@@ -458,7 +458,7 @@ impl Server {
     }
 
     /// Process the event and return next step.
-    fn process_event<'a>(
+    pub fn process_event<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
@@ -798,7 +798,7 @@ impl Server {
         Ok(ProcessEvent::Continue)
     }
 
-    fn new(
+    pub fn new(
         connection: Arc<Connection>,
         lsp_queue: LspQueue,
         initialize_params: InitializeParams,
@@ -842,7 +842,7 @@ impl Server {
         s
     }
 
-    fn send_response(&self, x: Response) {
+    pub fn send_response(&self, x: Response) {
         self.connection.send(Message::Response(x))
     }
 
@@ -998,6 +998,7 @@ impl Server {
             }
             // we have to run, not just commit to process updates
             state.run_with_committing_transaction(transaction, &[]);
+            state.increment_snapshot(); // Increment snapshot after invalidation
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
@@ -1074,6 +1075,7 @@ impl Server {
         self.open_files
             .write()
             .insert(uri, Arc::new(params.text_document.text));
+        self.state.increment_snapshot(); // Increment snapshot on file open
         if !subsequent_mutation {
             self.validate_in_memory(ide_transaction_manager);
         }
@@ -1146,6 +1148,7 @@ impl Server {
         self.workspaces.changed(params.event);
         self.setup_file_watcher_if_necessary();
         self.request_settings_for_all_workspaces();
+        self.state.increment_snapshot(); // Increment snapshot on workspace change
     }
 
     fn did_change_configuration<'a>(
@@ -1222,7 +1225,7 @@ impl Server {
         })
     }
 
-    fn make_handle_if_enabled(&self, uri: &Url) -> Option<Handle> {
+    pub fn make_handle_if_enabled(&self, uri: &Url) -> Option<Handle> {
         self.make_handle_with_lsp_analysis_config_if_enabled(uri)
             .map(|(handle, _)| handle)
     }

@@ -3,10 +3,7 @@
   "tasks": [
     {
       "label": "watch extension",
-      "dependsOn": [
-        "npm: watch:tsc",
-        "npm: watch:esbuild"
-      ],
+      "dependsOn": ["npm: watch:tsc", "npm: watch:esbuild"],
       "presentation": {
         "reveal": "never"
       },
@@ -17,10 +14,7 @@
     },
     {
       "label": "build extension",
-      "dependsOn": [
-        "npm: compile",
-        "cargo: build pyrefly for extension"
-      ],
+      "dependsOn": ["npm: compile", "cargo: build pyrefly for extension"],
       "presentation": {
         "reveal": "never"
       },
@@ -42,9 +36,7 @@
       "options": {
         "cwd": "${workspaceFolder}/lsp"
       },
-      "dependsOn": [
-        "npm install"
-      ]
+      "dependsOn": ["npm install"]
     },
     {
       "type": "npm",
@@ -58,9 +50,7 @@
       "options": {
         "cwd": "${workspaceFolder}/lsp"
       },
-      "dependsOn": [
-        "npm install"
-      ]
+      "dependsOn": ["npm install"]
     },
     {
       "label": "npm install",
@@ -112,6 +102,34 @@
       }
     },
     {
+      "type": "shell",
+      "command": "cargo watch -x 'build --all-features --artifact-dir ../lsp/bin -Z unstable-options'",
+      "group": "build",
+      "isBackground": true,
+      "label": "cargo: watch debug pyrefly for extension",
+      "options": {
+        "shell": {
+          "args": ["-c", "-l"]
+        },
+        "cwd": "${workspaceFolder}/pyrefly"
+      },
+      "windows": {
+        "options": {
+          "shell": {
+            "args": ["-NonInteractive"]
+          }
+        }
+      },
+      "problemMatcher": {
+        "base": "$rustc",
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^\\[Running\\]",
+          "endsPattern": "^\\[Finished running\\]"
+        }
+      }
+    },
+    {
       "type": "npm",
       "script": "watch:tsc",
       "group": "build",
@@ -125,9 +143,7 @@
       "options": {
         "cwd": "${workspaceFolder}/lsp"
       },
-      "dependsOn": [
-        "npm install"
-      ]
+      "dependsOn": ["npm install"]
     }
   ]
 }

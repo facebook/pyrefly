@@ -1,0 +1,2188 @@
+{
+    "metaData": {
+        "version": "0.1.0"
+    },
+    "requests": [
+        {
+            "method": "typeServer/getSnapshot",
+            "typeName": "GetSnapshotRequest",
+            "result": {
+                "kind": "base",
+                "name": "integer"
+            },
+            "messageDirection": "clientToServer",
+            "documentation": "Request from client to get the current snapshot of the type server. A snapshot is a point-in-time representation of the type server's state, including all loaded files and their types."
+        },
+        {
+            "method": "typeServer/getSupportedProtocolVersion",
+            "typeName": "GetSupportedProtocolVersionRequest",
+            "result": {
+                "kind": "base",
+                "name": "string"
+            },
+            "messageDirection": "clientToServer",
+            "documentation": "Request to get the version of the protocol the type server supports. Returns a string representation of the protocol version (should be semver format)."
+        },
+        {
+            "method": "typeServer/getDiagnostics",
+            "typeName": "GetDiagnosticsRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Diagnostic"
+                        }
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetDiagnosticsParams"
+            },
+            "documentation": "Request to get diagnostics for a specific file."
+        },
+        {
+            "method": "typeServer/getDiagnosticsVersion",
+            "typeName": "GetDiagnosticsVersionRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetDiagnosticsVersionParams"
+            },
+            "documentation": "Request to get the version of diagnostics for a specific file."
+        },
+        {
+            "method": "typeServer/getType",
+            "typeName": "GetTypeRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetTypeParams"
+            },
+            "documentation": "Request to get the type information for a specific node."
+        },
+        {
+            "method": "typeServer/getBuiltinType",
+            "typeName": "GetBuiltinTypeRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetBuiltinTypeParams"
+            },
+            "documentation": "Request to get the type information for a specific builtin type."
+        },
+        {
+            "method": "typeServer/getTypeArgs",
+            "typeName": "GetTypeArgsRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Type"
+                        }
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetTypeArgsParams"
+            },
+            "documentation": "Request to get the collection of subtypes that make up a union type or the types that makes up a generic type."
+        },
+        {
+            "method": "typeServer/searchForTypeAttribute",
+            "typeName": "SearchForTypeAttributeRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "reference",
+                        "name": "Attribute"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "SearchForTypeAttributeParams"
+            },
+            "documentation": "Request to find an attribute of a class."
+        },
+        {
+            "method": "typeServer/getTypeAttributes",
+            "typeName": "GetTypeAttributesRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Attribute"
+                        }
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetTypeAttributesParams"
+            },
+            "documentation": "Request to get the attributes of a specific class or the parameters and return value of a specific function."
+        },
+        {
+            "method": "typeServer/getOverloads",
+            "typeName": "GetOverloadsRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Type"
+                        }
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetOverloadsParams"
+            },
+            "documentation": "Request to get all overloads of a function or method. The returned value doesn't include the implementation signature."
+        },
+        {
+            "method": "typeServer/getMatchingOverloads",
+            "typeName": "GetMatchingOverloadsRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Type"
+                        }
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetMatchingOverloadsParams"
+            },
+            "documentation": "Request to get the overloads that a call node matches."
+        },
+        {
+            "method": "typeServer/getMetaclass",
+            "typeName": "GetMetaclassRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetMetaclassParams"
+            },
+            "documentation": "Request to get the meta class of a type."
+        },
+        {
+            "method": "typeServer/getTypeOfDeclaration",
+            "typeName": "GetTypeOfDeclarationRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetTypeOfDeclarationParams"
+            },
+            "documentation": "Request to get the type of a declaration."
+        },
+        {
+            "method": "typeServer/getSymbol",
+            "typeName": "GetSymbolRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "reference",
+                        "name": "Symbol"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetSymbolParams"
+            },
+            "documentation": "Request to get symbol declaration information for a node."
+        },
+        {
+            "method": "typeServer/getSymbolsForFile",
+            "typeName": "GetSymbolsForFileRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "reference",
+                        "name": "FileSymbolInfo"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetSymbolsForFileParams"
+            },
+            "documentation": "Request to get all symbols for a file. This is used to get all symbols in a file."
+        },
+        {
+            "method": "typeServer/getFunctionParts",
+            "typeName": "GetFunctionPartsRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "reference",
+                        "name": "FunctionParts"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetFunctionPartsParams"
+            },
+            "documentation": "Request to get the string representation of a function's parts, meaning its parameters and return type."
+        },
+        {
+            "method": "typeServer/getRepr",
+            "typeName": "GetReprRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetReprParams"
+            },
+            "documentation": "Request to get the string representation of a type in a human-readable format. This may or may not be the same as the type's \"name\"."
+        },
+        {
+            "method": "typeServer/getDocString",
+            "typeName": "GetDocStringRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetDocStringParams"
+            },
+            "documentation": "Request to get the docstring for a specific declaration."
+        },
+        {
+            "method": "typeServer/resolveImportDeclaration",
+            "typeName": "ResolveImportDeclarationRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "reference",
+                        "name": "Declaration"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "ResolveImportDeclarationParams"
+            },
+            "documentation": "Request to resolve an import declaration."
+        },
+        {
+            "method": "typeServer/resolveImport",
+            "typeName": "ResolveImportRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "ResolveImportParams"
+            },
+            "documentation": "Request to resolve an import. This is used to resolve the import name to its location in the file system."
+        },
+        {
+            "method": "typeServer/getTypeAliasInfo",
+            "typeName": "GetTypeAliasInfoRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "reference",
+                        "name": "TypeAliasInfo"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetTypeAliasInfoParams"
+            },
+            "documentation": "Get information about a type alias."
+        },
+        {
+            "method": "typeServer/combineTypes",
+            "typeName": "CombineTypesRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "CombineTypesParams"
+            },
+            "documentation": "Request to combine types. This is used to combine multiple types into a single type."
+        },
+        {
+            "method": "typeServer/createInstanceType",
+            "typeName": "CreateInstanceTypeRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "CreateInstanceTypeParams"
+            },
+            "documentation": "Request to generate an instance type representation for the provided type."
+        },
+        {
+            "method": "typeServer/getPythonSearchPaths",
+            "typeName": "GetPythonSearchPathsRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "array",
+                        "element": {
+                            "kind": "base",
+                            "name": "string"
+                        }
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetPythonSearchPathsParams"
+            },
+            "documentation": "Request to get the search paths that the type server uses for Python modules."
+        }
+    ],
+    "notifications": [
+        {
+            "method": "typeServer/snapshotChanged",
+            "typeName": "SnapshotChangedNotification",
+            "messageDirection": "serverToClient",
+            "params": {
+                "kind": "reference",
+                "name": "SnapshotChangedParams"
+            },
+            "documentation": "Notification sent by the server to indicate any outstanding snapshots are invalid."
+        },
+        {
+            "method": "typeServer/diagnosticsChanged",
+            "typeName": "DiagnosticsChangedNotification",
+            "messageDirection": "serverToClient",
+            "params": {
+                "kind": "reference",
+                "name": "DiagnosticsChangedParams"
+            },
+            "documentation": "Notification sent by the server to indicate that diagnostics have changed and the client should re-request diagnostics for the file."
+        }
+    ],
+    "constants": [
+        {
+            "name": "TypeServerVersion",
+            "type": {
+                "kind": "base",
+                "name": "string"
+            },
+            "value": "0.1.0",
+            "documentation": "The version of the Type Server Protocol"
+        },
+        {
+            "name": "InvalidHandle",
+            "type": {
+                "kind": "base", 
+                "name": "integer"
+            },
+            "value": -1,
+            "documentation": "Represents an invalid handle value"
+        }
+    ],
+    "structures": [
+        {
+            "name": "Position",
+            "properties": [
+                {
+                    "name": "line",
+                    "type": {
+                        "kind": "base",
+                        "name": "uinteger"
+                    },
+                    "documentation": "Line position in a document (zero-based)."
+                },
+                {
+                    "name": "character",
+                    "type": {
+                        "kind": "base",
+                        "name": "uinteger"
+                    },
+                    "documentation": "Character offset on a line in a document (zero-based)."
+                }
+            ],
+            "documentation": "Position in a text document expressed as zero-based line and character offset."
+        },
+        {
+            "name": "Range",
+            "properties": [
+                {
+                    "name": "start",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Position"
+                    },
+                    "documentation": "The range's start position."
+                },
+                {
+                    "name": "end",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Position"
+                    },
+                    "documentation": "The range's end position."
+                }
+            ],
+            "documentation": "A range in a text document expressed as (zero-based) start and end positions."
+        },
+        {
+            "name": "Diagnostic",
+            "properties": [
+                {
+                    "name": "range",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Range"
+                    },
+                    "documentation": "The range at which the message applies."
+                },
+                {
+                    "name": "severity",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "optional": true,
+                    "documentation": "The diagnostic's severity."
+                },
+                {
+                    "name": "code",
+                    "type": {
+                        "kind": "or",
+                        "items": [
+                            {
+                                "kind": "base",
+                                "name": "integer"
+                            },
+                            {
+                                "kind": "base",
+                                "name": "string"
+                            }
+                        ]
+                    },
+                    "optional": true,
+                    "documentation": "The diagnostic's code."
+                },
+                {
+                    "name": "source",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": true,
+                    "documentation": "A human-readable string describing the source of this diagnostic."
+                },
+                {
+                    "name": "message",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The diagnostic's message."
+                }
+            ],
+            "documentation": "Represents a diagnostic, such as a compiler error or warning."
+        },
+        {
+            "name": "Node",
+            "properties": [
+                {
+                    "name": "uri",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "URI of the source file containing this node."
+                },
+                {
+                    "name": "range",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Range"
+                    },
+                    "documentation": "The range of the node in the source file. This is a zero-based range, meaning the start and end positions are both zero-based. The range uses character offsets the same way the LSP does."
+                }
+            ],
+            "documentation": "Represents a node in an AST (Abstract Syntax Tree) or similar structure."
+        },
+        {
+            "name": "ModuleName",
+            "properties": [
+                {
+                    "name": "leadingDots",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The leading dots in the module name. This is used to determine the relative import level."
+                },
+                {
+                    "name": "nameParts",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "base",
+                            "name": "string"
+                        }
+                    },
+                    "documentation": "The parts of the module name, split by dots. For example, for `my_module.sub_module`, this would be `['my_module', 'sub_module']`."
+                }
+            ],
+            "documentation": "Represents a module name with optional leading dots for relative imports."
+        },
+        {
+            "name": "Type",
+            "properties": [
+                {
+                    "name": "handle",
+                    "type": {
+                        "kind": "reference",
+                        "name": "TypeHandle"
+                    },
+                    "documentation": "Unique identifier for the type definition within the snapshot. A handle doesn't need to exist beyond the lifetime of the snapshot."
+                },
+                {
+                    "name": "category",
+                    "type": {
+                        "kind": "reference",
+                        "name": "TypeCategory"
+                    },
+                    "documentation": "Essential classification of the Type."
+                },
+                {
+                    "name": "flags",
+                    "type": {
+                        "kind": "reference",
+                        "name": "TypeFlags"
+                    },
+                    "documentation": "Flags describing the type."
+                },
+                {
+                    "name": "moduleName",
+                    "type": {
+                        "kind": "or",
+                        "items": [
+                            {
+                                "kind": "reference",
+                                "name": "ModuleName"
+                            },
+                            {
+                                "kind": "base",
+                                "name": "null"
+                            }
+                        ]
+                    },
+                    "documentation": "Name of the module the type comes from"
+                },
+                {
+                    "name": "name",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "Simple name of the type. For example, for a class `MyClass` in module `my_module`, this would be `MyClass`."
+                },
+                {
+                    "name": "aliasName",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": true,
+                    "documentation": "The typing module defines aliases for builtin types (e.g. Tuple, List, Dict). This field holds the alias name."
+                },
+                {
+                    "name": "categoryFlags",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "Flags specific to the category. For example, for a class type, this would be ClassFlags. For a function type, this would be FunctionFlags."
+                },
+                {
+                    "name": "decl",
+                    "type": {
+                        "kind": "or",
+                        "items": [
+                            {
+                                "kind": "reference",
+                                "name": "Declaration"
+                            },
+                            {
+                                "kind": "base",
+                                "name": "null"
+                            }
+                        ]
+                    },
+                    "documentation": "Declaration of the type, if available."
+                }
+            ],
+            "documentation": "Represents a type in the type system."
+        },
+        {
+            "name": "Attribute",
+            "properties": [
+                {
+                    "name": "name",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The name of the attribute. This is the name used to access the attribute in code."
+                },
+                {
+                    "name": "type",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "documentation": "The type of the attribute."
+                },
+                {
+                    "name": "owner",
+                    "type": {
+                        "kind": "or",
+                        "items": [
+                            {
+                                "kind": "reference",
+                                "name": "Type"
+                            },
+                            {
+                                "kind": "base",
+                                "name": "null"
+                            }
+                        ]
+                    },
+                    "documentation": "The type the attribute came from (can be a class, function, module, etc.)."
+                },
+                {
+                    "name": "boundType",
+                    "type": {
+                        "kind": "or",
+                        "items": [
+                            {
+                                "kind": "reference",
+                                "name": "Type"
+                            },
+                            {
+                                "kind": "base",
+                                "name": "null"
+                            }
+                        ]
+                    },
+                    "documentation": "The type the attribute is bound to, if applicable."
+                },
+                {
+                    "name": "flags",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "Flags describing extra data about an attribute."
+                },
+                {
+                    "name": "decls",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Declaration"
+                        }
+                    },
+                    "documentation": "The declarations for the attribute."
+                }
+            ],
+            "documentation": "Represents an attribute of a type (e.g., a field, method, or parameter)."
+        },
+        {
+            "name": "Declaration",
+            "properties": [
+                {
+                    "name": "handle",
+                    "type": {
+                        "kind": "reference",
+                        "name": "DeclarationHandle"
+                    },
+                    "documentation": "Unique identifier for the declaration within the session."
+                },
+                {
+                    "name": "category",
+                    "type": {
+                        "kind": "reference",
+                        "name": "DeclarationCategory"
+                    },
+                    "documentation": "Category of this symbol (function, variable, etc.)."
+                },
+                {
+                    "name": "flags",
+                    "type": {
+                        "kind": "reference",
+                        "name": "DeclarationFlags"
+                    },
+                    "documentation": "Extra information about the declaration."
+                },
+                {
+                    "name": "node",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Node"
+                    },
+                    "optional": true,
+                    "documentation": "Parse node associated with the declaration"
+                },
+                {
+                    "name": "moduleName",
+                    "type": {
+                        "kind": "reference",
+                        "name": "ModuleName"
+                    },
+                    "documentation": "The dot-separated import name for the file that contains the declaration."
+                },
+                {
+                    "name": "name",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The symbol name for the declaration (as the user sees it)"
+                },
+                {
+                    "name": "uri",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The file that contains the declaration. Unless this is an import declaration, then the uri refers to the file the import is referring to."
+                }
+            ],
+            "documentation": "Represents a symbol declaration in the type system."
+        },
+        {
+            "name": "Symbol",
+            "properties": [
+                {
+                    "name": "node",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Node"
+                    },
+                    "documentation": "The node for which the declaration information is being requested."
+                },
+                {
+                    "name": "name",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The name of the symbol found."
+                },
+                {
+                    "name": "decls",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Declaration"
+                        }
+                    },
+                    "documentation": "The declarations for the symbol. This can include multiple declarations for the same symbol."
+                },
+                {
+                    "name": "synthesizedTypes",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Type"
+                        }
+                    },
+                    "documentation": "Synthesized type information for a declaration that is not directly represented in the source code, but is derived from the declaration."
+                }
+            ],
+            "documentation": "Symbol information for a node, which includes a list of declarations and potentially synthesized types for those declarations."
+        },
+        {
+            "name": "FileSymbolInfo",
+            "properties": [
+                {
+                    "name": "uri",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The URI of the source file."
+                },
+                {
+                    "name": "symbols",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Symbol"
+                        }
+                    },
+                    "documentation": "The symbols in the file."
+                }
+            ],
+            "documentation": "Contains symbol information for an entire file."
+        },
+        {
+            "name": "ResolveImportOptions",
+            "properties": [
+                {
+                    "name": "resolveLocalNames",
+                    "type": {
+                        "kind": "base",
+                        "name": "boolean"
+                    },
+                    "optional": true,
+                    "documentation": "Whether to resolve local names in the import declaration."
+                },
+                {
+                    "name": "allowExternallyHiddenAccess",
+                    "type": {
+                        "kind": "base",
+                        "name": "boolean"
+                    },
+                    "optional": true,
+                    "documentation": "Whether to allow access to members that are hidden by external modules."
+                },
+                {
+                    "name": "skipFileNeededCheck",
+                    "type": {
+                        "kind": "base",
+                        "name": "boolean"
+                    },
+                    "optional": true,
+                    "documentation": "Whether to skip checking if the file is needed for the import resolution."
+                }
+            ],
+            "documentation": "Options for resolving an import declaration."
+        },
+        {
+            "name": "ResolveImportParams",
+            "properties": [
+                {
+                    "name": "sourceUri",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The URI of the source file where the import is referenced."
+                },
+                {
+                    "name": "moduleDescriptor",
+                    "type": {
+                        "kind": "reference",
+                        "name": "ModuleName"
+                    },
+                    "documentation": "The descriptor of the imported module."
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version."
+                }
+            ],
+            "documentation": "Parameters for resolving an import"
+        },
+        {
+            "name": "SearchForTypeAttributeParams",
+            "properties": [
+                {
+                    "name": "startType",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "documentation": "The starting point in the type hierarchy to search for the attribute."
+                },
+                {
+                    "name": "attributeName",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The name of the attribute being requested."
+                },
+                {
+                    "name": "accessFlags",
+                    "type": {
+                        "kind": "reference",
+                        "name": "AttributeAccessFlags"
+                    },
+                    "documentation": "Flags that control how the attribute is accessed."
+                },
+                {
+                    "name": "expressionNode",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Node"
+                    },
+                    "optional": true,
+                    "documentation": "Optional: The expression node that the member is being accessed from."
+                },
+                {
+                    "name": "instanceType",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "optional": true,
+                    "documentation": "Optional: The type of an instance that the attribute is being accessed from."
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version of the type server state."
+                }
+            ],
+            "documentation": "Parameters for searching for a type attribute."
+        },
+        {
+            "name": "GetTypeAttributesParams",
+            "properties": [
+                {
+                    "name": "type",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "documentation": "The type for which the attributes are being requested."
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version of the type server state."
+                }
+            ],
+            "documentation": "Parameters for getting type attributes."
+        },
+        {
+            "name": "GetSymbolParams",
+            "properties": [
+                {
+                    "name": "node",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Node"
+                    },
+                    "documentation": "The node for which the symbol information is being requested."
+                },
+                {
+                    "name": "name",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": true,
+                    "documentation": "The name of the symbol being requested. This is optional and can be undefined especially when the node is a name node."
+                },
+                {
+                    "name": "skipUnreachableCode",
+                    "type": {
+                        "kind": "base",
+                        "name": "boolean"
+                    },
+                    "documentation": "Whether to skip unreachable code when looking for the symbol declaration."
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version of the type server state."
+                }
+            ],
+            "documentation": "Parameters for getting symbol information."
+        },
+        {
+            "name": "GetBuiltinTypeParams",
+            "properties": [
+                {
+                    "name": "scopingNode",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Node"
+                    },
+                    "documentation": "The node that is used to scope the builtin type. Every module may have a different set of builtins based on where the module is located."
+                },
+                {
+                    "name": "name",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The name of the builtin type being requested."
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version of the type server state."
+                }
+            ],
+            "documentation": "Parameters for getting builtin type information."
+        },
+        {
+            "name": "FunctionParts",
+            "properties": [
+                {
+                    "name": "params",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "base",
+                            "name": "string"
+                        }
+                    },
+                    "documentation": "The function parameters as strings."
+                },
+                {
+                    "name": "returnType",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The return type as a string."
+                }
+            ],
+            "documentation": "Parts of a function, including its parameters and return type. This is used to provide a string representation of a function's signature."
+        },
+        {
+            "name": "TypeAliasInfo",
+            "properties": [
+                {
+                    "name": "name",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The original name of the alias."
+                },
+                {
+                    "name": "typeArgs",
+                    "type": {
+                        "kind": "or",
+                        "items": [
+                            {
+                                "kind": "array",
+                                "element": {
+                                    "kind": "reference",
+                                    "name": "Type"
+                                }
+                            },
+                            {
+                                "kind": "base",
+                                "name": "null"
+                            }
+                        ]
+                    },
+                    "documentation": "The arguments for the type alias, if any."
+                }
+            ],
+            "documentation": "Information about a type alias."
+        },
+        {
+            "name": "GetDiagnosticsParams",
+            "properties": [
+                {
+                    "name": "uri",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The URI of the file to get diagnostics for"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for getting diagnostics for a file."
+        },
+        {
+            "name": "GetDiagnosticsVersionParams",
+            "properties": [
+                {
+                    "name": "uri",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The URI of the file"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for getting diagnostics version for a file."
+        },
+        {
+            "name": "GetTypeParams",
+            "properties": [
+                {
+                    "name": "node",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Node"
+                    },
+                    "documentation": "The node to get type information for"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for getting type information for a node."
+        },
+        {
+            "name": "GetTypeArgsParams",
+            "properties": [
+                {
+                    "name": "type",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "documentation": "The type to get arguments for"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for getting type arguments."
+        },
+        {
+            "name": "GetOverloadsParams",
+            "properties": [
+                {
+                    "name": "type",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "documentation": "The type to get overloads for"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for getting function overloads."
+        },
+        {
+            "name": "GetMatchingOverloadsParams",
+            "properties": [
+                {
+                    "name": "callNode",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Node"
+                    },
+                    "documentation": "The call node to get matching overloads for"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for getting matching overloads for a call."
+        },
+        {
+            "name": "GetMetaclassParams",
+            "properties": [
+                {
+                    "name": "type",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "documentation": "The type to get metaclass for"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for getting metaclass of a type."
+        },
+        {
+            "name": "GetTypeOfDeclarationParams",
+            "properties": [
+                {
+                    "name": "decl",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Declaration"
+                    },
+                    "documentation": "The declaration to get type for"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for getting type of a declaration."
+        },
+        {
+            "name": "GetSymbolsForFileParams",
+            "properties": [
+                {
+                    "name": "uri",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The URI of the file"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for getting symbols for a file."
+        },
+        {
+            "name": "GetFunctionPartsParams",
+            "properties": [
+                {
+                    "name": "type",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "documentation": "The function type"
+                },
+                {
+                    "name": "flags",
+                    "type": {
+                        "kind": "reference",
+                        "name": "TypeReprFlags"
+                    },
+                    "documentation": "Formatting flags"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for getting function parts."
+        },
+        {
+            "name": "GetReprParams",
+            "properties": [
+                {
+                    "name": "type",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "documentation": "The type to get representation for"
+                },
+                {
+                    "name": "flags",
+                    "type": {
+                        "kind": "reference",
+                        "name": "TypeReprFlags"
+                    },
+                    "documentation": "Formatting flags"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for getting type representation."
+        },
+        {
+            "name": "GetDocStringParams",
+            "properties": [
+                {
+                    "name": "type",
+                    "type": {
+                        "kind": "or",
+                        "items": [
+                            {
+                                "kind": "reference",
+                                "name": "Type"
+                            },
+                            {
+                                "kind": "base",
+                                "name": "null"
+                            }
+                        ]
+                    },
+                    "optional": true,
+                    "documentation": "The type context"
+                },
+                {
+                    "name": "decl",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Declaration"
+                    },
+                    "documentation": "The declaration to get documentation for"
+                },
+                {
+                    "name": "boundObjectOrClass",
+                    "type": {
+                        "kind": "or",
+                        "items": [
+                            {
+                                "kind": "reference",
+                                "name": "Type"
+                            },
+                            {
+                                "kind": "base",
+                                "name": "null"
+                            }
+                        ]
+                    },
+                    "optional": true,
+                    "documentation": "The bound object or class type"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for getting documentation string."
+        },
+        {
+            "name": "ResolveImportDeclarationParams",
+            "properties": [
+                {
+                    "name": "decl",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Declaration"
+                    },
+                    "documentation": "The import declaration to resolve"
+                },
+                {
+                    "name": "options",
+                    "type": {
+                        "kind": "reference",
+                        "name": "ResolveImportOptions"
+                    },
+                    "documentation": "Resolution options"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for resolving import declaration."
+        },
+        {
+            "name": "GetTypeAliasInfoParams",
+            "properties": [
+                {
+                    "name": "type",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "documentation": "The type to get alias info for"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for getting type alias information."
+        },
+        {
+            "name": "CombineTypesParams",
+            "properties": [
+                {
+                    "name": "types",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Type"
+                        }
+                    },
+                    "documentation": "The types to combine"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for combining types."
+        },
+        {
+            "name": "CreateInstanceTypeParams",
+            "properties": [
+                {
+                    "name": "type",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "documentation": "The type to create instance from"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for creating instance type."
+        },
+        {
+            "name": "GetPythonSearchPathsParams",
+            "properties": [
+                {
+                    "name": "fromUri",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The URI to get search paths from"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                }
+            ],
+            "documentation": "Parameters for getting Python search paths."
+        },
+        {
+            "name": "SnapshotChangedParams",
+            "properties": [
+                {
+                    "name": "old",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The old snapshot version"
+                },
+                {
+                    "name": "new",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The new snapshot version"
+                }
+            ],
+            "documentation": "Parameters for snapshot changed notification."
+        },
+        {
+            "name": "DiagnosticsChangedParams",
+            "properties": [
+                {
+                    "name": "uri",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "documentation": "The URI of the file with changed diagnostics"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version"
+                },
+                {
+                    "name": "version",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The diagnostics version"
+                }
+            ],
+            "documentation": "Parameters for diagnostics changed notification."
+        }
+    ],
+    "enumerations": [
+        {
+            "name": "TypeCategory",
+            "type": {
+                "kind": "base",
+                "name": "integer"
+            },
+            "values": [
+                {
+                    "name": "Any",
+                    "value": 0,
+                    "documentation": "Type can be anything"
+                },
+                {
+                    "name": "Function",
+                    "value": 1,
+                    "documentation": "Callable type"
+                },
+                {
+                    "name": "Overloaded",
+                    "value": 2,
+                    "documentation": "Functions defined with @overload decorator"
+                },
+                {
+                    "name": "Class",
+                    "value": 3,
+                    "documentation": "Class definition"
+                },
+                {
+                    "name": "Module",
+                    "value": 4,
+                    "documentation": "Module instance"
+                },
+                {
+                    "name": "Union",
+                    "value": 5,
+                    "documentation": "Union of two or more other types"
+                },
+                {
+                    "name": "TypeVar",
+                    "value": 6,
+                    "documentation": "Type variable"
+                }
+            ],
+            "documentation": "Represents a category of a type, such as class, function, variable, etc."
+        },
+        {
+            "name": "TypeFlags",
+            "type": {
+                "kind": "base",
+                "name": "integer"
+            },
+            "values": [
+                {
+                    "name": "None",
+                    "value": 0
+                },
+                {
+                    "name": "Instantiable",
+                    "value": 1,
+                    "documentation": "Indicates if the type can be instantiated."
+                },
+                {
+                    "name": "Instance",
+                    "value": 2,
+                    "documentation": "Indicates if the type represents an instance (as opposed to a class or type itself)."
+                },
+                {
+                    "name": "Callable",
+                    "value": 4,
+                    "documentation": "Indicates if an instance of the type can be called like a function."
+                },
+                {
+                    "name": "Literal",
+                    "value": 8,
+                    "documentation": "Indicates if the instance is a literal (like `42`, `\"hello\"`, etc.)."
+                },
+                {
+                    "name": "Interface",
+                    "value": 16,
+                    "documentation": "Indicates if the type is an interface (a type that defines a set of methods and properties)."
+                },
+                {
+                    "name": "Generic",
+                    "value": 32,
+                    "documentation": "Indicates if the type is a generic type (a type that can be parameterized with other types)."
+                },
+                {
+                    "name": "FromAlias",
+                    "value": 64,
+                    "documentation": "Indicates if the type came from an alias (a type that refers to another type)."
+                }
+            ],
+            "documentation": "Flags that describe the characteristics of a type. These flags can be combined using bitwise operations."
+        },
+        {
+            "name": "FunctionFlags",
+            "type": {
+                "kind": "base",
+                "name": "integer"
+            },
+            "values": [
+                {
+                    "name": "None",
+                    "value": 0
+                },
+                {
+                    "name": "Async",
+                    "value": 1,
+                    "documentation": "Indicates if the function is asynchronous."
+                },
+                {
+                    "name": "Generator",
+                    "value": 2,
+                    "documentation": "Indicates if the function is a generator (can yield values)."
+                },
+                {
+                    "name": "Abstract",
+                    "value": 4,
+                    "documentation": "Indicates if the function is abstract (must be implemented in a subclass)."
+                },
+                {
+                    "name": "Static",
+                    "value": 8,
+                    "documentation": "Indicates if the function has a @staticmethod decorator."
+                }
+            ],
+            "documentation": "Flags that describe the characteristics of a function or method. These flags can be combined using bitwise operations."
+        },
+        {
+            "name": "ClassFlags",
+            "type": {
+                "kind": "base",
+                "name": "integer"
+            },
+            "values": [
+                {
+                    "name": "None",
+                    "value": 0
+                },
+                {
+                    "name": "Enum",
+                    "value": 1,
+                    "documentation": "Indicates if the class is an enum (a special kind of class that defines a set of named values)."
+                },
+                {
+                    "name": "TypedDict",
+                    "value": 2,
+                    "documentation": "Indicates if the class is a TypedDict or derived from a TypedDict."
+                }
+            ],
+            "documentation": "Flags that describe the characteristics of a class. These flags can be combined using bitwise operations."
+        },
+        {
+            "name": "TypeVarFlags",
+            "type": {
+                "kind": "base",
+                "name": "integer"
+            },
+            "values": [
+                {
+                    "name": "None",
+                    "value": 0
+                },
+                {
+                    "name": "IsParamSpec",
+                    "value": 1,
+                    "documentation": "Indicates if the type variable is a ParamSpec (as defined in PEP 612)."
+                }
+            ],
+            "documentation": "Flags that describe the characteristics of a type variable. These flags can be combined using bitwise operations."
+        },
+        {
+            "name": "AttributeFlags",
+            "type": {
+                "kind": "base",
+                "name": "integer"
+            },
+            "values": [
+                {
+                    "name": "None",
+                    "value": 0
+                },
+                {
+                    "name": "IsArgsList",
+                    "value": 1,
+                    "documentation": "Indicates if a parameter is an argument list (e.g., `*args`)."
+                },
+                {
+                    "name": "IsKwargsDict",
+                    "value": 2,
+                    "documentation": "Indicates if the attribute is a keyword argument dictionary (e.g., `**kwargs`)."
+                }
+            ],
+            "documentation": "Flags that describe extra data about an attribute."
+        },
+        {
+            "name": "AttributeAccessFlags",
+            "type": {
+                "kind": "base",
+                "name": "integer"
+            },
+            "values": [
+                {
+                    "name": "None",
+                    "value": 0
+                },
+                {
+                    "name": "SkipInstanceAttributes",
+                    "value": 1,
+                    "documentation": "Skip instance attributes when searching for attributes of a type."
+                },
+                {
+                    "name": "SkipTypeBaseClass",
+                    "value": 2,
+                    "documentation": "Skip members from the base class of a type when searching for members of a type."
+                },
+                {
+                    "name": "SkipAttributeAccessOverrides",
+                    "value": 4,
+                    "documentation": "Skip attribute access overrides when searching for members of a type."
+                },
+                {
+                    "name": "GetBoundAttributes",
+                    "value": 8,
+                    "documentation": "Look for bound attributes when searching for attributes of a type."
+                }
+            ],
+            "documentation": "Flags that are used for searching for attributes of a class Type."
+        },
+        {
+            "name": "DeclarationCategory",
+            "type": {
+                "kind": "base",
+                "name": "integer"
+            },
+            "values": [
+                {
+                    "name": "Intrinsic",
+                    "value": 0,
+                    "documentation": "An intrinsic refers to a symbol that has no actual declaration in the source code, such as built-in types or functions."
+                },
+                {
+                    "name": "Variable",
+                    "value": 1,
+                    "documentation": "A variable is a named storage location that can hold a value."
+                },
+                {
+                    "name": "Param",
+                    "value": 2,
+                    "documentation": "A parameter is a variable that is passed to a function or method."
+                },
+                {
+                    "name": "TypeParam",
+                    "value": 3,
+                    "documentation": "This is for PEP 695 type parameters."
+                },
+                {
+                    "name": "TypeAlias",
+                    "value": 4,
+                    "documentation": "This is for PEP 695 type aliases."
+                },
+                {
+                    "name": "Function",
+                    "value": 5,
+                    "documentation": "A function is any construct that begins with the `def` keyword and has a body, which can be called with arguments."
+                },
+                {
+                    "name": "Class",
+                    "value": 6,
+                    "documentation": "A class is any construct that begins with the `class` keyword and has a body, which can be instantiated."
+                },
+                {
+                    "name": "Import",
+                    "value": 7,
+                    "documentation": "An import declaration, which is a reference to another module."
+                }
+            ],
+            "documentation": "Represents the category of a declaration in the type system."
+        },
+        {
+            "name": "DeclarationFlags",
+            "type": {
+                "kind": "base",
+                "name": "integer"
+            },
+            "values": [
+                {
+                    "name": "None",
+                    "value": 0
+                },
+                {
+                    "name": "ClassMember",
+                    "value": 1,
+                    "documentation": "Indicates if the declaration is a method (a function defined within a class)."
+                },
+                {
+                    "name": "Constant",
+                    "value": 2,
+                    "documentation": "Indicates if the declaration is a constant (a variable that cannot be changed)."
+                },
+                {
+                    "name": "Final",
+                    "value": 4,
+                    "documentation": "Indicates if the declaration is final variable (a class that cannot be subclassed)."
+                },
+                {
+                    "name": "IsDefinedBySlots",
+                    "value": 8,
+                    "documentation": "Indicates if the declaration is defined by slots (a class that uses __slots__)."
+                },
+                {
+                    "name": "UsesLocalName",
+                    "value": 16,
+                    "documentation": "Indicates if the import declaration uses 'as' with a different name."
+                },
+                {
+                    "name": "UnresolvedImport",
+                    "value": 32,
+                    "documentation": "Indicates if the import declaration is unresolved (the module or symbol could not be found)."
+                }
+            ],
+            "documentation": "Flags that describe extra information about a declaration."
+        },
+        {
+            "name": "TypeReprFlags",
+            "type": {
+                "kind": "base",
+                "name": "integer"
+            },
+            "values": [
+                {
+                    "name": "None",
+                    "value": 0
+                },
+                {
+                    "name": "ExpandTypeAliases",
+                    "value": 1,
+                    "documentation": "Turn type aliases into their original type."
+                },
+                {
+                    "name": "PrintTypeVarVariance",
+                    "value": 2,
+                    "documentation": "Print the variance of a type parameter."
+                },
+                {
+                    "name": "ConvertToInstanceType",
+                    "value": 4,
+                    "documentation": "Convert the type into an instance type before printing it."
+                }
+            ],
+            "documentation": "Flags that control how type representations are formatted."
+        }
+    ],
+    "typeAliases": [
+        {
+            "name": "TypeHandle",
+            "type": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "integer"
+                    }
+                ]
+            },
+            "documentation": "Unique identifier for a type definition within the snapshot. A handle doesn't need to exist beyond the lifetime of the snapshot."
+        },
+        {
+            "name": "DeclarationHandle",
+            "type": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "integer"
+                    }
+                ]
+            },
+            "documentation": "Unique identifier for a declaration within the session."
+        }
+    ]
+}
