@@ -283,15 +283,24 @@ impl Ignore {
         false
     }
 
-    /// Get all pyrefly ignores.
+    #[inline]
+    /// Get pyrefly ignores that are global, and do not have an error code.
+    pub fn get_pyrefly_all_ignores(&self) -> SmallSet<LineNumber> {
+        self._get_pyrefly_ignores(true)
+    }
+
+    #[inline]
     pub fn get_pyrefly_ignores(&self) -> SmallSet<LineNumber> {
+        self._get_pyrefly_ignores(false)
+    }
+    fn _get_pyrefly_ignores(&self, only_all: bool) -> SmallSet<LineNumber> {
         self.ignores
             .iter()
             .filter(|ignore| {
                 ignore
                     .1
                     .iter()
-                    .any(|s| s.tool == Tool::Pyrefly && s.kind.is_empty())
+                    .any(|s| s.tool == Tool::Pyrefly && (!only_all || s.kind.is_empty()))
             })
             .map(|(line, _)| *line)
             .collect()
@@ -306,6 +315,8 @@ mod tests {
 
     #[test]
     fn test_parse_ignores() {
+        // TODO: The second component of `expect` (the error code)
+        // is not actually tested.
         fn f(x: &str, expect: &[(Tool, u32)]) {
             assert_eq!(
                 &Ignore::parse_ignores(x)
@@ -325,6 +336,7 @@ mod tests {
             "code # mypy: ignore\n# pyre-fixme\nmore code",
             &[(Tool::Mypy, 1), (Tool::Pyre, 3)],
         );
+        f("# pyrefly: ignore[bad-]\n", &[(Tool::Pyrefly, 2)]);
         f(
             "# type: ignore\n# mypy: ignore\n# bad\n\ncode",
             &[(Tool::Any, 4), (Tool::Mypy, 4)],

@@ -69,6 +69,7 @@ use crate::export::exports::ExportLocation;
 use crate::graph::index::Idx;
 use crate::state::handle::Handle;
 use crate::state::ide::IntermediateDefinition;
+use crate::state::ide::create_ignore_code_action;
 use crate::state::ide::insert_import_edit;
 use crate::state::ide::key_to_intermediate_definition;
 use crate::state::require::Require;
@@ -1424,6 +1425,17 @@ impl<'a> Transaction<'a> {
                 _ => {}
             }
         }
+        code_actions.extend(
+            self.get_errors(vec![handle])
+                .collect_errors()
+                .shown
+                .iter()
+                // NOTE: For these suppressions the cursor needs to literally
+                // be on the error range, instead of just the line. This
+                // is typical with LSPs but worth noting.
+                .filter(|error| error.range().contains_range(range))
+                .filter_map(|error| create_ignore_code_action(error, &module_info)),
+        );
         code_actions.sort_by(|(title1, _, _, _), (title2, _, _, _)| title1.cmp(title2));
         Some(code_actions)
     }
