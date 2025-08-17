@@ -195,7 +195,14 @@
     "Line 30: Expected 1 errors"
   ],
   "generics_paramspec_semantics.py": [],
-  "generics_paramspec_specialization.py": [],
+  "generics_paramspec_specialization.py": [
+    "Line 14: Unexpected errors [\"Redundant cast: `Literal['']` is already assignable to type `Any`\"]",
+    "Line 15: Unexpected errors [\"Redundant cast: `Literal['']` is already assignable to type `Any`\"]",
+    "Line 19: Unexpected errors [\"Redundant cast: `Literal['']` is already assignable to type `Any`\"]",
+    "Line 20: Unexpected errors [\"Redundant cast: `Literal['']` is already assignable to type `Any`\"]",
+    "Line 21: Unexpected errors [\"Redundant cast: `Literal['']` is already assignable to type `Any`\"]",
+    "Line 49: Unexpected errors [\"Redundant cast: `Literal['']` is already assignable to type `Any`\"]"
+  ],
   "generics_scoping.py": [
     "Line 50: Expected 1 errors",
     "Line 54: Expected 1 errors",
