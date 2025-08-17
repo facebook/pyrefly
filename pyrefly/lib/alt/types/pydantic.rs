@@ -14,6 +14,7 @@ use pyrefly_derive::VisitMut;
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq, VisitMut, Default)]
 pub struct PydanticMetadata {
     pub frozen: bool,
+    pub validation_alias: Option<Box<str>>,
 }
 
 impl fmt::Display for PydanticMetadata {

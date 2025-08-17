@@ -5,9 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::env;
-use std::iter::once;
-
 use lsp_server::Message;
 use lsp_server::Request;
 use lsp_server::RequestId;
@@ -16,88 +13,74 @@ use lsp_server::ResponseError;
 use lsp_types::Url;
 use tempfile::TempDir;
 
-use crate::test::lsp::lsp_interaction::util::TestCase;
-use crate::test::lsp::lsp_interaction::util::build_did_open_notification;
+use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
+use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
-use crate::test::lsp::lsp_interaction::util::run_test_lsp;
 
 fn test_go_to_def(
     root: &TempDir,
     workspace_folders: Option<Vec<(String, Url)>>,
     // request file name, relative to root
-    request_file_name: &str,
+    request_file_name: &'static str,
     // (line, character, response_file_name (relative to root), response_line_start, response_character_start, response_line_end, response_character_end)
-    requests: Vec<(u32, u32, String, u32, u32, u32, u32)>,
+    requests: Vec<(u32, u32, &'static str, u32, u32, u32, u32)>,
 ) {
-    run_test_lsp(TestCase {
-        messages_from_language_client: once(Message::from(build_did_open_notification(
-                root.path().join(request_file_name),
-        ))).chain(
-            requests.iter().enumerate().map(
-                |(i, (request_line, request_character, _response_file_name, _response_line_start, _response_character_start, _response_line_end, _response_character_end))| {
-                Message::from(Request {
-                    id: RequestId::from((2 + i) as i32),
-                    method: "textDocument/definition".to_owned(),
-                    params: serde_json::json!({
-                        "textDocument": {
-                            "uri": Url::from_file_path(root.path().join(request_file_name)).unwrap().to_string()
-                        },
-                        "position": {
-                            "line": request_line,
-                            "character": request_character
-                        }
-                    }),
-                })
-            })).collect(),
-        expected_messages_from_language_server: requests.iter().enumerate().map(
-            |(
-                i,
-                (
-                    _request_line,
-                    _request_character,
-                    response_file_name,
-                    response_line_start,
-                    response_character_start,
-                    response_line_end,
-                    response_character_end,
-                ),
-            )| {
-                Message::Response(Response {
-                    id: RequestId::from((2 + i) as i32),
-                    result: Some(serde_json::json!({
-                        "uri": Url::from_file_path(root.path().join(response_file_name)).unwrap().to_string(),
-                        "range": {
-                            "start": {
-                                "line": response_line_start,
-                                "character": response_character_start
-                            },
-                            "end": {
-                                "line": response_line_end,
-                                "character": response_character_end
-                            }
-                        }
-                    })),
-                    error: None,
-                })
-            },
-        ).collect(),
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
         workspace_folders,
         ..Default::default()
     });
+    interaction.server.did_open(request_file_name);
+
+    for (
+        request_line,
+        request_character,
+        response_file_name,
+        response_line_start,
+        response_character_start,
+        response_line_end,
+        response_character_end,
+    ) in requests
+    {
+        interaction
+            .server
+            .definition(request_file_name, request_line, request_character);
+        interaction.client.expect_definition_response_from_root(
+            response_file_name,
+            response_line_start,
+            response_character_start,
+            response_line_end,
+            response_character_end,
+        );
+    }
 }
 
 fn test_go_to_def_basic(root: &TempDir, workspace_folders: Option<Vec<(String, Url)>>) {
-    test_go_to_def(
-        root,
-        workspace_folders,
-        "foo.py",
-        vec![
-            (5, 7, "bar.py".to_owned(), 0, 0, 0, 0),
-            (6, 16, "bar.py".to_owned(), 6, 6, 6, 9),
-            (8, 9, "bar.py".to_owned(), 7, 4, 7, 7),
-            (9, 7, "bar.py".to_owned(), 6, 6, 6, 9),
-        ],
-    );
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    let file = "foo.py";
+    interaction.initialize(InitializeSettings {
+        workspace_folders: workspace_folders.clone(),
+        ..Default::default()
+    });
+    interaction.server.did_open(file);
+    interaction.server.definition(file, 5, 7);
+    interaction
+        .client
+        .expect_definition_response_from_root("bar.py", 0, 0, 0, 0);
+    interaction.server.definition(file, 6, 16);
+    interaction
+        .client
+        .expect_definition_response_from_root("bar.py", 6, 6, 6, 9);
+    interaction.server.definition(file, 8, 9);
+    interaction
+        .client
+        .expect_definition_response_from_root("bar.py", 7, 4, 7, 7);
+    interaction.server.definition(file, 9, 7);
+    interaction
+        .client
+        .expect_definition_response_from_root("bar.py", 6, 6, 6, 9);
 }
 
 #[test]
@@ -113,13 +96,7 @@ fn test_go_to_def_single_root() {
 }
 
 #[test]
-fn test_go_to_def_no_root() {
-    let root = get_test_files_root();
-    test_go_to_def_basic(&root, Some(vec![]));
-}
-
-#[test]
-fn test_go_to_def_no_root_uses_upwards_search() {
+fn test_go_to_def_no_workspace_folders() {
     let root = get_test_files_root();
     test_go_to_def_basic(&root, Some(vec![]));
 }
@@ -137,10 +114,10 @@ fn test_go_to_def_relative_path() {
         None,
         "foo_relative.py",
         vec![
-            (5, 14, "bar.py".to_owned(), 0, 0, 0, 0),
-            (6, 17, "bar.py".to_owned(), 6, 6, 6, 9),
-            (8, 9, "bar.py".to_owned(), 7, 4, 7, 7),
-            (9, 7, "bar.py".to_owned(), 6, 6, 6, 9),
+            (5, 14, "bar.py", 0, 0, 0, 0),
+            (6, 17, "bar.py", 6, 6, 6, 9),
+            (8, 9, "bar.py", 7, 4, 7, 7),
+            (9, 7, "bar.py", 6, 6, 6, 9),
         ],
     );
 }
@@ -148,72 +125,51 @@ fn test_go_to_def_relative_path() {
 #[test]
 fn definition_in_builtins() {
     let root = get_test_files_root();
-    let pyrefly_typeshed_materialized = env::temp_dir().join("pyrefly_bundled_typeshed");
-    let result_file = pyrefly_typeshed_materialized.join("typing.pyi");
-    run_test_lsp(TestCase {
-        messages_from_language_client: vec![
-            Message::from(build_did_open_notification(
-                root.path().join("imports_builtins.py"),
-            )),
-            Message::from(Request {
-                id: RequestId::from(2),
-                method: "textDocument/definition".to_owned(),
-                params: serde_json::json!({
-                    "textDocument": {
-                        "uri": Url::from_file_path(root.path().join("imports_builtins.py")).unwrap().to_string()
-                    },
-                    "position": {
-                        "line": 7,
-                        "character": 7
-                    }
-                }),
-            }),
-        ],
-        expected_messages_from_language_server: vec![Message::Response(Response {
-            id: RequestId::from(2),
-            result: Some(serde_json::json!({
-                "range":{"end":{"character":4,"line":425},"start":{"character":0,"line":425}},"uri":Url::from_file_path(result_file.as_path()).unwrap().to_string()})),
-            error: None,
-        })],
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
         ..Default::default()
     });
-    assert!(
-        pyrefly_typeshed_materialized.join("pyrefly.toml").exists(),
-        "Expected pyrefly.toml to exist at {:?}",
-        pyrefly_typeshed_materialized.to_str()
-    );
-    assert!(
-        result_file.exists(),
-        "Expected pyrefly.toml to exist at {result_file:?}",
+    interaction.server.did_open("imports_builtins.py");
+    interaction.server.definition("imports_builtins.py", 7, 7);
+    interaction.client.expect_response_with(
+        |response| {
+            // expect typing.py, NOT typing.pyi
+            response.result.as_ref().is_some_and(|r| {
+                r.get("uri")
+                    .is_some_and(|uri| uri.as_str().is_some_and(|x| x.ends_with("typing.py")))
+            })
+        },
+        "response must return the file `typing.py` from a site package",
     );
 }
 
 #[test]
 fn malformed_missing_position() {
     let root = get_test_files_root();
-    run_test_lsp(TestCase {
-        messages_from_language_client: vec![
-            Message::from(build_did_open_notification(root.path().join("foo.py"))),
-            Message::from(Request {
-                id: RequestId::from(2),
-                method: "textDocument/definition".to_owned(),
-                // Missing position
-                params: serde_json::json!({
-                    "textDocument": {
-                        "uri": Url::from_file_path(root.path().join("foo.py")).unwrap().to_string()
-                    },
-                }),
-            }),
-        ],
-        expected_messages_from_language_server: vec![Message::Response(Response {
-            id: RequestId::from(2),
-            result: None,
-            error: Some(ResponseError {
-                code: -32602,
-                message: "missing field `position`".to_owned(),
-                data: None,
-            }),
-        })],
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
         ..Default::default()
+    });
+    interaction.server.did_open("foo.py");
+    interaction.server.send_message(Message::Request(Request {
+        id: RequestId::from(2),
+        method: "textDocument/definition".to_owned(),
+        // Missing position
+        params: serde_json::json!({
+            "textDocument": {
+                "uri": Url::from_file_path(root.path().join("foo.py")).unwrap().to_string()
+            },
+        }),
+    }));
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
+        result: None,
+        error: Some(ResponseError {
+            code: -32602,
+            message: "missing field `position`".to_owned(),
+            data: None,
+        }),
     });
 }

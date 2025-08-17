@@ -43,7 +43,7 @@ use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyConsistentOverrideCheck;
-use crate::binding::binding::KeyFunction;
+use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyVariance;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
@@ -247,7 +247,7 @@ pub enum FlowStyle {
     ImportAs(ModuleName),
     /// Am I a function definition? Used to chain overload definitions.
     /// If so, does my return type have an explicit annotation?
-    FunctionDef(Idx<KeyFunction>, bool),
+    FunctionDef(Idx<KeyDecoratedFunction>, bool),
     /// The name is possibly uninitialized (perhaps due to merging branches)
     PossiblyUninitialized,
     /// The name was in an annotated declaration like `x: int` but not initialized
@@ -681,13 +681,11 @@ impl Scopes {
         }
     }
 
-    // Is the immediate scope a class scope? If so, return the keys for the class and its metadata.
-    // This function only looks at the current scope, so it will return `None` if we're inside
-    // another scope, like a method.
-    pub fn current_class_and_metadata_keys(
-        &self,
+    // Is this scope a class scope? If so, return the keys for the class and its metadata.
+    pub fn get_class_and_metadata_keys(
+        scope: &Scope,
     ) -> Option<(Idx<KeyClass>, Idx<KeyClassMetadata>)> {
-        match &self.current().kind {
+        match &scope.kind {
             ScopeKind::Class(class_scope) => Some((
                 class_scope.indices.class_idx,
                 class_scope.indices.metadata_idx,
@@ -702,14 +700,8 @@ impl Scopes {
         &self,
     ) -> Option<(Idx<KeyClass>, Idx<KeyClassMetadata>)> {
         for scope in self.iter_rev() {
-            match &scope.kind {
-                ScopeKind::Class(class_scope) => {
-                    return Some((
-                        class_scope.indices.class_idx,
-                        class_scope.indices.metadata_idx,
-                    ));
-                }
-                _ => {}
+            if let Some(class_and_metadata) = Self::get_class_and_metadata_keys(scope) {
+                return Some(class_and_metadata);
             }
         }
         None
@@ -718,7 +710,7 @@ impl Scopes {
     pub fn function_predecessor_indices(
         &self,
         name: &Name,
-    ) -> Option<(Idx<Key>, Idx<KeyFunction>)> {
+    ) -> Option<(Idx<Key>, Idx<KeyDecoratedFunction>)> {
         if let Some(flow) = self.current().flow.info.get(name)
             && let FlowStyle::FunctionDef(fidx, _) = flow.style
         {

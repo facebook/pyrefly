@@ -755,6 +755,35 @@ Completion Results:
 }
 
 #[test]
+fn attribute_completion_in_function_call() {
+    let code = r#"
+class Foo:
+    x: int
+
+def test(abcdefg: int) -> None:
+    pass
+
+f = Foo()
+
+test(f.
+#      ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+10 | test(f.
+            ^
+Completion Results:
+- (Field) x: int
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn builtins_doesnt_autoimport() {
     let code = r#"
 isins

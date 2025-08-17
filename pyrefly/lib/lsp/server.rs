@@ -98,6 +98,7 @@ use lsp_types::TextDocumentPositionParams;
 use lsp_types::TextDocumentSyncCapability;
 use lsp_types::TextDocumentSyncKind;
 use lsp_types::TextEdit;
+use lsp_types::TypeDefinitionProviderCapability;
 use lsp_types::Unregistration;
 use lsp_types::UnregistrationParams;
 use lsp_types::Url;
@@ -125,6 +126,9 @@ use lsp_types::request::DocumentDiagnosticRequest;
 use lsp_types::request::DocumentHighlightRequest;
 use lsp_types::request::DocumentSymbolRequest;
 use lsp_types::request::GotoDefinition;
+use lsp_types::request::GotoTypeDefinition;
+use lsp_types::request::GotoTypeDefinitionParams;
+use lsp_types::request::GotoTypeDefinitionResponse;
 use lsp_types::request::HoverRequest;
 use lsp_types::request::InlayHintRequest;
 use lsp_types::request::PrepareRenameRequest;
@@ -176,9 +180,9 @@ use crate::lsp::transaction_manager::TransactionManager;
 use crate::lsp::workspace::LspAnalysisConfig;
 use crate::lsp::workspace::Workspace;
 use crate::lsp::workspace::Workspaces;
-use crate::module::from_path::module_from_path;
 use crate::state::handle::Handle;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
+use crate::state::lsp::FindPreference;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::state::State;
@@ -323,6 +327,7 @@ pub fn capabilities(
             TextDocumentSyncKind::INCREMENTAL,
         )),
         definition_provider: Some(OneOf::Left(true)),
+        type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
         code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
             code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
             ..Default::default()
@@ -477,7 +482,7 @@ impl Server {
                 canceled_requests.insert(id);
             }
             LspEvent::DidOpenTextDocument(params) => {
-                self.did_open(ide_transaction_manager, subsequent_mutation, params);
+                self.did_open(ide_transaction_manager, subsequent_mutation, params)?;
             }
             LspEvent::DidChangeTextDocument(params) => {
                 self.did_change(ide_transaction_manager, subsequent_mutation, params)?;
@@ -561,6 +566,23 @@ impl Server {
                             x.id,
                             Ok(self
                                 .goto_definition(&transaction, params)
+                                .unwrap_or(default_response)),
+                        ));
+                        ide_transaction_manager.save(transaction);
+                    }
+                } else if let Some(params) = as_request::<GotoTypeDefinition>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<GotoTypeDefinition>(
+                            params, &x.id,
+                        )
+                    {
+                        let default_response = GotoTypeDefinitionResponse::Array(Vec::new());
+                        let transaction =
+                            ide_transaction_manager.non_committable_transaction(&self.state);
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(self
+                                .goto_type_definition(&transaction, params)
                                 .unwrap_or(default_response)),
                         ));
                         ide_transaction_manager.save(transaction);
@@ -994,7 +1016,7 @@ impl Server {
     ) {
         let unknown = ModuleName::unknown();
 
-        eprintln!("Populating all files in the config ({:?}).", config.root);
+        eprintln!("Populating all files in the config ({:?}).", config.source);
         let mut transaction = state.new_committable_transaction(Require::Indexing, None);
 
         let project_path_blobs = config.get_filtered_globs(None);
@@ -1006,10 +1028,8 @@ impl Server {
             if config != path_config {
                 continue;
             }
-            let module_name = module_from_path(&path, path_config.search_path())
-                .unwrap_or_else(ModuleName::unknown);
             handles.push((
-                Handle::new(module_name, module_path, path_config.get_sys_info()),
+                handle_from_module_path(&state, module_path),
                 Require::Indexing,
             ));
         }
@@ -1034,8 +1054,13 @@ impl Server {
         ide_transaction_manager: &mut TransactionManager<'a>,
         subsequent_mutation: bool,
         params: DidOpenTextDocumentParams,
-    ) {
-        let uri = params.text_document.uri.to_file_path().unwrap();
+    ) -> anyhow::Result<()> {
+        let uri = params.text_document.uri.to_file_path().map_err(|_| {
+            anyhow::anyhow!(
+                "Could not convert uri to filepath: {}",
+                params.text_document.uri
+            )
+        })?;
         let config_to_populate_files = if self.indexing_mode != IndexingMode::None
             && let Some(directory) = uri.as_path().parent()
         {
@@ -1055,6 +1080,7 @@ impl Server {
         self.populate_project_files_if_necessary(config_to_populate_files);
         // rewatch files in case we loaded or dropped any configs
         self.setup_file_watcher_if_necessary();
+        Ok(())
     }
 
     fn did_change<'a>(
@@ -1070,7 +1096,7 @@ impl Server {
         let old_version = version_info.get(&file_path).unwrap_or(&0);
         if version < *old_version {
             return Err(anyhow::anyhow!(
-                "Unexpected version in didChange notification: {version:?} is less than {old_version:?}"
+                "new_version < old_version in `textDocument/didChange` notification: new_version={version:?} old_version={old_version:?} text_document.uri={uri:?}"
             ));
         }
         version_info.insert(file_path.clone(), version);
@@ -1226,6 +1252,32 @@ impl Server {
         }
     }
 
+    fn goto_type_definition(
+        &self,
+        transaction: &Transaction<'_>,
+        params: GotoTypeDefinitionParams,
+    ) -> Option<GotoTypeDefinitionResponse> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri)?;
+        let info = transaction.get_module_info(&handle)?;
+        let range = info
+            .lined_buffer()
+            .from_lsp_position(params.text_document_position_params.position);
+        let targets = transaction.goto_type_definition(&handle, range);
+        let mut lsp_targets = targets
+            .iter()
+            .filter_map(to_lsp_location)
+            .collect::<Vec<_>>();
+        if lsp_targets.is_empty() {
+            None
+        } else if lsp_targets.len() == 1 {
+            Some(GotoTypeDefinitionResponse::Scalar(
+                lsp_targets.pop().unwrap(),
+            ))
+        } else {
+            Some(GotoTypeDefinitionResponse::Array(lsp_targets))
+        }
+    }
     fn completion(
         &self,
         transaction: &Transaction<'_>,
@@ -1335,7 +1387,14 @@ impl Server {
             module,
             docstring_range: _,
         }) = transaction
-            .find_definition(&handle, position, false)
+            .find_definition(
+                &handle,
+                position,
+                &FindPreference {
+                    jump_through_renamed_import: false,
+                    ..Default::default()
+                },
+            )
             // TODO: handle more than 1 definition
             .into_iter()
             .next()

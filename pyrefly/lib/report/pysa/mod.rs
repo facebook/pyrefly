@@ -44,17 +44,17 @@ use crate::alt::answers::Answers;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::BindingClass;
-use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
-use crate::binding::binding::KeyFunction;
+use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
 use crate::module::module_info::ModuleInfo;
 use crate::module::typeshed::typeshed;
 use crate::state::handle::Handle;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
+use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
 use crate::types::display::TypeDisplayContext;
 use crate::types::stdlib::Stdlib;
@@ -328,7 +328,11 @@ fn visit_expression(e: &Expr, context: &mut VisitorContext) {
 
             let definitions = context
                 .transaction
-                .find_definition_for_name_use(context.handle, &identifier, true)
+                .find_definition_for_name_use(
+                    context.handle,
+                    &identifier,
+                    &FindPreference::default(),
+                )
                 .map_or(vec![], |d| vec![d]);
 
             add_expression_definitions(&display_range, definitions, name.id.as_str(), context);
@@ -339,6 +343,7 @@ fn visit_expression(e: &Expr, context: &mut VisitorContext) {
                 context.handle,
                 attribute.value.range(),
                 &attribute.attr,
+                &FindPreference::default(),
             );
             add_expression_definitions(
                 &display_range,
@@ -523,10 +528,10 @@ fn get_scope_parent(ast: &ModModule, module_info: &Module, range: TextRange) -> 
 fn get_all_functions(
     bindings: &Bindings,
     answers: &Answers,
-) -> impl Iterator<Item = Arc<DecoratedFunction>> {
+) -> impl Iterator<Item = DecoratedFunction> {
     bindings
-        .keys::<KeyFunction>()
-        .map(|idx| answers.get_idx(idx).unwrap().clone())
+        .keys::<KeyDecoratedFunction>()
+        .map(|idx| DecoratedFunction::from_bindings_answers(idx, bindings, answers))
 }
 
 fn export_all_functions(
@@ -538,9 +543,9 @@ fn export_all_functions(
     let mut function_definitions = HashMap::new();
 
     for function in get_all_functions(bindings, answers) {
-        let display_range = module_info.display_range(function.id_range);
-        let name = function.metadata.kind.as_func_id().func.to_string();
-        let parent = get_scope_parent(ast, module_info, function.id_range);
+        let display_range = module_info.display_range(function.id_range());
+        let name = function.metadata().kind.as_func_id().func.to_string();
+        let parent = get_scope_parent(ast, module_info, function.id_range());
         assert!(
             function_definitions
                 .insert(
@@ -548,16 +553,16 @@ fn export_all_functions(
                     FunctionDefinition {
                         name,
                         parent,
-                        is_overload: function.metadata.flags.is_overload,
-                        is_staticmethod: function.metadata.flags.is_staticmethod,
-                        is_classmethod: function.metadata.flags.is_classmethod,
-                        is_property_getter: function.metadata.flags.is_property_getter,
+                        is_overload: function.metadata().flags.is_overload,
+                        is_staticmethod: function.metadata().flags.is_staticmethod,
+                        is_classmethod: function.metadata().flags.is_classmethod,
+                        is_property_getter: function.metadata().flags.is_property_getter,
                         is_property_setter: function
-                            .metadata
+                            .metadata()
                             .flags
                             .is_property_setter_with_getter
                             .is_some(),
-                        is_stub: function.stub_or_impl == FunctionStubOrImpl::Stub,
+                        is_stub: function.is_stub(),
                     }
                 )
                 .is_none(),
@@ -661,7 +666,7 @@ fn is_pytest_module(bindings: &Bindings, answers: &Answers, ast: &ModModule) -> 
     fn has_test_function(bindings: &Bindings, answers: &Answers) -> bool {
         get_all_functions(bindings, answers).any(|function| {
             function
-                .metadata
+                .metadata()
                 .kind
                 .as_func_id()
                 .func

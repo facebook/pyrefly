@@ -211,11 +211,12 @@ Pair(y="foo")  # E: Missing argument `x` in function `Pair.__new__`
 );
 
 testcase!(
-    test_named_tuple_default,
+    test_named_tuple_defaults,
     r#"
 from collections import namedtuple
 x = 2
 Tup = namedtuple("Tup", ["a", "b"], defaults=(None, x))
+Tup2 = namedtuple("Tup2", ["a", "b"], defaults=[None, x])
 "#,
 );
 

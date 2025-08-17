@@ -55,7 +55,6 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
-use crate::graph::index::Idx;
 use crate::types::callable::Callable;
 use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
@@ -236,7 +235,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     x.attr.id(),
                     x.attr.range,
                 );
-                self.attr_infer(&base, &x.attr.id, x.range, errors, None)
+                let attr_type = self.attr_infer(&base, &x.attr.id, x.range, errors, None);
+                if base.ty().is_literal_string() {
+                    match attr_type.ty() {
+                        Type::BoundMethod(method) => {
+                            return attr_type
+                                .clone()
+                                .with_ty(method.with_bound_object(base.ty().clone()).as_type());
+                        }
+                        _ => {}
+                    }
+                }
+                attr_type
             }
             Expr::Subscript(x) => {
                 // TODO: We don't deal properly with hint here, we should.
@@ -1439,8 +1449,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Apply a decorator. This effectively synthesizes a function call.
     pub fn apply_decorator(
         &self,
-        decorator: Idx<Key>,
+        decorator: Type,
         decoratee: Type,
+        range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
         if matches!(&decoratee, Type::ClassDef(cls) if cls.has_qname("typing", "TypeVar")) {
@@ -1448,14 +1459,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // itself depends on a TypeVar.
             return decoratee;
         }
-        let ty_decorator = self.get_idx(decorator).arc_clone_ty();
         if matches!(&decoratee, Type::ClassDef(_)) {
             // TODO: don't blanket ignore class decorators.
             return decoratee;
         }
-        let range = self.bindings().idx_to_key(decorator).range();
-        let call_target =
-            self.as_call_target_or_error(ty_decorator, CallStyle::FreeForm, range, errors, None);
+        let call_target = self.as_call_target_or_error(
+            decorator.clone(),
+            CallStyle::FreeForm,
+            range,
+            errors,
+            None,
+        );
         let arg = CallArg::ty(&decoratee, range);
         self.call_infer(call_target, &[arg], &[], range, errors, None, None, None)
     }

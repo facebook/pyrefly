@@ -12,6 +12,7 @@ use pyrefly_python::dunder;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::special_form::SpecialForm;
+use pyrefly_types::types::Var;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
@@ -1695,6 +1696,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn force_var_for_attribute_base(&self, var: Var) -> Type {
+        if let Some(_guard) = self.recurser.recurse(var) {
+            self.solver().force_var(var)
+        } else {
+            Type::any_implicit()
+        }
+    }
+
     // This function is intended as a low-level building block
     // Unions or intersections should be handled by callers
     fn as_attribute_base_no_union(&self, ty: Type) -> Option<AttributeBase> {
@@ -1800,13 +1809,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.stdlib.ellipsis_type()?.clone(),
             )),
             Type::Forall(forall) => self.as_attribute_base_no_union(forall.body.as_type()),
-            Type::Var(v) => {
-                if let Some(_guard) = self.recurser.recurse(v) {
-                    self.as_attribute_base_no_union(self.solver().force_var(v))
-                } else {
-                    Some(AttributeBase::Any(AnyStyle::Implicit))
-                }
-            }
+            Type::Var(v) => self.as_attribute_base_no_union(self.force_var_for_attribute_base(v)),
+            Type::Type(box Type::Var(v)) => self
+                .as_attribute_base_no_union(Type::type_form(self.force_var_for_attribute_base(v))),
             Type::SuperInstance(box (cls, obj)) => Some(AttributeBase::SuperInstance(cls, obj)),
             // TODO: check to see which ones should have class representations
             Type::Union(_)

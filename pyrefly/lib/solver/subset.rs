@@ -947,6 +947,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 t,
             ),
             (Type::Literal(l_lit), Type::Literal(u_lit)) => l_lit == u_lit,
+            (_, Type::SelfType(cls))
+                if got.is_literal_string() && cls == self.type_order.stdlib().str() =>
+            {
+                true
+            }
             (Type::LiteralString, _) => {
                 self.is_subset_eq(&self.type_order.stdlib().str().clone().to_type(), want)
             }

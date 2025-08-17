@@ -283,3 +283,16 @@ class D(MixinC, B):
         super().method_c()
     "#,
 );
+
+testcase!(
+    test_super_with_error_base,
+    r#"
+from nowhere import bob  # E: Could not find import
+class Foo(bob):
+    def __init__(self):
+        super().__init__(1)
+class Bar(bob):
+    def __new__(cls):
+        return super().__new__(cls, 1)
+    "#,
+);

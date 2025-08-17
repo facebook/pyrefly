@@ -40,6 +40,7 @@ use crate::module::module_info::ModuleInfo;
 use crate::report::glean::facts::*;
 use crate::report::glean::schema::*;
 use crate::state::handle::Handle;
+use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
 use crate::types::types::Type;
 
@@ -59,6 +60,14 @@ fn range_without_decorators(range: TextRange, decorators: &[Decorator]) -> TextR
 fn to_span(range: TextRange) -> src::ByteSpan {
     src::ByteSpan {
         start: range.start().to_u32().into(),
+        length: range.len().to_u32().into(),
+    }
+}
+
+fn to_span_with_offset(range: TextRange, offset: Option<TextSize>) -> src::ByteSpan {
+    let start = range.start();
+    src::ByteSpan {
+        start: offset.map_or(start, |x| start - x).to_u32().into(),
         length: range.len().to_u32().into(),
     }
 }
@@ -349,50 +358,52 @@ impl GleanState<'_> {
             .collect()
     }
 
-    fn default_fq_name(&self, name: &Name) -> String {
-        self.module_name.to_string() + "." + name
-    }
-
     fn fq_name_for_xref_definition(
         &self,
         name: &Name,
         def_range: TextRange,
         module: &ModuleInfo,
-    ) -> String {
+    ) -> Option<String> {
         let module_name = module.name();
         if module_name == ModuleName::builtins() {
-            name.to_string()
+            Some(name.to_string())
         } else if module_name == self.module_name {
             self.locations_fqnames
                 .get(&def_range.start())
-                .map_or(self.default_fq_name(name), |x| (**x).clone())
+                .map(|x| (**x).clone())
         } else {
             let local_name = module.code_at(def_range);
-            if local_name.is_empty() {
+            let fq_name = if local_name.is_empty() {
                 module_name.to_string()
             } else {
                 module_name.to_string() + "." + local_name
-            }
+            };
+            Some(fq_name)
         }
     }
 
     fn fq_names_for_name_or_attr(&self, expr: &Expr) -> Vec<String> {
         match expr {
             Expr::Attribute(attr) => self.fq_names_for_attribute(attr),
-            Expr::Name(name) => vec![self.fq_name_for_name_use(name)],
+            Expr::Name(name) => self.fq_name_for_name_use(name).map_or(vec![], |x| vec![x]),
             _ => vec![],
         }
     }
 
-    fn fq_name_for_name_use(&self, expr_name: &ExprName) -> String {
+    fn fq_name_for_name_use(&self, expr_name: &ExprName) -> Option<String> {
         let name = expr_name.id();
         let identifier = Ast::expr_name_identifier(expr_name.clone());
 
-        let definition =
-            self.transaction
-                .find_definition_for_name_use(self.handle, &identifier, false);
+        let definition = self.transaction.find_definition_for_name_use(
+            self.handle,
+            &identifier,
+            &FindPreference {
+                jump_through_renamed_import: false,
+                ..Default::default()
+            },
+        );
 
-        definition.map_or(self.default_fq_name(name), |def| {
+        definition.and_then(|def| {
             self.fq_name_for_xref_definition(name, def.definition_range, &def.module)
         })
     }
@@ -401,7 +412,7 @@ impl GleanState<'_> {
         if let Some(module) = ty.as_module() {
             Some(module.parts().join("."))
         } else {
-            ty.qname().map(|qname| {
+            ty.qname().and_then(|qname| {
                 self.fq_name_for_xref_definition(qname.id(), qname.range(), qname.module())
             })
         }
@@ -447,12 +458,18 @@ impl GleanState<'_> {
         }
     }
 
-    fn make_decorators(&self, decorators: &[Decorator]) -> Vec<String> {
+    fn make_decorators(&self, decorators: &[Decorator]) -> Option<Vec<String>> {
         let lined_buffer = self.module.lined_buffer();
-        decorators
+        let glean_decorators: Vec<String> = decorators
             .iter()
             .map(|x| lined_buffer.code_at(x.range()).to_owned())
-            .collect()
+            .collect();
+
+        if glean_decorators.is_empty() {
+            None
+        } else {
+            Some(glean_decorators)
+        }
     }
 
     fn class_facts(
@@ -476,7 +493,7 @@ impl GleanState<'_> {
             cls_declaration.clone(),
             Some(bases),
             None,
-            Some(self.make_decorators(&cls.decorator_list)),
+            self.make_decorators(&cls.decorator_list),
             Some((*context.container).clone()),
         );
 
@@ -490,7 +507,7 @@ impl GleanState<'_> {
         }
     }
 
-    fn make_xrefs(&self, expr: &Expr) -> Vec<python::XRefViaName> {
+    fn make_xrefs(&self, expr: &Expr, offset: Option<TextSize>) -> Vec<python::XRefViaName> {
         let (names, range) = match expr {
             Expr::Attribute(attr) => {
                 let fq_names = if attr.ctx.is_load() {
@@ -502,7 +519,7 @@ impl GleanState<'_> {
             }
             Expr::Name(name) => {
                 let fq_names = if name.ctx.is_load() {
-                    vec![self.fq_name_for_name_use(name)]
+                    self.fq_name_for_name_use(name).map_or(vec![], |x| vec![x])
                 } else {
                     vec![]
                 };
@@ -516,7 +533,7 @@ impl GleanState<'_> {
             .into_iter()
             .map(|name| python::XRefViaName {
                 target: python::Name::new(name),
-                source: to_span(range),
+                source: to_span_with_offset(range, offset),
             })
             .collect()
     }
@@ -532,17 +549,24 @@ impl GleanState<'_> {
         self.facts.xrefs_via_name.push(xref);
     }
 
-    fn xrefs_for_type_info(&self, expr: &Expr, xrefs: &mut Vec<python::XRefViaName>) {
-        xrefs.extend(self.make_xrefs(expr));
+    fn xrefs_for_type_info(
+        &self,
+        expr: &Expr,
+        xrefs: &mut Vec<python::XRefViaName>,
+        offset: TextSize,
+    ) {
+        xrefs.extend(self.make_xrefs(expr, Some(offset)));
 
-        expr.recurse(&mut |x| self.xrefs_for_type_info(x, xrefs));
+        expr.recurse(&mut |x| self.xrefs_for_type_info(x, xrefs, offset));
     }
 
     fn type_info(&self, annotation: Option<&Expr>) -> Option<python::TypeInfo> {
         annotation.map(|type_annotation| {
             let lined_buffer = self.module.lined_buffer();
             let mut xrefs = vec![];
-            type_annotation.visit(&mut |expr| self.xrefs_for_type_info(expr, &mut xrefs));
+            let range = type_annotation.range();
+            type_annotation
+                .visit(&mut |expr| self.xrefs_for_type_info(expr, &mut xrefs, range.start()));
             python::TypeInfo {
                 displayType: python::Type::new(
                     lined_buffer.code_at(type_annotation.range()).to_owned(),
@@ -667,7 +691,7 @@ impl GleanState<'_> {
             Some(kwonly_args),
             star_arg,
             star_kwarg,
-            Some(self.make_decorators(&func.decorator_list)),
+            self.make_decorators(&func.decorator_list),
             Some((*parent_ctx.container).clone()),
         );
 
@@ -853,7 +877,7 @@ impl GleanState<'_> {
                 self.callee_to_caller_facts(call, caller);
             }
         };
-        for xref in self.make_xrefs(expr) {
+        for xref in self.make_xrefs(expr, None) {
             self.add_xref(xref);
         }
         expr.recurse(&mut |s| self.generate_facts_from_exprs(s, container));

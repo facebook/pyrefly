@@ -768,8 +768,7 @@
                       "key": "classes.Animal"
                     }
                   }
-                },
-                "decorators": []
+                }
               }
             }
           },
@@ -820,8 +819,7 @@
                       "key": "classes.Dog"
                     }
                   }
-                },
-                "decorators": []
+                }
               }
             }
           },
@@ -862,7 +860,6 @@
                     }
                   }
                 },
-                "decorators": [],
                 "is_async": false,
                 "kwonly_params": [],
                 "params": [
@@ -880,7 +877,7 @@
                         {
                           "source": {
                             "length": 3,
-                            "start": 43
+                            "start": 0
                           },
                           "target": {
                             "id": 0,
@@ -938,7 +935,6 @@
                     }
                   }
                 },
-                "decorators": [],
                 "is_async": false,
                 "kwonly_params": [],
                 "params": [
@@ -959,7 +955,7 @@
                     {
                       "source": {
                         "length": 3,
-                        "start": 98
+                        "start": 0
                       },
                       "target": {
                         "id": 0,
@@ -1008,7 +1004,6 @@
                     }
                   }
                 },
-                "decorators": [],
                 "is_async": false,
                 "kwonly_params": [],
                 "params": [
@@ -1029,7 +1024,7 @@
                     {
                       "source": {
                         "length": 3,
-                        "start": 190
+                        "start": 0
                       },
                       "target": {
                         "id": 0,
@@ -1116,7 +1111,7 @@
                     {
                       "source": {
                         "length": 3,
-                        "start": 43
+                        "start": 0
                       },
                       "target": {
                         "id": 0,

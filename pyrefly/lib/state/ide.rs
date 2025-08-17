@@ -126,8 +126,9 @@ fn create_intermediate_definition_from(
             Binding::Module(name, ..) => return Some(IntermediateDefinition::Module(*name)),
             Binding::Function(idx, ..) => {
                 let func = bindings.get(*idx);
+                let undecorated = bindings.get(func.undecorated_idx);
                 return Some(IntermediateDefinition::Local(Export {
-                    location: func.def.name.range,
+                    location: undecorated.def.name.range,
                     symbol_kind: Some(SymbolKind::Function),
                     docstring_range: func.docstring_range,
                     is_deprecated: false,

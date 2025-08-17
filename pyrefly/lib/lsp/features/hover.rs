@@ -18,6 +18,7 @@ use starlark_map::small_set::SmallSet;
 
 use crate::state::handle::Handle;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
+use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
 
 pub struct HoverValue {
@@ -104,7 +105,14 @@ pub fn get_hover(
         module,
         docstring_range,
     }) = transaction
-        .find_definition(handle, position, true)
+        .find_definition(
+            handle,
+            position,
+            &FindPreference {
+                prefer_pyi: false,
+                ..Default::default()
+            },
+        )
         // TODO: handle more than 1 definition
         .into_iter()
         .next()

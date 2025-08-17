@@ -572,6 +572,22 @@ impl<'a> Transaction<'a> {
         Ok(Handle::new(module, path, handle.sys_info().dupe()))
     }
 
+    /// Create a handle for import `module` within the handle `handle`, preferring `.py` over `.pyi`
+    pub fn import_handle_prefer_executable(
+        &self,
+        handle: &Handle,
+        module: ModuleName,
+        path: Option<&ModulePath>,
+    ) -> Result<Handle, FindError> {
+        let path = match path {
+            Some(path) => path.dupe(),
+            None => self
+                .get_cached_loader(&self.get_module(handle).config.read())
+                .find_import_prefer_executable(module, Some(handle.path().as_path()))?,
+        };
+        Ok(Handle::new(module, path, handle.sys_info().dupe()))
+    }
+
     /// Create a handle for import `module` within the handle `handle`
     pub fn import_prefixes(&self, handle: &Handle, module: ModuleName) -> Vec<ModuleName> {
         find_import_prefixes(&self.get_module(handle).config.read(), module)

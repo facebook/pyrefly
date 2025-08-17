@@ -43,12 +43,14 @@ use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::FirstUse;
+use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyExport;
-use crate::binding::binding::KeyFunction;
 use crate::binding::binding::KeyLegacyTypeParam;
+use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::TypeParameter;
@@ -246,13 +248,10 @@ impl Bindings {
         }
     }
 
-    pub fn get_function_param(&self, name: &Identifier) -> Either<Idx<KeyAnnotation>, Var> {
+    pub fn get_function_param(&self, name: &Identifier) -> &FunctionParameter {
         let b = self.get(self.key_to_idx(&Key::Definition(ShortIdentifier::new(name))));
         if let Binding::FunctionParameter(p) = b {
-            match p {
-                Either::Left(idx) => Either::Left(*idx),
-                Either::Right(var) => Either::Right(*var),
-            }
+            p
         } else {
             panic!(
                 "Internal error: unexpected binding for parameter `{}` @  {:?}: {}, module={}, path={}",
@@ -389,10 +388,14 @@ impl BindingTable {
 
     fn link_predecessor_function(
         &mut self,
-        pred_function_idx: Idx<KeyFunction>,
-        function_idx: Idx<KeyFunction>,
+        pred_function_idx: Idx<KeyDecoratedFunction>,
+        function_idx: Idx<KeyDecoratedFunction>,
     ) {
-        let pred_binding = self.functions.1.get_mut(pred_function_idx).unwrap();
+        let pred_binding = self
+            .decorated_functions
+            .1
+            .get_mut(pred_function_idx)
+            .unwrap();
         pred_binding.successor = Some(function_idx);
     }
 }
@@ -558,25 +561,25 @@ impl<'a> BindingsBuilder<'a> {
         })
     }
 
-    /// Given the name of a function def, return a new `Idx<KeyFunction>` at which
+    /// Given the name of a function def, return a new `Idx<KeyDecoratedFunction>` at which
     /// we will store the result of binding it along with an optional `Idx<Key>` at which
     /// we have the binding for the TypeInfo of any preceding function def of the same name.
     ///
     /// An invariant is that the caller must store a binding for the returned
-    /// `Idx<KeyFunction>`; failure to do so will lead to a dangling Idx and
+    /// `Idx<KeyDecoratedFunction>`; failure to do so will lead to a dangling Idx and
     /// a panic at solve time.
     ///
     /// Function bindings are unusual because the `@overload` decorator causes bindings
     /// that would normally be unrelated in control flow to become tied together.
     ///
-    /// As a result, when we create a Idx<KeyFunction> for binding a function def, we
+    /// As a result, when we create a Idx<KeyDecoratedFunction> for binding a function def, we
     /// will want to track any pre-existing binding associated with the same name and
     /// link the bindings together.
     pub fn create_function_index(
         &mut self,
         function_identifier: &Identifier,
-    ) -> (Idx<KeyFunction>, Option<Idx<Key>>) {
-        // Get the index of both the `Key` and `KeyFunction` for the preceding function definition, if any
+    ) -> (Idx<KeyDecoratedFunction>, Option<Idx<Key>>) {
+        // Get the index of both the `Key` and `KeyDecoratedFunction` for the preceding function definition, if any
         let (pred_idx, pred_function_idx) = match self
             .scopes
             .function_predecessor_indices(&function_identifier.id)
@@ -584,11 +587,12 @@ impl<'a> BindingsBuilder<'a> {
             Some((pred_idx, pred_function_idx)) => (Some(pred_idx), Some(pred_function_idx)),
             None => (None, None),
         };
-        // Create the Idx<KeyFunction> at which we'll store the def we are ready to bind now.
+        // Create the Idx<KeyDecoratedFunction> at which we'll store the def we are ready to bind now.
         // The caller *must* eventually store a binding for it.
-        let function_idx =
-            self.idx_for_promise(KeyFunction(ShortIdentifier::new(function_identifier)));
-        // If we found a previous def, we store a forward reference inside its `BindingFunction`.
+        let function_idx = self.idx_for_promise(KeyDecoratedFunction(ShortIdentifier::new(
+            function_identifier,
+        )));
+        // If we found a previous def, we store a forward reference inside its `BindingDecoratedFunction`.
         if let Some(pred_function_idx) = pred_function_idx {
             self.table
                 .link_predecessor_function(pred_function_idx, function_idx);
@@ -1140,6 +1144,7 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         target: AnnotationTarget,
         x: AnyParameterRef,
+        undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
     ) {
         let name = x.name();
@@ -1149,26 +1154,21 @@ impl<'a> BindingsBuilder<'a> {
                 BindingAnnotation::AnnotateExpr(target.clone(), x.clone(), class_key),
             )
         });
-        let (annot, def) = match annot {
-            Some(annot) => (annot, Either::Left(annot)),
-            None => {
-                let var = self.solver.fresh_contained(self.uniques);
-                let annot = self.insert_binding(
-                    KeyAnnotation::Annotation(ShortIdentifier::new(name)),
-                    BindingAnnotation::Type(target.clone(), var.to_type()),
-                );
-                (annot, Either::Right(var))
-            }
-        };
         let key = self.insert_binding(
             Key::Definition(ShortIdentifier::new(name)),
-            Binding::FunctionParameter(def),
+            Binding::FunctionParameter(match annot {
+                Some(annot) => FunctionParameter::Annotated(annot),
+                None => FunctionParameter::Unannotated(
+                    self.solver.fresh_contained(self.uniques),
+                    undecorated_idx,
+                ),
+            }),
         );
         self.scopes.add_to_current_static(
             name.id.clone(),
             name.range,
             SymbolKind::Parameter,
-            Some(annot),
+            annot,
             false,
         );
         self.bind_name(&name.id, key, FlowStyle::Other);

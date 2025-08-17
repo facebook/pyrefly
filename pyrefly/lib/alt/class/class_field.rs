@@ -1089,16 +1089,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && dm.kws.frozen
             && dm.fields.contains(name)
         {
-            return Some(ReadOnlyReason::FrozenDataclass);
-        }
-
-        // all frozen pydantic fields are read-only
-        if let Some(pm) = metadata.pydantic_metadata()
-            && let Some(dm) = metadata.dataclass_metadata()
-            && dm.fields.contains(name)
-            && pm.frozen
-        {
-            return Some(ReadOnlyReason::PydanticFrozen);
+            let reason = if metadata.pydantic_metadata().is_some() {
+                ReadOnlyReason::PydanticFrozen
+            } else {
+                ReadOnlyReason::FrozenDataclass
+            };
+            return Some(reason);
         }
 
         // A nested class def is assumed to be ReadOnly. We distinguish a nested `class C: ...`
@@ -1418,6 +1414,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(bind_class_attribute(cls, foralled, &None))
     }
 
+    fn is_typed_dict_field(&self, metadata: &ClassMetadata, field_name: &Name) -> bool {
+        metadata
+            .typed_dict_metadata()
+            .is_some_and(|metadata| metadata.fields.contains_key(field_name))
+    }
+
     pub fn check_consistent_override_for_field(
         &self,
         cls: &Class,
@@ -1447,6 +1449,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut got_attr = None;
         let mut parent_attr_found = false;
         let mut parent_has_any = false;
+        let is_typed_dict_field =
+            self.is_typed_dict_field(&self.get_metadata_for_class(cls), field_name);
 
         for parent in bases.iter() {
             let parent_cls = parent.class_object();
@@ -1512,6 +1516,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     continue;
                 }
             }
+            if is_typed_dict_field != self.is_typed_dict_field(&parent_metadata, field_name) {
+                // TypedDict fields are actually dict keys, so we want to check them against other
+                // keys but not regular fields.
+                continue;
+            }
             let want_attr =
                 self.as_instance_attribute(&want_class_field, &Instance::of_class(parent));
             if got_attr.is_none() {
@@ -1567,6 +1576,59 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn get_field_from_ancestors(
+        &self,
+        cls: &Class,
+        mut ancestors: impl Iterator<Item = &'a ClassType>,
+        name: &Name,
+        get_field: &impl Fn(&Class, &Name) -> Option<Arc<ClassField>>,
+    ) -> Option<WithDefiningClass<Arc<ClassField>>> {
+        ancestors.find_map(|ancestor| {
+            if ancestor.is_builtin("object")
+                && [dunder::NEW, dunder::INIT].contains(name)
+                && self.extends_any(cls)
+            {
+                // If this class has an `Any` ancestor, then we assume that `__new__` and `__init__`
+                // can be called with any arguments. These attributes are special because they are
+                // commonly overridden with incompatible type signatures. For most attributes, it's
+                // more helpful to return the attribute type from `object` because it's unlikely to
+                // have been changed by the unknown `Any` ancestor. Note that we put this check
+                // right before `object` in the MRO because we know that `object` is always last.
+                // While it would be safer to assume that the `Any` ancestor could appear first in
+                // the MRO, we choose to instead return a more precise attribute type if we can find
+                // one on a non-`Any` ancestor.
+                Some(Arc::new(ClassField::new_synthesized(Type::any_implicit())))
+            } else {
+                get_field(ancestor.class_object(), name)
+            }
+            .map(|field| WithDefiningClass {
+                value: Arc::new(field.instantiate_for(&Instance::of_class(ancestor))),
+                defining_class: ancestor.class_object().dupe(),
+            })
+        })
+    }
+
+    fn get_field_from_mro(
+        &self,
+        cls: &Class,
+        name: &Name,
+        get_field: &impl Fn(&Class, &Name) -> Option<Arc<ClassField>>,
+    ) -> Option<WithDefiningClass<Arc<ClassField>>> {
+        get_field(cls, name)
+            .map(|field| WithDefiningClass {
+                value: field,
+                defining_class: cls.dupe(),
+            })
+            .or_else(|| {
+                self.get_field_from_ancestors(
+                    cls,
+                    self.get_mro_for_class(cls).ancestors(self.stdlib),
+                    name,
+                    get_field,
+                )
+            })
+    }
+
     /// Only look up fields that are not synthesized. This is useful when synthesizing method signatures
     /// for typeddict, named tuple, etc.
     pub fn get_non_synthesized_class_member(
@@ -1574,19 +1636,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         name: &Name,
     ) -> Option<Arc<ClassField>> {
-        self.get_non_synthesized_field_from_current_class_only(cls, name)
-            .filter(|field| !field.is_init_var())
-            .or_else(|| {
-                self.get_mro_for_class(cls)
-                    .ancestors(self.stdlib)
-                    .find_map(|ancestor| {
-                        self.get_non_synthesized_field_from_current_class_only(
-                            ancestor.class_object(),
-                            name,
-                        )
-                        .filter(|field| !field.is_init_var())
-                    })
-            })
+        self.get_field_from_mro(cls, name, &|cls, name| {
+            self.get_non_synthesized_field_from_current_class_only(cls, name)
+                .filter(|field| !field.is_init_var())
+        })
+        .map(|x| x.value)
     }
 
     fn get_synthesized_field_from_current_class_only(
@@ -1617,22 +1671,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         name: &Name,
     ) -> Option<WithDefiningClass<Arc<ClassField>>> {
-        if let Some(field) = self.get_field_from_current_class_only(cls, name) {
-            Some(WithDefiningClass {
-                value: field,
-                defining_class: cls.dupe(),
-            })
-        } else {
-            self.get_mro_for_class(cls)
-                .ancestors(self.stdlib)
-                .find_map(|ancestor| {
-                    self.get_field_from_current_class_only(ancestor.class_object(), name)
-                        .map(|field| WithDefiningClass {
-                            value: Arc::new(field.instantiate_for(&Instance::of_class(ancestor))),
-                            defining_class: ancestor.class_object().dupe(),
-                        })
-                })
-        }
+        self.get_field_from_mro(cls, name, &|cls, name| {
+            self.get_field_from_current_class_only(cls, name)
+        })
     }
 
     fn get_non_synthesized_dataclass_member_impl(
@@ -1640,25 +1681,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         name: &Name,
     ) -> Option<WithDefiningClass<Arc<ClassField>>> {
-        if let Some(field) = self.get_non_synthesized_field_from_current_class_only(cls, name) {
-            Some(WithDefiningClass {
-                value: field,
-                defining_class: cls.dupe(),
-            })
-        } else {
-            self.get_mro_for_class(cls)
-                .ancestors(self.stdlib)
-                .find_map(|ancestor| {
-                    self.get_non_synthesized_field_from_current_class_only(
-                        ancestor.class_object(),
-                        name,
-                    )
-                    .map(|field| WithDefiningClass {
-                        value: Arc::new(field.instantiate_for(&Instance::of_class(ancestor))),
-                        defining_class: ancestor.class_object().dupe(),
-                    })
-                })
-        }
+        self.get_field_from_mro(cls, name, &|cls, name| {
+            self.get_non_synthesized_field_from_current_class_only(cls, name)
+        })
     }
 
     pub(in crate::alt::class) fn get_class_member(
@@ -1719,18 +1744,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ancestors = metadata
             .ancestors(self.stdlib)
             .skip_while(|ancestor| *ancestor != start_lookup_cls);
-        for ancestor in ancestors {
-            if let Some(field) =
-                self.get_field_from_current_class_only(ancestor.class_object(), name)
-                && !field.is_init_var()
-            {
-                return Some(WithDefiningClass {
-                    value: Arc::new(field.instantiate_for(&Instance::of_class(ancestor))),
-                    defining_class: ancestor.class_object().dupe(),
-                });
-            }
-        }
-        None
+        self.get_field_from_ancestors(cls, ancestors, name, &|cls, name| {
+            self.get_field_from_current_class_only(cls, name)
+                .filter(|field| !field.is_init_var())
+        })
     }
 
     /// Looks up an attribute on a super instance.

@@ -19,6 +19,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::FuncMetadata;
 use pyrefly_types::callable::Function;
@@ -36,6 +37,7 @@ use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
+use ruff_python_ast::ExprName;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
@@ -46,10 +48,13 @@ use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::Answers;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::binding::binding::Key;
+use crate::binding::bindings::Bindings;
 use crate::config::finder::ConfigFinder;
 use crate::module::module_info::ModuleInfo;
 use crate::state::handle::Handle;
 use crate::state::lsp::DefinitionMetadata;
+use crate::state::lsp::FindPreference;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
@@ -364,7 +369,7 @@ impl Query {
                         handle,
                         // take location of last included character in range (which should work for identifiers and attributes)
                         callee_range.end().checked_sub(TextSize::from(1)).unwrap(),
-                        true,
+                        &FindPreference::default(),
                     );
                     if defs.len() == 1 {
                         // TODO: decide what do to with multiple definitions
@@ -468,8 +473,26 @@ impl Query {
         let ast = transaction.get_ast(&handle)?;
         let module_info = transaction.get_module_info(&handle)?;
         let answers = transaction.get_answers(&handle)?;
+        let bindings = transaction.get_bindings(&handle)?;
 
         let mut res = Vec::new();
+
+        fn is_static_method(ty: &Type) -> bool {
+            match ty {
+                Type::Union(tys) => tys.iter().all(is_static_method),
+                Type::BoundMethod(m) => m.func.metadata().flags.is_staticmethod,
+                Type::Function(f) => f.metadata.flags.is_staticmethod,
+                Type::Forall(f) => {
+                    if let Forallable::Function(func) = &f.body {
+                        func.metadata.flags.is_staticmethod
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            }
+        }
+
         fn add_type(
             ty: &Type,
             range: TextRange,
@@ -478,31 +501,47 @@ impl Query {
         ) {
             let mut ctx = TypeDisplayContext::new(&[ty]);
             ctx.always_display_module_name();
-            res.push((
-                module_info.display_range(range),
-                ctx.display(ty).to_string(),
-            ));
+            let text = ctx.display(ty).to_string();
+            let text = if is_static_method(ty) {
+                format!("typing.StaticMethod[{text}]")
+            } else {
+                text
+            };
+            res.push((module_info.display_range(range), text));
+        }
+        fn try_find_key_for_name(name: &ExprName, bindings: &Bindings) -> Option<Key> {
+            let key = Key::BoundName(ShortIdentifier::expr_name(name));
+            if bindings.is_valid_key(&key) {
+                Some(key)
+            } else if let key = Key::Definition(ShortIdentifier::expr_name(name))
+                && bindings.is_valid_key(&key)
+            {
+                Some(key)
+            } else {
+                None
+            }
         }
         fn f(
             x: &Expr,
             module_info: &ModuleInfo,
             answers: &Answers,
-            transaction: &Transaction<'_>,
-            handle: &Handle,
+            bindings: &Bindings,
             res: &mut Vec<(DisplayRange, String)>,
         ) {
             let range = x.range();
-            if let Some(ty) = answers.get_type_trace(range) {
+            if let Expr::Name(name) = x
+                && let Some(key) = try_find_key_for_name(name, bindings)
+                && let Some(idx) = answers.get_idx(bindings.key_to_idx(&key))
+            {
+                let ty = answers.for_display(idx.arc_clone_ty());
                 add_type(&ty, range, module_info, res);
-            } else if let Some(ty) = transaction.get_type_at(handle, range.start()) {
-                // this branch is needed to cover cases when type is not available in answers
-                // which happens for local variables
+            } else if let Some(ty) = answers.get_type_trace(range) {
                 add_type(&ty, range, module_info, res);
             }
-            x.recurse(&mut |x| f(x, module_info, answers, transaction, handle, res));
+            x.recurse(&mut |x| f(x, module_info, answers, bindings, res));
         }
 
-        ast.visit(&mut |x| f(x, &module_info, &answers, &transaction, &handle, &mut res));
+        ast.visit(&mut |x| f(x, &module_info, &answers, &bindings, &mut res));
         Some(res)
     }
 

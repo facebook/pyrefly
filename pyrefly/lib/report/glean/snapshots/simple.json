@@ -304,7 +304,6 @@
                     }
                   }
                 },
-                "decorators": [],
                 "is_async": false,
                 "kwonly_params": [],
                 "params": [],

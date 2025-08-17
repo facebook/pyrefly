@@ -398,6 +398,17 @@ impl BoundMethod {
     pub fn as_function(self) -> Type {
         self.func.as_type()
     }
+
+    pub fn with_bound_object(&self, obj: Type) -> Self {
+        Self {
+            obj,
+            func: self.func.clone(),
+        }
+    }
+
+    pub fn as_type(self) -> Type {
+        Type::BoundMethod(Box::new(self))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

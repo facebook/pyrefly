@@ -1354,3 +1354,15 @@ def f5(cls, x: type):
         return cls.mro(x)
     "#,
 );
+
+testcase!(
+    test_get_type_new,
+    r#"
+from typing import cast, reveal_type
+def get_type_t[T]() -> type[T]:
+    return cast(type[T], 0)
+def foo[T](x: type[T]):
+    # mypy reveals the same thing we do (the type of `type.__new__`), while pyright reveals `Unknown`.
+    reveal_type(get_type_t().__new__)  # E: Overload[(cls: type[Self@type], o: object, /) -> type, (cls: type[TypeVar[Self]], name: str, bases: tuple[type, ...], namespace: dict[str, Any], /, **kwds: Any) -> TypeVar[Self]]
+    "#,
+);

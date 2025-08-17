@@ -12,6 +12,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::locked_map::LockedMap;
 use vec1::Vec1;
@@ -22,6 +23,7 @@ use crate::config::config::ConfigSource;
 use crate::config::config::ImportLookupPathPart;
 use crate::error::context::ErrorContext;
 use crate::module::finder::find_import;
+use crate::module::finder::find_import_filtered;
 
 #[derive(Debug, Clone, Dupe)]
 pub enum FindError {
@@ -95,6 +97,8 @@ impl FindError {
 pub struct LoaderFindCache {
     config: ArcId<ConfigFile>,
     cache: LockedMap<ModuleName, Result<ModulePath, FindError>>,
+    // If a python executable module (excludes .pyi) exists and differs from the imported python module, store it here
+    executable_cache: LockedMap<ModuleName, Option<ModulePath>>,
 }
 
 impl LoaderFindCache {
@@ -102,6 +106,35 @@ impl LoaderFindCache {
         Self {
             config,
             cache: Default::default(),
+            executable_cache: Default::default(),
+        }
+    }
+
+    pub fn find_import_prefer_executable(
+        &self,
+        module: ModuleName,
+        path: Option<&Path>,
+    ) -> Result<ModulePath, FindError> {
+        match self.executable_cache.get(&module) {
+            Some(Some(module)) => Ok(module.dupe()),
+            Some(None) => self.find_import(module, path),
+            None => {
+                match find_import_filtered(
+                    &self.config,
+                    module,
+                    path,
+                    Some(ModuleStyle::Executable),
+                ) {
+                    Ok(import) => {
+                        self.executable_cache.insert(module, Some(import.dupe()));
+                        Ok(import)
+                    }
+                    Err(_) => {
+                        self.executable_cache.insert(module, None);
+                        self.find_import(module, path)
+                    }
+                }
+            }
         }
     }
 

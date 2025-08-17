@@ -1112,3 +1112,25 @@ def valid_kwargs(**kwargs: Unpack[Coord]):
     pass
     "#,
 );
+
+testcase!(
+    test_items_as_key,
+    r#"
+from typing import assert_type, TypedDict
+class TD(TypedDict):
+    items: int
+td: TD = {'items': 1}
+assert_type(td['items'], int)
+    "#,
+);
+
+testcase!(
+    test_inheritance_consistency,
+    r#"
+from typing import TypedDict
+class A(TypedDict):
+    x: int
+class B(A):
+    x: str  # E: `B.x` has type `str`, which is not consistent with `int` in `A.x`
+    "#,
+);

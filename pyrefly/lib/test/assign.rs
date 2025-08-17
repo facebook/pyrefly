@@ -809,3 +809,21 @@ class A:
         self._x: bool = x # E: `int` is not assignable to attribute `_x` with type `bool`
     "#,
 );
+
+testcase!(
+    test_assign_unannotated_self_cls_param,
+    r#"
+from typing import Self, assert_type
+class A:
+    def m1(self):
+        assert_type(self, Self)
+        self = None
+        assert_type(self, None)
+
+    @classmethod
+    def m2(cls):
+        assert_type(cls, type[Self])
+        cls = None
+        assert_type(cls, None)
+    "#,
+);

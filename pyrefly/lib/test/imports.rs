@@ -966,3 +966,21 @@ from foo import x
 x("hello")  # E: Call to deprecated overload `foo.x`
 "#,
 );
+
+fn env_submodule_attribute_name_collision() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path("foo", "foo/__init__.py", "from .bar import bar");
+    t.add_with_path("foo.bar", "foo/bar.py", "def bar(): pass");
+    t
+}
+
+testcase!(
+    bug = "Pyrefly incorrectly resolves `foo.bar` to the submodule rather than the same-named function in the submodule",
+    test_submodule_attribute_name_collision,
+    env_submodule_attribute_name_collision(),
+    r#"
+from typing import reveal_type
+import foo
+reveal_type(foo.bar)  # E: revealed type: Module[foo.bar]
+    "#,
+);

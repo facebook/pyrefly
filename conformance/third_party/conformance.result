@@ -295,7 +295,6 @@
   ],
   "literals_literalstring.py": [
     "Line 120: Expected 1 errors",
-    "Line 52: Unexpected errors ['assert_type(str, LiteralString) failed']",
     "Line 111: Unexpected errors [\"assert_type(str, Literal['hello']) failed\"]",
     "Line 116: Unexpected errors ['assert_type(str, LiteralString) failed']"
   ],

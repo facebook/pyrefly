@@ -7110,16 +7110,6 @@
     },
     {
       "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(str, LiteralString) failed",
-      "description": "assert_type(str, LiteralString) failed",
-      "line": 52,
-      "name": "assert-type",
-      "stop_column": 49,
-      "stop_line": 52
-    },
-    {
-      "code": -2,
       "column": 25,
       "concise_description": "`str` is not assignable to `LiteralString`",
       "description": "`str` is not assignable to `LiteralString`",

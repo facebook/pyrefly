@@ -12,7 +12,9 @@ use itertools::Either;
 use itertools::Itertools;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::type_info::TypeInfo;
 use pyrefly_util::display::DisplayWithCtx;
+use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Expr;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -89,7 +91,212 @@ impl BaseClassParseResult {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    fn protocol_metadata(cls: &Class, bases: &[BaseClass]) -> Option<ProtocolMetadata> {
+    pub fn class_metadata_of(
+        &self,
+        cls: &Class,
+        bases: &[BaseClass],
+        keywords: &[(Name, Expr)],
+        decorators: &[(Idx<Key>, TextRange)],
+        is_new_type: bool,
+        special_base: &Option<Box<BaseClass>>,
+        pydantic_metadata_binding: &PydanticMetadataBinding,
+        errors: &ErrorCollector,
+    ) -> ClassMetadata {
+        // Get class decorators.
+        let decorators = decorators.map(|(decorator_key, decorator_range)| {
+            (self.get_idx(*decorator_key), *decorator_range)
+        });
+
+        // Get full base class list and compute data that depends on the `BaseClass` representation
+        // of base classes.
+        let bases = if let Some(special_base) = special_base {
+            bases
+                .iter()
+                .chain([(**special_base).clone()].iter())
+                .cloned()
+                .collect()
+        } else {
+            bases.to_vec()
+        };
+        let initial_protocol_metadata = Self::initial_protocol_metadata(cls, bases.as_slice());
+        let has_generic_base_class = bases.iter().any(|x| x.is_generic());
+        let has_typed_dict_base_class = bases.iter().any(|x| x.is_typed_dict());
+
+        // Parse base classes and compute data that depends on the `BaseClassParseResult`
+        // representation of base classes.
+        let parsed_results = bases
+            .into_iter()
+            .map(|x| self.parse_base_class(x, is_new_type))
+            .collect::<Vec<_>>();
+        let contains_base_class_any = parsed_results.iter().any(|x| x.is_any());
+        let protocol_metadata = self.final_protocol_metadata(
+            initial_protocol_metadata,
+            &decorators,
+            &parsed_results,
+            errors,
+        );
+
+        // Compute base classes with metadata.
+        let bases_with_metadata = self.bases_with_metadata(parsed_results, is_new_type, errors);
+
+        // Compute class keywords, including the metaclass.
+        let (metaclasses, keywords): (Vec<_>, Vec<(_, _)>) =
+            keywords.iter().partition_map(|(n, x)| match n.as_str() {
+                "metaclass" => Either::Left(x),
+                _ => Either::Right((n.clone(), self.expr_infer(x, errors))),
+            });
+        let base_metaclasses = bases_with_metadata
+            .iter()
+            .filter_map(|(b, metadata)| metadata.metaclass().map(|m| (b.name(), m)))
+            .collect::<Vec<_>>();
+        let metaclass = self.calculate_metaclass(
+            cls,
+            metaclasses.into_iter().next(),
+            &base_metaclasses,
+            errors,
+        );
+        if let Some(metaclass) = &metaclass {
+            self.check_base_class_metaclasses(cls, metaclass, &base_metaclasses, errors);
+            if metaclass.targs().as_slice().iter().any(|targ| {
+                targ.any(|ty| {
+                    matches!(
+                        ty,
+                        Type::TypeVar(_) | Type::TypeVarTuple(_) | Type::ParamSpec(_)
+                    )
+                })
+            }) {
+                self.error(
+                    errors,
+                    cls.range(),
+                    ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                    "Metaclass may not be an unbound generic".to_owned(),
+                );
+            }
+        }
+
+        // Compute various pieces of special metadata.
+        let has_base_any = contains_base_class_any
+            || bases_with_metadata
+                .iter()
+                .any(|(_, metadata)| metadata.has_base_any());
+
+        let named_tuple_metadata = self.named_tuple_metadata(cls, &bases_with_metadata, errors);
+        if named_tuple_metadata.is_some() && bases_with_metadata.len() > 1 {
+            self.error(
+                errors,
+                cls.range(),
+                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                "Named tuples do not support multiple inheritance".to_owned(),
+            );
+        }
+
+        let pydantic_metadata =
+            self.pydantic_metadata(&bases_with_metadata, pydantic_metadata_binding);
+
+        let is_typed_dict = has_typed_dict_base_class
+            || bases_with_metadata
+                .iter()
+                .any(|(_, metadata)| metadata.is_typed_dict());
+        if is_typed_dict
+            && let Some(bad) = bases_with_metadata.iter().find(|x| !x.1.is_typed_dict())
+        {
+            self.error(errors,
+                cls.range(),
+                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                format!("`{}` is not a typed dictionary. Typed dictionary definitions may only extend other typed dictionaries.", bad.0.name()),
+            );
+        }
+        let typed_dict_metadata =
+            self.typed_dict_metadata(cls, &bases_with_metadata, &keywords, is_typed_dict, errors);
+        if metaclass.is_some() && is_typed_dict {
+            self.error(
+                errors,
+                cls.range(),
+                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                "Typed dictionary definitions may not specify a metaclass".to_owned(),
+            );
+        }
+
+        let enum_metadata =
+            self.enum_metadata(cls, metaclass.as_ref(), &bases_with_metadata, errors);
+
+        let is_final = decorators.iter().any(|(decorator, _)| {
+            decorator.ty().callee_kind() == Some(CalleeKind::Function(FunctionKind::Final))
+        });
+
+        let total_ordering_metadata = decorators.iter().find_map(|(decorator, decorator_range)| {
+            decorator.ty().callee_kind().and_then(|kind| {
+                if kind == CalleeKind::Function(FunctionKind::TotalOrdering) {
+                    Some(TotalOrderingMetadata {
+                        location: *decorator_range,
+                    })
+                } else {
+                    None
+                }
+            })
+        });
+
+        // If this class inherits from a dataclass_transform-ed class, record the defaults that we
+        // should use for dataclass parameters.
+        let dataclass_defaults_from_base_class = bases_with_metadata
+            .iter()
+            .find_map(|(_, metadata)| metadata.dataclass_transform_metadata().cloned());
+        let dataclass_transform_metadata = self.dataclass_transform_metadata(
+            &decorators,
+            metaclass.as_ref(),
+            dataclass_defaults_from_base_class.clone(),
+        );
+        let dataclass_from_dataclass_transform = self.dataclass_from_dataclass_transform(
+            &keywords,
+            &decorators,
+            dataclass_defaults_from_base_class,
+            pydantic_metadata.as_ref(),
+        );
+        let dataclass_metadata = self.dataclass_metadata(
+            cls,
+            &decorators,
+            &bases_with_metadata,
+            dataclass_from_dataclass_transform,
+        );
+        if let Some(dm) = dataclass_metadata.as_ref() {
+            self.validate_frozen_dataclass_inheritance(cls, dm, &bases_with_metadata, errors);
+        }
+
+        // Compute final base class list.
+        let bases = if is_typed_dict && bases_with_metadata.is_empty() {
+            // This is a "fallback" class that contains attributes that are available on all TypedDict subclasses.
+            // Note that this also makes those attributes available on *instances* of said subclasses; this is
+            // desirable for methods but problematic for fields like `__total__` that should be available on the class
+            // but not the instance. For now, we make all fields available on both classes and instances.
+            let td_fallback = self.stdlib.typed_dict_fallback();
+            vec![td_fallback.class_object().clone()]
+        } else {
+            bases_with_metadata
+                .into_iter()
+                .map(|(base, _)| base)
+                .collect::<Vec<_>>()
+        };
+
+        ClassMetadata::new(
+            bases,
+            metaclass,
+            keywords,
+            typed_dict_metadata,
+            named_tuple_metadata,
+            enum_metadata,
+            protocol_metadata,
+            dataclass_metadata,
+            has_generic_base_class,
+            has_base_any,
+            is_new_type,
+            is_final,
+            total_ordering_metadata,
+            dataclass_transform_metadata,
+            pydantic_metadata,
+        )
+    }
+
+    fn initial_protocol_metadata(cls: &Class, bases: &[BaseClass]) -> Option<ProtocolMetadata> {
         if bases.iter().any(|x| matches!(x, BaseClass::Protocol(..))) {
             Some(ProtocolMetadata {
                 members: cls.fields().cloned().collect(),
@@ -98,6 +305,318 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             None
         }
+    }
+
+    fn final_protocol_metadata(
+        &self,
+        mut protocol_metadata: Option<ProtocolMetadata>,
+        decorators: &[(Arc<TypeInfo>, TextRange)],
+        parsed_results: &[BaseClassParseResult],
+        errors: &ErrorCollector,
+    ) -> Option<ProtocolMetadata> {
+        if let Some(proto) = &mut protocol_metadata {
+            for base in parsed_results.iter() {
+                if let BaseClassParseResult::Parsed(ParsedBaseClass {
+                    class_object: _,
+                    range,
+                    metadata,
+                }) = base
+                {
+                    if let Some(base_proto) = metadata.protocol_metadata() {
+                        proto.members.extend(base_proto.members.iter().cloned());
+                        if base_proto.is_runtime_checkable {
+                            proto.is_runtime_checkable = true;
+                        }
+                    } else {
+                        self.error(errors,
+                            *range,
+                            ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                            "If `Protocol` is included as a base class, all other bases must be protocols".to_owned(),
+                        );
+                    }
+                }
+            }
+        }
+        for (decorator, range) in decorators {
+            match decorator.ty().callee_kind() {
+                Some(CalleeKind::Function(FunctionKind::RuntimeCheckable)) => {
+                    if let Some(proto) = &mut protocol_metadata {
+                        proto.is_runtime_checkable = true;
+                    } else {
+                        self.error(
+                            errors,
+                            *range,
+                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                            "@runtime_checkable can only be applied to Protocol classes".to_owned(),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+        protocol_metadata
+    }
+
+    fn named_tuple_metadata(
+        &self,
+        cls: &Class,
+        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        errors: &ErrorCollector,
+    ) -> Option<NamedTupleMetadata> {
+        bases_with_metadata
+            .iter()
+            .find_map(|(base_class_object, metadata)| {
+                if base_class_object.has_qname(
+                    ModuleName::type_checker_internals().as_str(),
+                    "NamedTupleFallback",
+                ) {
+                    Some(NamedTupleMetadata {
+                        elements: self.get_named_tuple_elements(cls, errors),
+                    })
+                } else {
+                    metadata.named_tuple_metadata().cloned()
+                }
+            })
+    }
+
+    fn pydantic_metadata(
+        &self,
+        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        pydantic_metadata_binding: &PydanticMetadataBinding,
+    ) -> Option<PydanticMetadata> {
+        let has_pydantic_base_model_base_class =
+            bases_with_metadata.iter().any(|(base_class_object, _)| {
+                base_class_object.has_qname(ModuleName::pydantic().as_str(), "BaseModel")
+            });
+
+        let is_pydantic_model = has_pydantic_base_model_base_class
+            || bases_with_metadata
+                .iter()
+                .any(|(_, metadata)| metadata.is_pydantic_model());
+
+        // Determine final PydanticMetadata only if the class inherits from BaseModel in the MRO
+        match pydantic_metadata_binding {
+            PydanticMetadataBinding {
+                frozen,
+                validation_alias,
+            } if is_pydantic_model => Some(PydanticMetadata {
+                frozen: *frozen,
+                validation_alias: validation_alias.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    fn typed_dict_metadata(
+        &self,
+        cls: &Class,
+        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        keywords: &[(Name, Type)],
+        is_typed_dict: bool,
+        errors: &ErrorCollector,
+    ) -> Option<TypedDictMetadata> {
+        if is_typed_dict {
+            // Validate that only 'total' keyword is allowed for TypedDict and determine is_total
+            let mut is_total = true;
+            for (name, value) in keywords {
+                if name.as_str() != "total" {
+                    self.error(
+                        errors,
+                        cls.range(),
+                        ErrorInfo::Kind(ErrorKind::BadTypedDict),
+                        format!(
+                            "TypedDict does not support keyword argument `{}`",
+                            name.as_str()
+                        ),
+                    );
+                } else if matches!(value, Type::Literal(Lit::Bool(false))) {
+                    is_total = false;
+                }
+            }
+            let fields =
+                self.calculate_typed_dict_metadata_fields(cls, bases_with_metadata, is_total);
+            Some(TypedDictMetadata { fields })
+        } else {
+            None
+        }
+    }
+
+    fn enum_metadata(
+        &self,
+        cls: &Class,
+        metaclass: Option<&ClassType>,
+        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        errors: &ErrorCollector,
+    ) -> Option<EnumMetadata> {
+        if let Some(metaclass) = metaclass
+            && self
+                .as_superclass(metaclass, self.stdlib.enum_meta().class_object())
+                .is_some()
+        {
+            // NOTE(grievejia): This may create potential cycle if metaclass is generic. Need to look into
+            // whether it can be removed or not.
+            if !self.get_class_tparams(cls).is_empty() {
+                self.error(
+                    errors,
+                    cls.range(),
+                    ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                    "Enums may not be generic".to_owned(),
+                );
+            }
+            Some(EnumMetadata {
+                // A generic enum is an error, but we create Any type args anyway to handle it gracefully.
+                cls: self.promote_nontypeddict_silently_to_classtype(cls),
+                has_value: bases_with_metadata
+                    .iter()
+                    .any(|(base, _)| base.contains(&Name::new_static("_value_"))),
+                is_flag: bases_with_metadata.iter().any(|(base, _)| {
+                    self.is_subset_eq(
+                        &Type::ClassType(self.promote_nontypeddict_silently_to_classtype(base)),
+                        &Type::ClassType(self.stdlib.enum_flag().clone()),
+                    )
+                }),
+            })
+        } else {
+            None
+        }
+    }
+
+    fn dataclass_transform_metadata(
+        &self,
+        decorators: &[(Arc<TypeInfo>, TextRange)],
+        metaclass: Option<&ClassType>,
+        dataclass_defaults_from_base_class: Option<DataclassTransformKeywords>,
+    ) -> Option<DataclassTransformKeywords> {
+        // This is set when a class is decorated with `@typing.dataclass_transform(...)`. Note that
+        // this does not turn the class into a dataclass! Instead, it becomes a special base class
+        // (or metaclass) that turns child classes into dataclasses.
+        let mut dataclass_transform_metadata = dataclass_defaults_from_base_class;
+        if let Some(c) = metaclass
+            && let Some(m) = self
+                .get_metadata_for_class(c.class_object())
+                .dataclass_transform_metadata()
+        {
+            dataclass_transform_metadata = Some(m.clone());
+        }
+        for (decorator, _) in decorators {
+            // `@dataclass_transform(...)`
+            if let Type::KwCall(call) = decorator.ty()
+                && call.has_function_kind(FunctionKind::DataclassTransform)
+            {
+                dataclass_transform_metadata =
+                    Some(DataclassTransformKeywords::from_type_map(&call.keywords));
+            }
+        }
+        dataclass_transform_metadata
+    }
+
+    fn dataclass_from_dataclass_transform(
+        &self,
+        keywords: &[(Name, Type)],
+        decorators: &[(Arc<TypeInfo>, TextRange)],
+        dataclass_defaults_from_base_class: Option<DataclassTransformKeywords>,
+        pydantic_metadata: Option<&PydanticMetadata>,
+    ) -> Option<(DataclassKeywords, Vec<CalleeKind>)> {
+        // This is set when we should apply dataclass-like transformations to the class. The class
+        // should be transformed if:
+        // - it inherits from a base class decorated with `dataclass_transform(...)`, or
+        // - it inherits from a base class whose metaclass is decorated with `dataclass_transform(...)`, or
+        // - it is decorated with a decorator that is decorated with `dataclass_transform(...)`.
+        // - is a Pydantic model
+        let mut dataclass_from_dataclass_transform = None;
+        if let Some(defaults) = dataclass_defaults_from_base_class {
+            // This class inherits from a dataclass_transform-ed base class, so its keywords are
+            // interpreted as dataclass keywords.
+            let map = keywords.iter().cloned().collect::<OrderedMap<_, _>>();
+            let mut kws = DataclassKeywords::from_type_map(&TypeMap(map), &defaults);
+
+            // Inject frozen data from pydantic model
+            if let Some(pydantic) = pydantic_metadata {
+                kws.frozen = pydantic.frozen || kws.frozen;
+            }
+
+            dataclass_from_dataclass_transform = Some((kws, defaults.field_specifiers));
+        }
+        for (decorator, _) in decorators {
+            let decorator_ty = decorator.ty();
+            // `@foo` where `foo` is decorated with `@dataclass_transform(...)`
+            if let Some(defaults) = decorator_ty.dataclass_transform_metadata() {
+                dataclass_from_dataclass_transform = Some((
+                    DataclassKeywords::from_type_map(&TypeMap::new(), &defaults),
+                    defaults.field_specifiers,
+                ));
+            }
+            // `@foo(...)` where `foo` is decorated with `@dataclass_transform(...)`
+            else if let Type::KwCall(call) = decorator_ty
+                && let Some(defaults) = &call.func_metadata.flags.dataclass_transform_metadata
+            {
+                dataclass_from_dataclass_transform = Some((
+                    DataclassKeywords::from_type_map(&call.keywords, defaults),
+                    defaults.field_specifiers.clone(),
+                ));
+            }
+        }
+        dataclass_from_dataclass_transform
+    }
+
+    fn dataclass_metadata(
+        &self,
+        cls: &Class,
+        decorators: &[(Arc<TypeInfo>, TextRange)],
+        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        dataclass_from_dataclass_transform: Option<(DataclassKeywords, Vec<CalleeKind>)>,
+    ) -> Option<DataclassMetadata> {
+        // If we inherit from a dataclass, inherit its metadata. Note that if this class is
+        // itself decorated with @dataclass, we'll compute new metadata and overwrite this.
+        let mut dataclass_metadata = bases_with_metadata.iter().find_map(|(_, metadata)| {
+            let mut m = metadata.dataclass_metadata().cloned()?;
+            // Avoid accidentally overwriting a non-synthesized `__init__`.
+            m.kws.init = false;
+            Some(m)
+        });
+        for (decorator, _) in decorators {
+            let decorator_ty = decorator.ty();
+            match decorator_ty.callee_kind() {
+                // `@dataclass`
+                Some(CalleeKind::Function(FunctionKind::Dataclass)) => {
+                    let dataclass_fields = self.get_dataclass_fields(cls, bases_with_metadata);
+                    dataclass_metadata = Some(DataclassMetadata {
+                        fields: dataclass_fields,
+                        kws: DataclassKeywords::new(),
+                        field_specifiers: vec![
+                            CalleeKind::Function(FunctionKind::DataclassField),
+                            CalleeKind::Class(ClassKind::DataclassField),
+                        ],
+                    });
+                }
+                // `@dataclass(...)`
+                _ if let Type::KwCall(call) = decorator_ty
+                    && call.has_function_kind(FunctionKind::Dataclass) =>
+                {
+                    let dataclass_fields = self.get_dataclass_fields(cls, bases_with_metadata);
+                    dataclass_metadata = Some(DataclassMetadata {
+                        fields: dataclass_fields,
+                        kws: DataclassKeywords::from_type_map(
+                            &call.keywords,
+                            &DataclassTransformKeywords::new(),
+                        ),
+                        field_specifiers: vec![
+                            CalleeKind::Function(FunctionKind::DataclassField),
+                            CalleeKind::Class(ClassKind::DataclassField),
+                        ],
+                    });
+                }
+                _ => {}
+            }
+        }
+        if let Some((kws, field_specifiers)) = dataclass_from_dataclass_transform {
+            dataclass_metadata = Some(DataclassMetadata {
+                fields: self.get_dataclass_fields(cls, bases_with_metadata),
+                kws,
+                field_specifiers,
+            });
+        }
+        dataclass_metadata
     }
 
     // To avoid circular computation on targs, we have a special version of `expr_infer` that only recognize a small
@@ -191,444 +710,101 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn class_metadata_of(
+    fn bases_with_metadata(
         &self,
-        cls: &Class,
-        bases: &[BaseClass],
-        keywords: &[(Name, Expr)],
-        decorators: &[(Idx<Key>, TextRange)],
+        parsed_results: Vec<BaseClassParseResult>,
         is_new_type: bool,
-        special_base: &Option<Box<BaseClass>>,
-        pydantic_metadata_binding: &PydanticMetadataBinding,
         errors: &ErrorCollector,
-    ) -> ClassMetadata {
-        let mut enum_metadata = None;
-        let mut bases: Vec<BaseClass> = bases.to_vec();
-        if let Some(special_base) = special_base {
-            bases.push((**special_base).clone());
-        }
-        let mut protocol_metadata = Self::protocol_metadata(cls, bases.as_slice());
-        let has_generic_base_class = bases.iter().any(|x| x.is_generic());
-        let has_typed_dict_base_class = bases.iter().any(|x| x.is_typed_dict());
-
-        let parsed_results = bases
+    ) -> Vec<(Class, Arc<ClassMetadata>)> {
+        parsed_results
             .into_iter()
-            .map(|x| self.parse_base_class(x, is_new_type))
-            .collect::<Vec<_>>();
-        let contains_base_class_any = parsed_results.iter().any(|x| x.is_any());
-        let bases_with_metadata = parsed_results.into_iter().filter_map(|x| match x {
-            BaseClassParseResult::Ignored | BaseClassParseResult::AnyType => None,
-            BaseClassParseResult::InvalidBase(range) => {
-                if is_new_type {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                        "Second argument to NewType is invalid".to_owned(),
-                    );
-                }
-                None
-            }
-            BaseClassParseResult::InvalidExpr(expr) => {
-                if is_new_type {
-                    self.error(
-                        errors,
-                        expr.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                        "Second argument to NewType is invalid".to_owned(),
-                    );
-                } else {
-                    self.error(
-                        errors,
-                        expr.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                        format!(
-                            "Invalid expression form for base class: `{}`",
-                            expr.display_with(self.module())
-                        ),
-                    );
-                }
-                None
-            }
-            BaseClassParseResult::InvalidType(ty, range) => {
-                if is_new_type {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                        "Second argument to NewType is invalid".to_owned(),
-                    );
-                } else {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                        format!("Invalid base class: `{}`", self.for_display(ty)),
-                    );
-                }
-                None
-            }
-            BaseClassParseResult::Parsed(ParsedBaseClass { class_object, range, metadata }) => {
-                if metadata.is_final() {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                        format!("Cannot extend final class `{}`", class_object.name()),
-                    );
-                }
-                if is_new_type {
-                    // TODO: raise an error for generic classes and other forbidden types such as hashable
-                    if metadata.is_protocol() {
+            .filter_map(|x| match x {
+                BaseClassParseResult::Ignored | BaseClassParseResult::AnyType => None,
+                BaseClassParseResult::InvalidBase(range) => {
+                    if is_new_type {
                         self.error(
                             errors,
                             range,
                             ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                            "Second argument to NewType cannot be a protocol".to_owned(),
+                            "Second argument to NewType is invalid".to_owned(),
                         );
                     }
-                } else if metadata.is_new_type() {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                        "Subclassing a NewType not allowed".to_owned(),
-                    );
+                    None
                 }
-                if let Some(proto) = &mut protocol_metadata {
-                    if let Some(base_proto) = metadata.protocol_metadata() {
-                        proto.members.extend(base_proto.members.iter().cloned());
-                        if base_proto.is_runtime_checkable {
-                            proto.is_runtime_checkable = true;
-                        }
+                BaseClassParseResult::InvalidExpr(expr) => {
+                    if is_new_type {
+                        self.error(
+                            errors,
+                            expr.range(),
+                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                            "Second argument to NewType is invalid".to_owned(),
+                        );
                     } else {
-                        self.error(errors,
+                        self.error(
+                            errors,
+                            expr.range(),
+                            ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                            format!(
+                                "Invalid expression form for base class: `{}`",
+                                expr.display_with(self.module())
+                            ),
+                        );
+                    }
+                    None
+                }
+                BaseClassParseResult::InvalidType(ty, range) => {
+                    if is_new_type {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                            "Second argument to NewType is invalid".to_owned(),
+                        );
+                    } else {
+                        self.error(
+                            errors,
                             range,
                             ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                            "If `Protocol` is included as a base class, all other bases must be protocols".to_owned(),
+                            format!("Invalid base class: `{}`", self.for_display(ty)),
                         );
                     }
+                    None
                 }
-                Some((class_object, metadata))
-            }
-        }).collect::<Vec<_>>();
-
-        let has_base_any = contains_base_class_any
-            || bases_with_metadata
-                .iter()
-                .any(|(_, metadata)| metadata.has_base_any());
-
-        let named_tuple_metadata =
-            bases_with_metadata
-                .iter()
-                .find_map(|(base_class_object, metadata)| {
-                    if base_class_object.has_qname(
-                        ModuleName::type_checker_internals().as_str(),
-                        "NamedTupleFallback",
-                    ) {
-                        Some(NamedTupleMetadata {
-                            elements: self.get_named_tuple_elements(cls, errors),
-                        })
-                    } else {
-                        metadata.named_tuple_metadata().cloned()
-                    }
-                });
-        if named_tuple_metadata.is_some() && bases_with_metadata.len() > 1 {
-            self.error(
-                errors,
-                cls.range(),
-                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                "Named tuples do not support multiple inheritance".to_owned(),
-            );
-        }
-        let (metaclasses, keywords): (Vec<_>, Vec<(_, _)>) =
-            keywords.iter().partition_map(|(n, x)| match n.as_str() {
-                "metaclass" => Either::Left(x),
-                _ => Either::Right((n.clone(), self.expr_infer(x, errors))),
-            });
-
-        // If this class inherits from a dataclass_transform-ed class, record the defaults that we
-        // should use for dataclass parameters.
-        let dataclass_defaults_from_base_class = bases_with_metadata
-            .iter()
-            .find_map(|(_, metadata)| metadata.dataclass_transform_metadata().cloned());
-        // This is set when a class is decorated with `@typing.dataclass_transform(...)`. Note that
-        // this does not turn the class into a dataclass! Instead, it becomes a special base class
-        // (or metaclass) that turns child classes into dataclasses.
-        let mut dataclass_transform_metadata = dataclass_defaults_from_base_class.clone();
-        // If we inherit from a dataclass, inherit its metadata. Note that if this class is
-        // itself decorated with @dataclass, we'll compute new metadata and overwrite this.
-        let mut dataclass_metadata = bases_with_metadata.iter().find_map(|(_, metadata)| {
-            let mut m = metadata.dataclass_metadata().cloned()?;
-            // Avoid accidentally overwriting a non-synthesized `__init__`.
-            m.kws.init = false;
-            Some(m)
-        });
-        // This is set when we should apply dataclass-like transformations to the class. The class
-        // should be transformed if:
-        // - it inherits from a base class decorated with `dataclass_transform(...)`, or
-        // - it inherits from a base class whose metaclass is decorated with `dataclass_transform(...)`, or
-        // - it is decorated with a decorator that is decorated with `dataclass_transform(...)`.
-        let mut dataclass_from_dataclass_transform = None;
-        if let Some(defaults) = dataclass_defaults_from_base_class {
-            // This class inherits from a dataclass_transform-ed base class, so its keywords are
-            // interpreted as dataclass keywords.
-            let map = keywords.clone().into_iter().collect::<OrderedMap<_, _>>();
-            dataclass_from_dataclass_transform = Some((
-                DataclassKeywords::from_type_map(&TypeMap(map), &defaults),
-                defaults.field_specifiers,
-            ));
-        }
-        let is_typed_dict = has_typed_dict_base_class
-            || bases_with_metadata
-                .iter()
-                .any(|(_, metadata)| metadata.is_typed_dict());
-        if is_typed_dict
-            && let Some(bad) = bases_with_metadata.iter().find(|x| !x.1.is_typed_dict())
-        {
-            self.error(errors,
-                cls.range(),
-                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                format!("`{}` is not a typed dictionary. Typed dictionary definitions may only extend other typed dictionaries.", bad.0.name()),
-            );
-        }
-        let typed_dict_metadata = if is_typed_dict {
-            // Validate that only 'total' keyword is allowed for TypedDict and determine is_total
-            let mut is_total = true;
-            for (name, value) in &keywords {
-                if name.as_str() != "total" {
-                    self.error(
-                        errors,
-                        cls.range(),
-                        ErrorInfo::Kind(ErrorKind::BadTypedDict),
-                        format!(
-                            "TypedDict does not support keyword argument `{}`",
-                            name.as_str()
-                        ),
-                    );
-                } else if matches!(value, Type::Literal(Lit::Bool(false))) {
-                    is_total = false;
-                }
-            }
-            let fields =
-                self.calculate_typed_dict_metadata_fields(cls, &bases_with_metadata, is_total);
-            Some(TypedDictMetadata { fields })
-        } else {
-            None
-        };
-        let base_metaclasses = bases_with_metadata
-            .iter()
-            .filter_map(|(b, metadata)| metadata.metaclass().map(|m| (b.name(), m)))
-            .collect::<Vec<_>>();
-        let metaclass = self.calculate_metaclass(
-            cls,
-            metaclasses.into_iter().next(),
-            &base_metaclasses,
-            errors,
-        );
-        if let Some(c) = &metaclass
-            && let Some(m) = self
-                .get_metadata_for_class(c.class_object())
-                .dataclass_transform_metadata()
-        {
-            dataclass_transform_metadata = Some(m.clone());
-        }
-        if let Some(metaclass) = &metaclass {
-            self.check_base_class_metaclasses(cls, metaclass, &base_metaclasses, errors);
-            if self
-                .as_superclass(metaclass, self.stdlib.enum_meta().class_object())
-                .is_some()
-            {
-                // NOTE(grievejia): This may create potential cycle if metaclass is generic. Need to look into
-                // whether it can be removed or not.
-                if !self.get_class_tparams(cls).is_empty() {
-                    self.error(
-                        errors,
-                        cls.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                        "Enums may not be generic".to_owned(),
-                    );
-                }
-                enum_metadata = Some(EnumMetadata {
-                    // A generic enum is an error, but we create Any type args anyway to handle it gracefully.
-                    cls: self.promote_nontypeddict_silently_to_classtype(cls),
-                    has_value: bases_with_metadata
-                        .iter()
-                        .any(|(base, _)| base.contains(&Name::new_static("_value_"))),
-                    is_flag: bases_with_metadata.iter().any(|(base, _)| {
-                        self.is_subset_eq(
-                            &Type::ClassType(self.promote_nontypeddict_silently_to_classtype(base)),
-                            &Type::ClassType(self.stdlib.enum_flag().clone()),
-                        )
-                    }),
-                })
-            }
-            if is_typed_dict {
-                self.error(
-                    errors,
-                    cls.range(),
-                    ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                    "Typed dictionary definitions may not specify a metaclass".to_owned(),
-                );
-            }
-            if metaclass.targs().as_slice().iter().any(|targ| {
-                targ.any(|ty| {
-                    matches!(
-                        ty,
-                        Type::TypeVar(_) | Type::TypeVarTuple(_) | Type::ParamSpec(_)
-                    )
-                })
-            }) {
-                self.error(
-                    errors,
-                    cls.range(),
-                    ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                    "Metaclass may not be an unbound generic".to_owned(),
-                );
-            }
-        }
-        let mut is_final = false;
-        let mut total_ordering_metadata = None;
-        for (decorator_key, decorator_range) in decorators {
-            let decorator = self.get_idx(*decorator_key);
-            let decorator_ty = decorator.ty();
-            match decorator_ty.callee_kind() {
-                Some(CalleeKind::Function(FunctionKind::Final)) => {
-                    is_final = true;
-                }
-                Some(CalleeKind::Function(FunctionKind::RuntimeCheckable)) => {
-                    if let Some(proto) = &mut protocol_metadata {
-                        proto.is_runtime_checkable = true;
-                    } else {
+                BaseClassParseResult::Parsed(ParsedBaseClass {
+                    class_object,
+                    range,
+                    metadata,
+                }) => {
+                    if metadata.is_final() {
                         self.error(
                             errors,
-                            cls.range(),
-                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                            "@runtime_checkable can only be applied to Protocol classes".to_owned(),
+                            range,
+                            ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                            format!("Cannot extend final class `{}`", class_object.name()),
                         );
                     }
+                    if is_new_type {
+                        // TODO: raise an error for generic classes and other forbidden types such as hashable
+                        if metadata.is_protocol() {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                "Second argument to NewType cannot be a protocol".to_owned(),
+                            );
+                        }
+                    } else if metadata.is_new_type() {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                            "Subclassing a NewType not allowed".to_owned(),
+                        );
+                    }
+                    Some((class_object, metadata))
                 }
-                Some(CalleeKind::Function(FunctionKind::TotalOrdering)) => {
-                    total_ordering_metadata = Some(TotalOrderingMetadata {
-                        location: *decorator_range,
-                    });
-                }
-                // `@dataclass`
-                Some(CalleeKind::Function(FunctionKind::Dataclass)) => {
-                    let dataclass_fields = self.get_dataclass_fields(cls, &bases_with_metadata);
-                    dataclass_metadata = Some(DataclassMetadata {
-                        fields: dataclass_fields,
-                        kws: DataclassKeywords::new(),
-                        field_specifiers: vec![
-                            CalleeKind::Function(FunctionKind::DataclassField),
-                            CalleeKind::Class(ClassKind::DataclassField),
-                        ],
-                    });
-                }
-                // `@dataclass(...)`
-                _ if let Type::KwCall(call) = decorator_ty
-                    && call.has_function_kind(FunctionKind::Dataclass) =>
-                {
-                    let dataclass_fields = self.get_dataclass_fields(cls, &bases_with_metadata);
-                    dataclass_metadata = Some(DataclassMetadata {
-                        fields: dataclass_fields,
-                        kws: DataclassKeywords::from_type_map(
-                            &call.keywords,
-                            &DataclassTransformKeywords::new(),
-                        ),
-                        field_specifiers: vec![
-                            CalleeKind::Function(FunctionKind::DataclassField),
-                            CalleeKind::Class(ClassKind::DataclassField),
-                        ],
-                    });
-                }
-                // `@dataclass_transform(...)`
-                _ if let Type::KwCall(call) = decorator_ty
-                    && call.has_function_kind(FunctionKind::DataclassTransform) =>
-                {
-                    dataclass_transform_metadata =
-                        Some(DataclassTransformKeywords::from_type_map(&call.keywords));
-                }
-                // `@foo` where `foo` is decorated with `@dataclass_transform(...)`
-                _ if let Some(defaults) = decorator_ty.dataclass_transform_metadata() => {
-                    dataclass_from_dataclass_transform = Some((
-                        DataclassKeywords::from_type_map(&TypeMap::new(), &defaults),
-                        defaults.field_specifiers,
-                    ));
-                }
-                // `@foo(...)` where `foo` is decorated with `@dataclass_transform(...)`
-                _ if let Type::KwCall(call) = decorator_ty
-                    && let Some(defaults) =
-                        &call.func_metadata.flags.dataclass_transform_metadata =>
-                {
-                    dataclass_from_dataclass_transform = Some((
-                        DataclassKeywords::from_type_map(&call.keywords, defaults),
-                        defaults.field_specifiers.clone(),
-                    ));
-                }
-                _ => {}
-            }
-        }
-        if let Some((kws, field_specifiers)) = dataclass_from_dataclass_transform {
-            dataclass_metadata = Some(DataclassMetadata {
-                fields: self.get_dataclass_fields(cls, &bases_with_metadata),
-                kws,
-                field_specifiers,
-            });
-        }
-        if let Some(dm) = dataclass_metadata.as_ref() {
-            self.validate_frozen_dataclass_inheritance(cls, dm, &bases_with_metadata, errors);
-        }
-
-        let has_pydantic_base_model_base_class =
-            bases_with_metadata.iter().any(|(base_class_object, _)| {
-                base_class_object.has_qname(ModuleName::pydantic().as_str(), "BaseModel")
-            });
-
-        let is_pydantic_model = has_pydantic_base_model_base_class
-            || bases_with_metadata
-                .iter()
-                .any(|(_, metadata)| metadata.is_pydantic_model());
-
-        let bases = if is_typed_dict && bases_with_metadata.is_empty() {
-            // This is a "fallback" class that contains attributes that are available on all TypedDict subclasses.
-            // Note that this also makes those attributes available on *instances* of said subclasses; this is
-            // desirable for methods but problematic for fields like `__total__` that should be available on the class
-            // but not the instance. For now, we make all fields available on both classes and instances.
-            let td_fallback = self.stdlib.typed_dict_fallback();
-            vec![td_fallback.class_object().clone()]
-        } else {
-            bases_with_metadata
-                .into_iter()
-                .map(|(base, _)| base)
-                .collect::<Vec<_>>()
-        };
-
-        // Determine final PydanticMetadata only if the class inherits from BaseModel in the MRO
-        let pydantic_metadata = match pydantic_metadata_binding {
-            PydanticMetadataBinding { frozen } if is_pydantic_model => {
-                Some(PydanticMetadata { frozen: *frozen })
-            }
-            _ => None,
-        };
-
-        ClassMetadata::new(
-            bases,
-            metaclass,
-            keywords,
-            typed_dict_metadata,
-            named_tuple_metadata,
-            enum_metadata,
-            protocol_metadata,
-            dataclass_metadata,
-            has_generic_base_class,
-            has_base_any,
-            is_new_type,
-            is_final,
-            total_ordering_metadata,
-            dataclass_transform_metadata,
-            pydantic_metadata,
-        )
+            })
+            .collect::<Vec<_>>()
     }
 
     fn calculate_typed_dict_metadata_fields(

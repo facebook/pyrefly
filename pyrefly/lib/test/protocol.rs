@@ -551,14 +551,14 @@ testcase!(
 from typing import runtime_checkable
 
 # Applying @runtime_checkable to a non-protocol class should fail
-@runtime_checkable  
-class RegularClass: # E: @runtime_checkable can only be applied to Protocol classes
+@runtime_checkable  # E: @runtime_checkable can only be applied to Protocol classes
+class RegularClass:
     def method(self) -> int:
         return 42
 
 # This should also fail
-@runtime_checkable  
-class AnotherClass: # E: @runtime_checkable can only be applied to Protocol classes  
+@runtime_checkable  # E: @runtime_checkable can only be applied to Protocol classes  
+class AnotherClass:
     x: int = 5
 "#,
 );

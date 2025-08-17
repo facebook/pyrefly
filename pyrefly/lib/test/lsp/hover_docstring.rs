@@ -11,6 +11,7 @@ use pyrefly_python::docstring::Docstring;
 use ruff_text_size::TextSize;
 
 use crate::state::handle::Handle;
+use crate::state::lsp::FindPreference;
 use crate::state::state::State;
 use crate::test::util::get_batched_lsp_operations_report;
 
@@ -21,7 +22,7 @@ fn test_report_factory(
     move |state: &State, handle: &Handle, position: TextSize| -> String {
         let results = state
             .transaction()
-            .find_definition(handle, position, true)
+            .find_definition(handle, position, &FindPreference::default())
             .into_iter()
             .filter_map(|t| {
                 let docstring_range = t.docstring_range?;

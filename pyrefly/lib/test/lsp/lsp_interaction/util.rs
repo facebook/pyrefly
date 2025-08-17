@@ -33,6 +33,7 @@ use lsp_types::ServerCapabilities;
 use lsp_types::SignatureHelpOptions;
 use lsp_types::TextDocumentSyncCapability;
 use lsp_types::TextDocumentSyncKind;
+use lsp_types::TypeDefinitionProviderCapability;
 use lsp_types::Url;
 use lsp_types::WorkspaceFoldersServerCapabilities;
 use lsp_types::WorkspaceServerCapabilities;
@@ -280,6 +281,7 @@ fn get_initialize_responses(find_refs: bool) -> Vec<Message> {
             position_encoding: Some(PositionEncodingKind::UTF16),
             text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::INCREMENTAL)),
             definition_provider: Some(OneOf::Left(true)),
+            type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
             code_action_provider: Some(CodeActionProviderCapability::Options(
                 CodeActionOptions {
                     code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),

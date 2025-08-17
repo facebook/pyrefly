@@ -18,7 +18,7 @@ use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
-use crate::alt::types::decorated_function::DecoratedFunction;
+use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
 use crate::alt::types::yields::YieldFromResult;
 use crate::alt::types::yields::YieldResult;
@@ -33,11 +33,12 @@ use crate::binding::binding::BindingClassMetadata;
 use crate::binding::binding::BindingClassMro;
 use crate::binding::binding::BindingClassSynthesizedFields;
 use crate::binding::binding::BindingConsistentOverrideCheck;
+use crate::binding::binding::BindingDecoratedFunction;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingExport;
-use crate::binding::binding::BindingFunction;
 use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::BindingTParams;
+use crate::binding::binding::BindingUndecoratedFunction;
 use crate::binding::binding::BindingVariance;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
@@ -52,11 +53,12 @@ use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyConsistentOverrideCheck;
+use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyExport;
-use crate::binding::binding::KeyFunction;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTParams;
+use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::KeyVariance;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
@@ -186,19 +188,34 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExport {
     }
 }
 
-impl<Ans: LookupAnswer> Solve<Ans> for KeyFunction {
+impl<Ans: LookupAnswer> Solve<Ans> for KeyDecoratedFunction {
     fn solve(
         answers: &AnswersSolver<Ans>,
-        binding: &BindingFunction,
+        binding: &BindingDecoratedFunction,
         errors: &ErrorCollector,
-    ) -> Arc<DecoratedFunction> {
-        answers.solve_function(binding, errors)
+    ) -> Arc<Type> {
+        answers.solve_decorated_function(binding, errors)
     }
 
     fn promote_recursive(_: Var) -> Self::Answer {
         // TODO(samgoldman) I'm not sure this really makes sense. These bindings should never
         // be recursive, but this definition is required.
-        DecoratedFunction::recursive()
+        Type::any_implicit()
+    }
+}
+
+impl<Ans: LookupAnswer> Solve<Ans> for KeyUndecoratedFunction {
+    fn solve(
+        answers: &AnswersSolver<Ans>,
+        binding: &BindingUndecoratedFunction,
+        errors: &ErrorCollector,
+    ) -> Arc<UndecoratedFunction> {
+        answers.solve_undecorated_function(binding, errors)
+    }
+
+    fn promote_recursive(_: Var) -> Self::Answer {
+        // This shouldn't happen
+        UndecoratedFunction::recursive()
     }
 }
 
