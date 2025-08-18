@@ -2443,32 +2443,12 @@
     },
     {
       "code": -2,
-      "column": 36,
-      "concise_description": "Redundant cast: `Literal[0]` is already assignable to type `Any`",
-      "description": "Redundant cast: `Literal[0]` is already assignable to type `Any`",
-      "line": 38,
-      "name": "redundant-cast",
-      "stop_column": 44,
-      "stop_line": 38
-    },
-    {
-      "code": -2,
       "column": 14,
       "concise_description": "number literal cannot be used in annotations",
       "description": "number literal cannot be used in annotations",
       "line": 39,
       "name": "invalid-annotation",
       "stop_column": 15,
-      "stop_line": 39
-    },
-    {
-      "code": -2,
-      "column": 23,
-      "concise_description": "Redundant cast: `Literal[0]` is already assignable to type `Any`",
-      "description": "Redundant cast: `Literal[0]` is already assignable to type `Any`",
-      "line": 39,
-      "name": "redundant-cast",
-      "stop_column": 31,
       "stop_line": 39
     },
     {
@@ -2483,32 +2463,12 @@
     },
     {
       "code": -2,
-      "column": 25,
-      "concise_description": "Redundant cast: `Literal[0]` is already assignable to type `Any`",
-      "description": "Redundant cast: `Literal[0]` is already assignable to type `Any`",
-      "line": 40,
-      "name": "redundant-cast",
-      "stop_column": 33,
-      "stop_line": 40
-    },
-    {
-      "code": -2,
       "column": 20,
       "concise_description": "`ClassVar` arguments may not contain any type variables",
       "description": "`ClassVar` arguments may not contain any type variables",
       "line": 45,
       "name": "invalid-annotation",
       "stop_column": 21,
-      "stop_line": 45
-    },
-    {
-      "code": -2,
-      "column": 29,
-      "concise_description": "Redundant cast: `Literal[0]` is already assignable to type `Any`",
-      "description": "Redundant cast: `Literal[0]` is already assignable to type `Any`",
-      "line": 45,
-      "name": "redundant-cast",
-      "stop_column": 37,
       "stop_line": 45
     },
     {
@@ -2523,32 +2483,12 @@
     },
     {
       "code": -2,
-      "column": 35,
-      "concise_description": "Redundant cast: `Literal[0]` is already assignable to type `Any`",
-      "description": "Redundant cast: `Literal[0]` is already assignable to type `Any`",
-      "line": 46,
-      "name": "redundant-cast",
-      "stop_column": 43,
-      "stop_line": 46
-    },
-    {
-      "code": -2,
       "column": 20,
       "concise_description": "`ClassVar` arguments may not contain any type variables",
       "description": "`ClassVar` arguments may not contain any type variables",
       "line": 47,
       "name": "invalid-annotation",
       "stop_column": 36,
-      "stop_line": 47
-    },
-    {
-      "code": -2,
-      "column": 44,
-      "concise_description": "Redundant cast: `Literal[0]` is already assignable to type `Any`",
-      "description": "Redundant cast: `Literal[0]` is already assignable to type `Any`",
-      "line": 47,
-      "name": "redundant-cast",
-      "stop_column": 52,
       "stop_line": 47
     },
     {
@@ -4016,16 +3956,6 @@
       "description": "First argument to `typing.cast` must be a type",
       "line": 16,
       "name": "bad-argument-type",
-      "stop_column": 19,
-      "stop_line": 16
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "Redundant cast: `Literal['']` is already assignable to type `Unknown`",
-      "description": "Redundant cast: `Literal['']` is already assignable to type `Unknown`",
-      "line": 16,
-      "name": "redundant-cast",
       "stop_column": 19,
       "stop_line": 16
     },
@@ -5555,56 +5485,6 @@
   "generics_paramspec_specialization.py": [
     {
       "code": -2,
-      "column": 32,
-      "concise_description": "Redundant cast: `Literal['']` is already assignable to type `Any`",
-      "description": "Redundant cast: `Literal['']` is already assignable to type `Any`",
-      "line": 14,
-      "name": "redundant-cast",
-      "stop_column": 41,
-      "stop_line": 14
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "Redundant cast: `Literal['']` is already assignable to type `Any`",
-      "description": "Redundant cast: `Literal['']` is already assignable to type `Any`",
-      "line": 15,
-      "name": "redundant-cast",
-      "stop_column": 25,
-      "stop_line": 15
-    },
-    {
-      "code": -2,
-      "column": 33,
-      "concise_description": "Redundant cast: `Literal['']` is already assignable to type `Any`",
-      "description": "Redundant cast: `Literal['']` is already assignable to type `Any`",
-      "line": 19,
-      "name": "redundant-cast",
-      "stop_column": 42,
-      "stop_line": 19
-    },
-    {
-      "code": -2,
-      "column": 33,
-      "concise_description": "Redundant cast: `Literal['']` is already assignable to type `Any`",
-      "description": "Redundant cast: `Literal['']` is already assignable to type `Any`",
-      "line": 20,
-      "name": "redundant-cast",
-      "stop_column": 42,
-      "stop_line": 20
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "Redundant cast: `Literal['']` is already assignable to type `Any`",
-      "description": "Redundant cast: `Literal['']` is already assignable to type `Any`",
-      "line": 21,
-      "name": "redundant-cast",
-      "stop_column": 25,
-      "stop_line": 21
-    },
-    {
-      "code": -2,
       "column": 15,
       "concise_description": "Expected a valid ParamSpec expression, got `int`",
       "description": "Expected a valid ParamSpec expression, got `int`",
@@ -5612,16 +5492,6 @@
       "name": "invalid-param-spec",
       "stop_column": 31,
       "stop_line": 44
-    },
-    {
-      "code": -2,
-      "column": 32,
-      "concise_description": "Redundant cast: `Literal['']` is already assignable to type `Any`",
-      "description": "Redundant cast: `Literal['']` is already assignable to type `Any`",
-      "line": 49,
-      "name": "redundant-cast",
-      "stop_column": 41,
-      "stop_line": 49
     },
     {
       "code": -2,

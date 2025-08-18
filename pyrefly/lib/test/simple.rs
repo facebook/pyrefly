@@ -328,7 +328,7 @@ testcase!(
 from typing import Final, assert_type, Literal, cast
 x: Final[int] = 1
 y: Final = "test"
-z: Final[str] = cast(str, "")  # E: Redundant cast: `Literal['']` is already assignable to type `str`
+z: Final[str] = cast(str, "")  # No warning - Literal[''] is not exactly the same as str
 w: Final[int] = "bad"  # E: `Literal['bad']` is not assignable to `int`
 
 assert_type(x, int)
@@ -1019,7 +1019,7 @@ w = cast(val=1, typ="str")
 assert_type(w, str)
 
 cast()  # E: `typing.cast` missing required argument `typ`  # E: `typing.cast` missing required argument `val`
-cast(1, 1)  # E: First argument to `typing.cast` must be a type  # E: Redundant cast: `Literal[1]` is already assignable to type `Unknown`
+cast(1, 1)  # E: First argument to `typing.cast` must be a type
     "#,
 );
 
@@ -1089,9 +1089,9 @@ testcase!(
     test_bad_type_in_cast,
     r#"
 from typing import cast
-cast(lambda x: x, 1)  # E: First argument to `typing.cast` must be a type  # E: Redundant cast: `Literal[1]` is already assignable to type `Unknown`
+cast(lambda x: x, 1)  # E: First argument to `typing.cast` must be a type
 # Passing a listcomp as a type is nonsense; it's okay if we don't handle it optimally as long as we don't crash.
-cast([x for x in []], 1)  # E: First argument to `typing.cast` must be a type  # E: Could not find name `x`  # E: Redundant cast: `Literal[1]` is already assignable to type `Unknown`
+cast([x for x in []], 1)  # E: First argument to `typing.cast` must be a type  # E: Could not find name `x`
     "#,
 );
 

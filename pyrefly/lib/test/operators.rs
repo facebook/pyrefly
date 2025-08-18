@@ -484,7 +484,7 @@ testcase!(
 from typing import Callable, cast, reveal_type
 
 class Tensor:
-    __pow__ = cast(Callable[[Tensor, int], Tensor], lambda x, y: x)  # E: Redundant cast: `(x: Unknown, y: Unknown) -> Unknown` is already assignable to type `(Tensor, int) -> Tensor`
+    __pow__ = cast(Callable[[Tensor, int], Tensor], lambda x, y: x)  # No redundant cast warning - types are not exactly equal
 
 def f(x: Tensor, i: int):
     reveal_type(x ** i) # E: Argument `int` is not assignable to parameter with type `Tensor` # E: revealed type: Tensor # E: `**` is not supported between `Tensor` and `int`

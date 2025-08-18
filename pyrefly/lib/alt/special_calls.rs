@@ -254,13 +254,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if let Some(val_expr) = val {
             let val_type = self.expr_infer(val_expr, errors);
-            if !val_type.is_any() && self.is_subset_eq(&val_type, &ret) {
+            if !val_type.is_any() && val_type == ret {
                 self.error(
                     errors,
                     range,
                     ErrorInfo::Kind(ErrorKind::RedundantCast),
                     format!(
-                        "Redundant cast: `{}` is already assignable to type `{}`",
+                        "Redundant cast: `{}` is the same type as `{}`",
                         val_type.deterministic_printing(),
                         ret.clone().deterministic_printing()
                     ),
