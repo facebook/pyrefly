@@ -76,3 +76,25 @@ impl TypedDict {
         Type::TypedDict(self)
     }
 }
+
+/// How does the TypedDict handle extra items? See https://peps.python.org/pep-0728.
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Hash)]
+pub enum ExtraItems {
+    /// Default behavior when neither the `closed` nor `extra_items` keyword is specified.
+    Default,
+    /// Closed TypedDict that does not allow extra items. This is equivalent to Extra(Never) but
+    /// is its own variant because of how common it is.
+    Closed,
+    /// The TypedDict allows extra items of the specified type. Note that Extra(Never) (a closed
+    /// TypedDict) is represented with a separate Closed variant.
+    Extra(Type),
+}
+
+impl ExtraItems {
+    pub fn extra(ty: &Type) -> Self {
+        match ty {
+            Type::Never(_) => Self::Closed,
+            _ => Self::Extra(ty.clone()),
+        }
+    }
+}

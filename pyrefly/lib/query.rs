@@ -25,6 +25,7 @@ use pyrefly_types::callable::FuncMetadata;
 use pyrefly_types::callable::Function;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::class::Class;
+use pyrefly_types::literal::Lit;
 use pyrefly_types::qname::QName;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Forallable;
@@ -85,6 +86,32 @@ pub struct Callee {
 pub struct Attribute {
     pub name: String,
     pub kind: Option<String>,
+}
+
+fn display_range_for_expr(
+    module_info: &ModuleInfo,
+    original_range: TextRange,
+    expr: &Expr,
+) -> DisplayRange {
+    let expression_range = if let Expr::Generator(e) = expr {
+        // python AST module reports locations of all generator expressions as if they are parenthesized
+        // i.e any(any(a.b is not None for a in [l2]) for l2 in l1)
+        //        ^-will be col_offset for generator expression over l1
+        // ruff properly distinguishes between parenthesized and non-parenthesized expressions
+        // and points to the first character of the expression
+        // since queries are done based on Python AST for generator expression we will
+        // need to adjust start/end column offsets
+        if e.parenthesized {
+            original_range
+        } else {
+            original_range
+                .sub_start(TextSize::new(1))
+                .add_end(TextSize::new(1))
+        }
+    } else {
+        original_range
+    };
+    module_info.display_range(expression_range)
 }
 
 impl Query {
@@ -303,6 +330,9 @@ impl Query {
             match ty {
                 Type::ClassType(c) => qname_to_string(c.qname()),
                 Type::ClassDef(c) => qname_to_string(c.qname()),
+                Type::Literal(Lit::Str(_)) => String::from("builtins.str"),
+                Type::Literal(Lit::Int(_)) => String::from("builtins.int"),
+                Type::Literal(Lit::Bool(_)) => String::from("builtins.bool"),
                 _ => panic!("unexpected type: {ty:?}"),
             }
         }
@@ -495,6 +525,7 @@ impl Query {
 
         fn add_type(
             ty: &Type,
+            e: &Expr,
             range: TextRange,
             module_info: &ModuleInfo,
             res: &mut Vec<(DisplayRange, String)>,
@@ -507,7 +538,7 @@ impl Query {
             } else {
                 text
             };
-            res.push((module_info.display_range(range), text));
+            res.push((display_range_for_expr(module_info, range, e), text));
         }
         fn try_find_key_for_name(name: &ExprName, bindings: &Bindings) -> Option<Key> {
             let key = Key::BoundName(ShortIdentifier::expr_name(name));
@@ -534,9 +565,9 @@ impl Query {
                 && let Some(idx) = answers.get_idx(bindings.key_to_idx(&key))
             {
                 let ty = answers.for_display(idx.arc_clone_ty());
-                add_type(&ty, range, module_info, res);
+                add_type(&ty, x, range, module_info, res);
             } else if let Some(ty) = answers.get_type_trace(range) {
-                add_type(&ty, range, module_info, res);
+                add_type(&ty, x, range, module_info, res);
             }
             x.recurse(&mut |x| f(x, module_info, answers, bindings, res));
         }

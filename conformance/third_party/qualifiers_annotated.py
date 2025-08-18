@@ -115,7 +115,4 @@ class ClassC(TypedDict):
 
 TA1: TypeAlias = Annotated[int | str, ""]
 TA2 = Annotated[Literal[1, 2], ""]
-
-T = TypeVar("T")
-
 TA3 = Annotated[T, ""]

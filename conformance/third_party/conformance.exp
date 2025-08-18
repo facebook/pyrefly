@@ -3346,6 +3346,18 @@
       "stop_line": 53
     }
   ],
+  "dataclasses_match_args.py": [
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Class `DC4` has no class attribute `__match_args__`",
+      "description": "Class `DC4` has no class attribute `__match_args__`",
+      "line": 42,
+      "name": "missing-attribute",
+      "stop_column": 19,
+      "stop_line": 42
+    }
+  ],
   "dataclasses_order.py": [
     {
       "code": -2,
@@ -10077,6 +10089,438 @@
       "name": "bad-typed-dict",
       "stop_column": 20,
       "stop_line": 49
+    }
+  ],
+  "typeddicts_extra_items.py": [
+    {
+      "code": -2,
+      "column": 37,
+      "concise_description": "Key `novel_adaptation` is not defined in TypedDict `Movie`",
+      "description": "Key `novel_adaptation` is not defined in TypedDict `Movie`",
+      "line": 14,
+      "name": "typed-dict-key-error",
+      "stop_column": 55,
+      "stop_line": 14
+    },
+    {
+      "code": -2,
+      "column": 37,
+      "concise_description": "Key `year` is not defined in TypedDict `Movie`",
+      "description": "Key `year` is not defined in TypedDict `Movie`",
+      "line": 15,
+      "name": "typed-dict-key-error",
+      "stop_column": 43,
+      "stop_line": 15
+    },
+    {
+      "code": -2,
+      "column": 75,
+      "concise_description": "Unrecognized argument for typed dictionary definition",
+      "description": "Unrecognized argument for typed dictionary definition",
+      "line": 19,
+      "name": "invalid-argument",
+      "stop_column": 79,
+      "stop_line": 19
+    },
+    {
+      "code": -2,
+      "column": 47,
+      "concise_description": "Key `novel_adaptation` is not defined in TypedDict `MovieFunctional`",
+      "description": "Key `novel_adaptation` is not defined in TypedDict `MovieFunctional`",
+      "line": 21,
+      "name": "typed-dict-key-error",
+      "stop_column": 65,
+      "stop_line": 21
+    },
+    {
+      "code": -2,
+      "column": 47,
+      "concise_description": "Key `year` is not defined in TypedDict `MovieFunctional`",
+      "description": "Key `year` is not defined in TypedDict `MovieFunctional`",
+      "line": 22,
+      "name": "typed-dict-key-error",
+      "stop_column": 53,
+      "stop_line": 22
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "assert_type(Any, bool) failed",
+      "description": "assert_type(Any, bool) failed",
+      "line": 29,
+      "name": "assert-type",
+      "stop_column": 49,
+      "stop_line": 29
+    },
+    {
+      "code": -2,
+      "column": 23,
+      "concise_description": "TypedDict `Movie` does not have key `novel_adaptation`",
+      "description": "TypedDict `Movie` does not have key `novel_adaptation`",
+      "line": 29,
+      "name": "typed-dict-key-error",
+      "stop_column": 41,
+      "stop_line": 29
+    },
+    {
+      "code": -2,
+      "column": 40,
+      "concise_description": "`ReadOnly` is not allowed in this context",
+      "description": "`ReadOnly` is not allowed in this context",
+      "line": 33,
+      "name": "invalid-annotation",
+      "stop_column": 60,
+      "stop_line": 33
+    },
+    {
+      "code": -2,
+      "column": 54,
+      "concise_description": "`None` is not assignable to TypedDict key `year` with type `int`",
+      "description": "`None` is not assignable to TypedDict key `year` with type `int`",
+      "line": 39,
+      "name": "typed-dict-key-error",
+      "stop_column": 58,
+      "stop_line": 39
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Key `other_extra_key` is not defined in TypedDict `InheritedMovie`",
+      "description": "Key `other_extra_key` is not defined in TypedDict `InheritedMovie`",
+      "line": 43,
+      "name": "typed-dict-key-error",
+      "stop_column": 22,
+      "stop_line": 43
+    },
+    {
+      "code": -2,
+      "column": 38,
+      "concise_description": "`ReadOnly` is not allowed in this context",
+      "description": "`ReadOnly` is not allowed in this context",
+      "line": 100,
+      "name": "invalid-annotation",
+      "stop_column": 51,
+      "stop_line": 100
+    },
+    {
+      "code": -2,
+      "column": 50,
+      "concise_description": "`Required` is not allowed in this context",
+      "description": "`Required` is not allowed in this context",
+      "line": 111,
+      "name": "invalid-annotation",
+      "stop_column": 63,
+      "stop_line": 111
+    },
+    {
+      "code": -2,
+      "column": 57,
+      "concise_description": "`NotRequired` is not allowed in this context",
+      "description": "`NotRequired` is not allowed in this context",
+      "line": 114,
+      "name": "invalid-annotation",
+      "stop_column": 73,
+      "stop_line": 114
+    },
+    {
+      "code": -2,
+      "column": 15,
+      "concise_description": "Key `name` in TypedDict `MovieEI` may not be deleted",
+      "description": "Key `name` in TypedDict `MovieEI` may not be deleted",
+      "line": 125,
+      "name": "delete-error",
+      "stop_column": 21,
+      "stop_line": 125
+    },
+    {
+      "code": -2,
+      "column": 15,
+      "concise_description": "TypedDict `MovieEI` does not have key `year`",
+      "description": "TypedDict `MovieEI` does not have key `year`",
+      "line": 126,
+      "name": "typed-dict-key-error",
+      "stop_column": 21,
+      "stop_line": 126
+    },
+    {
+      "code": -2,
+      "column": 48,
+      "concise_description": "Unexpected keyword argument `year` in function `unpack_no_extra`",
+      "description": "Unexpected keyword argument `year` in function `unpack_no_extra`",
+      "line": 140,
+      "name": "unexpected-keyword",
+      "stop_column": 52,
+      "stop_line": 140
+    },
+    {
+      "code": -2,
+      "column": 45,
+      "concise_description": "Unexpected keyword argument `year` in function `unpack_extra`",
+      "description": "Unexpected keyword argument `year` in function `unpack_extra`",
+      "line": 141,
+      "name": "unexpected-keyword",
+      "stop_column": 49,
+      "stop_line": 141
+    },
+    {
+      "code": -2,
+      "column": 43,
+      "concise_description": "`ReadOnly` is not allowed in this context",
+      "description": "`ReadOnly` is not allowed in this context",
+      "line": 146,
+      "name": "invalid-annotation",
+      "stop_column": 56,
+      "stop_line": 146
+    },
+    {
+      "code": -2,
+      "column": 47,
+      "concise_description": "`ReadOnly` is not allowed in this context",
+      "description": "`ReadOnly` is not allowed in this context",
+      "line": 149,
+      "name": "invalid-annotation",
+      "stop_column": 61,
+      "stop_line": 149
+    },
+    {
+      "code": -2,
+      "column": 38,
+      "concise_description": "`ReadOnly` is not allowed in this context",
+      "description": "`ReadOnly` is not allowed in this context",
+      "line": 219,
+      "name": "invalid-annotation",
+      "stop_column": 57,
+      "stop_line": 219
+    },
+    {
+      "code": -2,
+      "column": 63,
+      "concise_description": "Key `year` is not defined in TypedDict `MovieExtraInt`",
+      "description": "Key `year` is not defined in TypedDict `MovieExtraInt`",
+      "line": 245,
+      "name": "typed-dict-key-error",
+      "stop_column": 69,
+      "stop_line": 245
+    },
+    {
+      "code": -2,
+      "column": 63,
+      "concise_description": "Key `description` is not defined in TypedDict `MovieExtraStr`",
+      "description": "Key `description` is not defined in TypedDict `MovieExtraStr`",
+      "line": 246,
+      "name": "typed-dict-key-error",
+      "stop_column": 76,
+      "stop_line": 246
+    },
+    {
+      "code": -2,
+      "column": 64,
+      "concise_description": "Key `year` is not defined in TypedDict `MovieExtraInt`",
+      "description": "Key `year` is not defined in TypedDict `MovieExtraInt`",
+      "line": 257,
+      "name": "typed-dict-key-error",
+      "stop_column": 70,
+      "stop_line": 257
+    },
+    {
+      "code": -2,
+      "column": 47,
+      "concise_description": "Unexpected keyword argument `year` in function `NonClosedMovie.__init__`",
+      "description": "Unexpected keyword argument `year` in function `NonClosedMovie.__init__`",
+      "line": 269,
+      "name": "unexpected-keyword",
+      "stop_column": 51,
+      "stop_line": 269
+    },
+    {
+      "code": -2,
+      "column": 43,
+      "concise_description": "Unexpected keyword argument `year` in function `ExtraMovie.__init__`",
+      "description": "Unexpected keyword argument `year` in function `ExtraMovie.__init__`",
+      "line": 275,
+      "name": "unexpected-keyword",
+      "stop_column": 47,
+      "stop_line": 275
+    },
+    {
+      "code": -2,
+      "column": 43,
+      "concise_description": "Unexpected keyword argument `language` in function `ExtraMovie.__init__`",
+      "description": "Unexpected keyword argument `language` in function `ExtraMovie.__init__`",
+      "line": 276,
+      "name": "unexpected-keyword",
+      "stop_column": 51,
+      "stop_line": 276
+    },
+    {
+      "code": -2,
+      "column": 44,
+      "concise_description": "Unexpected keyword argument `year` in function `ClosedMovie.__init__`",
+      "description": "Unexpected keyword argument `year` in function `ClosedMovie.__init__`",
+      "line": 284,
+      "name": "unexpected-keyword",
+      "stop_column": 48,
+      "stop_line": 284
+    },
+    {
+      "code": -2,
+      "column": 54,
+      "concise_description": "Key `summary` is not defined in TypedDict `MovieExtraStr`",
+      "description": "Key `summary` is not defined in TypedDict `MovieExtraStr`",
+      "line": 290,
+      "name": "typed-dict-key-error",
+      "stop_column": 63,
+      "stop_line": 290
+    },
+    {
+      "code": -2,
+      "column": 34,
+      "concise_description": "`TypedDict[MovieExtraStr]` is not assignable to `Mapping[str, str]`",
+      "description": "`TypedDict[MovieExtraStr]` is not assignable to `Mapping[str, str]`",
+      "line": 291,
+      "name": "bad-assignment",
+      "stop_column": 44,
+      "stop_line": 291
+    },
+    {
+      "code": -2,
+      "column": 54,
+      "concise_description": "Key `year` is not defined in TypedDict `MovieExtraInt`",
+      "description": "Key `year` is not defined in TypedDict `MovieExtraInt`",
+      "line": 293,
+      "name": "typed-dict-key-error",
+      "stop_column": 60,
+      "stop_line": 293
+    },
+    {
+      "code": -2,
+      "column": 34,
+      "concise_description": "`TypedDict[MovieExtraInt]` is not assignable to `Mapping[str, int]`",
+      "description": "`TypedDict[MovieExtraInt]` is not assignable to `Mapping[str, int]`",
+      "line": 294,
+      "name": "bad-assignment",
+      "stop_column": 44,
+      "stop_line": 294
+    },
+    {
+      "code": -2,
+      "column": 44,
+      "concise_description": "`TypedDict[MovieExtraInt]` is not assignable to `Mapping[str, int | str]`",
+      "description": "`TypedDict[MovieExtraInt]` is not assignable to `Mapping[str, int | str]`",
+      "line": 295,
+      "name": "bad-assignment",
+      "stop_column": 54,
+      "stop_line": 295
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "assert_type(list[tuple[str, object]], list[tuple[str, int | str]]) failed",
+      "description": "assert_type(list[tuple[str, object]], list[tuple[str, int | str]]) failed",
+      "line": 301,
+      "name": "assert-type",
+      "stop_column": 66,
+      "stop_line": 301
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "assert_type(list[object], list[int | str]) failed",
+      "description": "assert_type(list[object], list[int | str]) failed",
+      "line": 302,
+      "name": "assert-type",
+      "stop_column": 55,
+      "stop_line": 302
+    },
+    {
+      "code": -2,
+      "column": 25,
+      "concise_description": "`TypedDict[IntDict]` is not assignable to `dict[str, int]`",
+      "description": "`TypedDict[IntDict]` is not assignable to `dict[str, int]`",
+      "line": 317,
+      "name": "bad-assignment",
+      "stop_column": 26,
+      "stop_line": 317
+    },
+    {
+      "code": -2,
+      "column": 52,
+      "concise_description": "Key `bar` is not defined in TypedDict `IntDictWithNum`",
+      "description": "Key `bar` is not defined in TypedDict `IntDictWithNum`",
+      "line": 320,
+      "name": "typed-dict-key-error",
+      "stop_column": 57,
+      "stop_line": 320
+    },
+    {
+      "code": -2,
+      "column": 32,
+      "concise_description": "`TypedDict[IntDictWithNum]` is not assignable to `dict[str, int]`",
+      "description": "`TypedDict[IntDictWithNum]` is not assignable to `dict[str, int]`",
+      "line": 321,
+      "name": "bad-assignment",
+      "stop_column": 53,
+      "stop_line": 321
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Object of class `IntDictWithNum` has no attribute `clear`",
+      "description": "Object of class `IntDictWithNum` has no attribute `clear`",
+      "line": 328,
+      "name": "missing-attribute",
+      "stop_column": 28,
+      "stop_line": 328
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "assert_type(Any, tuple[str, int]) failed",
+      "description": "assert_type(Any, tuple[str, int]) failed",
+      "line": 330,
+      "name": "assert-type",
+      "stop_column": 62,
+      "stop_line": 330
+    },
+    {
+      "code": -2,
+      "column": 13,
+      "concise_description": "Object of class `IntDictWithNum` has no attribute `popitem`",
+      "description": "Object of class `IntDictWithNum` has no attribute `popitem`",
+      "line": 330,
+      "name": "missing-attribute",
+      "stop_column": 42,
+      "stop_line": 330
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Cannot set item in `TypedDict[IntDictWithNum]`",
+      "description": "Cannot set item in `TypedDict[IntDictWithNum]`\n  Object of class `IntDictWithNum` has no attribute `__setitem__`",
+      "line": 333,
+      "name": "unsupported-operation",
+      "stop_column": 31,
+      "stop_line": 333
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Cannot delete item in `TypedDict[IntDictWithNum]`",
+      "description": "Cannot delete item in `TypedDict[IntDictWithNum]`\n  No matching overload found for function `IntDictWithNum.__delitem__`\n  Possible overloads:\n  (key: Literal['num'], /) -> None [closest match]",
+      "line": 334,
+      "name": "unsupported-operation",
+      "stop_column": 35,
+      "stop_line": 334
+    },
+    {
+      "code": -2,
+      "column": 25,
+      "concise_description": "`dict[str, int]` is not assignable to `TypedDict[IntDict]`",
+      "description": "`dict[str, int]` is not assignable to `TypedDict[IntDict]`",
+      "line": 343,
+      "name": "bad-assignment",
+      "stop_column": 52,
+      "stop_line": 343
     }
   ],
   "typeddicts_final.py": [],

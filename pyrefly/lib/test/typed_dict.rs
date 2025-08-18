@@ -1134,3 +1134,17 @@ class B(A):
     x: str  # E: `B.x` has type `str`, which is not consistent with `int` in `A.x`
     "#,
 );
+
+testcase!(
+    test_closed_and_extra_items_kws,
+    r#"
+from typing import TypedDict
+class TD1(TypedDict, closed=True):
+    pass
+class TD2(TypedDict, extra_items=str):
+    pass
+# Using `closed` and `extra_items` together is a runtime error.
+class TD3(TypedDict, closed=True, extra_items=str):  # E: `closed` and `extra_items` cannot be used together
+    pass
+    "#,
+);

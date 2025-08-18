@@ -14,6 +14,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
+use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_util::display::commas_iter;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
@@ -324,6 +325,7 @@ impl Display for Keywords {
 pub struct TypedDictMetadata {
     /// Field name to the value of the `total` keyword in the defining class.
     pub fields: SmallMap<Name, bool>,
+    pub extra_items: ExtraItems,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]

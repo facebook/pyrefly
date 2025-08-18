@@ -325,7 +325,7 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn bind_lambda(&mut self, lambda: &mut ExprLambda, usage: &mut Usage) {
-        self.scopes.push(Scope::function(lambda.range));
+        self.scopes.push(Scope::function(lambda.range, false));
         if let Some(parameters) = &lambda.parameters {
             for x in parameters {
                 self.bind_lambda_param(x.name());
@@ -672,6 +672,16 @@ impl<'a> BindingsBuilder<'a> {
             }
             Expr::YieldFrom(x) => {
                 self.record_yield_from(x.clone());
+            }
+            Expr::Await(x) => {
+                self.ensure_expr(&mut x.value, usage);
+                if !self.scopes.is_in_async_def() {
+                    self.error(
+                        x.range(),
+                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        "`await` can only be used inside an async function".to_owned(),
+                    );
+                }
             }
             _ => {
                 x.recurse_mut(&mut |x| self.ensure_expr(x, usage));

@@ -485,11 +485,13 @@ pub struct ScopeMethod {
     pub self_name: Option<Identifier>,
     pub instance_attributes: SmallMap<Name, InstanceAttribute>,
     pub yields_and_returns: YieldsAndReturns,
+    pub is_async: bool,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct ScopeFunction {
     pub yields_and_returns: YieldsAndReturns,
+    pub is_async: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -570,11 +572,18 @@ impl Scope {
         Self::new(range, false, ScopeKind::Comprehension)
     }
 
-    pub fn function(range: TextRange) -> Self {
-        Self::new(range, true, ScopeKind::Function(Default::default()))
+    pub fn function(range: TextRange, is_async: bool) -> Self {
+        Self::new(
+            range,
+            true,
+            ScopeKind::Function(ScopeFunction {
+                yields_and_returns: Default::default(),
+                is_async,
+            }),
+        )
     }
 
-    pub fn method(range: TextRange, name: Identifier) -> Self {
+    pub fn method(range: TextRange, name: Identifier, is_async: bool) -> Self {
         Self::new(
             range,
             true,
@@ -583,6 +592,7 @@ impl Scope {
                 self_name: None,
                 instance_attributes: SmallMap::new(),
                 yields_and_returns: Default::default(),
+                is_async,
             }),
         )
     }
@@ -707,6 +717,22 @@ impl Scopes {
         None
     }
 
+    // Are we inside an async function or method?
+    pub fn is_in_async_def(&self) -> bool {
+        for scope in self.iter_rev() {
+            match &scope.kind {
+                ScopeKind::Function(function_scope) => {
+                    return function_scope.is_async;
+                }
+                ScopeKind::Method(method_scope) => {
+                    return method_scope.is_async;
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
     pub fn function_predecessor_indices(
         &self,
         name: &Name,
@@ -752,11 +778,17 @@ impl Scopes {
         scope
     }
 
-    pub fn push_function_scope(&mut self, range: TextRange, name: &Identifier, in_class: bool) {
+    pub fn push_function_scope(
+        &mut self,
+        range: TextRange,
+        name: &Identifier,
+        in_class: bool,
+        is_async: bool,
+    ) {
         if in_class {
-            self.push(Scope::method(range, name.clone()));
+            self.push(Scope::method(range, name.clone(), is_async));
         } else {
-            self.push(Scope::function(range));
+            self.push(Scope::function(range, is_async));
         }
     }
 

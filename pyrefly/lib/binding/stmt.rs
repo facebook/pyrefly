@@ -618,6 +618,13 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             Stmt::For(mut x) => {
+                if x.is_async && !self.scopes.is_in_async_def() {
+                    self.error(
+                        x.range(),
+                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        "`async for` can only be used inside an async function".to_owned(),
+                    );
+                }
                 self.bind_target_with_expr(&mut x.target, &mut x.iter, &|expr, ann| {
                     Binding::IterableValue(ann, expr.clone(), IsAsync::new(x.is_async))
                 });
@@ -703,6 +710,13 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             Stmt::With(x) => {
+                if x.is_async && !self.scopes.is_in_async_def() {
+                    self.error(
+                        x.range(),
+                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        "`async with` can only be used inside an async function".to_owned(),
+                    );
+                }
                 let kind = IsAsync::new(x.is_async);
                 for mut item in x.items {
                     let item_range = item.range();

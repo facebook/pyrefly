@@ -277,9 +277,10 @@ impl<'a> BindingsBuilder<'a> {
         func_name: &Identifier,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
+        is_async: bool,
     ) -> (YieldsAndReturns, Option<SelfAssignments>) {
         self.scopes
-            .push_function_scope(range, func_name, class_key.is_some());
+            .push_function_scope(range, func_name, class_key.is_some(), is_async);
         self.parameters(parameters, undecorated_idx, class_key);
         self.init_static_scope(&body, false);
         self.stmts(body);
@@ -294,10 +295,11 @@ impl<'a> BindingsBuilder<'a> {
         func_name: &Identifier,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
+        is_async: bool,
     ) -> Option<SelfAssignments> {
         // Push a scope to create the parameter keys (but do nothing else with it).
         self.scopes
-            .push_function_scope(range, func_name, class_key.is_some());
+            .push_function_scope(range, func_name, class_key.is_some(), is_async);
         self.parameters(parameters, undecorated_idx, class_key);
         self.scopes.pop();
         // If we are in a class, use a simple visitor to find `self.<attr>` assignments.
@@ -488,6 +490,7 @@ impl<'a> BindingsBuilder<'a> {
                 func_name,
                 undecorated_idx,
                 class_key,
+                is_async,
             )
         } else {
             match self.untyped_def_behavior {
@@ -500,6 +503,7 @@ impl<'a> BindingsBuilder<'a> {
                         func_name,
                         undecorated_idx,
                         class_key,
+                        is_async,
                     );
                     self.analyze_return_type(
                         func_name,
@@ -521,6 +525,7 @@ impl<'a> BindingsBuilder<'a> {
                         func_name,
                         undecorated_idx,
                         class_key,
+                        is_async,
                     );
                     self.analyze_return_type(
                         func_name,

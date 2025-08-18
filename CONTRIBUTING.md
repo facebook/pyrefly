@@ -1,36 +1,12 @@
 # Contributing to Pyrefly
 
-## Developer cheat sheet
-
-### GitHub developers
-
 The [rust toolchain](https://www.rust-lang.org/tools/install) is required for
 development. You can use the normal `cargo` commands (e.g. `cargo build`,
 `cargo test`).
 
-You can also run `python3 test.py` from this directory to use our all-in-one
-test script that auto-formats your code, runs the tests, and updates the
-conformance test results. It requires Python 3.9+.
-
 Refer to other sections of the document for
 [coding conventions](#coding-conventions) and where to add
 [new tests](#testing).
-
-### Meta internal developers
-
-From this directory, you can run:
-
-- Check things are plausible: `./test.py` (runs the basic tests and linter)
-- Run a command: `buck2 run pyrefly -- COMMAND_LINE_ARGUMENTS`
-  - For example, run on a single file: `buck2 run pyrefly -- check test.py`
-- Run a single test: `buck2 test pyrefly -- NAME_OF_THE_TEST`
-- Run the end-to-end tests: `buck2 test test:`
-- Run `arc pyre` (a.k.a. per-target type checking) with Pyrefly:
-  `arc pyre check <targets_to_check> -c python.type_checker=fbcode//pyrefly:pyrefly_for_buck -c python.typeshed_stubs=fbcode//python/typeshed_internal:typeshed_internal`
-- Debug a file: `buck2 run pyrefly -- check <filename> --debug-info=debug.js`,
-  then open `debug.html` in your browser
-- Fetch Typeshed from upstream
-  `HTTPS_PROXY=http://fwdproxy:8080 ./crates/pyrefly_bundled/update.py`
 
 ## Packaging
 
@@ -41,28 +17,6 @@ development. `pip install .` in the inner `pyrefly` directory works as well. You
 can also run `maturin` from the repo root by adding `-m pyrefly/Cargo.toml` to
 the command line.
 
-### Deploying to PyPI (Meta internal)
-
-Once a week, a
-[CodemodService job](https://www.internalfb.com/code/fbsource/xplat/scripts/codemod_service/configs/fbcode_pyrefly_version_upgrade.toml)
-generates a diff to update the version number. Accept this diff to upload a new
-version to PyPI.
-
-If you'd like to do a manual release between the weekly automated releases,
-follow the instructions in
-[version.bzl](https://www.internalfb.com/code/fbsource/fbcode/pyrefly/version.bzl)
-to update the version number.
-
-Behind the scenes, what's happening is:
-
-- The
-  [publish_to_pypi workflow](https://github.com/facebook/pyrefly/blob/main/.github/workflows/publish_to_pypi.yml)
-  triggers on any change to version.bzl.
-- This workflow calls the
-  [build_binaries workflow](https://github.com/facebook/pyrefly/blob/main/.github/workflows/build_binaries.yml)
-  to build release artifacts, uploads them, and tags the corresponding commit
-  with the version number.
-
 ## Coding conventions
 
 We follow the
@@ -72,12 +26,19 @@ the type checker.
 
 ## Testing
 
+You can use `cargo test` to run the tests, or `python3 test.py` from this
+directory to use our all-in-one test script that auto-formats your code, runs
+the tests, and updates the conformance test results. It requires Python 3.9+.
+
 Here's where you can add new integration tests, based on the type of issue
 you're working on:
 
 - configurations: `test/`
 - type checking: `pyrefly/lib/test/`
 - language server: `pyrefly/lib/test/lsp/`
+
+Take a look at the existing tests for examples of how to write tests. We use a
+custom `testcase!` macro that is useful for testing type checker behaviour.
 
 Please do not add tests in `conformance/third_party`. Those test cases are a
 copy of the official Python typing conformance tests, and any changes you make
@@ -86,6 +47,54 @@ tests.
 
 Running `./test.py` will re-generate Pyrefly's conformance test outputs. Those
 changes should be committed.
+
+## Debugging tips
+
+Below you’ll find a few practical suggestions to help you get started with
+troubleshooting issues in the project. These are not exhaustive or mandatory
+steps—feel free to experiment with other debugging methods, tools, or workflows
+as needed!
+
+### Make a Minimal Test Case
+
+When you encounter a bug or unexpected behavior, start by isolating the issue
+with a minimal, reproducible test case. Stripping away unrelated code helps
+clarify the problem and speeds up debugging. You can use the
+[Pyrefly sandbox](https://pyrefly.org/sandbox/) to quickly create a minimal
+reproduction.
+
+### Create a failing test
+
+Once you have a minimal reproducible example of the bug, create a failing test
+for it, so you can easily run it and verify that the bug still exists while you
+work on tracking down the root cause and fix the issue. See the section above on
+testing and place yout reproducible examples in the appropriate test file or
+create a new one.
+
+### Print debugging
+
+Printing intermediate values is a quick way to understand what’s going on in
+your code. You can use the
+[Rust-provided dbg! macro](https://doc.rust-lang.org/std/macro.dbg.html) for
+quick value inspection: `dbg!(&my_object);`
+
+Or insert conditionals to focus your debug output, e.g., print only when a name
+matches:
+`rust     if my_object.name == "target_case" {         dbg!(my_object);     }     `
+
+When running your test you will need to use the `--nocapture` flag to ensure the
+debug print statements show up in your console. To run your single test file in
+debug mode run `cargo test my_test_name -- --nocapture`.
+
+**Note: Remember to remove debug prints before submitting your pull request.**
+
+### Use a Rust debugger
+
+For tricky bugs sometimes it helps to use a debugger to step through the code
+and inspect variables. Many code editors,
+[such as VSCode, include graphical debuggers](https://www.youtube.com/watch?v=TlfGs7ExC0A)
+for breakpoints and variable watch. You can also use the command line debuggers
+like [lldb](https://docs.rs/lldb/latest/lldb/#installation):
 
 ## Contributor License Agreement ("CLA")
 

@@ -32,6 +32,56 @@ class C:
 );
 
 testcase!(
+    test_await_outside_async_function_def,
+    r#"
+async def make_int() -> int:
+    return 1
+await make_int()  # E: `await` can only be used inside an async function
+def test():
+    await make_int()  # E: `await` can only be used inside an async function
+async def test_async():
+    await make_int()  # ok
+"#,
+);
+
+testcase!(
+    test_async_for_outside_async_function_def,
+    r#"
+import asyncio
+class AsyncIterator:
+    def __init__(self):
+        pass
+    def __aiter__(self):
+        return self
+    async def __anext__(self):
+        raise StopAsyncIteration
+async for value in AsyncIterator(): pass  # E: `async for` can only be used inside an async function
+def test():
+    async for value in AsyncIterator(): pass  # E: `async for` can only be used inside an async function
+async def test_async():
+    async for value in AsyncIterator(): pass  # ok
+"#,
+);
+
+testcase!(
+    test_async_with_outside_async_function_def,
+    r#"
+import asyncio
+class AsyncContextManager:
+    async def __aenter__(self):
+        print("Entered context")
+        return self
+    async def __aexit__(self, exc_type, exc, tb):
+        print("Exited context")
+async with AsyncContextManager(): pass  # E: `async with` can only be used inside an async function
+def test():
+    async with AsyncContextManager(): pass  # E: `async with` can only be used inside an async function
+async def test_async():
+    async with AsyncContextManager(): pass  # ok
+"#,
+);
+
+testcase!(
     test_global_simple,
     r#"
 x: str = ""

@@ -119,7 +119,7 @@ class Base:
     # The @final decorator should not be on one of the overloads:
 
     @overload  # E[invalid_final] @final should be on implementation only
-    @final
+    @final  # E[invalid_final]
     def invalid_final(self, x: int) -> int:  # E[invalid_final]
         ...
 

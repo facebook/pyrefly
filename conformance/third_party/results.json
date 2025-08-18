@@ -22,6 +22,7 @@
     "dataclasses_hash.py",
     "dataclasses_inheritance.py",
     "dataclasses_kwonly.py",
+    "dataclasses_match_args.py",
     "dataclasses_order.py",
     "dataclasses_postinit.py",
     "dataclasses_transform_class.py",
@@ -140,6 +141,7 @@
     "qualifiers_final_decorator.py": 1,
     "specialtypes_never.py": 1,
     "specialtypes_type.py": 8,
+    "typeddicts_extra_items.py": 43,
     "typeddicts_inheritance.py": 1,
     "typeddicts_readonly_inheritance.py": 4,
     "typeddicts_required.py": 1

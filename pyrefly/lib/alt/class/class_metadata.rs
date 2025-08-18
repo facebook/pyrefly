@@ -13,6 +13,7 @@ use itertools::Itertools;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::type_info::TypeInfo;
+use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Expr;
@@ -418,24 +419,47 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if is_typed_dict {
             // Validate that only 'total' keyword is allowed for TypedDict and determine is_total
             let mut is_total = true;
+            let mut extra_items = None;
             for (name, value) in keywords {
-                if name.as_str() != "total" {
-                    self.error(
-                        errors,
-                        cls.range(),
-                        ErrorInfo::Kind(ErrorKind::BadTypedDict),
-                        format!(
-                            "TypedDict does not support keyword argument `{}`",
-                            name.as_str()
-                        ),
-                    );
-                } else if matches!(value, Type::Literal(Lit::Bool(false))) {
-                    is_total = false;
+                match (name.as_str(), value) {
+                    ("total", Type::Literal(Lit::Bool(false))) => {
+                        is_total = false;
+                    }
+                    ("closed" | "extra_items", _) if extra_items.is_some() => {
+                        self.error(
+                            errors,
+                            cls.range(),
+                            ErrorInfo::Kind(ErrorKind::BadTypedDict),
+                            "TypedDict keywords `closed` and `extra_items` cannot be used together"
+                                .to_owned(),
+                        );
+                    }
+                    ("closed", Type::Literal(Lit::Bool(true))) => {
+                        extra_items = Some(ExtraItems::Closed);
+                    }
+                    ("extra_items", _) => {
+                        extra_items = Some(ExtraItems::extra(value));
+                    }
+                    ("total" | "closed", _) => {}
+                    _ => {
+                        self.error(
+                            errors,
+                            cls.range(),
+                            ErrorInfo::Kind(ErrorKind::BadTypedDict),
+                            format!(
+                                "TypedDict does not support keyword argument `{}`",
+                                name.as_str()
+                            ),
+                        );
+                    }
                 }
             }
             let fields =
                 self.calculate_typed_dict_metadata_fields(cls, bases_with_metadata, is_total);
-            Some(TypedDictMetadata { fields })
+            Some(TypedDictMetadata {
+                fields,
+                extra_items: extra_items.unwrap_or(ExtraItems::Default),
+            })
         } else {
             None
         }
