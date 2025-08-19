@@ -137,7 +137,7 @@ import should be resolved from. See [`search-path`](#search-path) instead.
   mypy
 - Notes:
   - When overridden by passing in `FILES...`, we do not consult the
-    relevant config file for what to use for `project-excludes`. 
+    relevant config file for what to use for `project-excludes`.
     If `project-excludes` should not use the default value, override it with the flag as
     well. This is because
     if multiple configs are loaded that conflict with `project-includes`, determining
@@ -166,14 +166,14 @@ but we don't want to type check.
     filtered out of type checked files at our glob-implementation layer.
     - Dotfiles (any files that begin with a dot (`.<stuff>`)
     - Any files that don't end in `.py` or `.pyi`
-    - Your [`site-package-path`](#site-package-path) (including paths queried from 
+    - Your [`site-package-path`](#site-package-path) (including paths queried from
       the interpreter)
   - It is an error if no files are returned from any `project-includes` because
     they are filtered out by `project-excludes` entries. We differentiate between
     an error from a `project-includes` that doesn't match any files, and an error
     from all `project-includes` getting filtered by `project-excludes`.
   - When overridden by passing in `FILES...`, we do not consult the
-    relevant config file for what to use for `project-excludes`. 
+    relevant config file for what to use for `project-excludes`.
     If `project-excludes` should not use the default value, override it with the flag as
     well. See reasoning in [`project-includes` notes](#project-includes).
   - Your [`site-package-path`](#site-package-path) is added to your `project-excludes`
@@ -224,7 +224,7 @@ search paths that are automatically added, and are affected by this flag.
 - Flag equivalent: `--disable-search-path-heuristics`
 - Equivalent configs: none
 - Notes
-    - To see what search path we find for your a given file in your project, or 
+    - To see what search path we find for your a given file in your project, or
       your project overall, you can run `pyrefly dump-config [<file>...]`.
 
 #### **Search Path Heuristics**
@@ -428,6 +428,32 @@ type stubs could be found. See
 - Default: `true`
 - Flag equivalent: `--ignore-missing-source`
 - Equivalent configs: `reportMissingModuleSource` in Pyright
+
+### `infer-with-first-use`
+
+Whether to infer type variables not determined by a call or constructor based on their first usage.
+This includes empty containers like `[]` and `{}`.
+
+The default behavior is similar to Mypy - the type of the variable is inferred based on the first usage.
+
+```python
+x = []
+x.append(1)  # x is list[int]
+x.append("2")  # error!
+```
+
+Setting this to false will make Pyrefly infer `Any` for unsolved type variables, which behaves like Pyright.
+
+```python
+x = []  # x is list[Any]
+x.append(1)  # ok
+x.append("2")  # ok
+```
+
+- Type: bool
+- Default: `true`
+- Flag equivalent: `--infer-with-first-use`
+
 
 ### `untyped-def-behavior`
 
