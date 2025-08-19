@@ -30,9 +30,17 @@ use crate::state::memory::MemoryFilesLookup;
 pub struct Load {
     pub errors: ErrorCollector,
     pub module_info: Module,
+    /// Version number tracking how many times this load data has been updated.
+    /// This can be used for diagnostics versioning and cache invalidation.
+    pub version: u32,
 }
 
 impl Load {
+    /// Get the version number of this load data for diagnostics tracking
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
     /// Return the code for this module, and whether there was an error while loading (a self-error).
     pub fn load_from_path(
         path: &ModulePath,
@@ -62,6 +70,7 @@ impl Load {
         error_style: ErrorStyle,
         code: Arc<String>,
         self_error: Option<anyhow::Error>,
+        version: u32,
     ) -> Self {
         let module_info = Module::new(name, path, code);
         let errors = ErrorCollector::new(module_info.dupe(), error_style);
@@ -78,6 +87,7 @@ impl Load {
         Self {
             errors,
             module_info,
+            version,
         }
     }
 }

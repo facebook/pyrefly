@@ -37,6 +37,7 @@ pyrefly_derive = { path = "../crates/pyrefly_derive" }
 pyrefly_python = { path = "../crates/pyrefly_python" }
 pyrefly_types = { path = "../crates/pyrefly_types" }
 pyrefly_util = { path = "../crates/pyrefly_util" }
+tsp_types = { path = "../crates/tsp_types" }
 rayon = "1.9.0"
 regex = "1.11.1"
 ruff_annotate_snippets = { git = "https://github.com/astral-sh/ruff/", rev = "9bee8376a17401f9736b45fdefffb62edc2f1668" }

@@ -42,6 +42,8 @@ pub struct Context<'a, Lookup> {
     pub stdlib: &'a Stdlib,
     pub lookup: &'a Lookup,
     pub untyped_def_behavior: UntypedDefBehavior,
+    /// Function to get the next load version for diagnostics tracking
+    pub next_load_version: &'a dyn Fn() -> u32,
 }
 
 #[derive(Debug, Default, Dupe, Clone)]
@@ -141,6 +143,7 @@ impl Step {
             error_style,
             code,
             self_error,
+            (ctx.next_load_version)(),
         ))
     }
 

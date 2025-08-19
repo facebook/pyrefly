@@ -53,13 +53,18 @@ impl PythonInfo {
         }
         Self { interpreter, env }
     }
+
+    /// Get a reference to the Python environment
+    pub fn env(&self) -> &PythonEnvironment {
+        &self.env
+    }
 }
 
 /// LSP workspace settings: this is all that is necessary to run an LSP at a given root.
 #[derive(Debug, Clone, Default)]
 pub struct Workspace {
-    python_info: Option<PythonInfo>,
-    search_path: Option<Vec<PathBuf>>,
+    pub(crate) python_info: Option<PythonInfo>,
+    pub(crate) search_path: Option<Vec<PathBuf>>,
     pub disable_language_services: bool,
     pub disable_type_errors: bool,
     pub lsp_analysis_config: Option<LspAnalysisConfig>,
