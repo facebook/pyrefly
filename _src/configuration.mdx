@@ -158,7 +158,7 @@ type checking as way to filter files that match `project-includes`,
 but we don't want to type check.
 
 - Type: list of [filesystem glob patterns](#filesystem-globbing)
-- Default: `["**/*venv/**"]`
+- Default: `["**/node_modules", "**/__pycache__", "**/*venv/**"]`
 - Flag equivalent: `--project-excludes`
 - Equivalent configs: `exclude` in Pyright and mypy
 - Notes:

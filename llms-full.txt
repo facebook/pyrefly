@@ -674,7 +674,7 @@ type checking as way to filter files that match `project-includes`,
 but we don't want to type check.
 
 - Type: list of [filesystem glob patterns](#filesystem-globbing)
-- Default: `["**/*venv/**"]`
+- Default: `["**/node_modules", "**/__pycache__", "**/*venv/**"]`
 - Flag equivalent: `--project-excludes`
 - Equivalent configs: `exclude` in Pyright and mypy
 - Notes:
@@ -2201,6 +2201,24 @@ class Ex:
 x = Ex()
 x.meaning = 0
 ```
+
+## redundant-cast
+
+This warning is raised when `typing.cast()` is used to cast a value to a type it is already compatible with. Such casts are unnecessary and can be removed to improve code clarity.
+
+```python
+import typing
+
+x: int = 42
+# This cast is redundant since x is already an int
+y = typing.cast(int, x)  # redundant-cast
+
+# This is a valid cast since we're casting from a more general type
+obj: object = "hello"
+s = typing.cast(str, obj)  # No warning - this is a valid cast
+```
+
+The redundant cast warning helps identify unnecessary type casts that don't provide any additional type safety benefits.
 
 ## redundant-condition
 
