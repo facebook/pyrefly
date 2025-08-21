@@ -1,1 +1,0 @@
-"use strict";(self.webpackChunknew_website=self.webpackChunknew_website||[]).push([[5513],{55513:e=>{e.exports=JSON.parse('{"title":"All posts","items":[{"title":"Introducing Pyrefly - A new type checker and IDE experience for Python","permalink":"/blog/introducing-pyrefly","unlisted":false,"date":"2025-05-15T00:00:00.000Z"}]}')}}]);
