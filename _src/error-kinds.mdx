@@ -337,8 +337,11 @@ importlib.util.find_spec("os")  # error, `importlib.util` was not imported
 ## implicitly-defined-attribute
 
 An attribute was implicitly defined by assignment to `self` in a method that we
-do not recognize as always executing. (We recognize constructors and some test
-setup methods.)
+do not recognize as always executing. We recognize constructors and some test
+setup methods; we will emit an error for any attributes defined by assignment
+in other methods.
+
+This error is off by default, and must be manually enabled in the configuration.
 
 ```python
 class C:
