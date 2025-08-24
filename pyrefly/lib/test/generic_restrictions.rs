@@ -389,3 +389,100 @@ class Foo[T: (A, B)]:
         del self.y.x
     "#,
 );
+
+testcase!(
+    test_union_bounded_typevar_with_property_get,
+    r#"
+# https://github.com/facebook/pyrefly/issues/869
+from collections import defaultdict
+from typing import assert_type
+
+class A:
+
+    @property
+    def attr(self) -> str:
+        return "A"
+
+
+class B:
+
+    @property
+    def attr(self) -> str:
+        return "B"
+
+
+def foo[T: A | B](items: list[T]) -> None:
+    results: defaultdict[str, list[T]] = defaultdict(list)
+    for item in items:
+        assert_type(item.attr, str)
+        results[item.attr].append(item)
+    "#,
+);
+
+testcase!(
+    test_union_bounded_typevar_property_return_self,
+    r#"
+from typing import Self
+class A:
+    @property
+    def attr(self) -> Self: ...
+
+class B:
+    @property
+    def attr(self) -> Self: ...
+
+def foo[T: A | B](x: T) -> T:
+    return x.attr
+    "#,
+);
+
+testcase!(
+    test_constrained_typevar_property_return_self,
+    r#"
+from typing import Self
+class A:
+    @property
+    def attr(self) -> Self: ...
+
+class B:
+    @property
+    def attr(self) -> Self: ...
+
+def foo[T: (A, B)](x: T) -> T:
+    return x.attr
+    "#,
+);
+
+testcase!(
+    test_union_bounded_typevar_instance_method_return_self,
+    r#"
+from typing import Self
+class A:
+
+    def method(self) -> Self: ...
+
+class B:
+
+    def method(self) -> Self: ...
+
+def foo[T: A | B](x: T) -> T:
+    return x.method()
+    "#,
+);
+
+testcase!(
+    test_constrained_typevar_instance_method_return_self,
+    r#"
+from typing import Self
+class A:
+
+    def method(self) -> Self: ...
+
+class B:
+
+    def method(self) -> Self: ...
+
+def foo[T: (A, B)](x: T) -> T:
+    return x.method()
+    "#,
+);

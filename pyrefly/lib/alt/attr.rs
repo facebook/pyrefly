@@ -1482,7 +1482,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             },
             AttributeBase::TypeVar(q, bound) => {
                 if let Some(upper_bound) = bound {
-                    match self.get_bounded_quantified_attribute(q, &upper_bound, attr_name) {
+                    let specific_q = match q.restriction() {
+                        Restriction::Constraints(_) => {
+                            q.with_restriction(Restriction::Constraints(vec![
+                                upper_bound.clone().to_type(),
+                            ]))
+                        }
+                        Restriction::Bound(_) => {
+                            q.with_restriction(Restriction::Bound(upper_bound.clone().to_type()))
+                        }
+                        Restriction::Unrestricted => q,
+                    };
+                    match self.get_bounded_quantified_attribute(specific_q, &upper_bound, attr_name)
+                    {
                         Some(attr) => LookupResult::found(attr),
                         None => LookupResult::not_found(NotFoundOn::ClassInstance(
                             upper_bound.class_object().dupe(),
