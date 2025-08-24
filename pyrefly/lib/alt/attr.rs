@@ -1496,7 +1496,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             },
             AttributeBase1::Quantified(q, bound) => {
                 if let Some(upper_bound) = bound {
-                    match self.get_bounded_quantified_attribute(q.clone(), upper_bound, attr_name) {
+                    let specific_q = match q.restriction() {
+                        Restriction::Constraints(_) => {
+                            q.clone().with_restriction(Restriction::Constraints(vec![
+                                upper_bound.clone().to_type(),
+                            ]))
+                        }
+                        Restriction::Bound(_) => q
+                            .clone()
+                            .with_restriction(Restriction::Bound(upper_bound.clone().to_type())),
+                        Restriction::Unrestricted => q.clone(),
+                    };
+                    match self.get_bounded_quantified_attribute(specific_q, upper_bound, attr_name)
+                    {
                         Some(attr) => acc.found(attr, base),
                         None => acc.not_found(NotFoundOn::ClassInstance(
                             upper_bound.class_object().dupe(),

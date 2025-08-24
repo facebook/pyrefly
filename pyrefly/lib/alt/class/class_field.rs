@@ -658,15 +658,8 @@ fn bind_instance_attribute(
 ) -> Attribute {
     // Decorated objects are methods, so they can't be ClassVars
     if attr.is_property_getter() {
-        // For property getters on TypeVar instances, use the bound type instead of the TypeVar
-        let obj_type = match &instance.kind {
-            InstanceKind::TypeVar(_) => {
-                ClassType::new(instance.class.dupe(), instance.targs.clone()).to_type()
-            }
-            _ => instance.to_type(),
-        };
         Attribute::property(
-            make_bound_method(obj_type, attr).into_inner(),
+            make_bound_method(instance.to_type(), attr).into_inner(),
             None,
             instance.class.dupe(),
         )
