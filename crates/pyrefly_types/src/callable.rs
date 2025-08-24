@@ -285,6 +285,7 @@ impl FuncId {
 pub enum FunctionKind {
     IsInstance,
     IsSubclass,
+    HasAttr,
     Dataclass,
     DataclassField,
     /// `typing.dataclass_transform`. Note that this is `dataclass_transform` itself, *not* the
@@ -544,6 +545,7 @@ impl FunctionKind {
         match (module.as_str(), cls, func.as_str()) {
             ("builtins", None, "isinstance") => Self::IsInstance,
             ("builtins", None, "issubclass") => Self::IsSubclass,
+            ("builtins", None, "hasattr") => Self::HasAttr,
             ("builtins", None, "classmethod") => Self::ClassMethod,
             ("dataclasses", None, "dataclass") => Self::Dataclass,
             ("dataclasses", None, "field") => Self::DataclassField,
@@ -577,6 +579,11 @@ impl FunctionKind {
                 module: ModuleName::builtins(),
                 cls: None,
                 func: Name::new_static("issubclass"),
+            },
+            Self::HasAttr => FuncId {
+                module: ModuleName::builtins(),
+                cls: None,
+                func: Name::new_static("hasattr"),
             },
             Self::ClassMethod => FuncId {
                 module: ModuleName::builtins(),
