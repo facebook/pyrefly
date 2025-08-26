@@ -141,9 +141,7 @@
   "dataclasses_usage.py": [],
   "directives_assert_type.py": [],
   "directives_cast.py": [],
-  "directives_deprecated.py": [
-    "Line 25: Expected 1 errors"
-  ],
+  "directives_deprecated.py": [],
   "directives_no_type_check.py": [],
   "directives_reveal_type.py": [],
   "directives_type_checking.py": [],
