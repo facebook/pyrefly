@@ -325,7 +325,7 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn bind_lambda(&mut self, lambda: &mut ExprLambda, usage: &mut Usage) {
-        self.scopes.push(Scope::function(lambda.range, false));
+        self.scopes.push(Scope::lambda(lambda.range, false));
         if let Some(parameters) = &lambda.parameters {
             for x in parameters {
                 self.bind_lambda_param(x.name());

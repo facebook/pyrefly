@@ -582,6 +582,16 @@ impl Scope {
             }),
         )
     }
+    pub fn lambda(range: TextRange, is_async: bool) -> Self {
+        Self::new(
+            range,
+            false,
+            ScopeKind::Function(ScopeFunction {
+                yields_and_returns: Default::default(),
+                is_async,
+            }),
+        )
+    }
 
     pub fn method(range: TextRange, name: Identifier, is_async: bool) -> Self {
         Self::new(
