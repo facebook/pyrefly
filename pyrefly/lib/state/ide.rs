@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use dupe::Dupe;
+use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
@@ -23,6 +25,7 @@ use crate::binding::binding::Key;
 use crate::binding::bindings::Bindings;
 use crate::binding::narrow::identifier_and_chain_for_expr;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
+use crate::error::error::Error;
 use crate::export::exports::Export;
 use crate::state::handle::Handle;
 
@@ -185,4 +188,67 @@ pub fn insert_import_edit(
         export_name
     );
     (position, insert_text)
+}
+
+pub fn create_ignore_code_action(
+    error: &Error,
+    module_info: &Module,
+) -> Option<(String, Module, TextRange, String)> {
+    let ignore_lines_in_module = module_info.ignore().get_pyrefly_ignores();
+    let start_line = error.display_range().start.line;
+
+    if ignore_lines_in_module.contains(&start_line) {
+        create_add_to_existing_ignore_action(error, module_info)
+    } else {
+        create_new_ignore_action(error, module_info)
+    }
+}
+
+fn create_add_to_existing_ignore_action(
+    error: &Error,
+    module_info: &Module,
+) -> Option<(String, Module, TextRange, String)> {
+    let dec = error.display_range().start.line.decrement()?;
+    let suppression_comment = module_info
+        .lined_buffer()
+        .content_in_line_range(dec, dec)
+        .trim_end();
+    let bracket_pos = suppression_comment.rfind(']')?;
+    let row_offset = module_info.lined_buffer().line_start(dec);
+    let text_range = TextRange::new(
+        row_offset + TextSize::from(bracket_pos as u32),
+        row_offset + TextSize::from((bracket_pos + 1) as u32),
+    );
+
+    Some((
+        format!("Add {} to above ignore comment", error.error_kind()),
+        module_info.dupe(),
+        text_range,
+        format!(", {}]", error.error_kind().to_name()),
+    ))
+}
+
+fn create_new_ignore_action(
+    error: &Error,
+    module_info: &Module,
+) -> Option<(String, Module, TextRange, String)> {
+    let start = error.range().start();
+    let display_pos = module_info.display_pos(start);
+    let start = module_info.lined_buffer().line_start(display_pos.line);
+    let line = module_info
+        .lined_buffer()
+        .content_in_line_range(display_pos.line, display_pos.line);
+    let offset = line.find(|c: char| !c.is_whitespace()).unwrap_or(0);
+    let leading_indentation = " ".repeat(offset as usize);
+
+    Some((
+        format!("Suppress {} with ignore comment", error.error_kind()),
+        module_info.dupe(),
+        TextRange::new(start, start),
+        format!(
+            "{}# pyrefly: ignore[{}]\n",
+            leading_indentation,
+            error.error_kind().to_name()
+        ),
+    ))
 }
