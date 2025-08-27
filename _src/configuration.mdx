@@ -346,6 +346,19 @@ This configuration option **is mutually exclusive with `python-interpreter` and 
 - Default: `false`
 - Flag equivalent: `--skip-interpreter-query`
 
+### `typeshed-path`
+
+Override the version of typeshed that's being used for type checking. The provided
+path should point to the root of typeshed.
+
+[Typeshed](https://github.com/python/typeshed) contains the type information for Python's
+standard library, which Pyrefly uses for type checking and resolving both the most basic
+types (like `object`, `str`, ...) and types/type signatures from stdlib modules.
+
+- Type: path to typeshed
+- Default: none (resolves to bundled typeshed)
+- Flag equivalent: `--typeshed-path`
+
 ### `errors`
 
 Configure the severity for each kind of error that Pyrefly emits: `error`, `warn`, `ignore`.

@@ -1,0 +1,236 @@
+---
+title: Supported Features
+
+description: Supported features for Pyrefly's IDE extension
+---
+
+# IDE Supported Features
+
+Pyrefly’s language server powers a complete editing experience while **fully disabling Pylance**, ensuring no interference between checkers.
+
+> Each feature below links to the [official LSP specification](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/) and shows what’s currently supported by Pyrefly.
+
+---
+
+### [Go to definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_definition)
+
+Jump to where a symbol is declared with a click or <kbd>F12</kbd>.
+<video
+  src="/videos/go-to-definition.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+<!-- ### [Go to type definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_typeDefinition)
+
+Navigate to the underlying type of any expression.
+<video
+  src="/videos/go-to-type-definition.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+-->
+
+### [Find references](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_references)
+
+List all usages of a symbol across your codebase.
+<video
+  src="/videos/find-all-references.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Document symbols](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_documentSymbol)
+
+See an outline of all top-level items in the current file.
+<video
+  src="/videos/document-symbols.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Workspace symbols](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#workspace_symbol)
+
+Search globally for functions, classes, and variables.
+<video
+  src="/videos/workspace-symbols.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Hover](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_hover)
+
+See type info and docstrings when hovering over code.
+<video
+  src="/videos/hover.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Document highlights](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_documentHighlight)
+
+Highlights all other instances of the symbol under your cursor.
+<video
+  src="/videos/document-highlights.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Signature help](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_signatureHelp)
+
+Live function signatures as you type, with parameter hints.
+<video
+  src="/videos/signature-help.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Completion](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_completion)
+
+Autocomplete suggestions for project-specific symbols and imports.
+<video
+  src="/videos/autocomplete.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Rename](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_rename)
+
+Safely rename symbols project-wide.
+<video
+  src="/videos/rename.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+<!-- ### [Call hierarchy](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#callHierarchy_prepare)
+
+Explore callers and callees of a method or function.
+![Call hierarchy](../gifs/call-hierarchy.gif)
+
+---
+ -->
+
+### [Diagnostics](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_publishDiagnostics)
+
+Type errors and warnings from Pyrefly’s checker appear in the diagnostics pane ("Problems" pane in VSCode).
+<video
+  src="/videos/diagnostics.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Semantic tokens](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_semanticTokens)
+
+Rich syntax highlighting based on token type and origin.
+<video
+  src="/videos/semantic-highlighting.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Inlay hints](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_inlayHint)
+
+Inline hints for types, parameter names, and return values. This is enabled by default; you can disable them using the [VSCode Setting](https://code.visualstudio.com/docs/editing/editingevolved#_inlay-hints).
+<video
+  src="/videos/inlay-hints.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Notebook support](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#notebookDocument)
+
+Works with Jupyter and notebook-style cells.
+<!-- <video
+  src="/videos/jupyter-notebooks.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/> -->
+
+---
+
+## Planned features
+
+See [planned features and request your own](https://github.com/facebook/pyrefly/issues/344) on GitHub.

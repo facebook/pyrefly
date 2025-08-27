@@ -7,7 +7,8 @@
 - [Error Kinds](error-kinds): Pyrefly error categories and suppression codes
 - [Error Suppressions](error-suppressions): How to suppress errors in Pyrefly
 - [Getting Started](getting-started): Quick start guide for Pyrefly
-- [IDE](IDE): Pyrefly in the IDE
+- [IDE Installation](IDE): How to add Pyrefly Language Server and Typechecking to your IDE
+- [Supported Features](IDE-features): Supported features for Pyrefly's IDE extension
 - [Import Resolution](import-resolution): How Pyrefly finds and resolves imports
 - [Introduction](index): Guides and references for all you need to know about Pyrefly
 - [Installation](installation): How to install Pyrefly
