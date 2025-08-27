@@ -1716,6 +1716,7 @@ testcase!(
     test_typed_dict_kwargs_overlap_pos_arg,
     r#"
 from typing import *
+from functools import cache
 
 class Kwargs(TypedDict):
     x: int
@@ -1724,6 +1725,8 @@ class Kwargs(TypedDict):
 def test(x: int, /, **kwargs: Unpack[Kwargs]): ...
 
 # this should not be OK
+def test(x: int, **kwargs: Unpack[Kwargs]): ... # E:  TypedDict key 'x' in **kwargs overlaps with positional parameter 'x'
+@cache
 def test(x: int, **kwargs: Unpack[Kwargs]): ... # E:  TypedDict key 'x' in **kwargs overlaps with positional parameter 'x'
     "#,
 );
