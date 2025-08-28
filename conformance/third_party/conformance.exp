@@ -1,6 +1,6 @@
 @generated
 {
-  "aliases_explicit.py": [
+  "conformance\\third_party\\aliases_explicit.py": [
     {
       "code": -2,
       "column": 9,
@@ -232,7 +232,7 @@
       "stop_line": 102
     }
   ],
-  "aliases_implicit.py": [
+  "conformance\\third_party\\aliases_implicit.py": [
     {
       "code": -2,
       "column": 9,
@@ -404,7 +404,7 @@
       "stop_line": 135
     }
   ],
-  "aliases_newtype.py": [
+  "conformance\\third_party\\aliases_newtype.py": [
     {
       "code": -2,
       "column": 8,
@@ -546,7 +546,7 @@
       "stop_line": 65
     }
   ],
-  "aliases_recursive.py": [
+  "conformance\\third_party\\aliases_recursive.py": [
     {
       "code": -2,
       "column": 36,
@@ -648,7 +648,7 @@
       "stop_line": 69
     }
   ],
-  "aliases_type_statement.py": [
+  "conformance\\third_party\\aliases_type_statement.py": [
     {
       "code": -2,
       "column": 1,
@@ -890,7 +890,7 @@
       "stop_line": 79
     }
   ],
-  "aliases_typealiastype.py": [
+  "conformance\\third_party\\aliases_typealiastype.py": [
     {
       "code": -2,
       "column": 63,
@@ -1062,9 +1062,9 @@
       "stop_line": 66
     }
   ],
-  "aliases_variance.py": [],
-  "annotations_coroutines.py": [],
-  "annotations_forward_refs.py": [
+  "conformance\\third_party\\aliases_variance.py": [],
+  "conformance\\third_party\\annotations_coroutines.py": [],
+  "conformance\\third_party\\annotations_forward_refs.py": [
     {
       "code": -2,
       "column": 10,
@@ -1256,7 +1256,7 @@
       "stop_line": 96
     }
   ],
-  "annotations_generators.py": [
+  "conformance\\third_party\\annotations_generators.py": [
     {
       "code": -2,
       "column": 21,
@@ -1378,7 +1378,7 @@
       "stop_line": 190
     }
   ],
-  "annotations_methods.py": [
+  "conformance\\third_party\\annotations_methods.py": [
     {
       "code": -2,
       "column": 12,
@@ -1390,7 +1390,7 @@
       "stop_line": 42
     }
   ],
-  "annotations_typeexpr.py": [
+  "conformance\\third_party\\annotations_typeexpr.py": [
     {
       "code": -2,
       "column": 9,
@@ -1542,7 +1542,7 @@
       "stop_line": 102
     }
   ],
-  "callables_annotation.py": [
+  "conformance\\third_party\\callables_annotation.py": [
     {
       "code": -2,
       "column": 7,
@@ -1744,7 +1744,7 @@
       "stop_line": 189
     }
   ],
-  "callables_kwargs.py": [
+  "conformance\\third_party\\callables_kwargs.py": [
     {
       "code": -2,
       "column": 10,
@@ -1917,6 +1917,16 @@
     },
     {
       "code": -2,
+      "column": 20,
+      "concise_description": "TypedDict key 'v1' in **kwargs overlaps with positional parameter 'v1'",
+      "description": "TypedDict key 'v1' in **kwargs overlaps with positional parameter 'v1'",
+      "line": 111,
+      "name": "bad-function-definition",
+      "stop_column": 41,
+      "stop_line": 111
+    },
+    {
+      "code": -2,
       "column": 21,
       "concise_description": "`Unpack` in **kwargs annotation must be used only with a `TypedDict`",
       "description": "`Unpack` in **kwargs annotation must be used only with a `TypedDict`",
@@ -1936,7 +1946,7 @@
       "stop_line": 134
     }
   ],
-  "callables_protocol.py": [
+  "conformance\\third_party\\callables_protocol.py": [
     {
       "code": -2,
       "column": 7,
@@ -2108,7 +2118,7 @@
       "stop_line": 311
     }
   ],
-  "callables_subtyping.py": [
+  "conformance\\third_party\\callables_subtyping.py": [
     {
       "code": -2,
       "column": 36,
@@ -2430,7 +2440,7 @@
       "stop_line": 297
     }
   ],
-  "classes_classvar.py": [
+  "conformance\\third_party\\classes_classvar.py": [
     {
       "code": -2,
       "column": 11,
@@ -2642,7 +2652,7 @@
       "stop_line": 140
     }
   ],
-  "classes_override.py": [
+  "conformance\\third_party\\classes_override.py": [
     {
       "code": -2,
       "column": 9,
@@ -2694,7 +2704,7 @@
       "stop_line": 89
     }
   ],
-  "constructors_call_init.py": [
+  "conformance\\third_party\\constructors_call_init.py": [
     {
       "code": -2,
       "column": 13,
@@ -2736,7 +2746,7 @@
       "stop_line": 130
     }
   ],
-  "constructors_call_metaclass.py": [
+  "conformance\\third_party\\constructors_call_metaclass.py": [
     {
       "code": -2,
       "column": 7,
@@ -2758,7 +2768,7 @@
       "stop_line": 65
     }
   ],
-  "constructors_call_new.py": [
+  "conformance\\third_party\\constructors_call_new.py": [
     {
       "code": -2,
       "column": 13,
@@ -2780,7 +2790,7 @@
       "stop_line": 145
     }
   ],
-  "constructors_call_type.py": [
+  "conformance\\third_party\\constructors_call_type.py": [
     {
       "code": -2,
       "column": 8,
@@ -2852,7 +2862,7 @@
       "stop_line": 59
     }
   ],
-  "constructors_callable.py": [
+  "conformance\\third_party\\constructors_callable.py": [
     {
       "code": -2,
       "column": 12,
@@ -3094,9 +3104,9 @@
       "stop_line": 193
     }
   ],
-  "constructors_consistency.py": [],
-  "dataclasses_descriptors.py": [],
-  "dataclasses_final.py": [
+  "conformance\\third_party\\constructors_consistency.py": [],
+  "conformance\\third_party\\dataclasses_descriptors.py": [],
+  "conformance\\third_party\\dataclasses_final.py": [
     {
       "code": -2,
       "column": 1,
@@ -3138,7 +3148,7 @@
       "stop_line": 38
     }
   ],
-  "dataclasses_frozen.py": [
+  "conformance\\third_party\\dataclasses_frozen.py": [
     {
       "code": -2,
       "column": 1,
@@ -3180,7 +3190,7 @@
       "stop_line": 33
     }
   ],
-  "dataclasses_hash.py": [
+  "conformance\\third_party\\dataclasses_hash.py": [
     {
       "code": -2,
       "column": 16,
@@ -3202,7 +3212,7 @@
       "stop_line": 32
     }
   ],
-  "dataclasses_inheritance.py": [
+  "conformance\\third_party\\dataclasses_inheritance.py": [
     {
       "code": -2,
       "column": 5,
@@ -3224,7 +3234,7 @@
       "stop_line": 66
     }
   ],
-  "dataclasses_kwonly.py": [
+  "conformance\\third_party\\dataclasses_kwonly.py": [
     {
       "code": -2,
       "column": 11,
@@ -3256,7 +3266,7 @@
       "stop_line": 53
     }
   ],
-  "dataclasses_match_args.py": [
+  "conformance\\third_party\\dataclasses_match_args.py": [
     {
       "code": -2,
       "column": 1,
@@ -3268,7 +3278,7 @@
       "stop_line": 42
     }
   ],
-  "dataclasses_order.py": [
+  "conformance\\third_party\\dataclasses_order.py": [
     {
       "code": -2,
       "column": 4,
@@ -3280,7 +3290,7 @@
       "stop_line": 50
     }
   ],
-  "dataclasses_postinit.py": [
+  "conformance\\third_party\\dataclasses_postinit.py": [
     {
       "code": -2,
       "column": 9,
@@ -3322,7 +3332,7 @@
       "stop_line": 36
     }
   ],
-  "dataclasses_slots.py": [
+  "conformance\\third_party\\dataclasses_slots.py": [
     {
       "code": -2,
       "column": 7,
@@ -3354,7 +3364,7 @@
       "stop_line": 69
     }
   ],
-  "dataclasses_transform_class.py": [
+  "conformance\\third_party\\dataclasses_transform_class.py": [
     {
       "code": -2,
       "column": 7,
@@ -3436,7 +3446,7 @@
       "stop_line": 122
     }
   ],
-  "dataclasses_transform_converter.py": [
+  "conformance\\third_party\\dataclasses_transform_converter.py": [
     {
       "code": -2,
       "column": 41,
@@ -3548,7 +3558,7 @@
       "stop_line": 133
     }
   ],
-  "dataclasses_transform_field.py": [
+  "conformance\\third_party\\dataclasses_transform_field.py": [
     {
       "code": -2,
       "column": 16,
@@ -3570,7 +3580,7 @@
       "stop_line": 75
     }
   ],
-  "dataclasses_transform_func.py": [
+  "conformance\\third_party\\dataclasses_transform_func.py": [
     {
       "code": -2,
       "column": 13,
@@ -3642,7 +3652,7 @@
       "stop_line": 96
     }
   ],
-  "dataclasses_transform_meta.py": [
+  "conformance\\third_party\\dataclasses_transform_meta.py": [
     {
       "code": -2,
       "column": 7,
@@ -3724,7 +3734,7 @@
       "stop_line": 103
     }
   ],
-  "dataclasses_usage.py": [
+  "conformance\\third_party\\dataclasses_usage.py": [
     {
       "code": -2,
       "column": 19,
@@ -3836,7 +3846,7 @@
       "stop_line": 179
     }
   ],
-  "directives_assert_type.py": [
+  "conformance\\third_party\\directives_assert_type.py": [
     {
       "code": -2,
       "column": 16,
@@ -3898,7 +3908,7 @@
       "stop_line": 33
     }
   ],
-  "directives_cast.py": [
+  "conformance\\third_party\\directives_cast.py": [
     {
       "code": -2,
       "column": 12,
@@ -3940,7 +3950,7 @@
       "stop_line": 17
     }
   ],
-  "directives_deprecated.py": [
+  "conformance\\third_party\\directives_deprecated.py": [
     {
       "code": -2,
       "column": 44,
@@ -4052,7 +4062,7 @@
       "stop_line": 98
     }
   ],
-  "directives_no_type_check.py": [
+  "conformance\\third_party\\directives_no_type_check.py": [
     {
       "code": -2,
       "column": 14,
@@ -4104,7 +4114,7 @@
       "stop_line": 32
     }
   ],
-  "directives_reveal_type.py": [
+  "conformance\\third_party\\directives_reveal_type.py": [
     {
       "code": -2,
       "column": 16,
@@ -4166,10 +4176,10 @@
       "stop_line": 20
     }
   ],
-  "directives_type_checking.py": [],
-  "directives_type_ignore.py": [],
-  "directives_type_ignore_file1.py": [],
-  "directives_type_ignore_file2.py": [
+  "conformance\\third_party\\directives_type_checking.py": [],
+  "conformance\\third_party\\directives_type_ignore.py": [],
+  "conformance\\third_party\\directives_type_ignore_file1.py": [],
+  "conformance\\third_party\\directives_type_ignore_file2.py": [
     {
       "code": -2,
       "column": 10,
@@ -4181,7 +4191,7 @@
       "stop_line": 14
     }
   ],
-  "directives_version_platform.py": [
+  "conformance\\third_party\\directives_version_platform.py": [
     {
       "code": -2,
       "column": 17,
@@ -4203,7 +4213,7 @@
       "stop_line": 45
     }
   ],
-  "enums_behaviors.py": [
+  "conformance\\third_party\\enums_behaviors.py": [
     {
       "code": -2,
       "column": 16,
@@ -4245,8 +4255,8 @@
       "stop_line": 44
     }
   ],
-  "enums_definition.py": [],
-  "enums_expansion.py": [
+  "conformance\\third_party\\enums_definition.py": [],
+  "conformance\\third_party\\enums_expansion.py": [
     {
       "code": -2,
       "column": 20,
@@ -4258,7 +4268,7 @@
       "stop_line": 53
     }
   ],
-  "enums_member_names.py": [
+  "conformance\\third_party\\enums_member_names.py": [
     {
       "code": -2,
       "column": 16,
@@ -4270,7 +4280,7 @@
       "stop_line": 30
     }
   ],
-  "enums_member_values.py": [
+  "conformance\\third_party\\enums_member_values.py": [
     {
       "code": -2,
       "column": 12,
@@ -4362,7 +4372,7 @@
       "stop_line": 96
     }
   ],
-  "enums_members.py": [
+  "conformance\\third_party\\enums_members.py": [
     {
       "code": -2,
       "column": 12,
@@ -4574,7 +4584,7 @@
       "stop_line": 147
     }
   ],
-  "exceptions_context_managers.py": [
+  "conformance\\third_party\\exceptions_context_managers.py": [
     {
       "code": -2,
       "column": 16,
@@ -4596,7 +4606,7 @@
       "stop_line": 57
     }
   ],
-  "generics_base_class.py": [
+  "conformance\\third_party\\generics_base_class.py": [
     {
       "code": -2,
       "column": 26,
@@ -4658,7 +4668,7 @@
       "stop_line": 68
     }
   ],
-  "generics_basic.py": [
+  "conformance\\third_party\\generics_basic.py": [
     {
       "code": -2,
       "column": 12,
@@ -4830,7 +4840,7 @@
       "stop_line": 208
     }
   ],
-  "generics_defaults.py": [
+  "conformance\\third_party\\generics_defaults.py": [
     {
       "code": -2,
       "column": 7,
@@ -4922,7 +4932,7 @@
       "stop_line": 170
     }
   ],
-  "generics_defaults_referential.py": [
+  "conformance\\third_party\\generics_defaults_referential.py": [
     {
       "code": -2,
       "column": 13,
@@ -5024,7 +5034,7 @@
       "stop_line": 78
     }
   ],
-  "generics_defaults_specialization.py": [
+  "conformance\\third_party\\generics_defaults_specialization.py": [
     {
       "code": -2,
       "column": 1,
@@ -5046,7 +5056,7 @@
       "stop_line": 55
     }
   ],
-  "generics_paramspec_basic.py": [
+  "conformance\\third_party\\generics_paramspec_basic.py": [
     {
       "code": -2,
       "column": 13,
@@ -5138,7 +5148,7 @@
       "stop_line": 39
     }
   ],
-  "generics_paramspec_components.py": [
+  "conformance\\third_party\\generics_paramspec_components.py": [
     {
       "code": -2,
       "column": 25,
@@ -5330,7 +5340,7 @@
       "stop_line": 98
     }
   ],
-  "generics_paramspec_semantics.py": [
+  "conformance\\third_party\\generics_paramspec_semantics.py": [
     {
       "code": -2,
       "column": 4,
@@ -5442,7 +5452,7 @@
       "stop_line": 137
     }
   ],
-  "generics_paramspec_specialization.py": [
+  "conformance\\third_party\\generics_paramspec_specialization.py": [
     {
       "code": -2,
       "column": 15,
@@ -5494,7 +5504,7 @@
       "stop_line": 61
     }
   ],
-  "generics_scoping.py": [
+  "conformance\\third_party\\generics_scoping.py": [
     {
       "code": -2,
       "column": 10,
@@ -5516,7 +5526,7 @@
       "stop_line": 65
     }
   ],
-  "generics_self_advanced.py": [
+  "conformance\\third_party\\generics_self_advanced.py": [
     {
       "code": -2,
       "column": 20,
@@ -5558,7 +5568,7 @@
       "stop_line": 44
     }
   ],
-  "generics_self_attributes.py": [
+  "conformance\\third_party\\generics_self_attributes.py": [
     {
       "code": -2,
       "column": 38,
@@ -5570,7 +5580,7 @@
       "stop_line": 26
     }
   ],
-  "generics_self_basic.py": [
+  "conformance\\third_party\\generics_self_basic.py": [
     {
       "code": -2,
       "column": 26,
@@ -5582,7 +5592,7 @@
       "stop_line": 67
     }
   ],
-  "generics_self_protocols.py": [
+  "conformance\\third_party\\generics_self_protocols.py": [
     {
       "code": -2,
       "column": 19,
@@ -5614,7 +5624,7 @@
       "stop_line": 64
     }
   ],
-  "generics_self_usage.py": [
+  "conformance\\third_party\\generics_self_usage.py": [
     {
       "code": -2,
       "column": 12,
@@ -5626,7 +5636,7 @@
       "stop_line": 103
     }
   ],
-  "generics_syntax_compatibility.py": [
+  "conformance\\third_party\\generics_syntax_compatibility.py": [
     {
       "code": -2,
       "column": 7,
@@ -5668,7 +5678,7 @@
       "stop_line": 26
     }
   ],
-  "generics_syntax_declarations.py": [
+  "conformance\\third_party\\generics_syntax_declarations.py": [
     {
       "code": -2,
       "column": 7,
@@ -5770,7 +5780,7 @@
       "stop_line": 79
     }
   ],
-  "generics_syntax_infer_variance.py": [
+  "conformance\\third_party\\generics_syntax_infer_variance.py": [
     {
       "code": -2,
       "column": 36,
@@ -5952,7 +5962,7 @@
       "stop_line": 155
     }
   ],
-  "generics_syntax_scoping.py": [
+  "conformance\\third_party\\generics_syntax_scoping.py": [
     {
       "code": -2,
       "column": 20,
@@ -6034,7 +6044,7 @@
       "stop_line": 116
     }
   ],
-  "generics_type_erasure.py": [
+  "conformance\\third_party\\generics_type_erasure.py": [
     {
       "code": -2,
       "column": 16,
@@ -6106,7 +6116,7 @@
       "stop_line": 46
     }
   ],
-  "generics_typevartuple_args.py": [
+  "conformance\\third_party\\generics_typevartuple_args.py": [
     {
       "code": -2,
       "column": 8,
@@ -6198,7 +6208,7 @@
       "stop_line": 76
     }
   ],
-  "generics_typevartuple_basic.py": [
+  "conformance\\third_party\\generics_typevartuple_basic.py": [
     {
       "code": -2,
       "column": 34,
@@ -6360,7 +6370,7 @@
       "stop_line": 106
     }
   ],
-  "generics_typevartuple_callable.py": [
+  "conformance\\third_party\\generics_typevartuple_callable.py": [
     {
       "code": -2,
       "column": 28,
@@ -6372,7 +6382,7 @@
       "stop_line": 26
     }
   ],
-  "generics_typevartuple_concat.py": [
+  "conformance\\third_party\\generics_typevartuple_concat.py": [
     {
       "code": -2,
       "column": 12,
@@ -6384,8 +6394,8 @@
       "stop_line": 56
     }
   ],
-  "generics_typevartuple_overloads.py": [],
-  "generics_typevartuple_specialization.py": [
+  "conformance\\third_party\\generics_typevartuple_overloads.py": [],
+  "conformance\\third_party\\generics_typevartuple_specialization.py": [
     {
       "code": -2,
       "column": 16,
@@ -6487,7 +6497,7 @@
       "stop_line": 163
     }
   ],
-  "generics_typevartuple_unpack.py": [
+  "conformance\\third_party\\generics_typevartuple_unpack.py": [
     {
       "code": -2,
       "column": 28,
@@ -6499,7 +6509,7 @@
       "stop_line": 30
     }
   ],
-  "generics_upper_bound.py": [
+  "conformance\\third_party\\generics_upper_bound.py": [
     {
       "code": -2,
       "column": 38,
@@ -6541,7 +6551,7 @@
       "stop_line": 56
     }
   ],
-  "generics_variance.py": [
+  "conformance\\third_party\\generics_variance.py": [
     {
       "code": -2,
       "column": 36,
@@ -6553,7 +6563,7 @@
       "stop_line": 14
     }
   ],
-  "generics_variance_inference.py": [
+  "conformance\\third_party\\generics_variance_inference.py": [
     {
       "code": -2,
       "column": 33,
@@ -6785,7 +6795,7 @@
       "stop_line": 194
     }
   ],
-  "historical_positional.py": [
+  "conformance\\third_party\\historical_positional.py": [
     {
       "code": -2,
       "column": 4,
@@ -6827,7 +6837,7 @@
       "stop_line": 43
     }
   ],
-  "literals_interactions.py": [
+  "conformance\\third_party\\literals_interactions.py": [
     {
       "code": -2,
       "column": 5,
@@ -6889,7 +6899,7 @@
       "stop_line": 72
     }
   ],
-  "literals_literalstring.py": [
+  "conformance\\third_party\\literals_literalstring.py": [
     {
       "code": -2,
       "column": 29,
@@ -6991,7 +7001,7 @@
       "stop_line": 171
     }
   ],
-  "literals_parameterizations.py": [
+  "conformance\\third_party\\literals_parameterizations.py": [
     {
       "code": -2,
       "column": 15,
@@ -7163,7 +7173,7 @@
       "stop_line": 65
     }
   ],
-  "literals_semantics.py": [
+  "conformance\\third_party\\literals_semantics.py": [
     {
       "code": -2,
       "column": 18,
@@ -7205,7 +7215,7 @@
       "stop_line": 33
     }
   ],
-  "namedtuples_define_class.py": [
+  "conformance\\third_party\\namedtuples_define_class.py": [
     {
       "code": -2,
       "column": 7,
@@ -7327,7 +7337,7 @@
       "stop_line": 105
     }
   ],
-  "namedtuples_define_functional.py": [
+  "conformance\\third_party\\namedtuples_define_functional.py": [
     {
       "code": -2,
       "column": 14,
@@ -7469,7 +7479,7 @@
       "stop_line": 66
     }
   ],
-  "namedtuples_type_compat.py": [
+  "conformance\\third_party\\namedtuples_type_compat.py": [
     {
       "code": -2,
       "column": 23,
@@ -7491,7 +7501,7 @@
       "stop_line": 23
     }
   ],
-  "namedtuples_usage.py": [
+  "conformance\\third_party\\namedtuples_usage.py": [
     {
       "code": -2,
       "column": 7,
@@ -7573,7 +7583,7 @@
       "stop_line": 53
     }
   ],
-  "narrowing_typeguard.py": [
+  "conformance\\third_party\\narrowing_typeguard.py": [
     {
       "code": -2,
       "column": 9,
@@ -7615,7 +7625,7 @@
       "stop_line": 148
     }
   ],
-  "narrowing_typeis.py": [
+  "conformance\\third_party\\narrowing_typeis.py": [
     {
       "code": -2,
       "column": 9,
@@ -7707,7 +7717,7 @@
       "stop_line": 199
     }
   ],
-  "overloads_basic.py": [
+  "conformance\\third_party\\overloads_basic.py": [
     {
       "code": -2,
       "column": 1,
@@ -7719,7 +7729,7 @@
       "stop_line": 39
     }
   ],
-  "overloads_consistency.py": [
+  "conformance\\third_party\\overloads_consistency.py": [
     {
       "code": -2,
       "column": 5,
@@ -7741,7 +7751,7 @@
       "stop_line": 41
     }
   ],
-  "overloads_definitions.py": [
+  "conformance\\third_party\\overloads_definitions.py": [
     {
       "code": -2,
       "column": 5,
@@ -7883,7 +7893,7 @@
       "stop_line": 226
     }
   ],
-  "overloads_evaluation.py": [
+  "conformance\\third_party\\overloads_evaluation.py": [
     {
       "code": -2,
       "column": 11,
@@ -8065,7 +8075,7 @@
       "stop_line": 345
     }
   ],
-  "protocols_class_objects.py": [
+  "conformance\\third_party\\protocols_class_objects.py": [
     {
       "code": -2,
       "column": 15,
@@ -8097,7 +8107,7 @@
       "stop_line": 74
     }
   ],
-  "protocols_definition.py": [
+  "conformance\\third_party\\protocols_definition.py": [
     {
       "code": -2,
       "column": 11,
@@ -8289,7 +8299,7 @@
       "stop_line": 341
     }
   ],
-  "protocols_explicit.py": [
+  "conformance\\third_party\\protocols_explicit.py": [
     {
       "code": -2,
       "column": 20,
@@ -8301,7 +8311,7 @@
       "stop_line": 56
     }
   ],
-  "protocols_generic.py": [
+  "conformance\\third_party\\protocols_generic.py": [
     {
       "code": -2,
       "column": 24,
@@ -8403,7 +8413,7 @@
       "stop_line": 147
     }
   ],
-  "protocols_merging.py": [
+  "conformance\\third_party\\protocols_merging.py": [
     {
       "code": -2,
       "column": 25,
@@ -8455,7 +8465,7 @@
       "stop_line": 83
     }
   ],
-  "protocols_modules.py": [
+  "conformance\\third_party\\protocols_modules.py": [
     {
       "code": -2,
       "column": 17,
@@ -8497,8 +8507,8 @@
       "stop_line": 49
     }
   ],
-  "protocols_recursive.py": [],
-  "protocols_runtime_checkable.py": [
+  "conformance\\third_party\\protocols_recursive.py": [],
+  "conformance\\third_party\\protocols_runtime_checkable.py": [
     {
       "code": -2,
       "column": 22,
@@ -8530,7 +8540,7 @@
       "stop_line": 61
     }
   ],
-  "protocols_self.py": [
+  "conformance\\third_party\\protocols_self.py": [
     {
       "code": -2,
       "column": 5,
@@ -8552,7 +8562,7 @@
       "stop_line": 33
     }
   ],
-  "protocols_subtyping.py": [
+  "conformance\\third_party\\protocols_subtyping.py": [
     {
       "code": -2,
       "column": 12,
@@ -8624,8 +8634,8 @@
       "stop_line": 103
     }
   ],
-  "protocols_variance.py": [],
-  "qualifiers_annotated.py": [
+  "conformance\\third_party\\protocols_variance.py": [],
+  "conformance\\third_party\\qualifiers_annotated.py": [
     {
       "code": -2,
       "column": 17,
@@ -8787,7 +8797,7 @@
       "stop_line": 91
     }
   ],
-  "qualifiers_final_annotation.py": [
+  "conformance\\third_party\\qualifiers_final_annotation.py": [
     {
       "code": -2,
       "column": 7,
@@ -9009,7 +9019,7 @@
       "stop_line": 147
     }
   ],
-  "qualifiers_final_decorator.py": [
+  "conformance\\third_party\\qualifiers_final_decorator.py": [
     {
       "code": -2,
       "column": 16,
@@ -9111,8 +9121,8 @@
       "stop_line": 125
     }
   ],
-  "specialtypes_any.py": [],
-  "specialtypes_never.py": [
+  "conformance\\third_party\\specialtypes_any.py": [],
+  "conformance\\third_party\\specialtypes_never.py": [
     {
       "code": -2,
       "column": 22,
@@ -9154,7 +9164,7 @@
       "stop_line": 105
     }
   ],
-  "specialtypes_none.py": [
+  "conformance\\third_party\\specialtypes_none.py": [
     {
       "code": -2,
       "column": 7,
@@ -9186,7 +9196,7 @@
       "stop_line": 41
     }
   ],
-  "specialtypes_promotions.py": [
+  "conformance\\third_party\\specialtypes_promotions.py": [
     {
       "code": -2,
       "column": 5,
@@ -9198,7 +9208,7 @@
       "stop_line": 13
     }
   ],
-  "specialtypes_type.py": [
+  "conformance\\third_party\\specialtypes_type.py": [
     {
       "code": -2,
       "column": 7,
@@ -9350,7 +9360,7 @@
       "stop_line": 146
     }
   ],
-  "tuples_type_compat.py": [
+  "conformance\\third_party\\tuples_type_compat.py": [
     {
       "code": -2,
       "column": 27,
@@ -9592,7 +9602,7 @@
       "stop_line": 188
     }
   ],
-  "tuples_type_form.py": [
+  "conformance\\third_party\\tuples_type_form.py": [
     {
       "code": -2,
       "column": 6,
@@ -9704,7 +9714,7 @@
       "stop_line": 45
     }
   ],
-  "tuples_unpacked.py": [
+  "conformance\\third_party\\tuples_unpacked.py": [
     {
       "code": -2,
       "column": 29,
@@ -9756,7 +9766,7 @@
       "stop_line": 61
     }
   ],
-  "typeddicts_alt_syntax.py": [
+  "conformance\\third_party\\typeddicts_alt_syntax.py": [
     {
       "code": -2,
       "column": 1,
@@ -9868,7 +9878,7 @@
       "stop_line": 45
     }
   ],
-  "typeddicts_class_syntax.py": [
+  "conformance\\third_party\\typeddicts_class_syntax.py": [
     {
       "code": -2,
       "column": 9,
@@ -9920,7 +9930,7 @@
       "stop_line": 49
     }
   ],
-  "typeddicts_extra_items.py": [
+  "conformance\\third_party\\typeddicts_extra_items.py": [
     {
       "code": -2,
       "column": 45,
@@ -10202,8 +10212,8 @@
       "stop_line": 343
     }
   ],
-  "typeddicts_final.py": [],
-  "typeddicts_inheritance.py": [
+  "conformance\\third_party\\typeddicts_final.py": [],
+  "conformance\\third_party\\typeddicts_inheritance.py": [
     {
       "code": -2,
       "column": 7,
@@ -10225,7 +10235,7 @@
       "stop_line": 55
     }
   ],
-  "typeddicts_operations.py": [
+  "conformance\\third_party\\typeddicts_operations.py": [
     {
       "code": -2,
       "column": 17,
@@ -10347,7 +10357,7 @@
       "stop_line": 62
     }
   ],
-  "typeddicts_readonly.py": [
+  "conformance\\third_party\\typeddicts_readonly.py": [
     {
       "code": -2,
       "column": 4,
@@ -10409,7 +10419,7 @@
       "stop_line": 61
     }
   ],
-  "typeddicts_readonly_consistency.py": [
+  "conformance\\third_party\\typeddicts_readonly_consistency.py": [
     {
       "code": -2,
       "column": 14,
@@ -10481,7 +10491,7 @@
       "stop_line": 85
     }
   ],
-  "typeddicts_readonly_inheritance.py": [
+  "conformance\\third_party\\typeddicts_readonly_inheritance.py": [
     {
       "code": -2,
       "column": 4,
@@ -10553,7 +10563,7 @@
       "stop_line": 94
     }
   ],
-  "typeddicts_readonly_kwargs.py": [
+  "conformance\\third_party\\typeddicts_readonly_kwargs.py": [
     {
       "code": -2,
       "column": 12,
@@ -10565,7 +10575,7 @@
       "stop_line": 33
     }
   ],
-  "typeddicts_readonly_update.py": [
+  "conformance\\third_party\\typeddicts_readonly_update.py": [
     {
       "code": -2,
       "column": 10,
@@ -10577,7 +10587,7 @@
       "stop_line": 23
     }
   ],
-  "typeddicts_required.py": [
+  "conformance\\third_party\\typeddicts_required.py": [
     {
       "code": -2,
       "column": 5,
@@ -10639,7 +10649,7 @@
       "stop_line": 74
     }
   ],
-  "typeddicts_type_consistency.py": [
+  "conformance\\third_party\\typeddicts_type_consistency.py": [
     {
       "code": -2,
       "column": 10,
@@ -10731,7 +10741,7 @@
       "stop_line": 126
     }
   ],
-  "typeddicts_usage.py": [
+  "conformance\\third_party\\typeddicts_usage.py": [
     {
       "code": -2,
       "column": 7,
