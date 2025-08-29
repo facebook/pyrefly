@@ -616,6 +616,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn is_iterable(&self, ty: &Type) -> bool {
+        self.unwrap_iterable(ty).is_some()
+            || matches!(ty, Type::Tuple(_))
+            || matches!(ty, Type::ClassType(cls) if self.as_tuple(cls).is_some())
+    }
+
     /// Given an `iterable` type, determine the iteration type; this is the type
     /// of `x` if we were to loop using `for x in iterable`.
     ///
@@ -640,7 +646,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Union(ts) => ts
                 .iter()
-                .flat_map(|t| self.iterate(t, range, errors))
+                .filter_map(|t| {
+                    if self.is_iterable(t) {
+                        Some(self.iterate(t, range, errors))
+                    } else {
+                        None
+                    }
+                })
+                .flatten()
                 .collect(),
             _ => {
                 let ty = self
