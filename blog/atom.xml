@@ -83,7 +83,7 @@ Type hints are much easier to add as you go than to retrofit across an entire co
             <uri>https://github.com/javabster</uri>
         </author>
         <author>
-            <name>PyreFly Team</name>
+            <name>Pyrefly Team</name>
             <uri>https://github.com/facebook/pyrefly</uri>
         </author>
         <category label="typechecking" term="typechecking"/>
@@ -132,7 +132,7 @@ Type hints are much easier to add as you go than to retrofit across an entire co
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="acknowledgements">Acknowledgements<a href="https://pyrefly.org/blog/introducing-pyrefly/#acknowledgements" class="hash-link" aria-label="Direct link to Acknowledgements" title="Direct link to Acknowledgements">​</a></h3>
 <p><em>Pyrefly was created By Meta’s Python Language Tooling Team: Jia Chen, Rebecca Chen, Sam Goldman, David Luo, Kyle Into, Zeina Migeed, Neil Mitchell, Maggie Moss, Conner Nilsen, Aaron Pollack, Teddy Sudol, Steven Troxler, Lucian Wischik, Danny Yang, and Sam Zhou.</em></p>]]></content>
         <author>
-            <name>PyreFly Team</name>
+            <name>Pyrefly Team</name>
             <uri>https://github.com/facebook/pyrefly</uri>
         </author>
         <category label="typechecking" term="typechecking"/>
