@@ -91,7 +91,20 @@ testcase!(
 from warnings import deprecated
 @deprecated("function is deprecated")
 def old_function() -> None: ...
-old_function()  # E: Call to deprecated function `old_function`
+old_function()  # E: Reference to deprecated function `old_function`
+    "#,
+);
+
+testcase!(
+    test_deprecated_function_reference,
+    r#"
+from typing import Callable
+from warnings import deprecated
+@deprecated("function is deprecated")
+def old_function() -> None: ...
+
+def take_callable(f: Callable) -> None: ...
+take_callable(old_function)  # E: Reference to deprecated function `old_function`
     "#,
 );
 
@@ -104,7 +117,7 @@ class C:
     def old_function(self) -> None: ...
 
 c = C()
-c.old_function()  # E: Call to deprecated function `C.old_function`
+c.old_function()  # E: Reference to deprecated function `C.old_function`
     "#,
 );
 
@@ -122,7 +135,7 @@ def f(x: str) -> str: ...
 def f(x: int | str) -> int | str:
     return x
 
-f(0)  # E: Call to deprecated function `f`
+f(0)  # E: Reference to deprecated function `f`
     "#,
 );
 
