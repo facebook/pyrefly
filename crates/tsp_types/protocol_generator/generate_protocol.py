@@ -382,27 +382,45 @@ def replace_flag_enum(content: str, name: str, mapping: Dict[str, int]) -> str:
     enum_marker = f"pub enum {name} "
     enum_start = content.find(enum_marker)
     if enum_start == -1:
-        return
+        print(
+            f"Warning: Enum {name} not found in content, skipping flag enum replacement"
+        )
+        return content
     enum_brace = content.find("{", enum_start)
     enum_end = find_block_end(enum_brace)
     if enum_end is None:
-        return
+        print(
+            f"Warning: Could not find end of enum {name}, skipping flag enum replacement"
+        )
+        return content
     ser_marker = f"impl Serialize for {name}"
     ser_start = content.find(ser_marker, enum_end)
     if ser_start == -1:
-        return
+        print(
+            f"Warning: Could not find Serialize impl for {name}, skipping flag enum replacement"
+        )
+        return content
     ser_brace = content.find("{", ser_start)
     ser_end = find_block_end(ser_brace)
     if ser_end is None:
-        return
+        print(
+            f"Warning: Could not find end of Serialize impl for {name}, skipping flag enum replacement"
+        )
+        return content
     de_marker = f"impl<'de> Deserialize<'de> for {name}"
     de_start = content.find(de_marker, ser_end)
     if de_start == -1:
-        return
+        print(
+            f"Warning: Could not find Deserialize impl for {name}, skipping flag enum replacement"
+        )
+        return content
     de_brace = content.find("{", de_start)
     de_end = find_block_end(de_brace)
     if de_end is None:
-        return
+        print(
+            f"Warning: Could not find end of Deserialize impl for {name}, skipping flag enum replacement"
+        )
+        return content
     # Capture doc comments preceding enum
 
     doc_start = enum_start
@@ -470,6 +488,59 @@ def replace_flag_enum(content: str, name: str, mapping: Dict[str, int]) -> str:
     )
     replacement = "\n" + "\n".join(lines) + "\n"
     return content[:doc_start] + replacement + content[de_end:]
+
+
+def extract_flag_enums_from_tsp(tsp_json: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
+    """
+    Extract flag enums from TSP JSON file.
+
+    A flag enum is identified by:
+    1. Having integer values
+    2. Having "Flags" in the name, OR
+    3. Having values that are powers of 2 (or 0), suggesting bitflag usage
+    """
+    flag_enums = {}
+
+    for enum_def in tsp_json.get("enumerations", []):
+        enum_name = enum_def["name"]
+
+        # Check if this enum has integer values
+
+        if enum_def.get("type", {}).get("name") != "integer":
+            continue
+        # Extract value mappings
+
+        mapping = {}
+        power_of_two_count = 0
+        zero_count = 0
+
+        for value_def in enum_def["values"]:
+            name = value_def["name"]
+            value = value_def["value"]
+            mapping[name] = value
+
+            if value == 0:
+                zero_count += 1
+            elif value > 0 and (value & (value - 1)) == 0:
+                # This is a power of 2
+
+                power_of_two_count += 1
+        total_values = len(mapping)
+
+        # Determine if this is likely a flag enum:
+
+        is_flag_enum = False
+
+        # Strong indicator: name contains "Flags"
+
+        if "Flags" in enum_name:
+            is_flag_enum = True
+        # Special case: all values are powers of 2 or 0
+        elif total_values > 1 and (power_of_two_count + zero_count) == total_values:
+            is_flag_enum = True
+        if is_flag_enum:
+            flag_enums[enum_name] = mapping
+    return flag_enums
 
 
 def generate_rust_protocol(tsp_json_path: str, output_dir: str) -> None:
@@ -553,52 +624,10 @@ def generate_rust_protocol(tsp_json_path: str, output_dir: str) -> None:
 
         content = "#![allow(clippy::all)]\n#![allow(dead_code)]\n\n" + content
 
-        # Fixup flag enums
+        # Fixup flag enums - automatically detect flag enums from TSP JSON
 
-        for enum_name, mapping in {
-            "TypeFlags": {
-                "None": 0,
-                "Instantiable": 1,
-                "Instance": 2,
-                "Callable": 4,
-                "Literal": 8,
-                "Interface": 16,
-                "Generic": 32,
-                "FromAlias": 64,
-            },
-            "AttributeFlags": {"None": 0, "IsArgsList": 1, "IsKwargsDict": 2},
-            "DeclarationFlags": {
-                "None": 0,
-                "ClassMember": 1,
-                "Constant": 2,
-                "Final": 4,
-                "IsDefinedBySlots": 8,
-                "UsesLocalName": 16,
-                "UnresolvedImport": 32,
-            },
-            "TypeReprFlags": {
-                "None": 0,
-                "ExpandTypeAliases": 1,
-                "PrintTypeVarVariance": 2,
-                "ConvertToInstanceType": 4,
-            },
-            "AttributeAccessFlags": {
-                "None": 0,
-                "SkipInstanceAttributes": 1,
-                "SkipTypeBaseClass": 2,
-                "SkipAttributeAccessOverrides": 4,
-                "GetBoundAttributes": 8,
-            },
-            "FunctionFlags": {
-                "None": 0,
-                "Async": 1,
-                "Generator": 2,
-                "Abstract": 4,
-                "Static": 8,
-            },
-            "ClassFlags": {"None": 0, "Enum": 1, "TypedDict": 2},
-            "TypeVarFlags": {"None": 0, "IsParamSpec": 1},
-        }.items():
+        flag_enums = extract_flag_enums_from_tsp(tsp_json)
+        for enum_name, mapping in flag_enums.items():
             content = replace_flag_enum(content, enum_name, mapping)
         target_protocol.write_text(content, encoding="utf-8")
         print(f"Successfully generated: {target_protocol}")

@@ -119,10 +119,10 @@ pub enum TSPRequestMethods {
     TypeServerGetBuiltinType,
     #[serde(rename = "typeServer/getTypeArgs")]
     TypeServerGetTypeArgs,
-    #[serde(rename = "typeServer/searchForTypeAttribute")]
-    TypeServerSearchForTypeAttribute,
-    #[serde(rename = "typeServer/getTypeAttributes")]
-    TypeServerGetTypeAttributes,
+    #[serde(rename = "typeServer/getSymbolsForType")]
+    TypeServerGetSymbolsForType,
+    #[serde(rename = "typeServer/getSymbolsForNode")]
+    TypeServerGetSymbolsForNode,
     #[serde(rename = "typeServer/getOverloads")]
     TypeServerGetOverloads,
     #[serde(rename = "typeServer/getMatchingOverloads")]
@@ -131,12 +131,6 @@ pub enum TSPRequestMethods {
     TypeServerGetMetaclass,
     #[serde(rename = "typeServer/getTypeOfDeclaration")]
     TypeServerGetTypeOfDeclaration,
-    #[serde(rename = "typeServer/getSymbol")]
-    TypeServerGetSymbol,
-    #[serde(rename = "typeServer/getSymbolsForFile")]
-    TypeServerGetSymbolsForFile,
-    #[serde(rename = "typeServer/getFunctionParts")]
-    TypeServerGetFunctionParts,
     #[serde(rename = "typeServer/getRepr")]
     TypeServerGetRepr,
     #[serde(rename = "typeServer/getDocString")]
@@ -187,15 +181,15 @@ pub enum TSPRequests {
         id: serde_json::Value,
         params: GetTypeArgsParams,
     },
-    #[serde(rename = "typeServer/searchForTypeAttribute")]
-    SearchForTypeAttributeRequest {
+    #[serde(rename = "typeServer/getSymbolsForType")]
+    GetSymbolsForTypeRequest {
         id: serde_json::Value,
-        params: SearchForTypeAttributeParams,
+        params: GetSymbolsForTypeParams,
     },
-    #[serde(rename = "typeServer/getTypeAttributes")]
-    GetTypeAttributesRequest {
+    #[serde(rename = "typeServer/getSymbolsForNode")]
+    GetSymbolsForNodeRequest {
         id: serde_json::Value,
-        params: GetTypeAttributesParams,
+        params: GetSymbolsForNodeParams,
     },
     #[serde(rename = "typeServer/getOverloads")]
     GetOverloadsRequest {
@@ -216,21 +210,6 @@ pub enum TSPRequests {
     GetTypeOfDeclarationRequest {
         id: serde_json::Value,
         params: GetTypeOfDeclarationParams,
-    },
-    #[serde(rename = "typeServer/getSymbol")]
-    GetSymbolRequest {
-        id: serde_json::Value,
-        params: GetSymbolParams,
-    },
-    #[serde(rename = "typeServer/getSymbolsForFile")]
-    GetSymbolsForFileRequest {
-        id: serde_json::Value,
-        params: GetSymbolsForFileParams,
-    },
-    #[serde(rename = "typeServer/getFunctionParts")]
-    GetFunctionPartsRequest {
-        id: serde_json::Value,
-        params: GetFunctionPartsParams,
     },
     #[serde(rename = "typeServer/getRepr")]
     GetReprRequest {
@@ -361,6 +340,7 @@ impl TypeFlags {
     pub const INTERFACE: TypeFlags = TypeFlags(16);
     pub const GENERIC: TypeFlags = TypeFlags(32);
     pub const FROM_ALIAS: TypeFlags = TypeFlags(64);
+    pub const UNPACKED: TypeFlags = TypeFlags(128);
     #[inline]
     pub fn new() -> Self {
         Self::NONE
@@ -392,6 +372,10 @@ impl TypeFlags {
     #[inline]
     pub fn with_from_alias(self) -> Self {
         TypeFlags(self.0 | TypeFlags::FROM_ALIAS.0)
+    }
+    #[inline]
+    pub fn with_unpacked(self) -> Self {
+        TypeFlags(self.0 | TypeFlags::UNPACKED.0)
     }
     #[inline]
     pub fn contains(self, other: Self) -> bool {
@@ -442,6 +426,7 @@ impl FunctionFlags {
     pub const GENERATOR: FunctionFlags = FunctionFlags(2);
     pub const ABSTRACT: FunctionFlags = FunctionFlags(4);
     pub const STATIC: FunctionFlags = FunctionFlags(8);
+    pub const GRADUAL_CALLABLE_FORM: FunctionFlags = FunctionFlags(16);
     #[inline]
     pub fn new() -> Self {
         Self::NONE
@@ -461,6 +446,10 @@ impl FunctionFlags {
     #[inline]
     pub fn with_static(self) -> Self {
         FunctionFlags(self.0 | FunctionFlags::STATIC.0)
+    }
+    #[inline]
+    pub fn with_gradual_callable_form(self) -> Self {
+        FunctionFlags(self.0 | FunctionFlags::GRADUAL_CALLABLE_FORM.0)
     }
     #[inline]
     pub fn contains(self, other: Self) -> bool {
@@ -567,6 +556,7 @@ pub struct TypeVarFlags(pub i32);
 impl TypeVarFlags {
     pub const NONE: TypeVarFlags = TypeVarFlags(0);
     pub const IS_PARAM_SPEC: TypeVarFlags = TypeVarFlags(1);
+    pub const IS_TYPE_VAR_TUPLE: TypeVarFlags = TypeVarFlags(2);
     #[inline]
     pub fn new() -> Self {
         Self::NONE
@@ -574,6 +564,10 @@ impl TypeVarFlags {
     #[inline]
     pub fn with_is_param_spec(self) -> Self {
         TypeVarFlags(self.0 | TypeVarFlags::IS_PARAM_SPEC.0)
+    }
+    #[inline]
+    pub fn with_is_type_var_tuple(self) -> Self {
+        TypeVarFlags(self.0 | TypeVarFlags::IS_TYPE_VAR_TUPLE.0)
     }
     #[inline]
     pub fn contains(self, other: Self) -> bool {
@@ -612,134 +606,6 @@ impl std::ops::BitAnd for TypeVarFlags {
     type Output = TypeVarFlags;
     fn bitand(self, rhs: TypeVarFlags) -> TypeVarFlags {
         TypeVarFlags(self.0 & rhs.0)
-    }
-}
-
-/// Flags that describe extra data about an attribute.
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub struct AttributeFlags(pub i32);
-impl AttributeFlags {
-    pub const NONE: AttributeFlags = AttributeFlags(0);
-    pub const IS_ARGS_LIST: AttributeFlags = AttributeFlags(1);
-    pub const IS_KWARGS_DICT: AttributeFlags = AttributeFlags(2);
-    #[inline]
-    pub fn new() -> Self {
-        Self::NONE
-    }
-    #[inline]
-    pub fn with_is_args_list(self) -> Self {
-        AttributeFlags(self.0 | AttributeFlags::IS_ARGS_LIST.0)
-    }
-    #[inline]
-    pub fn with_is_kwargs_dict(self) -> Self {
-        AttributeFlags(self.0 | AttributeFlags::IS_KWARGS_DICT.0)
-    }
-    #[inline]
-    pub fn contains(self, other: Self) -> bool {
-        (self.0 & other.0) == other.0
-    }
-}
-impl Serialize for AttributeFlags {
-    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        s.serialize_i32(self.0)
-    }
-}
-impl<'de> Deserialize<'de> for AttributeFlags {
-    fn deserialize<D>(d: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let v = i32::deserialize(d)?;
-        Ok(AttributeFlags(v))
-    }
-}
-impl std::ops::BitOr for AttributeFlags {
-    type Output = AttributeFlags;
-    fn bitor(self, rhs: AttributeFlags) -> AttributeFlags {
-        AttributeFlags(self.0 | rhs.0)
-    }
-}
-impl std::ops::BitOrAssign for AttributeFlags {
-    fn bitor_assign(&mut self, rhs: AttributeFlags) {
-        self.0 |= rhs.0;
-    }
-}
-impl std::ops::BitAnd for AttributeFlags {
-    type Output = AttributeFlags;
-    fn bitand(self, rhs: AttributeFlags) -> AttributeFlags {
-        AttributeFlags(self.0 & rhs.0)
-    }
-}
-
-/// Flags that are used for searching for attributes of a class Type.
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub struct AttributeAccessFlags(pub i32);
-impl AttributeAccessFlags {
-    pub const NONE: AttributeAccessFlags = AttributeAccessFlags(0);
-    pub const SKIP_INSTANCE_ATTRIBUTES: AttributeAccessFlags = AttributeAccessFlags(1);
-    pub const SKIP_TYPE_BASE_CLASS: AttributeAccessFlags = AttributeAccessFlags(2);
-    pub const SKIP_ATTRIBUTE_ACCESS_OVERRIDES: AttributeAccessFlags = AttributeAccessFlags(4);
-    pub const GET_BOUND_ATTRIBUTES: AttributeAccessFlags = AttributeAccessFlags(8);
-    #[inline]
-    pub fn new() -> Self {
-        Self::NONE
-    }
-    #[inline]
-    pub fn with_skip_instance_attributes(self) -> Self {
-        AttributeAccessFlags(self.0 | AttributeAccessFlags::SKIP_INSTANCE_ATTRIBUTES.0)
-    }
-    #[inline]
-    pub fn with_skip_type_base_class(self) -> Self {
-        AttributeAccessFlags(self.0 | AttributeAccessFlags::SKIP_TYPE_BASE_CLASS.0)
-    }
-    #[inline]
-    pub fn with_skip_attribute_access_overrides(self) -> Self {
-        AttributeAccessFlags(self.0 | AttributeAccessFlags::SKIP_ATTRIBUTE_ACCESS_OVERRIDES.0)
-    }
-    #[inline]
-    pub fn with_get_bound_attributes(self) -> Self {
-        AttributeAccessFlags(self.0 | AttributeAccessFlags::GET_BOUND_ATTRIBUTES.0)
-    }
-    #[inline]
-    pub fn contains(self, other: Self) -> bool {
-        (self.0 & other.0) == other.0
-    }
-}
-impl Serialize for AttributeAccessFlags {
-    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        s.serialize_i32(self.0)
-    }
-}
-impl<'de> Deserialize<'de> for AttributeAccessFlags {
-    fn deserialize<D>(d: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let v = i32::deserialize(d)?;
-        Ok(AttributeAccessFlags(v))
-    }
-}
-impl std::ops::BitOr for AttributeAccessFlags {
-    type Output = AttributeAccessFlags;
-    fn bitor(self, rhs: AttributeAccessFlags) -> AttributeAccessFlags {
-        AttributeAccessFlags(self.0 | rhs.0)
-    }
-}
-impl std::ops::BitOrAssign for AttributeAccessFlags {
-    fn bitor_assign(&mut self, rhs: AttributeAccessFlags) {
-        self.0 |= rhs.0;
-    }
-}
-impl std::ops::BitAnd for AttributeAccessFlags {
-    type Output = AttributeAccessFlags;
-    fn bitand(self, rhs: AttributeAccessFlags) -> AttributeAccessFlags {
-        AttributeAccessFlags(self.0 & rhs.0)
     }
 }
 
@@ -818,6 +684,17 @@ impl DeclarationFlags {
     pub const IS_DEFINED_BY_SLOTS: DeclarationFlags = DeclarationFlags(8);
     pub const USES_LOCAL_NAME: DeclarationFlags = DeclarationFlags(16);
     pub const UNRESOLVED_IMPORT: DeclarationFlags = DeclarationFlags(32);
+    pub const SIMPLE_PARAM: DeclarationFlags = DeclarationFlags(64);
+    pub const ARGS_LIST_PARAM: DeclarationFlags = DeclarationFlags(128);
+    pub const KWARGS_DICT_PARAM: DeclarationFlags = DeclarationFlags(256);
+    pub const POSITIONAL_PARAM: DeclarationFlags = DeclarationFlags(512);
+    pub const STANDARD_PARAM: DeclarationFlags = DeclarationFlags(1024);
+    pub const KEYWORD_PARAM: DeclarationFlags = DeclarationFlags(2048);
+    pub const EXPANDED_ARGS_PARAM: DeclarationFlags = DeclarationFlags(4096);
+    pub const RETURN_TYPE: DeclarationFlags = DeclarationFlags(8192);
+    pub const ENUM_MEMBER: DeclarationFlags = DeclarationFlags(16384);
+    pub const TYPE_DECLARED: DeclarationFlags = DeclarationFlags(32768);
+    pub const SPECIALIZED_TYPE: DeclarationFlags = DeclarationFlags(65536);
     #[inline]
     pub fn new() -> Self {
         Self::NONE
@@ -845,6 +722,50 @@ impl DeclarationFlags {
     #[inline]
     pub fn with_unresolved_import(self) -> Self {
         DeclarationFlags(self.0 | DeclarationFlags::UNRESOLVED_IMPORT.0)
+    }
+    #[inline]
+    pub fn with_simple_param(self) -> Self {
+        DeclarationFlags(self.0 | DeclarationFlags::SIMPLE_PARAM.0)
+    }
+    #[inline]
+    pub fn with_args_list_param(self) -> Self {
+        DeclarationFlags(self.0 | DeclarationFlags::ARGS_LIST_PARAM.0)
+    }
+    #[inline]
+    pub fn with_kwargs_dict_param(self) -> Self {
+        DeclarationFlags(self.0 | DeclarationFlags::KWARGS_DICT_PARAM.0)
+    }
+    #[inline]
+    pub fn with_positional_param(self) -> Self {
+        DeclarationFlags(self.0 | DeclarationFlags::POSITIONAL_PARAM.0)
+    }
+    #[inline]
+    pub fn with_standard_param(self) -> Self {
+        DeclarationFlags(self.0 | DeclarationFlags::STANDARD_PARAM.0)
+    }
+    #[inline]
+    pub fn with_keyword_param(self) -> Self {
+        DeclarationFlags(self.0 | DeclarationFlags::KEYWORD_PARAM.0)
+    }
+    #[inline]
+    pub fn with_expanded_args_param(self) -> Self {
+        DeclarationFlags(self.0 | DeclarationFlags::EXPANDED_ARGS_PARAM.0)
+    }
+    #[inline]
+    pub fn with_return_type(self) -> Self {
+        DeclarationFlags(self.0 | DeclarationFlags::RETURN_TYPE.0)
+    }
+    #[inline]
+    pub fn with_enum_member(self) -> Self {
+        DeclarationFlags(self.0 | DeclarationFlags::ENUM_MEMBER.0)
+    }
+    #[inline]
+    pub fn with_type_declared(self) -> Self {
+        DeclarationFlags(self.0 | DeclarationFlags::TYPE_DECLARED.0)
+    }
+    #[inline]
+    pub fn with_specialized_type(self) -> Self {
+        DeclarationFlags(self.0 | DeclarationFlags::SPECIALIZED_TYPE.0)
     }
     #[inline]
     pub fn contains(self, other: Self) -> bool {
@@ -886,6 +807,134 @@ impl std::ops::BitAnd for DeclarationFlags {
     }
 }
 
+/// Flags that are used for searching for symbols.
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub struct SymbolSearchFlags(pub i32);
+impl SymbolSearchFlags {
+    pub const NONE: SymbolSearchFlags = SymbolSearchFlags(0);
+    pub const SKIP_INSTANCE_ATTRIBUTES: SymbolSearchFlags = SymbolSearchFlags(1);
+    pub const SKIP_TYPE_BASE_CLASS: SymbolSearchFlags = SymbolSearchFlags(2);
+    pub const SKIP_ATTRIBUTE_ACCESS_OVERRIDES: SymbolSearchFlags = SymbolSearchFlags(4);
+    pub const GET_BOUND_ATTRIBUTES: SymbolSearchFlags = SymbolSearchFlags(8);
+    pub const SKIP_UNREACHABLE_CODE: SymbolSearchFlags = SymbolSearchFlags(16);
+    #[inline]
+    pub fn new() -> Self {
+        Self::NONE
+    }
+    #[inline]
+    pub fn with_skip_instance_attributes(self) -> Self {
+        SymbolSearchFlags(self.0 | SymbolSearchFlags::SKIP_INSTANCE_ATTRIBUTES.0)
+    }
+    #[inline]
+    pub fn with_skip_type_base_class(self) -> Self {
+        SymbolSearchFlags(self.0 | SymbolSearchFlags::SKIP_TYPE_BASE_CLASS.0)
+    }
+    #[inline]
+    pub fn with_skip_attribute_access_overrides(self) -> Self {
+        SymbolSearchFlags(self.0 | SymbolSearchFlags::SKIP_ATTRIBUTE_ACCESS_OVERRIDES.0)
+    }
+    #[inline]
+    pub fn with_get_bound_attributes(self) -> Self {
+        SymbolSearchFlags(self.0 | SymbolSearchFlags::GET_BOUND_ATTRIBUTES.0)
+    }
+    #[inline]
+    pub fn with_skip_unreachable_code(self) -> Self {
+        SymbolSearchFlags(self.0 | SymbolSearchFlags::SKIP_UNREACHABLE_CODE.0)
+    }
+    #[inline]
+    pub fn contains(self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
+    }
+}
+impl Serialize for SymbolSearchFlags {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        s.serialize_i32(self.0)
+    }
+}
+impl<'de> Deserialize<'de> for SymbolSearchFlags {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let v = i32::deserialize(d)?;
+        Ok(SymbolSearchFlags(v))
+    }
+}
+impl std::ops::BitOr for SymbolSearchFlags {
+    type Output = SymbolSearchFlags;
+    fn bitor(self, rhs: SymbolSearchFlags) -> SymbolSearchFlags {
+        SymbolSearchFlags(self.0 | rhs.0)
+    }
+}
+impl std::ops::BitOrAssign for SymbolSearchFlags {
+    fn bitor_assign(&mut self, rhs: SymbolSearchFlags) {
+        self.0 |= rhs.0;
+    }
+}
+impl std::ops::BitAnd for SymbolSearchFlags {
+    type Output = SymbolSearchFlags;
+    fn bitand(self, rhs: SymbolSearchFlags) -> SymbolSearchFlags {
+        SymbolSearchFlags(self.0 & rhs.0)
+    }
+}
+
+/// Flags that give more information about a symbol.
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub struct SymbolFlags(pub i32);
+impl SymbolFlags {
+    pub const NONE: SymbolFlags = SymbolFlags(0);
+    pub const SYNTHESIZED_NAME: SymbolFlags = SymbolFlags(1);
+    #[inline]
+    pub fn new() -> Self {
+        Self::NONE
+    }
+    #[inline]
+    pub fn with_synthesized_name(self) -> Self {
+        SymbolFlags(self.0 | SymbolFlags::SYNTHESIZED_NAME.0)
+    }
+    #[inline]
+    pub fn contains(self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
+    }
+}
+impl Serialize for SymbolFlags {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        s.serialize_i32(self.0)
+    }
+}
+impl<'de> Deserialize<'de> for SymbolFlags {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let v = i32::deserialize(d)?;
+        Ok(SymbolFlags(v))
+    }
+}
+impl std::ops::BitOr for SymbolFlags {
+    type Output = SymbolFlags;
+    fn bitor(self, rhs: SymbolFlags) -> SymbolFlags {
+        SymbolFlags(self.0 | rhs.0)
+    }
+}
+impl std::ops::BitOrAssign for SymbolFlags {
+    fn bitor_assign(&mut self, rhs: SymbolFlags) {
+        self.0 |= rhs.0;
+    }
+}
+impl std::ops::BitAnd for SymbolFlags {
+    type Output = SymbolFlags;
+    fn bitand(self, rhs: SymbolFlags) -> SymbolFlags {
+        SymbolFlags(self.0 & rhs.0)
+    }
+}
+
 /// Flags that control how type representations are formatted.
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct TypeReprFlags(pub i32);
@@ -894,6 +943,7 @@ impl TypeReprFlags {
     pub const EXPAND_TYPE_ALIASES: TypeReprFlags = TypeReprFlags(1);
     pub const PRINT_TYPE_VAR_VARIANCE: TypeReprFlags = TypeReprFlags(2);
     pub const CONVERT_TO_INSTANCE_TYPE: TypeReprFlags = TypeReprFlags(4);
+    pub const PYTHON_SYNTAX: TypeReprFlags = TypeReprFlags(8);
     #[inline]
     pub fn new() -> Self {
         Self::NONE
@@ -909,6 +959,10 @@ impl TypeReprFlags {
     #[inline]
     pub fn with_convert_to_instance_type(self) -> Self {
         TypeReprFlags(self.0 | TypeReprFlags::CONVERT_TO_INSTANCE_TYPE.0)
+    }
+    #[inline]
+    pub fn with_python_syntax(self) -> Self {
+        TypeReprFlags(self.0 | TypeReprFlags::PYTHON_SYNTAX.0)
     }
     #[inline]
     pub fn contains(self, other: Self) -> bool {
@@ -1061,32 +1115,6 @@ pub struct Type {
     pub name: String,
 }
 
-/// Represents an attribute of a type (e.g., a field, method, or parameter).
-#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Attribute {
-    /// The type the attribute is bound to, if applicable.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bound_type: Option<Type>,
-
-    /// The declarations for the attribute.
-    pub decls: Vec<Declaration>,
-
-    /// Flags describing extra data about an attribute.
-    pub flags: i32,
-
-    /// The name of the attribute. This is the name used to access the attribute in code.
-    pub name: String,
-
-    /// The type the attribute came from (can be a class, function, module, etc.).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner: Option<Type>,
-
-    /// The type of the attribute.
-    #[serde(rename = "type")]
-    pub type_: Type,
-}
-
 /// Represents a symbol declaration in the type system.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1113,32 +1141,25 @@ pub struct Declaration {
     pub uri: String,
 }
 
-/// Symbol information for a node, which includes a list of declarations and potentially synthesized types for those declarations.
+/// Symbol information for a node
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Symbol {
-    /// The declarations for the symbol. This can include multiple declarations for the same symbol.
+    /// The declarations for the symbol. This can include multiple declarations for the same symbol, such as when a symbol is defined in multiple files.
     pub decls: Vec<Declaration>,
+
+    /// Flags giving more information about the symbol.
+    pub flags: SymbolFlags,
 
     /// The name of the symbol found.
     pub name: String,
 
-    /// The node for which the declaration information is being requested.
-    pub node: Node,
+    /// The type that is the semantic parent of this symbol. For example if the symbol is for a parameter, the parent would be the function or method that contains the parameter. If the symbol is for a class member, the parent would be the class that contains the member.
+    pub parent: Option<Type>,
 
-    /// Synthesized type information for a declaration that is not directly represented in the source code, but is derived from the declaration.
-    pub synthesized_types: Vec<Type>,
-}
-
-/// Contains symbol information for an entire file.
-#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FileSymbolInfo {
-    /// The symbols in the file.
-    pub symbols: Vec<Symbol>,
-
-    /// The URI of the source file.
-    pub uri: String,
+    /// The type of the symbol found.
+    #[serde(rename = "type")]
+    pub type_: Type,
 }
 
 /// Options for resolving an import declaration.
@@ -1169,53 +1190,39 @@ pub struct ResolveImportParams {
     pub source_uri: String,
 }
 
-/// Parameters for searching for a type attribute.
+/// Parameters for getting symbols for a type.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SearchForTypeAttributeParams {
-    /// Flags that control how the attribute is accessed.
-    pub access_flags: AttributeAccessFlags,
+pub struct GetSymbolsForTypeParams {
+    /// Flags used to do the search
+    pub flags: SymbolSearchFlags,
 
-    /// The name of the attribute being requested.
-    pub attribute_name: String,
+    /// The name to search for. If undefined, returns all the symbols for the type or node.
+    pub name: Option<String>,
 
-    /// Optional: The expression node that the member is being accessed from.
-    pub expression_node: Option<Node>,
-
-    /// Optional: The type of an instance that the attribute is being accessed from.
-    pub instance_type: Option<Type>,
+    /// The location where the symbols are being requested. This can help search for symbols.
+    pub node: Option<Node>,
 
     /// The snapshot version of the type server state.
     pub snapshot: i32,
 
-    /// The starting point in the type hierarchy to search for the attribute.
-    pub start_type: Type,
-}
-
-/// Parameters for getting type attributes.
-#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GetTypeAttributesParams {
-    /// The snapshot version of the type server state.
-    pub snapshot: i32,
-
-    /// The type for which the attributes are being requested.
+    /// The type for which the symbols are being requested. If this is a class, the symbols are based on the members of the class. If this is a function, the symbols are the parameters and the return value.
     #[serde(rename = "type")]
     pub type_: Type,
 }
 
-/// Parameters for getting symbol information.
+/// Parameters for getting symbols for a node.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GetSymbolParams {
-    /// The name of the symbol being requested. This is optional and can be undefined especially when the node is a name node.
+pub struct GetSymbolsForNodeParams {
+    /// Flags used to do the search
+    pub flags: SymbolSearchFlags,
+
+    /// The name to search for. If undefined, returns all the symbols for the type or node.
     pub name: Option<String>,
 
-    /// The node for which the symbol information is being requested.
+    /// The location to search for symbols from. This node is essentially used to scope the symbol search. It can be a Module node in order to search for top level symbols.
     pub node: Node,
-
-    /// Whether to skip unreachable code when looking for the symbol declaration.
-    pub skip_unreachable_code: bool,
 
     /// The snapshot version of the type server state.
     pub snapshot: i32,
@@ -1233,17 +1240,6 @@ pub struct GetBuiltinTypeParams {
 
     /// The snapshot version of the type server state.
     pub snapshot: i32,
-}
-
-/// Parts of a function, including its parameters and return type. This is used to provide a string representation of a function's signature.
-#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FunctionParts {
-    /// The function parameters as strings.
-    pub params: Vec<String>,
-
-    /// The return type as a string.
-    pub return_type: String,
 }
 
 /// Information about a type alias.
@@ -1347,32 +1343,6 @@ pub struct GetTypeOfDeclarationParams {
 
     /// The snapshot version
     pub snapshot: i32,
-}
-
-/// Parameters for getting symbols for a file.
-#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GetSymbolsForFileParams {
-    /// The snapshot version
-    pub snapshot: i32,
-
-    /// The URI of the file
-    pub uri: String,
-}
-
-/// Parameters for getting function parts.
-#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GetFunctionPartsParams {
-    /// Formatting flags
-    pub flags: TypeReprFlags,
-
-    /// The snapshot version
-    pub snapshot: i32,
-
-    /// The function type
-    #[serde(rename = "type")]
-    pub type_: Type,
 }
 
 /// Parameters for getting type representation.
@@ -1648,37 +1618,37 @@ pub struct GetTypeArgsRequest {
 /// Response to the [GetTypeArgsRequest].
 pub type GetTypeArgsResponse = Vec<Type>;
 
-/// Request to find an attribute of a class.
+/// Request to find symbols from a type.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SearchForTypeAttributeRequest {
+pub struct GetSymbolsForTypeRequest {
     /// The method to be invoked.
     pub method: TSPRequestMethods,
 
     /// The request id.
     pub id: LSPId,
 
-    pub params: SearchForTypeAttributeParams,
+    pub params: GetSymbolsForTypeParams,
 }
 
-/// Response to the [SearchForTypeAttributeRequest].
-pub type SearchForTypeAttributeResponse = Attribute;
+/// Response to the [GetSymbolsForTypeRequest].
+pub type GetSymbolsForTypeResponse = Vec<Symbol>;
 
-/// Request to get the attributes of a specific class or the parameters and return value of a specific function.
+/// Request to find symbols from a node.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GetTypeAttributesRequest {
+pub struct GetSymbolsForNodeRequest {
     /// The method to be invoked.
     pub method: TSPRequestMethods,
 
     /// The request id.
     pub id: LSPId,
 
-    pub params: GetTypeAttributesParams,
+    pub params: GetSymbolsForNodeParams,
 }
 
-/// Response to the [GetTypeAttributesRequest].
-pub type GetTypeAttributesResponse = Vec<Attribute>;
+/// Response to the [GetSymbolsForNodeRequest].
+pub type GetSymbolsForNodeResponse = Vec<Symbol>;
 
 /// Request to get all overloads of a function or method. The returned value doesn't include the implementation signature.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
@@ -1743,54 +1713,6 @@ pub struct GetTypeOfDeclarationRequest {
 
 /// Response to the [GetTypeOfDeclarationRequest].
 pub type GetTypeOfDeclarationResponse = Type;
-
-/// Request to get symbol declaration information for a node.
-#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GetSymbolRequest {
-    /// The method to be invoked.
-    pub method: TSPRequestMethods,
-
-    /// The request id.
-    pub id: LSPId,
-
-    pub params: GetSymbolParams,
-}
-
-/// Response to the [GetSymbolRequest].
-pub type GetSymbolResponse = Symbol;
-
-/// Request to get all symbols for a file. This is used to get all symbols in a file.
-#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GetSymbolsForFileRequest {
-    /// The method to be invoked.
-    pub method: TSPRequestMethods,
-
-    /// The request id.
-    pub id: LSPId,
-
-    pub params: GetSymbolsForFileParams,
-}
-
-/// Response to the [GetSymbolsForFileRequest].
-pub type GetSymbolsForFileResponse = FileSymbolInfo;
-
-/// Request to get the string representation of a function's parts, meaning its parameters and return type.
-#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GetFunctionPartsRequest {
-    /// The method to be invoked.
-    pub method: TSPRequestMethods,
-
-    /// The request id.
-    pub id: LSPId,
-
-    pub params: GetFunctionPartsParams,
-}
-
-/// Response to the [GetFunctionPartsRequest].
-pub type GetFunctionPartsResponse = FunctionParts;
 
 /// Request to get the string representation of a type in a human-readable format. This may or may not be the same as the type's "name".
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
@@ -1923,6 +1845,6 @@ pub type GetPythonSearchPathsResponse = Vec<String>;
 // Type Server Protocol Constants (idiomatic Rust)
 
 /// The version of the Type Server Protocol
-pub const TYPE_SERVER_VERSION: &str = "0.1.0";
+pub const TYPE_SERVER_VERSION: &str = "0.2.0";
 /// Represents an invalid handle value
 pub const INVALID_HANDLE: i32 = -1;

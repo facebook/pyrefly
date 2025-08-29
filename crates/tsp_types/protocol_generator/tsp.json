@@ -1,6 +1,6 @@
 {
     "metaData": {
-        "version": "0.1.0"
+        "version": "0.2.0"
     },
     "requests": [
         {
@@ -145,31 +145,8 @@
             "documentation": "Request to get the collection of subtypes that make up a union type or the types that makes up a generic type."
         },
         {
-            "method": "typeServer/searchForTypeAttribute",
-            "typeName": "SearchForTypeAttributeRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "reference",
-                        "name": "Attribute"
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "SearchForTypeAttributeParams"
-            },
-            "documentation": "Request to find an attribute of a class."
-        },
-        {
-            "method": "typeServer/getTypeAttributes",
-            "typeName": "GetTypeAttributesRequest",
+            "method": "typeServer/getSymbolsForType",
+            "typeName": "GetSymbolsForTypeRequest",
             "result": {
                 "kind": "or",
                 "items": [
@@ -177,7 +154,7 @@
                         "kind": "array",
                         "element": {
                             "kind": "reference",
-                            "name": "Attribute"
+                            "name": "Symbol"
                         }
                     },
                     {
@@ -189,9 +166,35 @@
             "messageDirection": "clientToServer",
             "params": {
                 "kind": "reference",
-                "name": "GetTypeAttributesParams"
+                "name": "GetSymbolsForTypeParams"
             },
-            "documentation": "Request to get the attributes of a specific class or the parameters and return value of a specific function."
+            "documentation": "Request to find symbols from a type."
+        },
+        {
+            "method": "typeServer/getSymbolsForNode",
+            "typeName": "GetSymbolsForNodeRequest",
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Symbol"
+                        }
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
+                    }
+                ]
+            },
+            "messageDirection": "clientToServer",
+            "params": {
+                "kind": "reference",
+                "name": "GetSymbolsForNodeParams"
+            },
+            "documentation": "Request to find symbols from a node."
         },
         {
             "method": "typeServer/getOverloads",
@@ -290,75 +293,6 @@
                 "name": "GetTypeOfDeclarationParams"
             },
             "documentation": "Request to get the type of a declaration."
-        },
-        {
-            "method": "typeServer/getSymbol",
-            "typeName": "GetSymbolRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "reference",
-                        "name": "Symbol"
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetSymbolParams"
-            },
-            "documentation": "Request to get symbol declaration information for a node."
-        },
-        {
-            "method": "typeServer/getSymbolsForFile",
-            "typeName": "GetSymbolsForFileRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "reference",
-                        "name": "FileSymbolInfo"
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetSymbolsForFileParams"
-            },
-            "documentation": "Request to get all symbols for a file. This is used to get all symbols in a file."
-        },
-        {
-            "method": "typeServer/getFunctionParts",
-            "typeName": "GetFunctionPartsRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "reference",
-                        "name": "FunctionParts"
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetFunctionPartsParams"
-            },
-            "documentation": "Request to get the string representation of a function's parts, meaning its parameters and return type."
         },
         {
             "method": "typeServer/getRepr",
@@ -577,13 +511,13 @@
                 "kind": "base",
                 "name": "string"
             },
-            "value": "0.1.0",
+            "value": "0.2.0",
             "documentation": "The version of the Type Server Protocol"
         },
         {
             "name": "InvalidHandle",
             "type": {
-                "kind": "base", 
+                "kind": "base",
                 "name": "integer"
             },
             "value": -1,
@@ -830,81 +764,6 @@
             "documentation": "Represents a type in the type system."
         },
         {
-            "name": "Attribute",
-            "properties": [
-                {
-                    "name": "name",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "documentation": "The name of the attribute. This is the name used to access the attribute in code."
-                },
-                {
-                    "name": "type",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "documentation": "The type of the attribute."
-                },
-                {
-                    "name": "owner",
-                    "type": {
-                        "kind": "or",
-                        "items": [
-                            {
-                                "kind": "reference",
-                                "name": "Type"
-                            },
-                            {
-                                "kind": "base",
-                                "name": "null"
-                            }
-                        ]
-                    },
-                    "documentation": "The type the attribute came from (can be a class, function, module, etc.)."
-                },
-                {
-                    "name": "boundType",
-                    "type": {
-                        "kind": "or",
-                        "items": [
-                            {
-                                "kind": "reference",
-                                "name": "Type"
-                            },
-                            {
-                                "kind": "base",
-                                "name": "null"
-                            }
-                        ]
-                    },
-                    "documentation": "The type the attribute is bound to, if applicable."
-                },
-                {
-                    "name": "flags",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "Flags describing extra data about an attribute."
-                },
-                {
-                    "name": "decls",
-                    "type": {
-                        "kind": "array",
-                        "element": {
-                            "kind": "reference",
-                            "name": "Declaration"
-                        }
-                    },
-                    "documentation": "The declarations for the attribute."
-                }
-            ],
-            "documentation": "Represents an attribute of a type (e.g., a field, method, or parameter)."
-        },
-        {
             "name": "Declaration",
             "properties": [
                 {
@@ -971,20 +830,20 @@
             "name": "Symbol",
             "properties": [
                 {
-                    "name": "node",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Node"
-                    },
-                    "documentation": "The node for which the declaration information is being requested."
-                },
-                {
                     "name": "name",
                     "type": {
                         "kind": "base",
                         "name": "string"
                     },
                     "documentation": "The name of the symbol found."
+                },
+                {
+                    "name": "type",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "documentation": "The type of the symbol found."
                 },
                 {
                     "name": "decls",
@@ -995,46 +854,36 @@
                             "name": "Declaration"
                         }
                     },
-                    "documentation": "The declarations for the symbol. This can include multiple declarations for the same symbol."
+                    "documentation": "The declarations for the symbol. This can include multiple declarations for the same symbol, such as when a symbol is defined in multiple files."
                 },
                 {
-                    "name": "synthesizedTypes",
+                    "name": "flags",
                     "type": {
-                        "kind": "array",
-                        "element": {
-                            "kind": "reference",
-                            "name": "Type"
-                        }
+                        "kind": "reference",
+                        "name": "SymbolFlags"
                     },
-                    "documentation": "Synthesized type information for a declaration that is not directly represented in the source code, but is derived from the declaration."
-                }
-            ],
-            "documentation": "Symbol information for a node, which includes a list of declarations and potentially synthesized types for those declarations."
-        },
-        {
-            "name": "FileSymbolInfo",
-            "properties": [
-                {
-                    "name": "uri",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "documentation": "The URI of the source file."
+                    "documentation": "Flags giving more information about the symbol."
                 },
                 {
-                    "name": "symbols",
+                    "name": "parent",
                     "type": {
-                        "kind": "array",
-                        "element": {
-                            "kind": "reference",
-                            "name": "Symbol"
-                        }
+                        "kind": "or",
+                        "items": [
+                            {
+                                "kind": "reference",
+                                "name": "Type"
+                            },
+                            {
+                                "kind": "base",
+                                "name": "null"
+                            }
+                        ]
                     },
-                    "documentation": "The symbols in the file."
+                    "optional": true,
+                    "documentation": "The type that is the semantic parent of this symbol. For example if the symbol is for a parameter, the parent would be the function or method that contains the parameter. If the symbol is for a class member, the parent would be the class that contains the member."
                 }
             ],
-            "documentation": "Contains symbol information for an entire file."
+            "documentation": "Symbol information for a node"
         },
         {
             "name": "ResolveImportOptions",
@@ -1100,63 +949,7 @@
             "documentation": "Parameters for resolving an import"
         },
         {
-            "name": "SearchForTypeAttributeParams",
-            "properties": [
-                {
-                    "name": "startType",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "documentation": "The starting point in the type hierarchy to search for the attribute."
-                },
-                {
-                    "name": "attributeName",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "documentation": "The name of the attribute being requested."
-                },
-                {
-                    "name": "accessFlags",
-                    "type": {
-                        "kind": "reference",
-                        "name": "AttributeAccessFlags"
-                    },
-                    "documentation": "Flags that control how the attribute is accessed."
-                },
-                {
-                    "name": "expressionNode",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Node"
-                    },
-                    "optional": true,
-                    "documentation": "Optional: The expression node that the member is being accessed from."
-                },
-                {
-                    "name": "instanceType",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "optional": true,
-                    "documentation": "Optional: The type of an instance that the attribute is being accessed from."
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version of the type server state."
-                }
-            ],
-            "documentation": "Parameters for searching for a type attribute."
-        },
-        {
-            "name": "GetTypeAttributesParams",
+            "name": "GetSymbolsForTypeParams",
             "properties": [
                 {
                     "name": "type",
@@ -1164,29 +957,25 @@
                         "kind": "reference",
                         "name": "Type"
                     },
-                    "documentation": "The type for which the attributes are being requested."
+                    "documentation": "The type for which the symbols are being requested. If this is a class, the symbols are based on the members of the class. If this is a function, the symbols are the parameters and the return value."
                 },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version of the type server state."
-                }
-            ],
-            "documentation": "Parameters for getting type attributes."
-        },
-        {
-            "name": "GetSymbolParams",
-            "properties": [
                 {
                     "name": "node",
                     "type": {
-                        "kind": "reference",
-                        "name": "Node"
+                        "kind": "or",
+                        "items": [
+                            {
+                                "kind": "reference",
+                                "name": "Node"
+                            },
+                            {
+                                "kind": "base",
+                                "name": "null"
+                            }
+                        ]
                     },
-                    "documentation": "The node for which the symbol information is being requested."
+                    "optional": true,
+                    "documentation": "The location where the symbols are being requested. This can help search for symbols."
                 },
                 {
                     "name": "name",
@@ -1195,15 +984,15 @@
                         "name": "string"
                     },
                     "optional": true,
-                    "documentation": "The name of the symbol being requested. This is optional and can be undefined especially when the node is a name node."
+                    "documentation": "The name to search for. If undefined, returns all the symbols for the type or node."
                 },
                 {
-                    "name": "skipUnreachableCode",
+                    "name": "flags",
                     "type": {
-                        "kind": "base",
-                        "name": "boolean"
+                        "kind": "reference",
+                        "name": "SymbolSearchFlags"
                     },
-                    "documentation": "Whether to skip unreachable code when looking for the symbol declaration."
+                    "documentation": "Flags used to do the search"
                 },
                 {
                     "name": "snapshot",
@@ -1214,7 +1003,46 @@
                     "documentation": "The snapshot version of the type server state."
                 }
             ],
-            "documentation": "Parameters for getting symbol information."
+            "documentation": "Parameters for getting symbols for a type."
+        },
+        {
+            "name": "GetSymbolsForNodeParams",
+            "properties": [
+                {
+                    "name": "node",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Node"
+                    },
+                    "documentation": "The location to search for symbols from. This node is essentially used to scope the symbol search. It can be a Module node in order to search for top level symbols."
+                },
+                {
+                    "name": "name",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": true,
+                    "documentation": "The name to search for. If undefined, returns all the symbols for the type or node."
+                },
+                {
+                    "name": "flags",
+                    "type": {
+                        "kind": "reference",
+                        "name": "SymbolSearchFlags"
+                    },
+                    "documentation": "Flags used to do the search"
+                },
+                {
+                    "name": "snapshot",
+                    "type": {
+                        "kind": "base",
+                        "name": "integer"
+                    },
+                    "documentation": "The snapshot version of the type server state."
+                }
+            ],
+            "documentation": "Parameters for getting symbols for a node."
         },
         {
             "name": "GetBuiltinTypeParams",
@@ -1245,31 +1073,6 @@
                 }
             ],
             "documentation": "Parameters for getting builtin type information."
-        },
-        {
-            "name": "FunctionParts",
-            "properties": [
-                {
-                    "name": "params",
-                    "type": {
-                        "kind": "array",
-                        "element": {
-                            "kind": "base",
-                            "name": "string"
-                        }
-                    },
-                    "documentation": "The function parameters as strings."
-                },
-                {
-                    "name": "returnType",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "documentation": "The return type as a string."
-                }
-            ],
-            "documentation": "Parts of a function, including its parameters and return type. This is used to provide a string representation of a function's signature."
         },
         {
             "name": "TypeAliasInfo",
@@ -1480,58 +1283,6 @@
                 }
             ],
             "documentation": "Parameters for getting type of a declaration."
-        },
-        {
-            "name": "GetSymbolsForFileParams",
-            "properties": [
-                {
-                    "name": "uri",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "documentation": "The URI of the file"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for getting symbols for a file."
-        },
-        {
-            "name": "GetFunctionPartsParams",
-            "properties": [
-                {
-                    "name": "type",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "documentation": "The function type"
-                },
-                {
-                    "name": "flags",
-                    "type": {
-                        "kind": "reference",
-                        "name": "TypeReprFlags"
-                    },
-                    "documentation": "Formatting flags"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for getting function parts."
         },
         {
             "name": "GetReprParams",
@@ -1886,6 +1637,11 @@
                     "name": "FromAlias",
                     "value": 64,
                     "documentation": "Indicates if the type came from an alias (a type that refers to another type)."
+                },
+                {
+                    "name": "Unpacked",
+                    "value": 128,
+                    "documentation": "Indicates if the type is unpacked (used with TypeVarTuple)."
                 }
             ],
             "documentation": "Flags that describe the characteristics of a type. These flags can be combined using bitwise operations."
@@ -1920,6 +1676,11 @@
                     "name": "Static",
                     "value": 8,
                     "documentation": "Indicates if the function has a @staticmethod decorator."
+                },
+                {
+                    "name": "GradualCallableForm",
+                    "value": 16,
+                    "documentation": "The *args and **kwargs parameters do not need to be present for this function to be compatible. This is used for Callable[..., x] and ... type arguments to ParamSpec and Concatenate."
                 }
             ],
             "documentation": "Flags that describe the characteristics of a function or method. These flags can be combined using bitwise operations."
@@ -1963,67 +1724,14 @@
                     "name": "IsParamSpec",
                     "value": 1,
                     "documentation": "Indicates if the type variable is a ParamSpec (as defined in PEP 612)."
+                },
+                {
+                    "name": "IsTypeVarTuple",
+                    "value": 2,
+                    "documentation": "Indicates if the type variable is a TypeVarTuple (as defined in PEP 646)."
                 }
             ],
             "documentation": "Flags that describe the characteristics of a type variable. These flags can be combined using bitwise operations."
-        },
-        {
-            "name": "AttributeFlags",
-            "type": {
-                "kind": "base",
-                "name": "integer"
-            },
-            "values": [
-                {
-                    "name": "None",
-                    "value": 0
-                },
-                {
-                    "name": "IsArgsList",
-                    "value": 1,
-                    "documentation": "Indicates if a parameter is an argument list (e.g., `*args`)."
-                },
-                {
-                    "name": "IsKwargsDict",
-                    "value": 2,
-                    "documentation": "Indicates if the attribute is a keyword argument dictionary (e.g., `**kwargs`)."
-                }
-            ],
-            "documentation": "Flags that describe extra data about an attribute."
-        },
-        {
-            "name": "AttributeAccessFlags",
-            "type": {
-                "kind": "base",
-                "name": "integer"
-            },
-            "values": [
-                {
-                    "name": "None",
-                    "value": 0
-                },
-                {
-                    "name": "SkipInstanceAttributes",
-                    "value": 1,
-                    "documentation": "Skip instance attributes when searching for attributes of a type."
-                },
-                {
-                    "name": "SkipTypeBaseClass",
-                    "value": 2,
-                    "documentation": "Skip members from the base class of a type when searching for members of a type."
-                },
-                {
-                    "name": "SkipAttributeAccessOverrides",
-                    "value": 4,
-                    "documentation": "Skip attribute access overrides when searching for members of a type."
-                },
-                {
-                    "name": "GetBoundAttributes",
-                    "value": 8,
-                    "documentation": "Look for bound attributes when searching for attributes of a type."
-                }
-            ],
-            "documentation": "Flags that are used for searching for attributes of a class Type."
         },
         {
             "name": "DeclarationCategory",
@@ -2115,9 +1823,122 @@
                     "name": "UnresolvedImport",
                     "value": 32,
                     "documentation": "Indicates if the import declaration is unresolved (the module or symbol could not be found)."
+                },
+                {
+                    "name": "SimpleParam",
+                    "value": 64,
+                    "documentation": "Indicates if the declaration is a simple parameter (e.g., a function parameter)."
+                },
+                {
+                    "name": "ArgsListParam",
+                    "value": 128,
+                    "documentation": "Indicates if a declaration is an argument list (e.g., `*args`)."
+                },
+                {
+                    "name": "KwargsDictParam",
+                    "value": 256,
+                    "documentation": "Indicates if the declaration is a keyword argument dictionary (e.g., `**kwargs`)."
+                },
+                {
+                    "name": "PositionalParam",
+                    "value": 512,
+                    "documentation": "Indicates if the declaration is a positional parameter."
+                },
+                {
+                    "name": "StandardParam",
+                    "value": 1024,
+                    "documentation": "Indicates if the declaration is a standard parameter."
+                },
+                {
+                    "name": "KeywordParam",
+                    "value": 2048,
+                    "documentation": "Indicates if the declaration is a keyword parameter."
+                },
+                {
+                    "name": "ExpandedArgsParam",
+                    "value": 4096,
+                    "documentation": "Indicates if the declaration is an expanded *args parameter."
+                },
+                {
+                    "name": "ReturnType",
+                    "value": 8192,
+                    "documentation": "Indicates if the declaration is a return type (e.g., the return value of a function)."
+                },
+                {
+                    "name": "EnumMember",
+                    "value": 16384,
+                    "documentation": "Indicates if the declaration is a member of an enum type."
+                },
+                {
+                    "name": "TypeDeclared",
+                    "value": 32768,
+                    "documentation": "Indicates if the declaration has an explicitly declared type."
+                },
+                {
+                    "name": "SpecializedType",
+                    "value": 65536,
+                    "documentation": "Indicates if the declaration is a specialization of a generic type."
                 }
             ],
             "documentation": "Flags that describe extra information about a declaration."
+        },
+        {
+            "name": "SymbolSearchFlags",
+            "type": {
+                "kind": "base",
+                "name": "integer"
+            },
+            "values": [
+                {
+                    "name": "None",
+                    "value": 0
+                },
+                {
+                    "name": "SkipInstanceAttributes",
+                    "value": 1,
+                    "documentation": "Skip instance attributes when searching for attributes of a type."
+                },
+                {
+                    "name": "SkipTypeBaseClass",
+                    "value": 2,
+                    "documentation": "Skip members from the base class of a type when searching for members of a type."
+                },
+                {
+                    "name": "SkipAttributeAccessOverrides",
+                    "value": 4,
+                    "documentation": "Skip attribute access overrides when searching for members of a type."
+                },
+                {
+                    "name": "GetBoundAttributes",
+                    "value": 8,
+                    "documentation": "Look for bound attributes when searching for attributes of a type. That is methods bound specifically to an instance."
+                },
+                {
+                    "name": "SkipUnreachableCode",
+                    "value": 16,
+                    "documentation": "When searching for a name, skip symbols that are in unreachable code."
+                }
+            ],
+            "documentation": "Flags that are used for searching for symbols."
+        },
+        {
+            "name": "SymbolFlags",
+            "type": {
+                "kind": "base",
+                "name": "integer"
+            },
+            "values": [
+                {
+                    "name": "None",
+                    "value": 0
+                },
+                {
+                    "name": "SynthesizedName",
+                    "value": 1,
+                    "documentation": "Indicates if the symbol name was synthesized by the type server and not present in the source code."
+                }
+            ],
+            "documentation": "Flags that give more information about a symbol."
         },
         {
             "name": "TypeReprFlags",
@@ -2144,6 +1965,11 @@
                     "name": "ConvertToInstanceType",
                     "value": 4,
                     "documentation": "Convert the type into an instance type before printing it."
+                },
+                {
+                    "name": "PythonSyntax",
+                    "value": 8,
+                    "documentation": "Limit output to legal Python syntax."
                 }
             ],
             "documentation": "Flags that control how type representations are formatted."

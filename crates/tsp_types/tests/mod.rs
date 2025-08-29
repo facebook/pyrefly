@@ -15,17 +15,20 @@
 //!
 //! These tests are separate from integration tests that require the main pyrefly crate.
 
-pub mod flags_smoke;
+pub mod combine_types;
 pub mod get_builtin_type;
 pub mod get_diagnostics;
-pub mod get_function_parts;
+pub mod get_diagnostics_version;
+pub mod get_docstring;
 pub mod get_matching_overloads;
+pub mod get_metaclass;
 pub mod get_overloads;
 pub mod get_repr;
-pub mod get_symbol;
-pub mod get_symbols_for_file;
+pub mod get_snapshot;
+pub mod get_supported_protocol_version;
+pub mod get_symbols_for_node;
+pub mod get_symbols_for_type;
 pub mod get_type;
 pub mod get_type_alias_info;
-pub mod get_type_attributes;
+pub mod get_type_args;
 pub mod resolve_import_declaration;
-pub mod search_for_type_attribute;
