@@ -4721,6 +4721,16 @@
     },
     {
       "code": -2,
+      "column": 18,
+      "concise_description": "Expected at least 2 constraints in TypeVar `BadConstraint1`, got 1",
+      "description": "Expected at least 2 constraints in TypeVar `BadConstraint1`, got 1",
+      "line": 49,
+      "name": "invalid-type-var",
+      "stop_column": 48,
+      "stop_line": 49
+    },
+    {
+      "code": -2,
       "column": 53,
       "concise_description": "Type variable bounds and constraints must be concrete",
       "description": "Type variable bounds and constraints must be concrete",

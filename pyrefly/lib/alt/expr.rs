@@ -1115,7 +1115,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> TypeVar {
         let mut arg_name = false;
-        let mut restriction = None;
         let mut default = None;
         let mut variance = None;
 
@@ -1163,12 +1162,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             arg_name = true;
         }
 
-        let constraints = iargs
+        let constraints: Vec<Type> = iargs
             .map(|arg| self.expr_untype(arg, TypeFormContext::TypeVarConstraint, errors))
-            .collect::<Vec<_>>();
-        if !constraints.is_empty() {
-            restriction = Some(Restriction::Constraints(constraints));
-        }
+            .collect();
+        // Defer deciding `restriction` until after we've seen keywords like `bound`
+
+        let mut bound_ty: Option<Type> = None;
+        let mut bound_kw_range: Option<TextRange> = None;
 
         for kw in &x.arguments.keywords {
             match &kw.arg {
@@ -1176,16 +1176,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     "bound" => {
                         let bound =
                             self.expr_untype(&kw.value, TypeFormContext::TypeVarConstraint, errors);
-                        if restriction.is_some() {
-                            self.error(
-                                errors,
-                                kw.range,
-                                ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
-                                "TypeVar cannot have both constraints and bound".to_owned(),
-                            );
-                        } else {
-                            restriction = Some(Restriction::Bound(bound));
-                        }
+                        bound_ty = Some(bound);
+                        bound_kw_range = Some(kw.range);
                     }
                     "default" => {
                         default = Some((
@@ -1238,7 +1230,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 "Missing `name` argument".to_owned(),
             );
         }
-        let restriction = restriction.unwrap_or(Restriction::Unrestricted);
+        // Decide on the final restriction and emit at most one error with the expected range
+        let restriction = if !constraints.is_empty() && bound_ty.is_some() {
+            // Prefer the historical error location at the `bound` keyword
+            self.error(
+                errors,
+                bound_kw_range.unwrap_or(x.range),
+                ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                "TypeVar cannot have both constraints and bound".to_owned(),
+            );
+            Restriction::Unrestricted
+        } else if constraints.len() == 1 {
+            self.error(
+                errors,
+                x.range,
+                ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                format!(
+                    "Expected at least 2 constraints in TypeVar `{}`, got {}",
+                    name.id,
+                    constraints.len(),
+                ),
+            );
+            Restriction::Unrestricted
+        } else if constraints.len() >= 2 {
+            Restriction::Constraints(constraints)
+        } else if let Some(b) = bound_ty {
+            Restriction::Bound(b)
+        } else {
+            Restriction::Unrestricted
+        };
         let mut default_value = None;
         if let Some((default_ty, default_range)) = default {
             default_value = Some(self.validate_type_var_default(

@@ -486,3 +486,12 @@ def foo[T: (A, B)](x: T) -> T:
     return x.method()
     "#,
 );
+
+testcase!(
+    test_typevar_single_constraint_is_error,
+    r#"
+from typing import TypeVar
+
+T = TypeVar("T", int)  # E: Expected at least 2 constraints in TypeVar `T`, got 1
+    "#,
+);
