@@ -18,6 +18,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 use starlark_map::smallmap;
 
 use crate::callable::Function;
@@ -351,6 +352,17 @@ impl<'a> TypeDisplayContext<'a> {
                 }
                 if let Some(i) = literal_idx {
                     display_types.insert(i, format!("Literal[{}]", commas_iter(|| &literals)));
+                }
+                if !display_types.is_empty() {
+                    let mut seen = SmallSet::new();
+                    display_types.retain(|s| {
+                        if seen.contains(s) {
+                            false
+                        } else {
+                            seen.insert(s.clone());
+                            true
+                        }
+                    });
                 }
                 write!(f, "{}", display_types.join(" | "))
             }
