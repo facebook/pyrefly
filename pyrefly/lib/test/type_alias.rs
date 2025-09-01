@@ -667,3 +667,19 @@ def test():
     type X = int  # E: `type` statement is not allowed in this context
     "#,
 );
+
+testcase!(
+    test_type_alias_base_class,
+    r#"
+from typing import TypeAlias
+
+# Test that scoped type aliases cannot be used as base classes
+type X = int
+Y: TypeAlias = int  
+Z = int
+
+class C1(X): pass  # E: Cannot use scoped type alias `X` as a base class
+class C2(Y): pass  # Should work - legacy explicit type alias
+class C3(Z): pass  # Should work - legacy implicit type alias
+    "#,
+);

@@ -29,7 +29,6 @@
     "Line 68: Unexpected errors ['`type[list[Unknown]]` is not subscriptable']"
   ],
   "aliases_type_statement.py": [
-    "Line 26: Expected 1 errors",
     "Line 82: Expected 1 errors",
     "Line 84: Expected 1 errors",
     "Lines 51, 52: Expected error (tag 'TA14')",

@@ -3,7 +3,7 @@
   "pass": 84,
   "fail": 54,
   "pass_rate": 0.61,
-  "differences": 238,
+  "differences": 237,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -93,7 +93,7 @@
   "failing": {
     "aliases_implicit.py": 5,
     "aliases_recursive.py": 17,
-    "aliases_type_statement.py": 5,
+    "aliases_type_statement.py": 4,
     "aliases_typealiastype.py": 26,
     "aliases_variance.py": 4,
     "annotations_forward_refs.py": 7,

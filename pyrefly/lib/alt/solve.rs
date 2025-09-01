@@ -3203,7 +3203,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::None => Some(Type::None), // Both a value and a type
             Type::Ellipsis => Some(Type::Ellipsis), // A bit weird because of tuples, so just promote it
             Type::Any(style) => Some(style.propagate()),
-            Type::TypeAlias(ta) => self.untype_opt(ta.as_type(), range),
+            Type::TypeAlias(ta) => {
+                match ta.style {
+                    TypeAliasStyle::Scoped => {
+                        // Scoped type aliases like `type X = int` wrap their inner type in type[T].
+                        // We need to unwrap this to get the actual type for base class resolution.
+                        let inner_type = ta.as_type();
+                        if let Type::Type(boxed_inner) = inner_type {
+                            Some(*boxed_inner)
+                        } else {
+                            // Fallback for edge cases
+                            self.untype_opt(inner_type, range)
+                        }
+                    }
+                    TypeAliasStyle::LegacyExplicit | TypeAliasStyle::LegacyImplicit => {
+                        // Legacy type aliases return the actual type directly
+                        self.untype_opt(ta.as_type(), range)
+                    }
+                }
+            }
             t @ Type::Unpack(
                 box Type::Tuple(_) | box Type::TypeVarTuple(_) | box Type::Quantified(_),
             ) => Some(t),
@@ -3444,7 +3462,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect();
                 Type::ParamSpecValue(ParamList::new(elts))
             }
-            _ => self.untype(self.expr_infer(x, errors), x.range(), errors),
+            _ => {
+                let inferred_ty = self.expr_infer(x, errors);
+
+                // Check if this is a scoped type alias in base class context
+                if type_form_context == TypeFormContext::BaseClassList {
+                    if let Type::TypeAlias(ta) = &inferred_ty {
+                        if ta.style == TypeAliasStyle::Scoped {
+                            return self.error(
+                                errors,
+                                x.range(),
+                                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                                format!(
+                                    "Cannot use scoped type alias `{}` as a base class. Use a legacy type alias instead: `{}: TypeAlias = {}`",
+                                    ta.name,
+                                    ta.name,
+                                    self.for_display(ta.as_type())
+                                ),
+                            );
+                        }
+                    }
+                }
+
+                self.untype(inferred_ty, x.range(), errors)
+            }
         };
         self.validate_type_form(result, x.range(), type_form_context, errors)
     }

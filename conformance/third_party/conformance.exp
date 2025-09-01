@@ -681,6 +681,16 @@
     },
     {
       "code": -2,
+      "column": 18,
+      "concise_description": "Cannot use scoped type alias `GoodAlias1` as a base class. Use a legacy type alias instead: `GoodAlias1: TypeAlias = type[int]`",
+      "description": "Cannot use scoped type alias `GoodAlias1` as a base class. Use a legacy type alias instead: `GoodAlias1: TypeAlias = type[int]`",
+      "line": 26,
+      "name": "invalid-inheritance",
+      "stop_column": 28,
+      "stop_line": 26
+    },
+    {
+      "code": -2,
       "column": 22,
       "concise_description": "Expected class object, got `TypeAliasType`",
       "description": "Expected class object, got `TypeAliasType`",
