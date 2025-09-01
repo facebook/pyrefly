@@ -788,9 +788,24 @@ impl<'a> BindingsBuilder<'a> {
     ) -> Result<(Idx<Key>, Option<Idx<Key>>), LookupError> {
         let mut barrier = false;
         let ok_no_usage = |idx| Ok((idx, None));
+        let is_static_type_information = matches!(usage, Usage::StaticTypeInformation);
+        let is_current_scope_class = matches!(self.scopes.current().kind, ScopeKind::Class(_));
+        let mut is_current_scope = true;
         for scope in self.scopes.iter_rev() {
             if let Some(flow) = scope.flow.info.get_hashed(name)
                 && !barrier
+                // Handles the special case of class fields:
+                // From https://docs.python.org/3/reference/executionmodel.html#resolution-of-names:
+                // """The scope of names defined in a class block is limited to the
+                // class block; it does not extend to the code blocks of
+                // methods. This includes comprehensions and generator
+                // expressions, but it does not include annotation scopes, which
+                // have access to their enclosing class scopes."""
+                && (
+                    is_static_type_information // Annotations can see class fields
+                    || (is_current_scope_class && is_current_scope) // The class body can see class fields in the current scope
+                    || !matches!(flow.style, FlowStyle::ClassField { .. }) // Other scopes cannot see class fields
+                )
             {
                 let (idx, maybe_pinned_idx) = self.detect_possible_first_use(flow.key, usage);
                 if let Some(pinned_idx) = maybe_pinned_idx {
@@ -814,6 +829,7 @@ impl<'a> BindingsBuilder<'a> {
                     }
                 }
             }
+            is_current_scope = false;
             barrier = barrier || scope.barrier;
         }
         Err(LookupError::NotFound)
