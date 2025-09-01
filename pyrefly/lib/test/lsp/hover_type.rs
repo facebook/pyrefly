@@ -148,6 +148,34 @@ Hover Result: `int`
 }
 
 #[test]
+fn merge_function_type() {
+    let code = r#"
+def f1(x: int) -> int: ...
+def f2(x: int) -> int: ...
+def f3(x: int) -> int: ...
+
+DICT = {
+#  ^
+    1: f1,
+    2: f2,
+    3: f3
+}
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    dbg!(report.trim());
+    assert_eq!(
+        r#"
+# main.py
+6 | DICT = {
+       ^
+Hover Result: `dict[int, ((x: int) -> int)]`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn import_test() {
     let code = r#"
 import typing

@@ -925,7 +925,7 @@ def f(x: T, y: TT):
     a = union(x, y)
     a = union(a, a)
     a = union(a, a)
-    reveal_type([a]) # E: revealed type: list[T | T]
+    reveal_type([a]) # E: revealed type: list[T]
 "#,
 );
 
