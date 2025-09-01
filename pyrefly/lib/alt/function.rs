@@ -626,8 +626,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             x.range,
                             ErrorInfo::Kind(ErrorKind::BadFunctionDefinition),
                             format!(
-                                "TypedDict key '{}' in **kwargs overlaps with parameter '{}'",
-                                name, name
+                                "TypedDict key '{name}' in **kwargs overlaps with parameter '{name}'"
                             ),
                         );
                     }

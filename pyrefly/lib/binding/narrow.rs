@@ -113,10 +113,10 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
                 write!(f, "IsNotSubclass({})", expr.display_with(ctx))
             }
             AtomicNarrowOp::HasAttr(attr) => {
-                write!(f, "HasAttr({})", attr)
+                write!(f, "HasAttr({attr})")
             }
             AtomicNarrowOp::NotHasAttr(attr) => {
-                write!(f, "NotHasAttr({})", attr)
+                write!(f, "NotHasAttr({attr})")
             }
             AtomicNarrowOp::GetAttr(attr, Some(default)) => {
                 write!(f, "GetAttr({}, {})", attr, default.display_with(ctx))
@@ -125,10 +125,10 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
                 write!(f, "NotGetAttr({}, {})", attr, default.display_with(ctx))
             }
             AtomicNarrowOp::GetAttr(attr, None) => {
-                write!(f, "GetAttr({}, None)", attr)
+                write!(f, "GetAttr({attr}, None)")
             }
             AtomicNarrowOp::NotGetAttr(attr, None) => {
-                write!(f, "NotGetAttr({}, None)", attr)
+                write!(f, "NotGetAttr({attr}, None)")
             }
             AtomicNarrowOp::TypeGuard(t, arguments) => {
                 write!(f, "TypeGuard({t}, {})", arguments.display_with(ctx))
