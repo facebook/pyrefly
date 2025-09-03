@@ -84,7 +84,8 @@ export default function Sandbox({
     const [pyreService, setPyreService] = useState<PyreflyState | null>(null);
     const [editorHeightforCodeSnippet, setEditorHeightforCodeSnippet] =
         useState<number | null>(null);
-    const [model, setModel] = useState<editor.ITextModel | null>(null);
+    const [models, setModels] = useState<Map<string, editor.ITextModel>>(new Map());
+    const [activeFileName, setActiveFileName] = useState<string>('sandbox.py');
     const [pyodideStatus, setPyodideStatus] = useState<PyodideStatus>(
         PyodideStatus.NOT_INITIALIZED
     );
@@ -92,6 +93,81 @@ export default function Sandbox({
     const [activeTab, setActiveTab] = useState<string>('errors');
     const [isHovered, setIsHovered] = useState(false);
     const [pythonVersion, setPythonVersion] = useState('3.12');
+    const model = models.get(activeFileName) || null;
+
+    // File management functions
+    const createNewFile = useCallback((fileName: string, content: string = '') => {
+        // Lets see if model already exists in Monaco
+        const existingModel = monaco.editor.getModels().find(m => m.uri.path === `/${fileName}`);
+
+        let newModel;
+        if (existingModel) {
+            // File exists, update its content
+            existingModel.setValue(content);
+            newModel = existingModel;
+        } else {
+            // Create new file from scratch
+            newModel = monaco.editor.createModel(content, 'python', monaco.Uri.file(`/${fileName}`));
+        }
+
+        setModels(prev => new Map(prev).set(fileName, newModel));
+        setActiveFileName(fileName);
+    }, []);
+
+    // Switch to a different file
+    const switchToFile = useCallback((fileName: string) => {
+        if (models.has(fileName)) {
+            setActiveFileName(fileName);
+            // If editor exists, immediately switch the model
+            const editor = editorRef.current;
+            const targetModel = models.get(fileName);
+            if (editor && targetModel) {
+                editor.setModel(targetModel);
+            }
+        }
+    }, [models]);
+
+    const TabBar = () => (
+        <div style={{
+            display: 'flex',
+            backgroundColor: '#f0f0f0',
+            borderBottom: '2px solid #ddd',
+            marginBottom: '0px'
+        }}>
+            {Array.from(models.keys()).map(fileName => (
+                <button
+                    key={fileName}
+                    onClick={() => {
+                        console.log('Clicked:', fileName);
+                        switchToFile(fileName);
+                    }}
+                    style={{
+                        padding: '10px 20px',
+                        border: 'none',
+                        backgroundColor: fileName === activeFileName ? '#0066cc' : '#ffffff',
+                        color: fileName === activeFileName ? 'white' : '#333',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        fontWeight: fileName === activeFileName ? 'bold' : 'normal'
+                    }}
+                >
+                    {fileName}
+                </button>
+            ))}
+        </div>
+    );
+
+    // Setup default files when editor loads
+    useEffect(() => {
+        if (models.size === 0) {
+            // Create main file first (this will set it as active)
+            createNewFile('sandbox.py', DEFAULT_SANDBOX_PROGRAM);
+            // Create a second file for testing and populate 
+            createNewFile('utils.py', '# Utility functions\n\ndef helper_function():\n    return "Hello from utils!"');
+            // Ensure sandbox.py is the file that remains active after creating utils.py
+            setActiveFileName('sandbox.py');
+        }
+    }, [createNewFile, models.size]);
 
     // Initialize Python version from URL on component mount
     useEffect(() => {
@@ -133,15 +209,34 @@ export default function Sandbox({
 
     // Need to add createModel handler in case monaco model was not created at mount time
     monaco.editor.onDidCreateModel((_newModel) => {
-        const curModel = fetchCurMonacoModelAndTriggerUpdate(sampleFilename);
-        setModel(curModel);
-        forceRecheck();
+        const curModel = fetchCurMonacoModelAndTriggerUpdate(activeFileName);
+        if (curModel) {
+            setModels(prev => new Map(prev).set(activeFileName, curModel));
+        }
     });
+
+    // Ensure Monaco editor model is synced with active file
+    useEffect(() => {
+        const editor = editorRef.current;
+        const targetModel = models.get(activeFileName);
+        
+        if (editor && targetModel && editor.getModel() !== targetModel) {
+            editor.setModel(targetModel);
+        }
+    }, [activeFileName, models]);
 
     // Recheck when pyre service or model changes
     useEffect(() => {
         forceRecheck();
     }, [pyreService, model]);
+
+    // Initial type check when models and pyreService are ready
+    useEffect(() => {
+        if (models.size > 0 && pyreService && model) {
+            // Small delay to ensure initiliasation
+            setTimeout(() => forceRecheck(), 100);
+        }
+    }, [models.size, pyreService, model]);
 
     function forceRecheck() {
         if (model == null || pyreService == null) return;
@@ -196,8 +291,11 @@ export default function Sandbox({
     }, [model, setActiveTab, setPyodideStatus]);
 
     function onEditorMount(editor: editor.IStandaloneCodeEditor) {
-        const model = fetchCurMonacoModelAndTriggerUpdate(sampleFilename);
-        setModel(model);
+        // Use activeFileName instead of sampleFilename 
+        const curModel = fetchCurMonacoModelAndTriggerUpdate(activeFileName);
+        if (curModel) {
+            setModels(prev => new Map(prev).set(activeFileName, curModel));
+        }
 
         if (isCodeSnippet) {
             // Add extra space for buttons on mobile devices
@@ -281,7 +379,8 @@ export default function Sandbox({
                 styles.tryEditor,
                 !isCodeSnippet && !isMobile() && styles.sandboxPadding
             )}
-        >
+        >   
+            <TabBar />
             <div
                 id="sandbox-code-editor-container"
                 {...stylex.props(
@@ -293,8 +392,8 @@ export default function Sandbox({
             >
                 {getPyreflyEditor(
                     isCodeSnippet,
-                    sampleFilename,
-                    codeSample,
+                    activeFileName,
+                    model?.getValue() || codeSample,
                     forceRecheck,
                     onEditorMount,
                     editorHeightforCodeSnippet,
