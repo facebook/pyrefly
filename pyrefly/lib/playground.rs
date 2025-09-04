@@ -242,6 +242,33 @@ impl Playground {
         self.state.run_with_committing_transaction(transaction, &handle_reqs);
     }
 
+    pub fn update_single_file(&mut self, filename: String, content: String) {
+        if let Some(handle) = self.handles.get(&filename) {
+            let module_path = PathBuf::from(&filename);
+            let file_content = vec![(module_path, Some(Arc::new(content)))];
+            
+            let mut transaction = self
+                .state
+                .new_committable_transaction(Require::Exports, None);
+            transaction.as_mut().set_memory(file_content);
+            
+            let mut handle_reqs = Vec::new();
+            for (file, file_handle) in &self.handles {
+                if file == &filename {
+                    handle_reqs.push((file_handle.dupe(), Require::Everything));
+                } else {
+                    handle_reqs.push((file_handle.dupe(), Require::Exports));
+                }
+            }
+            
+            self.state.run_with_committing_transaction(transaction, &handle_reqs);
+            
+            if Some(&filename) == self.handles.keys().find(|&f| f == &filename) {
+                self.handle = handle.dupe();
+            }
+        }
+    }
+
     pub fn set_active_file(&mut self, filename: &str) {
         if let Some(handle) = self.handles.get(filename) {
             self.handle = handle.dupe();
@@ -251,7 +278,6 @@ impl Playground {
     pub fn get_errors(&self) -> Vec<Diagnostic> {
         let mut all_diagnostics = Vec::new();
         
-        // Get errors for each file individually so we can track which file they belong to
         for (filename, handle) in &self.handles {
             let file_errors = self.state
                 .transaction()
@@ -273,7 +299,7 @@ impl Playground {
                             Severity::Error => 8,
                             Severity::Warn => 4,
                             Severity::Info => 2,
-                            Severity::Ignore => 1, // Ignored errors shouldn't be in `CollectedErrors.shown`
+                            Severity::Ignore => 1,
                         },
                         filename: filename.clone(),
                     }
@@ -450,6 +476,33 @@ mod tests {
                 "Error filename should be one of the test files, got: {}", error.filename
             );
         }
+    }
+
+    #[test]
+    fn test_incremental_update_with_cross_file_errors() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = HashMap::new();
+        files.insert("sandbox.py".to_owned(), "from utils import get_number\nresult: int = get_number()".to_owned());
+        files.insert("utils.py".to_owned(), "def get_number() -> int:\n    return 42".to_owned());
         
+        state.update_sandbox_files(files);
+        state.set_active_file("sandbox.py");
+        
+        let errors = state.get_errors();
+        assert_eq!(errors.len(), 0, "Should have no errors initially");
+        
+        state.update_single_file("utils.py".to_owned(), "def get_number() -> int:\n    return \"not a number\"".to_owned());
+        
+        let errors_after_update = state.get_errors();
+        
+        let utils_errors: Vec<_> = errors_after_update.iter()
+            .filter(|e| e.filename == "utils.py")
+            .collect();
+        
+        assert!(!utils_errors.is_empty(), "Should detect error in utils.py after incremental update");
+        
+        for error in &errors_after_update {
+            assert!(!error.filename.is_empty(), "Error should include filename");
+        }
     }
 }

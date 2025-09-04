@@ -38,6 +38,11 @@ impl State {
         Ok(())
     }
 
+    #[wasm_bindgen(js_name=updateSingleFile)]
+    pub fn update_single_file(&mut self, filename: String, content: String) {
+        self.0.update_single_file(filename, content);
+    }
+
     #[wasm_bindgen(js_name=setActiveFile)]
     pub fn set_active_file(&mut self, filename: String) {
         self.0.set_active_file(&filename);

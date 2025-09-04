@@ -37,6 +37,7 @@ import PythonVersionSelector from './PythonVersionSelector';
 export interface PyreflyState {
     updateSource: (source: string) => void;
     updateSandboxFiles: (files: Record<string, string>) => void;
+    updateSingleFile: (filename: string, content: string) => void;
     setActiveFile: (filename: string) => void;
     getErrors: () => ReadonlyArray<PyreflyErrorMessage>;
     autoComplete: (line: number, column: number) => any;
@@ -442,10 +443,19 @@ export default function Sandbox({
     // Initial type check when models and pyreService are ready
     useEffect(() => {
         if (models.size > 0 && pyreService && model) {
-            // Small delay to ensure initiliasation
+            const allFiles: Record<string, string> = {};
+            models.forEach((model, filename) => {
+                allFiles[filename] = model.getValue();
+            });
+            
+            if (Object.keys(allFiles).length > 0) {
+                pyreService.updateSandboxFiles(allFiles);
+                pyreService.setActiveFile(activeFileName);
+            }
+            
             setTimeout(() => forceRecheck(), 100);
         }
-    }, [models.size, pyreService, model]);
+    }, [models.size, pyreService, model, activeFileName]);
 
     function forceRecheck() {
         if (model == null || pyreService == null) return;
@@ -463,13 +473,9 @@ export default function Sandbox({
 
         // typecheck on edit
         try {
-            const allFiles: Record<string, string> = {};
-            models.forEach((model, filename) => {
-                allFiles[filename] = model.getValue();
-            });
-
-            if (Object.keys(allFiles).length > 0) {
-                pyreService.updateSandboxFiles(allFiles);
+            if (models.size > 1) {
+                const currentFileContent = model.getValue();
+                pyreService.updateSingleFile(activeFileName, currentFileContent);
                 pyreService.setActiveFile(activeFileName);
             } else {
                 const value = model.getValue();
