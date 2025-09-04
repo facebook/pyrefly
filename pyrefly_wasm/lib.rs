@@ -9,6 +9,7 @@
 #![allow(clippy::new_without_default)]
 
 use std::collections::HashMap;
+
 use pyrefly::playground::Playground;
 use pyrefly::playground::Position;
 use wasm_bindgen::prelude::*;
