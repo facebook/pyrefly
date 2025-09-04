@@ -30,6 +30,7 @@ import {
 import type { editor } from 'monaco-editor';
 import type { PyreflyErrorMessage } from './SandboxResults';
 import { DEFAULT_SANDBOX_PROGRAM } from './DefaultSandboxProgram';
+import { DEFAULT_UTILS_PROGRAM } from './DefaultUtilsProgram';
 import { usePythonWorker } from './usePythonWorker';
 import PythonVersionSelector from './PythonVersionSelector';
 
@@ -369,10 +370,8 @@ export default function Sandbox({
     // Setup default files when editor loads
     useEffect(() => {
         if (models.size === 0) {
-            // Create main file first (this will set it as active)
             createNewFile('sandbox.py', DEFAULT_SANDBOX_PROGRAM);
-            // Create a second file for testing and populate 
-            createNewFile('utils.py', '# Utility functions\n\ndef helper_function():\n    return "Hello from utils!"');
+            createNewFile('utils.py', DEFAULT_UTILS_PROGRAM);
             // Ensure sandbox.py is the file that remains active after creating utils.py
             setActiveFileName('sandbox.py');
         }
@@ -519,7 +518,7 @@ export default function Sandbox({
         }
     }
 
-    const { runPython } = usePythonWorker({
+    const { runPython, runMultiFilePython } = usePythonWorker({
         setPythonOutput,
         setPyodideStatus,
     });
@@ -527,7 +526,10 @@ export default function Sandbox({
     // Create a function to run Python code that can be passed a model
     const runPythonCodeFunction = createRunPythonCodeFunction(
         setActiveTab,
-        runPython
+        runPython,
+        runMultiFilePython,
+        models,
+        activeFileName
     );
     const runPythonCodeCallback = useCallback(async () => {
         if (!model) return;
@@ -995,7 +997,10 @@ function getResetButton(
 // Reusable function to create a Python code runner
 export function createRunPythonCodeFunction(
     onActiveTabChange: React.Dispatch<React.SetStateAction<string>>,
-    runPython: (code: string) => Promise<void>
+    runPython: (code: string) => Promise<void>,
+    runMultiFilePython: (activeFile: string, allFiles: Record<string, string>) => Promise<void>,
+    models: Map<string, editor.ITextModel>,
+    activeFileName: string
 ) {
     // Return a function that takes a model parameter
     return async (model: editor.ITextModel | null) => {
@@ -1004,8 +1009,18 @@ export function createRunPythonCodeFunction(
         // Switch to output tab
         onActiveTabChange('output');
 
-        const code = model.getValue();
-        await runPython(code);
+        // Check if this is a multi-file project
+        if (models.size > 1) {
+            const allFiles: Record<string, string> = {};
+            models.forEach((model, filename) => {
+                allFiles[filename] = model.getValue();
+            });
+            
+            await runMultiFilePython(activeFileName, allFiles);
+        } else {
+            const code = model.getValue();
+            await runPython(code);
+        }
     };
 }
 
