@@ -68,7 +68,7 @@ inspiration from [Pyre1](https://pyre-check.org/),
 
 ## Code layout
 
-Pyrefly is split into a number of crates (mostly under `crates/`):
+Pyrefly is split into a number of crates (mostly under 'crates/'):
 
 - `pyrefly_util` are general purpose utilities, which have nothing to do with
   Python or type checking. Examples include IO wrappers, locking, command line
