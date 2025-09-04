@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
+use pyrefly_build::map_db::MapDatabase;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::PythonPlatform;
@@ -92,25 +93,20 @@ fn test_multiple_path() {
 
     let mut config = ConfigFile::default();
     config.python_environment.set_empty_to_default();
+    let sys_info = config.get_sys_info();
+    let mut sourcedb = MapDatabase::new(sys_info.dupe());
     for (name, path, _) in FILES.iter().rev() {
-        config.custom_module_paths.insert(
+        sourcedb.insert(
             ModuleName::from_str(name),
             ModulePath::memory(PathBuf::from(path)),
         );
     }
+    config.source_db = Some(ArcId::new(Box::new(sourcedb)));
     config.configure();
     let config = ArcId::new(config);
 
-    let sys_info = SysInfo::default();
-
-    let state = State::new(ConfigFinder::new_constant(config));
-    let handles = FILES.map(|(name, path, _)| {
-        Handle::new(
-            ModuleName::from_str(name),
-            ModulePath::memory(PathBuf::from(path)),
-            sys_info.dupe(),
-        )
-    });
+    let state = State::new(ConfigFinder::new_constant(config.clone()));
+    let handles = config.source_db.as_ref().unwrap().modules_to_check();
     let mut transaction = state.new_transaction(Require::Exports, None);
     transaction.set_memory(
         FILES.map(|(_, path, contents)| {

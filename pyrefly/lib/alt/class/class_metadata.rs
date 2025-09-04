@@ -433,12 +433,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let has_root_model_kind = bases_with_metadata.iter().any(|(_, metadata)| {
             matches!(
                 metadata.pydantic_model_kind(),
-                Some(PydanticModelKind::RootModel)
+                Some(PydanticModelKind::RootModel(_))
             )
         });
 
+        // This is not the final form for this type.
         let pydantic_model_kind = if has_pydantic_root_model_base_class || has_root_model_kind {
-            PydanticModelKind::RootModel
+            PydanticModelKind::RootModel(Type::any_implicit())
         } else {
             PydanticModelKind::BaseModel
         };

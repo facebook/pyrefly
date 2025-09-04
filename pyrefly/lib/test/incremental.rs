@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
+use pyrefly_build::map_db::MapDatabase;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::SysInfo;
@@ -76,12 +77,14 @@ impl Incremental {
 
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
+        let mut sourcedb = MapDatabase::new(config.get_sys_info());
         for file in Self::USER_FILES {
-            config.custom_module_paths.insert(
+            sourcedb.insert(
                 ModuleName::from_str(file),
                 ModulePath::memory(PathBuf::from(file)),
             );
         }
+        config.source_db = Some(ArcId::new(Box::new(sourcedb)));
         config.configure();
         let config = ArcId::new(config);
 

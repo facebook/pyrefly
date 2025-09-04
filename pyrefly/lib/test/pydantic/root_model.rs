@@ -75,7 +75,23 @@ class FallBackRootModel(RootModel):
     pass
 
 m1 = FallBackRootModel(123) # E: Expected argument `root` to be passed by name in function `FallBackRootModel.__init__` 
+"#,
+);
 
+testcase!(
+    bug = "Rootmodel info should be propagated through the class heirchy",
+    test_inheritance,
+    pydantic_env(),
+    r#"
+from pydantic import RootModel
 
+class A(RootModel[int]):
+    pass
+
+class B(A):
+    pass
+
+m1 = B(3) # E: Expected argument `root` to be passed by name in function `B.__init__`
+m2 = B("abc") # E: Expected argument `root` to be passed by name in function `B.__init__`
 "#,
 );

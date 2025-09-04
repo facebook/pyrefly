@@ -510,9 +510,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for err in error {
             error_messages.push(err.to_error_msg(attr_name, todo_ctx))
         }
+
+        // Both types and error messages can be duplicated if elements in `attr_base` gets duplicated (can happen with
+        // if base type contain vars). Make sure that dedup logic applies to both branches.
         if error_messages.is_empty() {
             self.unions(types)
         } else {
+            error_messages.sort();
+            error_messages.dedup();
             self.error(
                 errors,
                 range,

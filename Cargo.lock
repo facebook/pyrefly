@@ -2151,6 +2151,7 @@ dependencies = [
  "parse-display",
  "pretty_assertions",
  "pulldown-cmark",
+ "pyrefly_build",
  "pyrefly_python",
  "pyrefly_util",
  "regex",

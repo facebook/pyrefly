@@ -11,14 +11,17 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Context as _;
+use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::fs_anyhow;
 use starlark_map::small_map::SmallMap;
 use tracing::debug;
 use vec1::Vec1;
 
+use crate::handle::Handle;
 use crate::source_db::SourceDatabase;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -97,26 +100,34 @@ fn create_manifest_item_index(
         .collect()
 }
 
+#[derive(Debug)]
 pub struct BuckCheckSourceDatabase {
     sources: SmallMap<ModuleName, Vec1<PathBuf>>,
     dependencies: SmallMap<ModuleName, Vec1<PathBuf>>,
+    sys_info: SysInfo,
 }
 
 impl SourceDatabase for BuckCheckSourceDatabase {
-    fn modules_to_check(&self) -> Vec<(ModuleName, PathBuf)> {
+    fn modules_to_check(&self) -> Vec<Handle> {
         self.sources
             .iter()
-            .flat_map(|(name, paths)| paths.iter().map(|path| (*name, path.clone())))
+            .flat_map(|(name, paths)| {
+                paths.iter().map(|path| {
+                    Handle::new(
+                        name.dupe(),
+                        ModulePath::filesystem(path.to_path_buf()),
+                        self.sys_info.dupe(),
+                    )
+                })
+            })
             .collect()
     }
 
-    fn list(&self) -> SmallMap<ModuleName, pyrefly_python::module_path::ModulePath> {
-        // Iterate the sources second so if there are any conflicts the source wins.
-        self.dependencies
-            .iter()
-            .chain(self.sources.iter())
-            .map(|(name, paths)| (*name, ModulePath::filesystem(paths.first().clone())))
-            .collect()
+    fn lookup(&self, module: &ModuleName, _: Option<&Handle>) -> Option<ModulePath> {
+        self.sources
+            .get(module)
+            .or_else(|| self.dependencies.get(module))
+            .map(|p| ModulePath::filesystem(p.first().clone()))
     }
 }
 
@@ -125,23 +136,31 @@ impl BuckCheckSourceDatabase {
         source_manifests: &[PathBuf],
         dependency_manifests: &[PathBuf],
         typeshed_manifests: &[PathBuf],
+        sys_info: SysInfo,
     ) -> anyhow::Result<Self> {
         let sources = read_manifest_files(source_manifests)?;
         let dependencies = read_manifest_files(dependency_manifests)?;
         let typeshed = read_manifest_files(typeshed_manifests)?;
-        Ok(Self::from_manifest_items(sources, dependencies, typeshed))
+        Ok(Self::from_manifest_items(
+            sources,
+            dependencies,
+            typeshed,
+            sys_info,
+        ))
     }
 
     fn from_manifest_items(
         source_items: Vec<ManifestItem>,
         dependency_items: Vec<ManifestItem>,
         typeshed_items: Vec<ManifestItem>,
+        sys_info: SysInfo,
     ) -> Self {
         Self {
             sources: create_manifest_item_index(source_items.into_iter()),
             dependencies: create_manifest_item_index(
                 dependency_items.into_iter().chain(typeshed_items),
             ),
+            sys_info,
         }
     }
 }
@@ -166,7 +185,7 @@ mod tests {
     }
 
     impl BuckCheckSourceDatabase {
-        fn lookup(&self, module: ModuleName) -> LookupResult {
+        fn lookup_for_test(&self, module: ModuleName) -> LookupResult {
             match self.sources.get(&module) {
                 Some(paths) => LookupResult::OwningSource(paths.first().clone()),
                 None => match self.dependencies.get(&module) {
@@ -214,21 +233,22 @@ mod tests {
                 module_name: ModuleName::from_str("baz"),
                 absolute_path: baz_path.clone(),
             }],
+            SysInfo::default(),
         );
         assert_eq!(
-            source_db.lookup(ModuleName::from_str("foo")),
+            source_db.lookup_for_test(ModuleName::from_str("foo")),
             LookupResult::OwningSource(foo_path)
         );
         assert_eq!(
-            source_db.lookup(ModuleName::from_str("bar")),
+            source_db.lookup_for_test(ModuleName::from_str("bar")),
             LookupResult::ExternalSource(bar_path)
         );
         assert_eq!(
-            source_db.lookup(ModuleName::from_str("baz")),
+            source_db.lookup_for_test(ModuleName::from_str("baz")),
             LookupResult::ExternalSource(baz_path)
         );
         assert_eq!(
-            source_db.lookup(ModuleName::from_str("qux")),
+            source_db.lookup_for_test(ModuleName::from_str("qux")),
             LookupResult::NoSource
         );
     }
@@ -263,13 +283,14 @@ mod tests {
                 },
             ],
             vec![],
+            SysInfo::default(),
         );
         assert_eq!(
-            source_db.lookup(ModuleName::from_str("foo")),
+            source_db.lookup_for_test(ModuleName::from_str("foo")),
             LookupResult::OwningSource(src_foo_path)
         );
         assert_eq!(
-            source_db.lookup(ModuleName::from_str("bar")),
+            source_db.lookup_for_test(ModuleName::from_str("bar")),
             LookupResult::OwningSource(src_bar_path)
         );
     }
@@ -303,13 +324,14 @@ mod tests {
                 },
             ],
             vec![],
+            SysInfo::default(),
         );
         assert_eq!(
-            source_db.lookup(ModuleName::from_str("foo")),
+            source_db.lookup_for_test(ModuleName::from_str("foo")),
             LookupResult::OwningSource(foo_pyi_path)
         );
         assert_eq!(
-            source_db.lookup(ModuleName::from_str("bar")),
+            source_db.lookup_for_test(ModuleName::from_str("bar")),
             LookupResult::ExternalSource(bar_pyi_path)
         );
     }
@@ -364,21 +386,22 @@ mod tests {
                     absolute_path: typeshed_d_path.clone(),
                 },
             ],
+            SysInfo::default(),
         );
         assert_eq!(
-            source_db.lookup(ModuleName::from_str("a")),
+            source_db.lookup_for_test(ModuleName::from_str("a")),
             LookupResult::ExternalSource(dep_a_path)
         );
         assert_eq!(
-            source_db.lookup(ModuleName::from_str("b")),
+            source_db.lookup_for_test(ModuleName::from_str("b")),
             LookupResult::ExternalSource(dep_b_path)
         );
         assert_eq!(
-            source_db.lookup(ModuleName::from_str("c")),
+            source_db.lookup_for_test(ModuleName::from_str("c")),
             LookupResult::ExternalSource(typeshed_c_path)
         );
         assert_eq!(
-            source_db.lookup(ModuleName::from_str("d")),
+            source_db.lookup_for_test(ModuleName::from_str("d")),
             LookupResult::ExternalSource(dep_d_path)
         );
     }

@@ -15,12 +15,13 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use itertools::Itertools;
+use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::absolutize::Absolutize as _;
+use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::Glob;
@@ -28,7 +29,6 @@ use pyrefly_util::globs::Globs;
 use pyrefly_util::prelude::VecExt;
 use serde::Deserialize;
 use serde::Serialize;
-use starlark_map::small_map::SmallMap;
 use tracing::debug;
 
 use crate::base::ConfigBase;
@@ -288,9 +288,11 @@ pub struct ConfigFile {
     )]
     pub use_ignore_files: bool,
 
-    /// Completely custom module to path mappings. Currently not exposed to the user.
-    #[serde(skip)]
-    pub custom_module_paths: SmallMap<ModuleName, ModulePath>,
+    /// Database understanding the mapping between source files and import paths,
+    /// especially within the context of a build system. This is used for getting handles
+    /// for a path and doing module finding.
+    #[serde(skip, default)]
+    pub source_db: Option<ArcId<Box<dyn SourceDatabase>>>,
 
     /// Skips the check to ensure any `-stubs` `site_package_path` entries have an
     /// installed non-stubs package.
@@ -324,7 +326,7 @@ impl Default for ConfigFile {
             python_environment: Default::default(),
             root: Default::default(),
             sub_configs: Default::default(),
-            custom_module_paths: Default::default(),
+            source_db: Default::default(),
             use_untyped_imports: None,
             use_ignore_files: true,
             ignore_missing_source: true,
@@ -904,7 +906,7 @@ mod tests {
                     untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                     permissive_ignores: None,
                 },
-                custom_module_paths: Default::default(),
+                source_db: Default::default(),
                 sub_configs: vec![SubConfig {
                     matches: Glob::new("sub/project/**".to_owned()).unwrap(),
                     settings: ConfigBase {
@@ -1140,7 +1142,7 @@ mod tests {
                 skip_interpreter_query: false,
             },
             root: Default::default(),
-            custom_module_paths: Default::default(),
+            source_db: Default::default(),
             sub_configs: vec![SubConfig {
                 matches: Glob::new("sub/project/**".to_owned()).unwrap(),
                 settings: Default::default(),
@@ -1195,7 +1197,7 @@ mod tests {
             fallback_search_path: Vec::new(),
             python_environment,
             root: Default::default(),
-            custom_module_paths: Default::default(),
+            source_db: Default::default(),
             sub_configs: vec![SubConfig {
                 matches: sub_config_matches,
                 settings: Default::default(),

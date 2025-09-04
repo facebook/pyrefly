@@ -29,4 +29,5 @@
 
 pub mod buck;
 pub mod handle;
+pub mod map_db;
 pub mod source_db;

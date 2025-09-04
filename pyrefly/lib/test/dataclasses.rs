@@ -1219,3 +1219,23 @@ class C2(C1):
 C2('', 0.2, b=3)
     "#,
 );
+
+testcase!(
+    test_assign_to_field_in_child,
+    r#"
+from dataclasses import dataclass
+
+@dataclass
+class Animal:
+    name: str | None = None
+    def speak(self) -> str: ...
+
+@dataclass
+class Dog(Animal):
+    def speak(self) -> str:
+        self.name = "dog"
+        return "woof"
+
+hdog = Dog(name="hdog")
+    "#,
+);

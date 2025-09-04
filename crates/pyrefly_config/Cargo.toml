@@ -17,6 +17,7 @@ dupe = "0.9.1"
 enum-iterator = "2.1"
 itertools = "0.14.0"
 parse-display = "0.8.2"
+pyrefly_build = { path = "../pyrefly_build" }
 pyrefly_python = { path = "../pyrefly_python" }
 pyrefly_util = { path = "../pyrefly_util" }
 regex = "1.11.1"

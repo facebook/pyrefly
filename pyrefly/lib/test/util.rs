@@ -18,6 +18,7 @@ use anstream::ColorChoice;
 use anyhow::anyhow;
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
+use pyrefly_build::map_db::MapDatabase;
 use pyrefly_config::error::ErrorDisplayConfig;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
@@ -212,9 +213,11 @@ impl TestEnv {
         if self.implicitly_defined_attribute_error {
             errors.set_error_severity(ErrorKind::ImplicitlyDefinedAttribute, Severity::Error);
         }
+        let mut sourcedb = MapDatabase::new(config.get_sys_info());
         for (name, path, _) in self.modules.iter() {
-            config.custom_module_paths.insert(*name, path.dupe());
+            sourcedb.insert(*name, path.dupe());
         }
+        config.source_db = Some(ArcId::new(Box::new(sourcedb)));
         config.interpreters.skip_interpreter_query = true;
         config.configure();
         ArcId::new(config)

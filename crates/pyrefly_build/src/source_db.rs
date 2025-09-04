@@ -6,7 +6,6 @@
  */
 
 use std::fmt;
-use std::path::PathBuf;
 
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
@@ -15,9 +14,10 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
-use starlark_map::small_map::SmallMap;
 use static_interner::Intern;
 use static_interner::Interner;
+
+use crate::handle::Handle;
 
 // We're interning `Target`s, since they'll be duplicated all over the place,
 // and it would be nice to have something that implements `Copy`.
@@ -56,7 +56,7 @@ impl Target {
 /// Represents a virtual filesystem provided by a build system. A build system
 /// should understand the relationship between targets and importable qualified
 /// paths to the files contained in the build system.
-pub trait SourceDatabase {
-    fn modules_to_check(&self) -> Vec<(ModuleName, PathBuf)>;
-    fn list(&self) -> SmallMap<ModuleName, ModulePath>;
+pub trait SourceDatabase: Send + Sync + fmt::Debug {
+    fn modules_to_check(&self) -> Vec<Handle>;
+    fn lookup(&self, module: &ModuleName, origin: Option<&Handle>) -> Option<ModulePath>;
 }

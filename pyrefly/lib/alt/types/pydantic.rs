@@ -7,6 +7,7 @@
 
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
+use pyrefly_types::types::Type;
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq, VisitMut, Default)]
 pub struct PydanticMetadata {
@@ -22,5 +23,5 @@ pub struct PydanticMetadata {
 pub enum PydanticModelKind {
     #[default]
     BaseModel,
-    RootModel,
+    RootModel(Type),
 }

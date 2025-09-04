@@ -77,6 +77,28 @@ del super(B, B()).a # E: Cannot delete field `a`
 );
 
 testcase!(
+    test_super_retain_self,
+    r#"
+from typing import Self
+class A:
+    def m(self) -> Self:
+        return self
+
+    @classmethod
+    def classm(cls) -> type[Self]:
+        return cls
+
+class B(A):
+    def m(self) -> Self:
+        return super().m()
+
+    @classmethod
+    def classm(cls) -> type[Self]:
+        return super().classm()
+    "#,
+);
+
+testcase!(
     test_self_attribute_assign_twice,
     r#"
 from typing import assert_type

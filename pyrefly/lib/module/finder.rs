@@ -9,6 +9,7 @@ use std::iter;
 use std::path::Path;
 use std::path::PathBuf;
 
+use pyrefly_build::handle::Handle;
 use pyrefly_python::COMPILED_FILE_SUFFIXES;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -415,13 +416,16 @@ fn find_module_prefixes<'a>(
 pub fn find_import_filtered(
     config: &ConfigFile,
     module: ModuleName,
-    path: Option<&Path>,
+    origin: Option<&Handle>,
     style_filter: Option<ModuleStyle>,
 ) -> Result<ModulePath, FindError> {
-    if let Some(path) = config.custom_module_paths.get(&module) {
-        Ok(path.clone())
-    } else if module != ModuleName::builtins() && config.replace_imports_with_any(path, module) {
+    let path = origin.map(|h| h.path().as_path());
+    if module != ModuleName::builtins() && config.replace_imports_with_any(path, module) {
         Err(FindError::Ignored)
+    } else if let Some(sourcedb) = &config.source_db
+        && let Some(path) = sourcedb.lookup(&module, origin)
+    {
+        Ok(path.clone())
     } else if let Some(path) = find_module(module, config.search_path(), true, style_filter)? {
         Ok(path)
     } else if let Some(custom_typeshed_path) = &config.typeshed_path
@@ -467,15 +471,16 @@ pub fn find_import_filtered(
 }
 
 /// Get the given [`ModuleName`] from this config's search and site package paths.
-/// We take the `path` of the file we're searching for the module from to determine if
-/// we should replace imports with `typing.Any`.
+/// We take the [`Handle`] of the file we're searching for the module from to determine if
+/// we should replace imports with `typing.Any` and to perform lookups within a
+/// `SourceDatabase`.
 /// Return `Err` when indicating the module could not be found.
 pub fn find_import(
     config: &ConfigFile,
     module: ModuleName,
-    path: Option<&Path>,
+    origin: Option<&Handle>,
 ) -> Result<ModulePath, FindError> {
-    find_import_filtered(config, module, path, None)
+    find_import_filtered(config, module, origin, None)
 }
 
 /// Find all legitimate imports that start with `module`

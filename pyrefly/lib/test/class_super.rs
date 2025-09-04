@@ -244,7 +244,7 @@ class A:
 class B(A):
     @classmethod
     def g(cls):
-        super().f(B())
+        super().f(cls())
     "#,
 );
 

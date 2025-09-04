@@ -1972,7 +1972,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
     ) -> Option<WithDefiningClass<Arc<ClassField>>> {
         self.get_field_from_mro(cls, name, &|cls, name| {
-            self.get_non_synthesized_field_from_current_class_only(cls, name)
+            let field = self.get_non_synthesized_field_from_current_class_only(cls, name)?;
+            if field.initialization() == ClassFieldInitialization::Method {
+                // This parent happens to assign to the field in a method but doesn't define it.
+                None
+            } else {
+                Some(field)
+            }
         })
     }
 
@@ -2097,11 +2103,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match super_obj {
             SuperObj::Instance(obj) => self
                 .get_super_class_member(obj.class_object(), Some(start_lookup_cls), name)
-                .map(|member| self.as_instance_attribute(&member.value, &Instance::of_class(obj))),
+                .map(|member| {
+                    self.as_instance_attribute(&member.value, &Instance::of_self_type(obj))
+                }),
             SuperObj::Class(obj) => self
                 .get_super_class_member(obj.class_object(), Some(start_lookup_cls), name)
                 .map(|member| {
-                    self.as_class_attribute(&member.value, &ClassBase::ClassType(obj.clone()))
+                    self.as_class_attribute(&member.value, &ClassBase::SelfType(obj.clone()))
                 }),
         }
     }

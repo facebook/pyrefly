@@ -17,6 +17,9 @@ pub struct Handle {
     module: ModuleName,
     path: ModulePath,
     sys_info: SysInfo,
+    /// If this `Handle` came from a build system, which target is the module being
+    /// referenced a part of?
+    /// Note: a [`ModuleName`] and [`ModulePath`] pair can be part of multiple targets.
     target: Option<Target>,
 }
 

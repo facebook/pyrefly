@@ -13,15 +13,12 @@ use anyhow::Context as _;
 use clap::Parser;
 use dupe::Dupe;
 use pyrefly_build::buck::buck_check::BuckCheckSourceDatabase;
-use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::SourceDatabase;
-use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::fs_anyhow;
-use pyrefly_util::prelude::VecExt;
 use serde::Deserialize;
 use tracing::info;
 
@@ -61,25 +58,23 @@ fn read_input_file(path: &Path) -> anyhow::Result<InputFile> {
     Ok(input_file)
 }
 
-fn compute_errors(sys_info: SysInfo, sourcedb: impl SourceDatabase) -> Vec<Error> {
-    let modules = sourcedb.modules_to_check();
+fn compute_errors(sys_info: SysInfo, sourcedb: Box<impl SourceDatabase + 'static>) -> Vec<Error> {
+    let modules_to_check = sourcedb
+        .modules_to_check()
+        .into_iter()
+        .map(|h| (h, Require::Errors))
+        .collect::<Vec<_>>();
 
     let mut config = ConfigFile::default();
     config.python_environment.python_platform = Some(sys_info.platform().clone());
     config.python_environment.python_version = Some(sys_info.version());
     config.python_environment.site_package_path = Some(Vec::new());
-    config.custom_module_paths = sourcedb.list();
+    config.source_db = Some(ArcId::new(sourcedb));
     config.interpreters.skip_interpreter_query = true;
     config.disable_search_path_heuristics = true;
     config.configure();
     let config = ArcId::new(config);
 
-    let modules_to_check = modules.into_map(|(name, path)| {
-        (
-            Handle::new(name, ModulePath::filesystem(path), sys_info.dupe()),
-            Require::Errors,
-        )
-    });
     let state = State::new(ConfigFinder::new_constant(config));
     state.run(&modules_to_check, Require::Exports, None);
     let transaction = state.transaction();
@@ -120,8 +115,9 @@ impl BuckCheckArgs {
             input_file.sources.as_slice(),
             input_file.dependencies.as_slice(),
             input_file.typeshed.as_slice(),
+            sys_info.dupe(),
         )?;
-        let type_errors = compute_errors(sys_info, sourcedb);
+        let type_errors = compute_errors(sys_info, Box::new(sourcedb));
         info!("Found {} type errors", type_errors.len());
         write_output(&type_errors, self.output_path.as_deref())?;
         Ok(CommandExitStatus::Success)

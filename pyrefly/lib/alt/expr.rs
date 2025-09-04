@@ -318,8 +318,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Expr::If(x) => {
                 let condition_type = self.expr_infer(&x.test, errors);
-                let body_type = self.expr_infer_type_no_trace(&x.body, hint, errors);
-                let orelse_type = self.expr_infer_type_no_trace(&x.orelse, hint, errors);
+                let body_type = self
+                    .expr_infer_type_info_with_hint(&x.body, hint, errors)
+                    .into_ty();
+                let orelse_type = self
+                    .expr_infer_type_info_with_hint(&x.orelse, hint, errors)
+                    .into_ty();
                 self.check_dunder_bool_is_callable(&condition_type, x.range(), errors);
                 self.check_redundant_condition(&condition_type, x.range(), errors);
                 match self.as_bool(&condition_type, x.test.range(), errors) {
