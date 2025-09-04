@@ -15,6 +15,7 @@ use dupe::Dupe;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use pyrefly_build::handle::Handle;
+use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::PythonPlatform;
@@ -34,6 +35,36 @@ use crate::config::finder::ConfigFinder;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
+
+#[derive(Debug, Clone)]
+struct PlaygroundSourceDatabase {
+    module_mappings: HashMap<ModuleName, ModulePath>,
+    sys_info: SysInfo,
+}
+
+impl PlaygroundSourceDatabase {
+    fn new(module_mappings: HashMap<ModuleName, ModulePath>, sys_info: SysInfo) -> Self {
+        Self {
+            module_mappings,
+            sys_info,
+        }
+    }
+}
+
+impl SourceDatabase for PlaygroundSourceDatabase {
+    fn modules_to_check(&self) -> Vec<Handle> {
+        self.module_mappings
+            .iter()
+            .map(|(module_name, module_path)| {
+                Handle::new(*module_name, module_path.dupe(), self.sys_info.dupe())
+            })
+            .collect()
+    }
+
+    fn lookup(&self, module_name: &ModuleName, _context: Option<&Handle>) -> Option<ModulePath> {
+        self.module_mappings.get(module_name).cloned()
+    }
+}
 
 #[derive(Serialize)]
 pub struct Position {
@@ -202,6 +233,8 @@ impl Playground {
         config.python_environment.python_platform = Some(self.sys_info.platform().clone());
 
         let mut file_contents = Vec::new();
+        let mut module_mappings = HashMap::new();
+
         for (filename, content) in &files {
             let module_name =
                 ModuleName::from_str(filename.strip_suffix(".py").unwrap_or(filename));
@@ -209,14 +242,15 @@ impl Playground {
             let module_path = PathBuf::from(format!("{}.py", module_name.as_str()));
             let memory_path = ModulePath::memory(module_path.clone());
 
-            config
-                .custom_module_paths
-                .insert(module_name, memory_path.dupe());
+            module_mappings.insert(module_name, memory_path.dupe());
 
             let handle = Handle::new(module_name, memory_path, self.sys_info.dupe());
             self.handles.insert(filename.clone(), handle);
             file_contents.push((module_path, Some(Arc::new(content.clone()))));
         }
+
+        let source_db = PlaygroundSourceDatabase::new(module_mappings, self.sys_info.dupe());
+        config.source_db = Some(ArcId::new(Box::new(source_db) as Box<dyn SourceDatabase>));
 
         config.configure();
         let config = ArcId::new(config);
