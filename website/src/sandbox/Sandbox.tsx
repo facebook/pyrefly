@@ -36,6 +36,8 @@ import PythonVersionSelector from './PythonVersionSelector';
 // Import type for Pyrefly State
 export interface PyreflyState {
     updateSource: (source: string) => void;
+    updateSandboxFiles: (files: Record<string, string>) => void;
+    setActiveFile: (filename: string) => void;
     getErrors: () => ReadonlyArray<PyreflyErrorMessage>;
     autoComplete: (line: number, column: number) => any;
     gotoDefinition: (line: number, column: number) => any;
@@ -126,8 +128,11 @@ export default function Sandbox({
             if (editor && targetModel) {
                 editor.setModel(targetModel);
             }
+            if (pyreService) {
+                pyreService.setActiveFile(fileName);
+            }
         }
-    }, [models]);
+    }, [models, pyreService]);
 
     // Create a new temporary file
     const createNewTempFile = useCallback(() => {
@@ -310,10 +315,7 @@ export default function Sandbox({
                         </div>
                     ) : (
                         <button
-                            onClick={() => {
-                                console.log('Clicked:', fileName);
-                                switchToFile(fileName);
-                            }}
+                            onClick={() => switchToFile(fileName)}
                             {...stylex.props(
                                 styles.tabButton,
                                 fileName === activeFileName && styles.tabButtonActive
@@ -461,15 +463,46 @@ export default function Sandbox({
 
         // typecheck on edit
         try {
-            const value = model.getValue();
-            pyreService.updateSource(value);
+            const allFiles: Record<string, string> = {};
+            models.forEach((model, filename) => {
+                allFiles[filename] = model.getValue();
+            });
+
+            if (Object.keys(allFiles).length > 0) {
+                pyreService.updateSandboxFiles(allFiles);
+                pyreService.setActiveFile(activeFileName);
+            } else {
+                const value = model.getValue();
+                pyreService.updateSource(value);
+            }
+
             const errors =
                 pyreService.getErrors() as ReadonlyArray<PyreflyErrorMessage>;
-            monaco.editor.setModelMarkers(
-                model,
-                'default',
-                mapPyreflyErrorsToMarkerData(errors)
-            );
+            
+            models.forEach((model) => {
+                monaco.editor.setModelMarkers(model, 'default', []);
+            });
+
+            const errorsByFile = new Map<string, PyreflyErrorMessage[]>();
+            errors.forEach(error => {
+                const filename = error.filename || activeFileName;
+                if (!errorsByFile.has(filename)) {
+                    errorsByFile.set(filename, []);
+                }
+                errorsByFile.get(filename)!.push(error);
+            });
+
+            errorsByFile.forEach((fileErrors, filename) => {
+                const fileModel = models.get(filename);
+                if (fileModel) {
+                    monaco.editor.setModelMarkers(
+                        fileModel,
+                        'default',
+                        mapPyreflyErrorsToMarkerData(fileErrors)
+                    );
+                }
+            });
+
             setInternalError('');
             setErrors(errors);
 
