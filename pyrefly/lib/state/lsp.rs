@@ -1710,9 +1710,49 @@ impl<'a> Transaction<'a> {
                 && definition_range == definition_export.location
             {
                 references.push(key.range());
+            } else if let Key::Definition(id) = key {
+                // Check if this is a different definition of the same variable name
+                if module.code_at(id.range()).trim() == module.code_at(definition_range).trim()
+                    && id.range() != definition_range
+                {
+                    // Only consider it a reference if it's in the same scope level as the original definition
+                    if self.are_in_same_scope(&handle, definition_range, id.range()) {
+                        references.push(id.range());
+                    }
+                }
             }
         }
+
         Some(references)
+    }
+
+    fn are_in_same_scope(&self, handle: &Handle, range1: TextRange, range2: TextRange) -> bool {
+        let Some(ast) = self.get_ast(handle) else {
+            return false;
+        };
+
+        let scope1 = Self::find_scope_node(&ast, range1.start());
+        let scope2 = Self::find_scope_node(&ast, range2.start());
+
+        scope1 == scope2
+    }
+
+    fn find_scope_node(ast: &ModModule, position: TextSize) -> Option<TextRange> {
+        let covering_nodes = Ast::locate_node(ast, position);
+
+        for node in covering_nodes.iter() {
+            match node {
+                AnyNodeRef::StmtFunctionDef(func_def) => {
+                    return Some(func_def.range());
+                }
+                AnyNodeRef::StmtClassDef(class_def) => {
+                    return Some(class_def.range());
+                }
+                _ => continue,
+            }
+        }
+
+        None
     }
 
     /// Bindings can contain synthetic bindings, which are not meaningful to end users.
