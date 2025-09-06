@@ -17,6 +17,7 @@ members = [
   "crates/pyrefly_python",
   "crates/pyrefly_types",
   "crates/pyrefly_util",
+  "crates/tsp_types",
   "pyrefly",
   "pyrefly_wasm",
 ]

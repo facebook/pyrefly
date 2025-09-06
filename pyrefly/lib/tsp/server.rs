@@ -14,8 +14,10 @@ use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_types::InitializeParams;
 use lsp_types::ServerCapabilities;
+use tsp_types::TSPRequests;
 
 use crate::commands::lsp::IndexingMode;
+use crate::lsp::lsp::new_response;
 use crate::lsp::queue::LspEvent;
 use crate::lsp::queue::LspQueue;
 use crate::lsp::server::ProcessEvent;
@@ -66,11 +68,37 @@ impl TspServer {
 
     fn handle_tsp_request<'a>(
         &'a self,
-        _ide_transaction_manager: &mut TransactionManager<'a>,
-        _request: &Request,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        request: &Request,
     ) -> anyhow::Result<bool> {
-        // TODO: Add handling for TSP requests
-        Ok(false)
+        // Convert the request into a TSPRequests enum
+        let wrapper = serde_json::json!({
+            "method": request.method,
+            "id": request.id,
+            "params": request.params
+        });
+
+        let Ok(msg) = serde_json::from_value::<TSPRequests>(wrapper) else {
+            // Not a TSP request
+            return Ok(false);
+        };
+
+        match msg {
+            TSPRequests::GetSupportedProtocolVersionRequest { .. } => {
+                let transaction =
+                    ide_transaction_manager.non_committable_transaction(self.inner.state());
+                self.inner.send_response(new_response(
+                    request.id.clone(),
+                    Ok(self.get_supported_protocol_version(&transaction)),
+                ));
+                ide_transaction_manager.save(transaction);
+                Ok(true)
+            }
+            _ => {
+                // Other TSP requests not yet implemented
+                Ok(false)
+            }
+        }
     }
 }
 

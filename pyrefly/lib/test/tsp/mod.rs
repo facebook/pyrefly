@@ -5,5 +5,5 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-pub mod requests;
-pub mod server;
+#![cfg(test)]
+pub mod tsp_interaction;

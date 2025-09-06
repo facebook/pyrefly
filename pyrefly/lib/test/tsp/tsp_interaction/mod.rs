@@ -5,5 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-pub mod requests;
-pub mod server;
+//! Tests for TSP (Type Server Protocol) request handlers
+
+pub mod get_supported_protocol_version;
+pub mod object_model;

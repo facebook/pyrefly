@@ -218,6 +218,9 @@ pub trait TspInterface {
     /// Send a response back to the LSP client
     fn send_response(&self, response: Response);
 
+    /// Get access to the state for creating transactions
+    fn state(&self) -> &Arc<State>;
+
     /// Process an LSP event and return the next step
     fn process_event<'a>(
         &'a self,
@@ -1963,6 +1966,10 @@ impl Server {
 impl TspInterface for Server {
     fn send_response(&self, response: Response) {
         self.send_response(response)
+    }
+
+    fn state(&self) -> &Arc<State> {
+        &self.state
     }
 
     fn process_event<'a>(

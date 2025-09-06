@@ -5,5 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-pub mod requests;
-pub mod server;
+//! TSP request implementations
+
+pub mod get_supported_protocol_version;
