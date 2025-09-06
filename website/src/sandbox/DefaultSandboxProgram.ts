@@ -29,9 +29,10 @@ export const DEFAULT_SANDBOX_PROGRAM = `
 # - Write and run Python code directly in your browser
 
 from typing import *
+from utils import format_number
 
 def test(x: int):
-  return f"{x}"
+  return format_number(x)
 
 # reveal_type will produce a type error that tells you the type Pyrefly has
 # computed for the return (in this case, str)

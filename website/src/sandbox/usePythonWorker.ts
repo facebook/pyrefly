@@ -8,7 +8,7 @@
  */
 
 import { useEffect } from 'react';
-import { WorkerResponse } from './pythonWorker';
+import { WorkerResponse, MultiFilePayload } from './pythonWorker';
 import { PyodideStatus } from './PyodideStatus';
 
 interface usePythonWorkerProps {
@@ -39,6 +39,27 @@ const runPython = async (code: string): Promise<void> => {
 
         // Send message to worker
         workerInstance?.postMessage(code);
+    });
+};
+
+// Singleton runMultiFilePython function
+const runMultiFilePython = async (activeFile: string, allFiles: Record<string, string>): Promise<void> => {
+    if (!workerInstance || !setOutputFunction) {
+        console.error(
+            'Python worker not initialized. Call initializePythonWorker first.'
+        );
+        return;
+    }
+
+    setOutputFunction('');
+
+    return new Promise((resolve) => {
+        // Store the resolve function for later use
+        resolveInstance = resolve;
+
+        // Send multi-file payload to worker
+        const payload: MultiFilePayload = { activeFile, allFiles };
+        workerInstance?.postMessage(payload);
     });
 };
 
@@ -115,5 +136,5 @@ export const usePythonWorker = ({
         };
     }, [setPythonOutput, setPyodideStatus]);
 
-    return { runPython };
+    return { runPython, runMultiFilePython };
 };

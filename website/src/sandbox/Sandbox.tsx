@@ -30,12 +30,16 @@ import {
 import type { editor } from 'monaco-editor';
 import type { PyreflyErrorMessage } from './SandboxResults';
 import { DEFAULT_SANDBOX_PROGRAM } from './DefaultSandboxProgram';
+import { DEFAULT_UTILS_PROGRAM } from './DefaultUtilsProgram';
 import { usePythonWorker } from './usePythonWorker';
 import PythonVersionSelector from './PythonVersionSelector';
 
 // Import type for Pyrefly State
 export interface PyreflyState {
     updateSource: (source: string) => void;
+    updateSandboxFiles: (files: Record<string, string>) => void;
+    updateSingleFile: (filename: string, content: string) => void;
+    setActiveFile: (filename: string) => void;
     getErrors: () => ReadonlyArray<PyreflyErrorMessage>;
     autoComplete: (line: number, column: number) => any;
     gotoDefinition: (line: number, column: number) => any;
@@ -84,7 +88,10 @@ export default function Sandbox({
     const [pyreService, setPyreService] = useState<PyreflyState | null>(null);
     const [editorHeightforCodeSnippet, setEditorHeightforCodeSnippet] =
         useState<number | null>(null);
-    const [model, setModel] = useState<editor.ITextModel | null>(null);
+    const [models, setModels] = useState<Map<string, editor.ITextModel>>(new Map());
+    const [activeFileName, setActiveFileName] = useState<string>('sandbox.py');
+    const [renamingFile, setRenamingFile] = useState<string | null>(null);
+    const [renameInputValue, setRenameInputValue] = useState<string>('');
     const [pyodideStatus, setPyodideStatus] = useState<PyodideStatus>(
         PyodideStatus.NOT_INITIALIZED
     );
@@ -92,6 +99,283 @@ export default function Sandbox({
     const [activeTab, setActiveTab] = useState<string>('errors');
     const [isHovered, setIsHovered] = useState(false);
     const [pythonVersion, setPythonVersion] = useState('3.12');
+    const model = models.get(activeFileName) || null;
+
+    // File management functions
+    const createNewFile = useCallback((fileName: string, content: string = '') => {
+        // Lets see if model already exists in Monaco
+        const existingModel = monaco.editor.getModels().find(m => m.uri.path === `/${fileName}`);
+
+        let newModel;
+        if (existingModel) {
+            // File exists, update its content
+            existingModel.setValue(content);
+            newModel = existingModel;
+        } else {
+            // Create new file from scratch
+            newModel = monaco.editor.createModel(content, 'python', monaco.Uri.file(`/${fileName}`));
+        }
+
+        setModels(prev => new Map(prev).set(fileName, newModel));
+        setActiveFileName(fileName);
+    }, []);
+
+    // Switch to a different file
+    const switchToFile = useCallback((fileName: string) => {
+        if (models.has(fileName)) {
+            setActiveFileName(fileName);
+            // If editor exists, immediately switch the model
+            const editor = editorRef.current;
+            const targetModel = models.get(fileName);
+            if (editor && targetModel) {
+                editor.setModel(targetModel);
+            }
+            if (pyreService) {
+                pyreService.setActiveFile(fileName);
+            }
+        }
+    }, [models, pyreService]);
+
+    // Create a new temporary file
+    const createNewTempFile = useCallback(() => {
+        // Prevent creating new file if already renaming one
+        if (renamingFile) {
+            return;
+        }
+        
+        let counter = 1;
+        let fileName = 'untitled.py';
+        
+        // Find next available untitled filename
+        while (models.has(fileName)) {
+            fileName = `untitled${counter}.py`;
+            counter++;
+        }
+        
+        // Create the file
+        createNewFile(fileName, '# New Python file\n');
+        
+        // Start renaming mode with empty input
+        setRenamingFile(fileName);
+        setRenameInputValue('');
+    }, [models, createNewFile, renamingFile]);
+
+
+    // Rename a file
+    const renameFile = useCallback((oldName: string, newName: string) => {
+        if (!newName.trim() || models.has(newName)) return false;
+        
+        // Ensure .py extension
+        const finalName = newName.endsWith('.py') ? newName : `${newName}.py`;
+        if (models.has(finalName)) return false;
+        
+        const oldModel = models.get(oldName);
+        if (!oldModel) return false;
+        
+        // Create new model with new name
+        const newModel = monaco.editor.createModel(
+            oldModel.getValue(),
+            'python',
+            monaco.Uri.file(`/${finalName}`)
+        );
+        
+        // If this is the active file, switch the editor to the new model BEFORE disposing the old one
+        const editor = editorRef.current;
+        if (activeFileName === oldName && editor) {
+            editor.setModel(newModel);
+        }
+        
+        // Update models map
+        setModels(prev => {
+            const newMap = new Map(prev);
+            newMap.delete(oldName);
+            newMap.set(finalName, newModel);
+            return newMap;
+        });
+        
+        
+        // Update active filename if needed
+        if (activeFileName === oldName) {
+            setActiveFileName(finalName);
+        }
+        
+        // Dispose old model AFTER switching
+        setTimeout(() => {
+            oldModel.dispose();
+        }, 100);
+        
+        return true;
+    }, [models, activeFileName]);
+
+    // Check if filename is valid (not empty and not duplicate)
+    const isValidFilename = useCallback((inputValue: string, currentFileName: string) => {
+        if (!inputValue.trim()) {
+            return false;
+        }
+        
+        const finalName = inputValue.trim().endsWith('.py') 
+            ? inputValue.trim() 
+            : `${inputValue.trim()}.py`;
+        
+        // Allow saving with the same name (no change)
+        if (finalName === currentFileName) {
+            return true;
+        }
+        
+        // Check if another file with this name already exists
+        return !models.has(finalName);
+    }, [models]);
+
+    // Handle rename save
+    const handleRenameSave = useCallback(() => {
+        if (!renamingFile) {
+            return;
+        }
+        
+        // Don't save if input is invalid
+        if (!isValidFilename(renameInputValue, renamingFile)) {
+            return;
+        }
+        
+        const success = renameFile(renamingFile, renameInputValue.trim());
+        if (success) {
+            setRenamingFile(null);
+            setRenameInputValue('');
+        }
+    }, [renamingFile, renameInputValue, renameFile, isValidFilename]);
+
+
+    // Delete a file
+    const deleteFile = useCallback((fileName: string) => {
+        // Prevent deleting sandbox.py (one file must always exist)
+        if (fileName === 'sandbox.py') {
+            return false;
+        }
+        
+        const modelToDelete = models.get(fileName);
+        if (!modelToDelete) return false;
+        
+        // Remove from models map
+        setModels(prev => {
+            const newMap = new Map(prev);
+            newMap.delete(fileName);
+            return newMap;
+        });
+        
+        
+        // If this was the active file, switch to sandbox.py
+        if (activeFileName === fileName) {
+            setActiveFileName('sandbox.py');
+            const editor = editorRef.current;
+            const sandboxModel = models.get('sandbox.py');
+            if (editor && sandboxModel) {
+                editor.setModel(sandboxModel);
+            }
+        }
+        
+        // If this file is currently being renamed, reset the rename state
+        if (renamingFile === fileName) {
+            setRenamingFile(null);
+            setRenameInputValue('');
+        }
+        
+        // Dispose the model
+        setTimeout(() => {
+            modelToDelete.dispose();
+        }, 100);
+        
+        return true;
+    }, [models, activeFileName, renamingFile]);
+
+    const TabBar = () => (
+        <div {...stylex.props(styles.tabBar)}>
+            {Array.from(models.keys()).map(fileName => (
+                <div key={fileName} {...stylex.props(styles.tabContainer)}>
+                    {renamingFile === fileName ? (
+                        <div {...stylex.props(
+                            styles.renameContainer,
+                            !isValidFilename(renameInputValue, fileName) && styles.invalidInput
+                        )}>
+                            <input
+                                {...stylex.props(styles.renameInput)}
+                                value={renameInputValue}
+                                onChange={(e) => setRenameInputValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || (e.ctrlKey && e.key === 's')) {
+                                        e.preventDefault();
+                                        handleRenameSave();
+                                    } else if (e.key === 'Escape') {
+                                        setRenamingFile(null);
+                                        setRenameInputValue('');
+                                    }
+                                }}
+                                onBlur={handleRenameSave}
+                                placeholder="Enter filename"
+                                autoFocus
+                            />
+                            <span {...stylex.props(styles.extensionLabel)}>.py</span>
+                        </div>
+                    ) : (
+                        <button
+                            onClick={() => switchToFile(fileName)}
+                            {...stylex.props(
+                                styles.tabButton,
+                                fileName === activeFileName && styles.tabButtonActive
+                            )}
+                        >
+                            {fileName}
+                        </button>
+                    )}
+                </div>
+            ))}
+            <div {...stylex.props(styles.buttonGroup)}>
+                {renamingFile ? (
+                    <button
+                        onClick={handleRenameSave}
+                        {...stylex.props(
+                            styles.actionButton,
+                            styles.saveButton,
+                            !isValidFilename(renameInputValue, renamingFile) && styles.disabledButton
+                        )}
+                        title={isValidFilename(renameInputValue, renamingFile) ? "Save file name" : "Invalid filename"}
+                        disabled={!isValidFilename(renameInputValue, renamingFile)}
+                    >
+                        ✓
+                    </button>
+                ) : (
+                    <button
+                        onClick={createNewTempFile}
+                        {...stylex.props(styles.actionButton)}
+                        title="Add new file"
+                    >
+                        +
+                    </button>
+                )}
+                <button
+                    onClick={() => deleteFile(activeFileName)}
+                    {...stylex.props(
+                        styles.actionButton, 
+                        styles.deleteButton,
+                        activeFileName === 'sandbox.py' && styles.disabledButton
+                    )}
+                    title={activeFileName === 'sandbox.py' ? 'Cannot delete sandbox.py' : 'Delete file'}
+                    disabled={activeFileName === 'sandbox.py'}
+                >
+                    ×
+                </button>
+            </div>
+        </div>
+    );
+
+    // Setup default files when editor loads
+    useEffect(() => {
+        if (models.size === 0) {
+            createNewFile('sandbox.py', DEFAULT_SANDBOX_PROGRAM);
+            createNewFile('utils.py', DEFAULT_UTILS_PROGRAM);
+            // Ensure sandbox.py is the file that remains active after creating utils.py
+            setActiveFileName('sandbox.py');
+        }
+    }, [createNewFile, models.size]);
 
     // Initialize Python version from URL on component mount
     useEffect(() => {
@@ -133,15 +417,44 @@ export default function Sandbox({
 
     // Need to add createModel handler in case monaco model was not created at mount time
     monaco.editor.onDidCreateModel((_newModel) => {
-        const curModel = fetchCurMonacoModelAndTriggerUpdate(sampleFilename);
-        setModel(curModel);
-        forceRecheck();
+        const curModel = fetchCurMonacoModelAndTriggerUpdate(activeFileName);
+        if (curModel) {
+            setModels(prev => new Map(prev).set(activeFileName, curModel));
+        }
     });
+
+    // Ensure Monaco editor model is synced with active file
+    useEffect(() => {
+        const editor = editorRef.current;
+        const targetModel = models.get(activeFileName);
+        
+        if (editor && targetModel && editor.getModel() !== targetModel) {
+            editor.setModel(targetModel);
+        }
+    }, [activeFileName, models]);
+
 
     // Recheck when pyre service or model changes
     useEffect(() => {
         forceRecheck();
     }, [pyreService, model]);
+
+    // Initial type check when models and pyreService are ready
+    useEffect(() => {
+        if (models.size > 0 && pyreService && model) {
+            const allFiles: Record<string, string> = {};
+            models.forEach((model, filename) => {
+                allFiles[filename] = model.getValue();
+            });
+            
+            if (Object.keys(allFiles).length > 0) {
+                pyreService.updateSandboxFiles(allFiles);
+                pyreService.setActiveFile(activeFileName);
+            }
+            
+            setTimeout(() => forceRecheck(), 100);
+        }
+    }, [models.size, pyreService, model, activeFileName]);
 
     function forceRecheck() {
         if (model == null || pyreService == null) return;
@@ -159,17 +472,45 @@ export default function Sandbox({
 
         // typecheck on edit
         try {
-            const value = model.getValue();
-            pyreService.updateSource(value);
+            if (models.size > 1) {
+                const currentFileContent = model.getValue();
+                pyreService.updateSingleFile(activeFileName, currentFileContent);
+                pyreService.setActiveFile(activeFileName);
+            } else {
+                const value = model.getValue();
+                pyreService.updateSource(value);
+            }
+
             const errors =
                 pyreService.getErrors() as ReadonlyArray<PyreflyErrorMessage>;
-            monaco.editor.setModelMarkers(
-                model,
-                'default',
-                mapPyreflyErrorsToMarkerData(errors)
-            );
+            
+            models.forEach((model) => {
+                monaco.editor.setModelMarkers(model, 'default', []);
+            });
+
+            const errorsByFile = new Map<string, PyreflyErrorMessage[]>();
+            errors.forEach(error => {
+                const filename = error.filename || activeFileName;
+                if (!errorsByFile.has(filename)) {
+                    errorsByFile.set(filename, []);
+                }
+                errorsByFile.get(filename)!.push(error);
+            });
+
+            errorsByFile.forEach((fileErrors, filename) => {
+                const fileModel = models.get(filename);
+                if (fileModel) {
+                    monaco.editor.setModelMarkers(
+                        fileModel,
+                        'default',
+                        mapPyreflyErrorsToMarkerData(fileErrors)
+                    );
+                }
+            });
+
             setInternalError('');
             setErrors(errors);
+
         } catch (e) {
             console.error(e);
             setInternalError(JSON.stringify(e));
@@ -177,7 +518,7 @@ export default function Sandbox({
         }
     }
 
-    const { runPython } = usePythonWorker({
+    const { runPython, runMultiFilePython } = usePythonWorker({
         setPythonOutput,
         setPyodideStatus,
     });
@@ -185,7 +526,10 @@ export default function Sandbox({
     // Create a function to run Python code that can be passed a model
     const runPythonCodeFunction = createRunPythonCodeFunction(
         setActiveTab,
-        runPython
+        runPython,
+        runMultiFilePython,
+        models,
+        activeFileName
     );
     const runPythonCodeCallback = useCallback(async () => {
         if (!model) return;
@@ -196,8 +540,11 @@ export default function Sandbox({
     }, [model, setActiveTab, setPyodideStatus]);
 
     function onEditorMount(editor: editor.IStandaloneCodeEditor) {
-        const model = fetchCurMonacoModelAndTriggerUpdate(sampleFilename);
-        setModel(model);
+        // Use activeFileName instead of sampleFilename 
+        const curModel = fetchCurMonacoModelAndTriggerUpdate(activeFileName);
+        if (curModel) {
+            setModels(prev => new Map(prev).set(activeFileName, curModel));
+        }
 
         if (isCodeSnippet) {
             // Add extra space for buttons on mobile devices
@@ -281,24 +628,27 @@ export default function Sandbox({
                 styles.tryEditor,
                 !isCodeSnippet && !isMobile() && styles.sandboxPadding
             )}
-        >
+        >   
+            {!isCodeSnippet && <TabBar />}
             <div
                 id="sandbox-code-editor-container"
                 {...stylex.props(
                     styles.codeEditorContainer,
-                    isCodeSnippet && styles.codeEditorContainerWithRadius
+                    isCodeSnippet && styles.codeEditorContainerWithRadius,
+                    !isCodeSnippet && styles.codeEditorContainerWithTabs
                 )}
                 onMouseEnter={() => setIsHovered(true)}
                 onMouseLeave={() => setIsHovered(false)}
             >
                 {getPyreflyEditor(
                     isCodeSnippet,
-                    sampleFilename,
-                    codeSample,
+                    activeFileName,
+                    model?.getValue() || codeSample,
                     forceRecheck,
                     onEditorMount,
                     editorHeightforCodeSnippet,
-                    pythonVersion
+                    pythonVersion,
+                    activeFileName,
                 )}
                 {
                     <div
@@ -371,13 +721,18 @@ function fetchCurMonacoModelAndTriggerUpdate(
         return null;
     }
 
-    const codeFromUrl = getCodeFromURL();
-    if (codeFromUrl != null && model != null) {
-        model.setValue(codeFromUrl);
+    // Only apply URL code to sandbox.py and avoid during rename operations (security)
+    if (fileName === 'sandbox.py') {
+        const codeFromUrl = getCodeFromURL();
+        if (codeFromUrl != null && model != null) {
+            model.setValue(codeFromUrl);
+        }
     }
 
-    // Force update to trigger initial inlay hint
-    model.setValue(model.getValue());
+    // Force update to trigger initial inlay hint - only for sandbox.py
+    if (fileName === 'sandbox.py') {
+        model.setValue(model.getValue());
+    }
 
     // Ensure tab size is correctly set
     model.updateOptions({ tabSize: 4, insertSpaces: true });
@@ -396,7 +751,8 @@ function getPyreflyEditor(
     forceRecheck: () => void,
     onEditorMount: (editor: editor.IStandaloneCodeEditor) => void,
     editorHeightforCodeSnippet: number | null,
-    pythonVersion: string
+    pythonVersion: string,
+    activeFileName: string,
 ): React.ReactElement {
     const { colorMode } = docusaurusTheme.useColorMode();
 
@@ -442,7 +798,7 @@ function getPyreflyEditor(
                 theme={editorTheme}
                 onChange={(value) => {
                     forceRecheck();
-                    if (typeof value === 'string') {
+                    if (typeof value === 'string' && activeFileName === 'sandbox.py') {
                         updateURL(value, pythonVersion);
                     }
                 }}
@@ -450,6 +806,8 @@ function getPyreflyEditor(
                 keepCurrentModel={true}
                 height={sandboxHeight}
                 options={{
+                    readOnly: false,
+                    domReadOnly: false,
                     minimap: { enabled: false },
                     hover: { enabled: true, above: false },
                     scrollBeyondLastLine: false,
@@ -639,7 +997,10 @@ function getResetButton(
 // Reusable function to create a Python code runner
 export function createRunPythonCodeFunction(
     onActiveTabChange: React.Dispatch<React.SetStateAction<string>>,
-    runPython: (code: string) => Promise<void>
+    runPython: (code: string) => Promise<void>,
+    runMultiFilePython: (activeFile: string, allFiles: Record<string, string>) => Promise<void>,
+    models: Map<string, editor.ITextModel>,
+    activeFileName: string
 ) {
     // Return a function that takes a model parameter
     return async (model: editor.ITextModel | null) => {
@@ -648,8 +1009,18 @@ export function createRunPythonCodeFunction(
         // Switch to output tab
         onActiveTabChange('output');
 
-        const code = model.getValue();
-        await runPython(code);
+        // Check if this is a multi-file project
+        if (models.size > 1) {
+            const allFiles: Record<string, string> = {};
+            models.forEach((model, filename) => {
+                allFiles[filename] = model.getValue();
+            });
+            
+            await runMultiFilePython(activeFileName, allFiles);
+        } else {
+            const code = model.getValue();
+            await runPython(code);
+        }
     };
 }
 
@@ -696,6 +1067,13 @@ const styles = stylex.create({
         border: '1px solid var(--color-background-secondary)',
         borderRadius: '0.25rem',
     },
+    codeEditorContainerWithTabs: {
+        border: '1px solid var(--color-border)',
+        borderTop: 'none',
+        borderBottomLeftRadius: '0.25rem',
+        borderBottomRightRadius: '0.25rem',
+        paddingTop: '4px',
+    },
     buttonContainerBase: {
         position: 'absolute',
         display: 'flex',
@@ -738,5 +1116,107 @@ const styles = stylex.create({
             margin: '0', // No margin needed as gap is handled by the container
             width: '100%', // Make buttons full width on mobile for sandbox
         },
+    },
+    // TabBar styles matching SandboxResults tabs
+    tabBar: {
+        display: 'flex',
+        background: 'var(--color-background)',
+        borderBottom: '1px solid var(--color-background-secondary)',
+        fontSize: '14px',
+        borderTopLeftRadius: '0.25rem',
+        borderTopRightRadius: '0.25rem',
+        alignItems: 'center',
+    },
+    tabButton: {
+        borderRight: '1px solid var(--color-background-secondary)',
+        cursor: 'pointer',
+        fontWeight: 'bold',
+        padding: '7px 15px',
+        border: 'none',
+        backgroundColor: 'transparent',
+        color: 'var(--color-text)',
+        fontSize: '14px',
+        ':last-child': {
+            borderRight: 'none',
+        },
+    },
+    tabButtonActive: {
+        background: 'var(--color-background)',
+        borderBottom: '2px solid var(--color-text)',
+        marginBottom: '-1px', // cover up container bottom border
+    },
+    buttonGroup: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '4px',
+        marginLeft: '8px', // Small gap from last tab
+    },
+    actionButton: {
+        border: 'none',
+        background: 'transparent',
+        color: 'var(--color-text)',
+        cursor: 'pointer',
+        padding: '7px 10px',
+        fontSize: '16px',
+        fontWeight: 'bold',
+        borderRadius: '4px',
+        minWidth: '32px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        ':hover': {
+            backgroundColor: 'var(--color-background-secondary)',
+        },
+    },
+    deleteButton: {
+        fontSize: '18px',
+        ':hover': {
+            color: 'var(--color-danger, #d32f2f)',
+        },
+    },
+    saveButton: {
+        ':hover': {
+            color: 'var(--color-success, #2e7d32)',
+        },
+    },
+    disabledButton: {
+        opacity: 0.4,
+        cursor: 'not-allowed',
+        ':hover': {
+            backgroundColor: 'transparent',
+            color: 'var(--color-text)',
+        },
+    },
+    tabContainer: {
+        display: 'flex',
+        alignItems: 'center',
+    },
+    renameContainer: {
+        display: 'flex',
+        alignItems: 'center',
+        padding: '4px 8px',
+        backgroundColor: 'var(--color-background)',
+        border: '1px solid var(--color-primary)',
+        borderRadius: '3px',
+        margin: '3px',
+    },
+    invalidInput: {
+        borderColor: 'var(--color-danger, #d32f2f)',
+    },
+    renameInput: {
+        border: 'none',
+        background: 'transparent',
+        color: 'var(--color-text)',
+        fontSize: '14px',
+        fontWeight: 'bold',
+        outline: 'none',
+        minWidth: '80px',
+        maxWidth: '150px',
+    },
+    extensionLabel: {
+        color: 'var(--color-text-secondary)',
+        fontSize: '14px',
+        fontWeight: 'bold',
+        marginLeft: '2px',
     },
 });

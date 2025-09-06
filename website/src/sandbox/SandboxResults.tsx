@@ -21,6 +21,7 @@ export interface PyreflyErrorMessage {
     message_details: string;
     kind: string;
     severity: number;
+    filename: string;
 }
 
 export type GoToDefFromError = (

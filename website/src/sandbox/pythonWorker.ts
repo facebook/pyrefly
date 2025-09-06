@@ -18,6 +18,11 @@ import { PyodideStatus } from './PyodideStatus';
  *
  */
 import { loadPyodide, PyodideInterface } from 'pyodide';
+
+export interface MultiFilePayload {
+    activeFile: string;
+    allFiles: Record<string, string>;
+}
 export type WorkerResponse =
     | stdoutResponseOrStderrResponse
     | RunPythonResponse
@@ -81,16 +86,47 @@ const initPyodide = async () => {
 };
 
 // Handle messages from the main thread
-self.onmessage = async (event: MessageEvent<string>) => {
-    const code = event.data;
-
+self.onmessage = async (event: MessageEvent<string | MultiFilePayload>) => {
     try {
         if (!pyodideInstance) {
             pyodideInstance = await initPyodide();
         }
-        pyodideInstance.runPython(code);
 
-        // Send successful response back to main thread
+        // Check for multi-file payload
+        if (typeof event.data === 'string') {
+            // If not then Single file execution 
+            const code = event.data;
+            pyodideInstance.runPython(code);
+        } else {
+            // Else Multi-file execution
+            const { activeFile, allFiles } = event.data as MultiFilePayload;
+            
+            // Write all the files to Pyodide's filesystem
+            for (const [filename, content] of Object.entries(allFiles)) {
+                pyodideInstance.FS.writeFile(`/${filename}`, new TextEncoder().encode(content));
+            }
+            
+            // Add root directory to Python path and invalidate caches
+            pyodideInstance.runPython(`
+import sys
+import importlib
+# Add root directory to Python path if not already there
+if '/' not in sys.path:
+    sys.path.insert(0, '/')
+# Invalidate import caches so Python can find the modules
+importlib.invalidate_caches()
+            `);
+            
+            // Execute the active (currently selected) file
+            const activeFileContent = allFiles[activeFile];
+            if (activeFileContent) {
+                pyodideInstance.runPython(activeFileContent);
+            } else {
+                throw new Error(`Active file '${activeFile}' not found in provided files`);
+            }
+        }
+
+        // Send successful response back to the main thread
         const response: WorkerResponse = {
             type: 'runPython',
             success: true,
@@ -99,7 +135,7 @@ self.onmessage = async (event: MessageEvent<string>) => {
     } catch (error) {
         console.error('Python error:', error);
 
-        // Send error response back to main thread
+        // Send error response back to the main thread
         const response: WorkerResponse = {
             type: 'runPython',
             success: false,
