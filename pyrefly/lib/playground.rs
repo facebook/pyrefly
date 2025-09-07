@@ -163,8 +163,8 @@ pub struct InlayHint {
 
 pub struct Playground {
     state: State,
-    handle: Handle,
     handles: HashMap<String, Handle>,
+    active_filename: String,
     sys_info: SysInfo,
     config_finder: ConfigFinder,
 }
@@ -190,38 +190,15 @@ impl Playground {
         let config_finder = ConfigFinder::new_constant(config.dupe());
 
         let state = State::new(config_finder);
-        let handle = Handle::new(
-            ModuleName::from_str("test"),
-            ModulePath::memory(PathBuf::from("test.py")),
-            sys_info.dupe(),
-        );
-        let mut handles = HashMap::new();
-        handles.insert("test.py".to_owned(), handle.dupe());
         let config_finder_for_self = ConfigFinder::new_constant(config.dupe());
-        let mut me = Self {
+
+        Ok(Self {
             state,
-            handle,
-            handles,
+            handles: HashMap::new(),
+            active_filename: String::new(),
             sys_info,
             config_finder: config_finder_for_self,
-        };
-        me.update_source("".to_owned());
-        Ok(me)
-    }
-
-    pub fn update_source(&mut self, source: String) {
-        let source = Arc::new(source);
-        let mut transaction = self
-            .state
-            .new_committable_transaction(Require::Exports, None);
-        transaction
-            .as_mut()
-            .set_memory(vec![(PathBuf::from("test.py"), Some(source))]);
-        self.state.run_with_committing_transaction(
-            transaction,
-            &[self.handle.dupe()],
-            Require::Everything,
-        );
+        })
     }
 
     pub fn update_sandbox_files(&mut self, files: HashMap<String, String>) {
@@ -260,10 +237,10 @@ impl Playground {
         self.state = State::new(new_config_finder);
         self.config_finder = ConfigFinder::new_constant(config.dupe());
 
-        if let Some(sandbox_handle) = self.handles.get("sandbox.py") {
-            self.handle = sandbox_handle.dupe();
-        } else if let Some((_, first_handle)) = self.handles.iter().next() {
-            self.handle = first_handle.dupe();
+        if self.handles.contains_key("sandbox.py") {
+            self.active_filename = "sandbox.py".to_owned();
+        } else if let Some((first_filename, _)) = self.handles.iter().next() {
+            self.active_filename = first_filename.clone();
         }
 
         let mut transaction = self
@@ -271,18 +248,14 @@ impl Playground {
             .new_committable_transaction(Require::Exports, None);
         transaction.as_mut().set_memory(file_contents);
 
-        let handle_reqs: Vec<(Handle, Require)> = self
-            .handles
-            .values()
-            .map(|handle| (handle.dupe(), Require::Everything))
-            .collect();
+        let handles: Vec<Handle> = self.handles.values().map(|handle| handle.dupe()).collect();
 
         self.state
-            .run_with_committing_transaction(transaction, &handle_reqs);
+            .run_with_committing_transaction(transaction, &handles, Require::Everything);
     }
 
     pub fn update_single_file(&mut self, filename: String, content: String) {
-        if let Some(handle) = self.handles.get(&filename) {
+        if let Some(_handle) = self.handles.get(&filename) {
             let module_path = PathBuf::from(&filename);
             let file_content = vec![(module_path, Some(Arc::new(content)))];
 
@@ -291,27 +264,20 @@ impl Playground {
                 .new_committable_transaction(Require::Exports, None);
             transaction.as_mut().set_memory(file_content);
 
-            let mut handle_reqs = Vec::new();
-            for (file, file_handle) in &self.handles {
-                if file == &filename {
-                    handle_reqs.push((file_handle.dupe(), Require::Everything));
-                } else {
-                    handle_reqs.push((file_handle.dupe(), Require::Exports));
-                }
-            }
+            let handles: Vec<Handle> = self.handles.values().map(|handle| handle.dupe()).collect();
 
             self.state
-                .run_with_committing_transaction(transaction, &handle_reqs);
+                .run_with_committing_transaction(transaction, &handles, Require::Everything);
 
-            if Some(&filename) == self.handles.keys().find(|&f| f == &filename) {
-                self.handle = handle.dupe();
+            if self.handles.contains_key(&filename) {
+                self.active_filename = filename;
             }
         }
     }
 
     pub fn set_active_file(&mut self, filename: &str) {
-        if let Some(handle) = self.handles.get(filename) {
-            self.handle = handle.dupe();
+        if self.handles.contains_key(filename) {
+            self.active_filename = filename.to_owned();
         }
     }
 
@@ -352,14 +318,16 @@ impl Playground {
     }
 
     fn to_text_size(&self, transaction: &Transaction, pos: Position) -> Option<TextSize> {
-        let info = transaction.get_module_info(&self.handle)?;
+        let handle = self.handles.get(&self.active_filename)?;
+        let info = transaction.get_module_info(handle)?;
         Some(info.lined_buffer().from_display_pos(pos.to_display_pos()?))
     }
 
     pub fn query_type(&self, pos: Position) -> Option<TypeQueryResult> {
+        let handle = self.handles.get(&self.active_filename)?;
         let transaction = self.state.transaction();
         let position = self.to_text_size(&transaction, pos)?;
-        let t = transaction.get_type_at(&self.handle, position)?;
+        let t = transaction.get_type_at(handle, position)?;
         Some(TypeQueryResult {
             contents: vec![TypeQueryContent {
                 language: "python".to_owned(),
@@ -369,21 +337,26 @@ impl Playground {
     }
 
     pub fn goto_definition(&mut self, pos: Position) -> Option<Range> {
+        let handle = self.handles.get(&self.active_filename)?;
         let transaction = self.state.transaction();
         let position = self.to_text_size(&transaction, pos)?;
         // TODO: Support goto multiple definitions
         transaction
-            .goto_definition(&self.handle, position)
+            .goto_definition(handle, position)
             .into_iter()
             .next()
             .map(|r| Range::new(r.module.display_range(r.range)))
     }
 
     pub fn autocomplete(&self, pos: Position) -> Vec<AutoCompletionItem> {
+        let handle = match self.handles.get(&self.active_filename) {
+            Some(h) => h,
+            None => return Vec::new(),
+        };
         let transaction = self.state.transaction();
         self.to_text_size(&transaction, pos)
             .map_or(Vec::new(), |position| {
-                transaction.completion(&self.handle, position, Default::default())
+                transaction.completion(handle, position, Default::default())
             })
             .into_map(
                 |CompletionItem {
@@ -402,10 +375,14 @@ impl Playground {
     }
 
     pub fn inlay_hint(&self) -> Vec<InlayHint> {
+        let handle = match self.handles.get(&self.active_filename) {
+            Some(h) => h,
+            None => return Vec::new(),
+        };
         let transaction = self.state.transaction();
         transaction
-            .get_module_info(&self.handle)
-            .zip(transaction.inlay_hints(&self.handle, Default::default()))
+            .get_module_info(handle)
+            .zip(transaction.inlay_hints(handle, Default::default()))
             .map(|(info, hints)| {
                 hints.into_map(|(position, label)| {
                     let position = Position::from_display_pos(info.display_pos(position));
@@ -426,7 +403,10 @@ mod tests {
         let mut state = Playground::new(None).unwrap();
         let expected_errors: Vec<String> = Vec::new();
 
-        state.update_source("from typing import *".to_owned());
+        let mut files = HashMap::new();
+        files.insert("main.py".to_owned(), "from typing import *".to_owned());
+        state.update_sandbox_files(files);
+        state.set_active_file("main.py");
 
         assert_eq!(
             state
@@ -441,7 +421,11 @@ mod tests {
     #[test]
     fn test_invalid_import() {
         let mut state = Playground::new(None).unwrap();
-        state.update_source("from t".to_owned());
+        let mut files = HashMap::new();
+        files.insert("main.py".to_owned(), "from t".to_owned());
+        state.update_sandbox_files(files);
+        state.set_active_file("main.py");
+
         let expected_headers = &[
             "Could not find import of `t`",
             "Parse error: Expected 'import', found newline",
