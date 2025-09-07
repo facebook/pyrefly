@@ -30,7 +30,7 @@ describe('pyrefly_wasm', () => {
 
     beforeEach(() => {
         // Update the source before each test
-        pyreService.updateSource(DEFAULT_SANDBOX_PROGRAM);
+        pyreService.updateSingleFile('main.py', DEFAULT_SANDBOX_PROGRAM);
     });
 
     describe('getErrors', () => {
@@ -39,7 +39,7 @@ describe('pyrefly_wasm', () => {
 x: int = ""
 import
 `;
-            pyreService.updateSource(
+            pyreService.updateSingleFile('main.py',
                 DEFAULT_SANDBOX_PROGRAM + programWithError
             );
             const errors = pyreService.getErrors();
@@ -75,7 +75,7 @@ import
 
         it('complex python program, error with typedDict', () => {
             // Update source with a complete program
-            pyreService.updateSource(
+            pyreService.updateSingleFile('main.py',
                 `
 from typing import TypedDict
 
@@ -123,7 +123,7 @@ movie: Movie = {'name': 'Blade Runner',
             const typingForAutocomplete = `
 tes
 `;
-            pyreService.updateSource(
+            pyreService.updateSingleFile('main.py',
                 DEFAULT_SANDBOX_PROGRAM + typingForAutocomplete
             );
 

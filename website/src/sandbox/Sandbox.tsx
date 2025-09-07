@@ -36,7 +36,6 @@ import PythonVersionSelector from './PythonVersionSelector';
 
 // Import type for Pyrefly State
 export interface PyreflyState {
-    updateSource: (source: string) => void;
     updateSandboxFiles: (files: Record<string, string>) => void;
     updateSingleFile: (filename: string, content: string) => void;
     setActiveFile: (filename: string) => void;
@@ -480,7 +479,7 @@ export default function Sandbox({
                 pyreService.setActiveFile(activeFileName);
             } else {
                 const value = model.getValue();
-                pyreService.updateSource(value);
+                pyreService.updateSingleFile(activeFileName, value);
             }
 
             const errors =
