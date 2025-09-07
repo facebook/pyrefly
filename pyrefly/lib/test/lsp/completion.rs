@@ -38,17 +38,26 @@ fn get_test_report(
             kind,
             insert_text,
             data,
+            tags,
             ..
         } in state
             .transaction()
             .completion(handle, position, import_format)
         {
+            let is_deprecated = if let Some(tags) = tags {
+                tags.contains(&lsp_types::CompletionItemTag::DEPRECATED)
+            } else {
+                false
+            };
             if (filter.include_keywords || kind != Some(CompletionItemKind::KEYWORD))
                 && (filter.include_builtins || data != Some(serde_json::json!("builtin")))
             {
                 report.push_str("\n- (");
                 report.push_str(&format!("{:?}", kind.unwrap()));
                 report.push_str(") ");
+                if is_deprecated {
+                    report.push_str("[DEPRECATED] ");
+                }
                 report.push_str(&label);
                 if let Some(detail) = detail {
                     report.push_str(": ");
