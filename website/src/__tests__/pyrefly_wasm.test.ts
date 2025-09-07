@@ -147,6 +147,8 @@ tes
 
     describe('hover', () => {
         it('should return type information for expressions', () => {
+            // Set active file to main.py
+            pyreService.setActiveFile('main.py');
             // Position of "test(42)" in reveal_type 
             const hoverInfo = pyreService.queryType(18, 13);
 
