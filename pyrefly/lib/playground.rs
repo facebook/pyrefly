@@ -219,7 +219,8 @@ impl Playground {
             .set_memory(vec![(PathBuf::from("test.py"), Some(source))]);
         self.state.run_with_committing_transaction(
             transaction,
-            &[(self.handle.dupe(), Require::Everything)],
+            &[self.handle.dupe()],
+            Require::Everything,
         );
     }
 

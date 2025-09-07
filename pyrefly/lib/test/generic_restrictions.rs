@@ -241,7 +241,7 @@ class C[T = int]:
         return self
     attr: T
 reveal_type(C.meth)  # E: [T](self: C[T], /) -> C[T]
-assert_type(C.attr, int)  # E: assert_type(Any, int) failed  # E: Instance-only attribute `attr` of class `C` is not visible on the class
+assert_type(C.attr, int)  # E: assert_type(Any, int) failed  # E: Generic attribute `attr` of class `C` is not visible on the class
  "#,
 );
 

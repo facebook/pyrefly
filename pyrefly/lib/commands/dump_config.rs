@@ -6,11 +6,9 @@
  */
 
 use clap::Parser;
-use dupe::Dupe;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
-use pyrefly_util::prelude::SliceExt;
 use starlark_map::small_map::SmallMap;
 
 use crate::commands::check::FullCheckArgs;
@@ -19,7 +17,6 @@ use crate::commands::files::FilesArgs;
 use crate::commands::util::CommandExitStatus;
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
-use crate::state::require::Require;
 
 // We intentionally make DumpConfig take the same arguments as Check so that dumping the
 // config is as easy as changing the command name.
@@ -48,7 +45,7 @@ fn dump_config(
         config_finder.checkpoint(files_to_check.files())?,
         &config_finder,
     );
-    let mut handles = handles.all(Require::Everything).map(|x| x.0.dupe());
+    let mut handles = handles.all();
     handles.sort_by(|a, b| a.path().cmp(b.path()));
     for handle in handles {
         let path = handle.path();

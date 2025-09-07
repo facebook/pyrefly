@@ -38,7 +38,6 @@ use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::memory::MemoryUsageTrace;
-use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::watcher::Watcher;
 use tracing::debug;
 use tracing::info;
@@ -373,17 +372,14 @@ impl Handles {
             .or_insert((module_name, config.get_sys_info()))
     }
 
-    pub fn all(&self, specified_require: Require) -> Vec<(Handle, Require)> {
+    pub fn all(&self) -> Vec<Handle> {
         self.path_data
             .iter()
             .map(|(path, (module_name, runtime_metadata))| {
-                (
-                    Handle::new(
-                        module_name.dupe(),
-                        ModulePath::filesystem(path.to_path_buf()),
-                        runtime_metadata.dupe(),
-                    ),
-                    specified_require,
+                Handle::new(
+                    module_name.dupe(),
+                    ModulePath::filesystem(path.to_path_buf()),
+                    runtime_metadata.dupe(),
                 )
             })
             .collect()
@@ -488,18 +484,6 @@ impl Timings {
 }
 
 impl CheckArgs {
-    pub fn get_handles(
-        self,
-        files_to_check: FilteredGlobs,
-        config_finder: &ConfigFinder,
-    ) -> anyhow::Result<Vec<(Handle, Require)>> {
-        let handles = Handles::new(
-            config_finder.checkpoint(files_to_check.files())?,
-            config_finder,
-        );
-        Ok(handles.all(self.get_required_levels().specified))
-    }
-
     pub fn run_once(
         self,
         files_to_check: FilteredGlobs,
@@ -530,7 +514,8 @@ impl CheckArgs {
         self.run_inner(
             timings,
             transaction.as_mut(),
-            &handles.all(require_levels.specified),
+            &handles.all(),
+            require_levels.specified,
         )
     }
 
@@ -571,7 +556,8 @@ impl CheckArgs {
         self.run_inner(
             Timings::new(),
             transaction.as_mut(),
-            &[(handle, require_levels.specified)],
+            &[handle],
+            require_levels.specified,
         )
     }
 
@@ -593,7 +579,8 @@ impl CheckArgs {
             let res = self.run_inner(
                 timings,
                 transaction.as_mut(),
-                &handles.all(require_levels.specified),
+                &handles.all(),
+                require_levels.specified,
             );
             state.commit_transaction(transaction);
             if let Err(e) = res {
@@ -642,19 +629,20 @@ impl CheckArgs {
         &self,
         mut timings: Timings,
         transaction: &mut Transaction,
-        handles: &[(Handle, Require)],
+        handles: &[Handle],
+        require: Require,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
         let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
 
         let type_check_start = Instant::now();
         transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
-        transaction.run(handles);
+        transaction.run(handles, require);
         transaction.set_subscriber(None);
 
         let loads = if self.behavior.check_all {
             transaction.get_all_errors()
         } else {
-            transaction.get_errors(handles.iter().map(|(handle, _)| handle))
+            transaction.get_errors(handles)
         };
         timings.type_check = type_check_start.elapsed();
 
@@ -703,7 +691,7 @@ impl CheckArgs {
             };
         }
         if self.output.summary == Summary::Full {
-            let user_handles: HashSet<&Handle> = handles.iter().map(|(h, _)| h).collect();
+            let user_handles: HashSet<&Handle> = handles.iter().collect();
             let (user_lines, dep_lines) = transaction.split_line_count(&user_handles);
             info!(
                 "{} ({}); {} ({} in your project, {} in dependencies); \
@@ -729,16 +717,12 @@ impl CheckArgs {
             let is_javascript = debug_info.extension() == Some("js".as_ref());
             fs_anyhow::write(
                 debug_info,
-                report::debug_info::debug_info(
-                    transaction,
-                    &handles.map(|x| x.0.dupe()),
-                    is_javascript,
-                ),
+                report::debug_info::debug_info(transaction, handles, is_javascript),
             )?;
         }
         if let Some(glean) = &self.output.report_glean {
             fs_anyhow::create_dir_all(glean)?;
-            for (handle, _) in handles {
+            for handle in handles {
                 // Generate a safe filename using hash to avoid OS filename length limits
                 let module_hash = blake3::hash(handle.module().to_string().as_bytes());
                 fs_anyhow::write(

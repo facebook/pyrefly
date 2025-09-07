@@ -112,6 +112,40 @@ m.x = 10
 );
 
 testcase!(
+    test_frozen_model_subclass,
+    pydantic_env(),
+    r#"
+from pydantic import BaseModel, ConfigDict
+
+class Model(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    x: int = 42
+
+class Model2(Model):
+    model_config = ConfigDict(frozen=False)
+
+m = Model2()
+m.x = 10
+"#,
+);
+
+testcase!(
+    test_frozen_model_default,
+    pydantic_env(),
+    r#"
+from pydantic import BaseModel
+class A(BaseModel, frozen=True):
+    x: int
+
+class B(A):
+    pass
+
+b = B(x=0)
+b.x = 1 # E: Cannot set field `x`
+"#,
+);
+
+testcase!(
     bug = "Nested config not supported yet. Fields should be frozen.",
     test_nested_model_config,
     pydantic_env(),

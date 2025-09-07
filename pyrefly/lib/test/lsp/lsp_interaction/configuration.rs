@@ -183,7 +183,7 @@ fn test_disable_type_errors_language_services_still_work() {
     interaction.set_root(test_files_root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
         workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        configuration: Some(Some(serde_json::json!([{"pyrefly": {"disableTypeErrors": true}}, {"pyrefly": {"disableTypeErrors": true}}]))),
+        configuration: Some(Some(serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-off"}}, {"pyrefly": {"displayTypeErrors": "force-off"}}]))),
         ..Default::default()
     });
 
@@ -225,7 +225,7 @@ fn test_disable_type_errors_workspace_folder() {
 
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(get_diagnostics_result()),
+        result: Some(serde_json::json!({"items": [], "kind": "full"})),
         error: None,
     });
 
@@ -234,12 +234,26 @@ fn test_disable_type_errors_workspace_folder() {
     interaction
         .client
         .expect_configuration_request(2, Some(&scope_uri));
-    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"disableTypeErrors": true}}, {"pyrefly": {"disableTypeErrors": true}}]));
+    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-off"}}, {"pyrefly": {"displayTypeErrors": "force-off"}}]));
     interaction.server.diagnostic("type_errors.py");
 
     interaction.client.expect_response(Response {
         id: RequestId::from(3),
         result: Some(serde_json::json!({"items": [], "kind": "full"})),
+        error: None,
+    });
+
+    interaction.server.did_change_configuration();
+
+    interaction
+        .client
+        .expect_configuration_request(3, Some(&scope_uri));
+    interaction.server.send_configuration_response(3, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
+    interaction.server.diagnostic("type_errors.py");
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(4),
+        result: Some(get_diagnostics_result()),
         error: None,
     });
 
@@ -262,19 +276,31 @@ fn test_disable_type_errors_default_workspace() {
 
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(get_diagnostics_result()),
+        result: Some(serde_json::json!({"items": [], "kind": "full"})),
         error: None,
     });
 
     interaction.server.did_change_configuration();
 
     interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"disableTypeErrors": true}}, {"pyrefly": {"disableTypeErrors": true}}]));
+    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-off"}}, {"pyrefly": {"displayTypeErrors": "force-off"}}]));
     interaction.server.diagnostic("type_errors.py");
 
     interaction.client.expect_response(Response {
         id: RequestId::from(3),
         result: Some(serde_json::json!({"items": [], "kind": "full"})),
+        error: None,
+    });
+
+    interaction.server.did_change_configuration();
+
+    interaction.client.expect_configuration_request(3, None);
+    interaction.server.send_configuration_response(3, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
+    interaction.server.diagnostic("type_errors.py");
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(4),
+        result: Some(get_diagnostics_result()),
         error: None,
     });
 
@@ -309,7 +335,7 @@ fn test_disable_type_errors_config() {
     interaction
         .client
         .expect_configuration_request(2, Some(&scope_uri));
-    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"disableTypeErrors": false}}, {"pyrefly": {"disableTypeErrors": false}}]));
+    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction.server.diagnostic("type_errors.py");
 
     interaction.client.expect_response(Response {
@@ -341,7 +367,7 @@ fn test_parse_pylance_configs() {
         2,
         serde_json::json!([
             {
-                "pyrefly": {"disableTypeErrors": true},
+                "pyrefly": {"displayTypeErrors": "force-off"},
                 "analysis": {
                     "diagnosticMode": "workspace",
                     "importFormat": "relative",
@@ -371,7 +397,45 @@ fn test_diagnostics_default_workspace() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings::default());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(None),
+        ..Default::default()
+    });
+
+    interaction.server.did_open("type_errors.py");
+
+    interaction.server.diagnostic("type_errors.py");
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
+        result: Some(serde_json::json!({"items": [], "kind": "full"})),
+        error: None,
+    });
+
+    interaction.server.did_change_configuration();
+    interaction.client.expect_configuration_request(2, None);
+    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
+    interaction.server.diagnostic("type_errors.py");
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(3),
+        result: Some(get_diagnostics_result()),
+        error: None,
+    });
+
+    interaction.shutdown();
+}
+
+#[test]
+fn test_diagnostics_default_workspace_with_config() {
+    let test_root = get_test_files_root();
+    let root = test_root.path().join("tests_requiring_config");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.clone());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(None),
+        ..Default::default()
+    });
 
     interaction.server.did_open("type_errors.py");
 
@@ -380,6 +444,17 @@ fn test_diagnostics_default_workspace() {
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
         result: Some(get_diagnostics_result()),
+        error: None,
+    });
+
+    interaction.server.did_change_configuration();
+    interaction.client.expect_configuration_request(2, None);
+    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-off"}}, {"pyrefly": {"displayTypeErrors": "force-off"}}]));
+    interaction.server.diagnostic("type_errors.py");
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(3),
+        result: Some(serde_json::json!({"items": [], "kind": "full"})),
         error: None,
     });
 
@@ -393,7 +468,8 @@ fn test_diagnostics_in_workspace() {
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+        configuration: Some(None),
         ..Default::default()
     });
 
@@ -403,6 +479,19 @@ fn test_diagnostics_in_workspace() {
 
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
+        result: Some(serde_json::json!({"items": [], "kind": "full"})),
+        error: None,
+    });
+
+    interaction.server.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(2, Some(&scope_uri));
+    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
+    interaction.server.diagnostic("type_errors.py");
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(3),
         result: Some(get_diagnostics_result()),
         error: None,
     });

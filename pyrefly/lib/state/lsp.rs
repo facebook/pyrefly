@@ -128,6 +128,15 @@ pub enum ImportFormat {
     Relative,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DisplayTypeErrors {
+    #[default]
+    Default,
+    ForceOff,
+    ForceOn,
+}
+
 const RESOLVE_EXPORT_INITIAL_GAS: Gas = Gas::new(100);
 const MIN_CHARACTERS_TYPED_AUTOIMPORT: usize = 3;
 
@@ -2548,7 +2557,7 @@ impl<'a> CancellableTransaction<'a> {
                 let rdeps = self.as_ref().get_transitive_rdeps(definition_handle.dupe());
                 // We still need to know everything about the definition file, because the index
                 // only contains non-local references.
-                self.run(&[(definition_handle, Require::Everything)])?;
+                self.run(&[definition_handle], Require::Everything)?;
                 rdeps
             }
         };

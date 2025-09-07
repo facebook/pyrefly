@@ -117,7 +117,8 @@
   "constructors_consistency.py": [],
   "dataclasses_descriptors.py": [],
   "dataclasses_final.py": [
-    "Line 35: Expected 1 errors"
+    "Line 35: Expected 1 errors",
+    "Line 37: Expected 1 errors"
   ],
   "dataclasses_frozen.py": [],
   "dataclasses_hash.py": [],
@@ -138,9 +139,7 @@
   "dataclasses_usage.py": [],
   "directives_assert_type.py": [],
   "directives_cast.py": [],
-  "directives_deprecated.py": [
-    "Line 25: Expected 1 errors"
-  ],
+  "directives_deprecated.py": [],
   "directives_no_type_check.py": [],
   "directives_reveal_type.py": [],
   "directives_type_checking.py": [],
@@ -154,8 +153,6 @@
   "enums_member_names.py": [],
   "enums_member_values.py": [],
   "enums_members.py": [
-    "Line 27: Unexpected errors ['assert_type(Any, str) failed', 'Instance-only attribute `genus` of class `Pet` is not visible on the class']",
-    "Line 28: Unexpected errors ['assert_type(Any, str) failed', 'Instance-only attribute `species` of class `Pet` is not visible on the class']",
     "Line 100: Unexpected errors ['assert_type(Literal[TrafficLight.AMBER], Literal[TrafficLight.YELLOW]) failed']"
   ],
   "exceptions_context_managers.py": [
@@ -173,7 +170,7 @@
   "generics_defaults.py": [
     "Line 130: Unexpected errors ['assert_type(Any, int) failed']",
     "Line 169: Unexpected errors ['assert_type([DefaultIntT](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']",
-    "Line 170: Unexpected errors ['assert_type(Any, int) failed', 'Instance-only attribute `attr` of class `Foo7` is not visible on the class']"
+    "Line 170: Unexpected errors ['assert_type(Any, int) failed', 'Generic attribute `attr` of class `Foo7` is not visible on the class']"
   ],
   "generics_defaults_referential.py": [
     "Line 66: Unexpected errors ['Expected default `TypeVar[X1]` of `Ok1` to be assignable to the upper bound of `float`']",
@@ -197,10 +194,7 @@
     "Line 95: Expected 1 errors",
     "Line 96: Expected 1 errors"
   ],
-  "generics_self_advanced.py": [
-    "Line 43: Unexpected errors ['assert_type(Any, list[Self]) failed', 'Instance-only attribute `a` of class `ChildB` is not visible on the class']",
-    "Line 44: Unexpected errors ['assert_type(Any, Self) failed', 'Instance-only attribute `a` of class `ChildB` is not visible on the class']"
-  ],
+  "generics_self_advanced.py": [],
   "generics_self_attributes.py": [],
   "generics_self_basic.py": [
     "Line 20: Expected 1 errors",

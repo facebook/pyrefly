@@ -185,7 +185,13 @@ impl Step {
             enable_trace,
             ctx.untyped_def_behavior,
         );
-        let answers = Answers::new(&bindings, solver, enable_index, enable_trace);
+        let answers = Answers::new(
+            &bindings,
+            solver,
+            enable_index,
+            enable_trace,
+            ctx.infer_with_first_use,
+        );
         Arc::new((bindings, Arc::new(answers)))
     }
 
@@ -205,7 +211,6 @@ impl Step {
             ctx.require.compute_errors()
                 || ctx.require.keep_answers_trace()
                 || ctx.require.keep_answers(),
-            ctx.infer_with_first_use,
         );
         Arc::new(solutions)
     }

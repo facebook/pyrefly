@@ -30,6 +30,7 @@ use crate::alt::types::class_metadata::ClassValidationFlags;
 use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::binding::pydantic::GT;
 use crate::binding::pydantic::LT;
+use crate::binding::pydantic::ROOT;
 use crate::binding::pydantic::STRICT;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -81,10 +82,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let metadata = self.get_metadata_for_class(cls);
         let dataclass = metadata.dataclass_metadata()?;
         let mut fields = SmallMap::new();
+
+        let optional_positional_arg = self.get_pydantic_root_model_type_via_mro(cls, &metadata);
+
         if dataclass.kws.init {
             fields.insert(
                 dunder::INIT,
-                self.get_dataclass_init(cls, dataclass, !metadata.is_pydantic_base_model(), errors),
+                self.get_dataclass_init(
+                    cls,
+                    dataclass,
+                    !metadata.is_pydantic_base_model(),
+                    optional_positional_arg,
+                    errors,
+                ),
             );
         }
         let dataclass_fields_type = self.stdlib.dict(
@@ -435,24 +445,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         dataclass: &DataclassMetadata,
         strict_default: bool,
+        optional_pos: Option<Type>,
         errors: &ErrorCollector,
     ) -> ClassSynthesizedField {
         let mut params = vec![self.class_self_param(cls, false)];
-        let mut has_seen_default = false;
-        for (name, field, field_flags) in self.iter_fields(cls, dataclass, true) {
-            let strict = field_flags.strict.unwrap_or(strict_default);
-
-            if field_flags.init {
-                let has_default = field_flags.default
-                    || (dataclass.class_validation_flags.validate_by_name
-                        && dataclass.class_validation_flags.validate_by_alias);
-                let is_kw_only = field_flags.is_kw_only();
-                if !is_kw_only {
-                    if !has_default
-                        && has_seen_default
-                        && let Some(range) = cls.field_decl_range(&name)
-                    {
-                        self.error(
+        if let Some(ty) = optional_pos {
+            params.push(Param::Pos(ROOT, ty, Required::Optional(None)));
+        } else {
+            let mut has_seen_default = false;
+            for (name, field, field_flags) in self.iter_fields(cls, dataclass, true) {
+                let strict = field_flags.strict.unwrap_or(strict_default);
+                if field_flags.init {
+                    let has_default = field_flags.default
+                        || (dataclass.class_validation_flags.validate_by_name
+                            && dataclass.class_validation_flags.validate_by_alias);
+                    let is_kw_only = field_flags.is_kw_only();
+                    if !is_kw_only {
+                        if !has_default
+                            && has_seen_default
+                            && let Some(range) = cls.field_decl_range(&name)
+                        {
+                            self.error(
                                 errors,
                                 range,
                                 ErrorInfo::Kind(ErrorKind::BadClassDefinition),
@@ -460,43 +473,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     "Dataclass field `{name}` without a default may not follow dataclass field with a default"
                                 ),
                             );
+                        }
+                        if has_default {
+                            has_seen_default = true;
+                        }
                     }
-                    if has_default {
-                        has_seen_default = true;
+                    if dataclass.class_validation_flags.validate_by_name
+                        || (dataclass.class_validation_flags.validate_by_alias
+                            && field_flags.alias.is_none())
+                    {
+                        params.push(self.as_param(
+                            &field,
+                            &name,
+                            has_default,
+                            is_kw_only,
+                            strict,
+                            field_flags.converter_param.clone(),
+                            errors,
+                        ));
                     }
-                }
-                if dataclass.class_validation_flags.validate_by_name
-                    || (dataclass.class_validation_flags.validate_by_alias
-                        && field_flags.alias.is_none())
-                {
-                    params.push(self.as_param(
-                        &field,
-                        &name,
-                        has_default,
-                        is_kw_only,
-                        strict,
-                        field_flags.converter_param.clone(),
-                        errors,
-                    ));
-                }
-                if let Some(alias) = &field_flags.alias
-                    && dataclass.class_validation_flags.validate_by_alias
-                {
-                    params.push(self.as_param(
-                        &field,
-                        alias,
-                        has_default,
-                        is_kw_only,
-                        strict,
-                        field_flags.converter_param.clone(),
-                        errors,
-                    ));
+                    if let Some(alias) = &field_flags.alias
+                        && dataclass.class_validation_flags.validate_by_alias
+                    {
+                        params.push(self.as_param(
+                            &field,
+                            alias,
+                            has_default,
+                            is_kw_only,
+                            strict,
+                            field_flags.converter_param.clone(),
+                            errors,
+                        ));
+                    }
                 }
             }
-        }
-
-        if dataclass.kws.extra {
-            params.push(Param::Kwargs(None, Type::Any(AnyStyle::Implicit)));
+            if dataclass.kws.extra {
+                params.push(Param::Kwargs(None, Type::Any(AnyStyle::Implicit)));
+            }
         }
 
         let ty = Type::Function(Box::new(Function {

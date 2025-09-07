@@ -633,3 +633,25 @@ testcase!(
 __all__ += []  # E: Could not find name `__all__`
 "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/264
+testcase!(
+    test_class_var_scope,
+    r#"
+from typing import reveal_type
+
+x = 'string'
+
+class A:
+    x = 42
+    def f():
+        reveal_type(x) # E: revealed type: Literal['string']
+
+    lambda_f = lambda: reveal_type(x) # E: revealed type: Literal['string']
+
+    class B:
+        reveal_type(x) # E: revealed type: Literal['string']
+
+    [reveal_type(x) for _ in range(1)] # E: revealed type: Literal['string']
+"#,
+);

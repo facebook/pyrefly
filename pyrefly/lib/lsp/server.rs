@@ -8,7 +8,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::iter::once;
-use std::num::NonZero;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -95,6 +94,7 @@ use lsp_types::SignatureHelp;
 use lsp_types::SignatureHelpOptions;
 use lsp_types::SignatureHelpParams;
 use lsp_types::SymbolInformation;
+use lsp_types::TextDocumentIdentifier;
 use lsp_types::TextDocumentPositionParams;
 use lsp_types::TextDocumentSyncCapability;
 use lsp_types::TextDocumentSyncKind;
@@ -144,6 +144,7 @@ use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WorkspaceConfiguration;
 use lsp_types::request::WorkspaceSymbolRequest;
 use pyrefly_build::handle::Handle;
+use pyrefly_config::config::ConfigSource;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
@@ -156,8 +157,7 @@ use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
-use pyrefly_util::thread_pool::ThreadCount;
-use pyrefly_util::thread_pool::ThreadPool;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use starlark_map::small_map::SmallMap;
@@ -183,12 +183,35 @@ use crate::lsp::transaction_manager::TransactionManager;
 use crate::lsp::workspace::LspAnalysisConfig;
 use crate::lsp::workspace::Workspace;
 use crate::lsp::workspace::Workspaces;
+use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::state::State;
 use crate::state::state::Transaction;
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum TypeErrorDisplayStatus {
+    DisabledInIdeConfig,
+    EnabledInIdeConfig,
+    DisabledInConfigFile,
+    EnabledInConfigFile,
+    DisabledDueToMissingConfigFile,
+}
+
+impl TypeErrorDisplayStatus {
+    fn is_enabled(self) -> bool {
+        match self {
+            TypeErrorDisplayStatus::DisabledInIdeConfig
+            | TypeErrorDisplayStatus::DisabledInConfigFile
+            | TypeErrorDisplayStatus::DisabledDueToMissingConfigFile => false,
+            TypeErrorDisplayStatus::EnabledInIdeConfig
+            | TypeErrorDisplayStatus::EnabledInConfigFile => true,
+        }
+    }
+}
 
 /// Interface exposed for TSP to interact with the LSP server
 pub trait TspInterface {
@@ -238,10 +261,6 @@ impl ServerConnection {
 
 pub struct Server {
     connection: ServerConnection,
-    /// A thread pool of size one for heavy read operations on the State
-    async_state_read_threads: ThreadPool,
-    /// A thread pool of size one for running background transactions on the State
-    transaction_threads: ThreadPool,
     lsp_queue: LspQueue,
     initialize_params: InitializeParams,
     indexing_mode: IndexingMode,
@@ -812,6 +831,14 @@ impl Server {
                         ));
                         ide_transaction_manager.save(transaction);
                     }
+                } else if &x.method == "pyrefly/textDocument/typeErrorDisplayStatus" {
+                    let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
+                    self.send_response(new_response(
+                        x.id,
+                        Ok(self.type_error_display_status(
+                            text_document.uri.to_file_path().unwrap().as_path(),
+                        )),
+                    ));
                 } else {
                     self.send_response(Response::new_err(
                         x.id.clone(),
@@ -849,12 +876,6 @@ impl Server {
         let config_finder = Workspaces::config_finder(&workspaces);
         let s = Self {
             connection: ServerConnection(connection),
-            async_state_read_threads: ThreadPool::with_thread_count(ThreadCount::NumThreads(
-                NonZero::new(1).unwrap(),
-            )),
-            transaction_threads: ThreadPool::with_thread_count(ThreadCount::NumThreads(
-                NonZero::new(1).unwrap(),
-            )),
             lsp_queue,
             initialize_params,
             indexing_mode,
@@ -897,11 +918,11 @@ impl Server {
         state: &State,
         open_files: &RwLock<HashMap<PathBuf, Arc<String>>>,
         transaction: &mut Transaction<'_>,
-    ) -> Vec<(Handle, Require)> {
+    ) -> Vec<Handle> {
         let handles = open_files
             .read()
             .keys()
-            .map(|x| (make_open_handle(state, x), Require::Everything))
+            .map(|x| make_open_handle(state, x))
             .collect::<Vec<_>>();
         transaction.set_memory(
             open_files
@@ -910,7 +931,7 @@ impl Server {
                 .map(|x| (x.0.clone(), Some(x.1.dupe())))
                 .collect::<Vec<_>>(),
         );
-        transaction.run(&handles);
+        transaction.run(&handles, Require::Everything);
         handles
     }
 
@@ -928,15 +949,38 @@ impl Server {
                 .python_file(ModuleName::unknown(), e.path());
             if open_files.contains_key(&path)
                 && !config.project_excludes.covers(&path)
-                && !self
-                    .workspaces
-                    .get_with(path.to_path_buf(), |w| w.disable_type_errors)
-                    .unwrap_or_else(|| config.disable_type_errors_in_ide(e.path().as_path()))
+                && self
+                    .type_error_display_status(e.path().as_path())
+                    .is_enabled()
             {
                 return Some((path.to_path_buf(), e.to_diagnostic()));
             }
         }
         None
+    }
+
+    fn type_error_display_status(&self, path: &Path) -> TypeErrorDisplayStatus {
+        let handle = make_open_handle(&self.state, path);
+        let config = self
+            .state
+            .config_finder()
+            .python_file(handle.module(), handle.path());
+        match self
+            .workspaces
+            .get_with(path.to_path_buf(), |w| w.display_type_errors)
+        {
+            Some(DisplayTypeErrors::ForceOn) => TypeErrorDisplayStatus::EnabledInIdeConfig,
+            Some(DisplayTypeErrors::ForceOff) => TypeErrorDisplayStatus::DisabledInIdeConfig,
+            Some(DisplayTypeErrors::Default) | None => {
+                if matches!(config.source, ConfigSource::Synthetic) {
+                    TypeErrorDisplayStatus::DisabledDueToMissingConfigFile
+                } else if config.disable_type_errors_in_ide(path) {
+                    TypeErrorDisplayStatus::DisabledInConfigFile
+                } else {
+                    TypeErrorDisplayStatus::EnabledInConfigFile
+                }
+            }
+        }
     }
 
     fn validate_in_memory<'a>(&'a self, ide_transaction_manager: &mut TransactionManager<'a>) {
@@ -955,11 +999,7 @@ impl Server {
             for x in open_files.keys() {
                 diags.insert(x.as_path().to_owned(), Vec::new());
             }
-            for e in transaction
-                .get_errors(handles.iter().map(|(handle, _)| handle))
-                .collect_errors()
-                .shown
-            {
+            for e in transaction.get_errors(&handles).collect_errors().shown {
                 if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files) {
                     diags.entry(path.to_owned()).or_default().push(diag);
                 }
@@ -997,7 +1037,7 @@ impl Server {
                     if self.indexed_configs.lock().insert(config.dupe()) {
                         let state = self.state.dupe();
                         let lsp_queue = self.lsp_queue.dupe();
-                        self.transaction_threads.async_spawn(move || {
+                        std::thread::spawn(move || {
                             Self::populate_all_project_files_in_config(config, state, lsp_queue);
                         });
                     }
@@ -1034,7 +1074,7 @@ impl Server {
                 drop(indexed_workspaces);
                 let state = self.state.dupe();
                 let lsp_queue = self.lsp_queue.dupe();
-                self.transaction_threads.async_spawn(move || {
+                std::thread::spawn(move || {
                     Self::populate_all_workspaces_files(
                         roots_to_populate_files,
                         state,
@@ -1062,7 +1102,7 @@ impl Server {
         let state = self.state.dupe();
         let lsp_queue = self.lsp_queue.dupe();
         let cancellation_handles = self.cancellation_handles.dupe();
-        self.transaction_threads.async_spawn(move || {
+        std::thread::spawn(move || {
             let mut transaction = state.new_committable_transaction(Require::Indexing, None);
             f(transaction.as_mut());
             // Commit will be blocked until there are no ongoing reads.
@@ -1072,7 +1112,7 @@ impl Server {
                 cancellation_handle.cancel();
             }
             // we have to run, not just commit to process updates
-            state.run_with_committing_transaction(transaction, &[]);
+            state.run_with_committing_transaction(transaction, &[], Require::Everything);
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
@@ -1103,14 +1143,11 @@ impl Server {
             if config != path_config {
                 continue;
             }
-            handles.push((
-                handle_from_module_path(&state, module_path),
-                Require::Indexing,
-            ));
+            handles.push(handle_from_module_path(&state, module_path));
         }
 
         eprintln!("Prepare to check {} files.", handles.len());
-        transaction.as_mut().run(&handles);
+        transaction.as_mut().run(&handles, Require::Indexing);
         state.commit_transaction(transaction);
         // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
         // the main event loop of the server. As a result, the server can do a revalidation of
@@ -1138,14 +1175,14 @@ impl Server {
                 .unwrap_or_default();
             let mut handles = Vec::new();
             for path in paths {
-                handles.push((
-                    handle_from_module_path(&state, ModulePath::filesystem(path.clone())),
-                    Require::Indexing,
+                handles.push(handle_from_module_path(
+                    &state,
+                    ModulePath::filesystem(path.clone()),
                 ));
             }
 
             eprintln!("Prepare to check {} files.", handles.len());
-            transaction.as_mut().run(&handles);
+            transaction.as_mut().run(&handles, Require::Indexing);
             state.commit_transaction(transaction);
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
@@ -1243,7 +1280,7 @@ impl Server {
             .publish_diagnostics_for_uri(params.text_document.uri, Vec::new(), None);
         let state = self.state.dupe();
         let open_files = self.open_files.dupe();
-        self.transaction_threads.async_spawn(move || {
+        std::thread::spawn(move || {
             // Clear out the memory associated with this file.
             // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
             // Having the extra file hanging around doesn't harm anything, but does use extra memory.
@@ -1523,7 +1560,7 @@ impl Server {
         let cancellation_handles = self.cancellation_handles.dupe();
 
         let connection = self.connection.dupe();
-        self.async_state_read_threads.async_spawn(move || {
+        std::thread::spawn(move || {
             let mut transaction = state.cancellable_transaction();
             cancellation_handles
                 .lock()

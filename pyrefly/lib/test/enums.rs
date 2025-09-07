@@ -319,13 +319,18 @@ def foo(f: MyFlag) -> None:
 testcase!(
     test_enum_instance_only_attr,
     r#"
-from typing import reveal_type
+from typing import assert_type, Any
 from enum import Enum
 
 class MyEnum(Enum):
+    X = "foo"
     Y: int
+    Z = "bar"
 
-MyEnum.Y  # E: Instance-only attribute `Y` of class `MyEnum` is not visible on the class
+assert_type(MyEnum.Y, int)
+
+for x in MyEnum:
+    assert_type(x.value, str)  # Y is not an enum member
 "#,
 );
 
@@ -494,6 +499,28 @@ class Color(IntEnum):
     );
     env
 }
+
+testcase!(
+    test_enum_descriptor,
+    r#"
+from enum import IntEnum
+from typing import Callable, assert_type
+
+class classproperty[_TClass, _TReturnType]:
+    fget: Callable[[_TClass], _TReturnType]
+    def __init__(self, f: Callable[[_TClass], _TReturnType]) -> None: ...
+    def __get__(self, obj: _TClass | None, cls: _TClass) -> _TReturnType: ...
+    
+class Foo(IntEnum):
+    X = 1
+    @classproperty
+    def Y(cls) -> list[Foo]:
+        return [Foo.X]
+
+# descriptors are not enum members
+assert_type(Foo.Y, list[Foo])
+"#,
+);
 
 testcase!(
     bug = "The RED = ... in pyi should be fine",

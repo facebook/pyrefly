@@ -18,6 +18,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 use starlark_map::smallmap;
 
 use crate::callable::Function;
@@ -370,7 +371,13 @@ impl<'a> TypeDisplayContext<'a> {
                 if let Some(i) = literal_idx {
                     display_types.insert(i, format!("Literal[{}]", commas_iter(|| &literals)));
                 }
-                write!(f, "{}", display_types.join(" | "))
+                // This is mainly to prettify types for functions with different names but the same signature
+                let display_types_deduped = display_types
+                    .into_iter()
+                    .collect::<SmallSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                write!(f, "{}", display_types_deduped.join(" | "))
             }
             Type::Intersect(types) => {
                 write!(

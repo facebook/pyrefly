@@ -249,7 +249,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> CallTarget {
         match self.as_call_target(ty.clone()) {
-            Some(target) => target,
+            Some(target) => {
+                let metadata = target.function_metadata();
+                if let Some(m) = metadata
+                    && m.flags.is_deprecated
+                {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::new(ErrorKind::Deprecated, context),
+                        format!(
+                            "`{}` is deprecated",
+                            m.kind.as_func_id().format(self.module().name())
+                        ),
+                    );
+                }
+                target
+            }
             None => {
                 let expect_message = match call_style {
                     CallStyle::Method(method) => {
@@ -566,19 +582,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ctor_targs: Option<&mut TArgs>,
     ) -> Type {
         let metadata = call_target.function_metadata();
-        if let Some(m) = metadata
-            && m.flags.is_deprecated
-        {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::Deprecated, context),
-                format!(
-                    "Call to deprecated function `{}`",
-                    m.kind.as_func_id().format(self.module().name())
-                ),
-            );
-        }
         // Does this call target correspond to a function whose keyword arguments we should save?
         let kw_metadata = {
             if let Some(m) = metadata

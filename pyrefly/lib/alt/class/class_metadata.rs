@@ -45,7 +45,9 @@ use crate::binding::base_class::BaseClassExpr;
 use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::base_class::BaseClassGenericKind;
 use crate::binding::binding::Key;
+use crate::binding::pydantic::FROZEN_DEFAULT;
 use crate::binding::pydantic::PydanticMetadataBinding;
+use crate::binding::pydantic::VALIDATE_BY_NAME;
 use crate::binding::pydantic::VALIDATION_ALIAS;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -265,7 +267,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             dataclass_from_dataclass_transform,
             pydantic_metadata.as_ref(),
         );
-        if let Some(dm) = dataclass_metadata.as_ref() {
+        if let Some(dm) = dataclass_metadata.as_ref()
+            && pydantic_metadata.is_none()
+        {
             self.validate_frozen_dataclass_inheritance(cls, dm, &bases_with_metadata, errors);
         }
 
@@ -433,29 +437,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let has_root_model_kind = bases_with_metadata.iter().any(|(_, metadata)| {
             matches!(
                 metadata.pydantic_model_kind(),
-                Some(PydanticModelKind::RootModel(_))
+                Some(PydanticModelKind::RootModel)
             )
         });
 
-        // This is not the final form for this type.
         let pydantic_model_kind = if has_pydantic_root_model_base_class || has_root_model_kind {
-            PydanticModelKind::RootModel(Type::any_implicit())
+            PydanticModelKind::RootModel
         } else {
             PydanticModelKind::BaseModel
         };
 
+        let PydanticMetadataBinding {
+            frozen,
+            extra,
+            validate_by_name,
+        } = pydantic_metadata_binding;
+
+        // TODO: support ConfigDict validate_by_alias.
+        // Note: class keywords take precedence over ConfigDict keywords.
+        // But another design choice is to error if there is a conflict. We can consider this design for v2.
         // Extract validate_by_alias & validate_by_name
         let class_validate_by_alias = keywords
             .iter()
             .find(|(name, _)| name.as_str() == "validate_by_alias")
             .is_none_or(|(_, ann)| ann.get_type().as_bool().unwrap_or(true));
 
+        // TODO Zeina: Rename this variable to just validate_by_name
         let class_validate_by_name = keywords
             .iter()
-            .find(|(name, _)| name.as_str() == "validate_by_name")
-            .is_some_and(|(_, ann)| ann.get_type().as_bool().unwrap_or(false));
-
-        let PydanticMetadataBinding { frozen, extra } = pydantic_metadata_binding;
+            .find(|(name, _)| name == &VALIDATE_BY_NAME)
+            .map_or(*validate_by_name, |(_, ann)| {
+                ann.get_type().as_bool().unwrap_or(*validate_by_name)
+            });
 
         // Here, "ignore" and "allow" translate to true, while "forbid" translates to false.
         // With no keyword, the default is "true" and I default to "false" on a wrong keyword.
@@ -498,6 +511,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     true
                 }
             }
+        };
+
+        let frozen = match frozen {
+            Some(value) => value,
+            None => &bases_with_metadata
+                .iter()
+                .find_map(|(_, metadata)| {
+                    metadata
+                        .dataclass_metadata()
+                        .as_ref()
+                        .map(|dm| dm.kws.frozen)
+                })
+                .unwrap_or(FROZEN_DEFAULT),
         };
 
         Some(PydanticMetadata {

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use dupe::Dupe;
+use pyrefly_config::base::ConfigBase;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
@@ -120,6 +121,7 @@ pub fn standard_config_finder(
                                     .ancestors()
                                     .map(|x| x.to_owned())
                                     .collect::<Vec<_>>(),
+                                root: ConfigBase::default_for_ide_without_config(),
                                 ..Default::default()
                             },
                         );

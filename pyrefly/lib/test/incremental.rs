@@ -129,7 +129,8 @@ impl Incremental {
         let handles = want.map(|x| self.handle(x));
         self.state.run_with_committing_transaction(
             transaction,
-            &handles.map(|x| (x.dupe(), self.require.unwrap_or(Require::Everything))),
+            &handles,
+            self.require.unwrap_or(Require::Everything),
         );
         let loaded = Self::USER_FILES.map(|x| self.handle(x));
         let errors = self.state.transaction().get_errors(&loaded);

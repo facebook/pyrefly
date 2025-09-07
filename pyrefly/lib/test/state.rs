@@ -55,10 +55,7 @@ else:
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
         let path = find_import(&config_file, name, None).unwrap();
-        (
-            Handle::new(name, path, sys_info.dupe()),
-            Require::Everything,
-        )
+        Handle::new(name, path, sys_info.dupe())
     };
 
     let handles = [
@@ -68,9 +65,9 @@ else:
     ];
     let mut transaction = state.new_transaction(Require::Exports, None);
     transaction.set_memory(test_env.get_memory());
-    transaction.run(&handles);
+    transaction.run(&handles, Require::Everything);
     transaction
-        .get_errors(handles.iter().map(|(handle, _)| handle))
+        .get_errors(&handles)
         .check_against_expectations()
         .unwrap();
 }
@@ -113,7 +110,7 @@ fn test_multiple_path() {
             (PathBuf::from(path), Some(Arc::new((*contents).to_owned())))
         }),
     );
-    transaction.run(&handles.map(|x| (x.dupe(), Require::Everything)));
+    transaction.run(&handles, Require::Everything);
     let loads = transaction.get_errors(handles.iter());
     print_errors(&loads.collect_errors().shown);
     loads.check_against_expectations().unwrap();
@@ -132,7 +129,7 @@ fn test_change_require() {
 
     let mut t = state.new_committable_transaction(Require::Exports, None);
     t.as_mut().set_memory(env.get_memory());
-    t.as_mut().run(&[(handle.dupe(), Require::Exports)]);
+    t.as_mut().run(&[handle.dupe()], Require::Exports);
     state.commit_transaction(t);
 
     assert_eq!(
@@ -145,7 +142,7 @@ fn test_change_require() {
         0
     );
     assert!(state.transaction().get_bindings(&handle).is_none());
-    state.run(&[(handle.dupe(), Require::Errors)], Require::Exports, None);
+    state.run(&[handle.dupe()], Require::Errors, Require::Exports, None);
     assert_eq!(
         state
             .transaction()
@@ -157,7 +154,8 @@ fn test_change_require() {
     );
     assert!(state.transaction().get_bindings(&handle).is_none());
     state.run(
-        &[(handle.dupe(), Require::Everything)],
+        &[handle.dupe()],
+        Require::Everything,
         Require::Exports,
         None,
     );
@@ -187,12 +185,12 @@ fn test_crash_on_search() {
         PathBuf::from("foo.py"),
         Some(Arc::new("x = 3".to_owned())),
     )]);
-    t.as_mut().run(&[]); // This run breaks reproduction (but is now required)
+    t.as_mut().run(&[], Require::Everything); // This run breaks reproduction (but is now required)
     state.commit_transaction(t);
 
     // Now we need to increment the step counter.
     let mut t = state.new_committable_transaction(REQUIRE, None);
-    t.as_mut().run(&[]);
+    t.as_mut().run(&[], Require::Everything);
     state.commit_transaction(t);
 
     // Now we run two searches, this used to crash

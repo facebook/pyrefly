@@ -77,10 +77,15 @@
                     "default": false,
                     "description": "If true, pyrefly will not provide other IDE services like completions, hover, definition, etc. To control type errors, see `python.pyrefly.disableTypeErrors`"
                 },
-                "python.pyrefly.disableTypeErrors": {
-                    "type": ["boolean", null],
-                    "default": null,
-                    "description": "If true, pyrefly will not provide typecheck squiggles in the IDE. To control other IDE services, see `python.pyrefly.disableLanguageServices`"
+                "python.pyrefly.displayTypeErrors": {
+                    "type": "string",
+                    "description": "If default, pyrefly will not provide typecheck squiggles in the IDE by default, unless a file is covered by a pyrefly.toml. If force-off, pyrefly will never provide typecheck squiggles in the IDE. If force-on, pyrefly will always provide typecheck squiggles in the IDE.",
+                    "default": "default",
+                    "enum": [
+                        "default",
+                        "force-on",
+                        "force-off"
+                    ]
                 },
                 "pyrefly.trace.server": {
                     "type": "string",

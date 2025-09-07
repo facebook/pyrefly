@@ -105,3 +105,17 @@ class Model(BaseModel, validate_by_name=True, validate_by_alias=True):
 Model()
 "#,
 );
+
+testcase!(
+    bug = "We should respect validate_by_name and accept both Model(...) calls",
+    test_configdict_validate_by_name,
+    pydantic_env(),
+    r#"
+from pydantic import BaseModel, Field, ConfigDict
+class Model(BaseModel):
+    x: str = Field(..., alias="y")
+    model_config = ConfigDict(validate_by_name=True)
+Model(y="123")
+Model(x="123")  
+    "#,
+);

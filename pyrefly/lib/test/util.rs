@@ -243,9 +243,7 @@ impl TestEnv {
         let mut transaction =
             state.new_committable_transaction(Require::Exports, Some(Box::new(subscriber.dupe())));
         transaction.as_mut().set_memory(self.get_memory());
-        transaction
-            .as_mut()
-            .run(&handles.map(|x| (x.dupe(), Require::Everything)));
+        transaction.as_mut().run(&handles, Require::Everything);
         state.commit_transaction(transaction);
         subscriber.finish();
         print_errors(
@@ -484,7 +482,7 @@ pub fn testcase_for_macro(
                 PathBuf::from(file),
                 Some(Arc::new(contents.clone())),
             )]);
-            t.run(&[(h.dupe(), Require::Everything)]);
+            t.run(&[h.dupe()], Require::Everything);
             let errors = t.get_errors([&h]);
             print_errors(&errors.collect_errors().shown);
             errors.check_against_expectations()?;

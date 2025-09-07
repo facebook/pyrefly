@@ -131,6 +131,9 @@ from typing import assert_type, Any, Callable, Coroutine, Generator, AsyncGenera
 def simple_return() -> int:
     return "oops"  # E: Returned type `Literal['oops']` is not assignable to declared return type `int`
 
+def simple_implicit_return() -> int:  # E: missing an explicit `return`
+    pass
+
 def generator_with_return() -> Generator[int, Any, str]:
     # TODO(stroxler): this yield error message needs some wordsmithing!
     yield "oops"  # E: Type of yielded value `Literal['oops']` is not assignable to declared return type `int`

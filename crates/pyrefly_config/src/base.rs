@@ -99,6 +99,13 @@ impl PartialEq for ExtraConfigs {
 }
 
 impl ConfigBase {
+    pub fn default_for_ide_without_config() -> Self {
+        Self {
+            disable_type_errors_in_ide: Some(true),
+            ..Default::default()
+        }
+    }
+
     pub fn get_errors(base: &Self) -> Option<&ErrorDisplayConfig> {
         base.errors.as_ref()
     }

@@ -866,18 +866,17 @@ fn should_export_function(function: &DecoratedFunction, context: &ModuleContext)
 }
 
 fn get_super_class_member(
-    handle: &Handle,
-    transaction: &Transaction,
-    module_ids: &ModuleIds,
     class: &Class,
     field: &Name,
+    context: &ModuleContext,
 ) -> Option<ClassRef> {
-    transaction
-        .ad_hoc_solve(handle, |solver| {
+    context
+        .transaction
+        .ad_hoc_solve(context.handle, |solver| {
             solver.get_super_class_member(class, None, field)
         })
         .unwrap()
-        .map(|member| ClassRef::from_class(&member.defining_class, module_ids))
+        .map(|member| ClassRef::from_class(&member.defining_class, context.module_ids))
 }
 
 fn export_all_functions(
@@ -926,15 +925,9 @@ fn export_all_functions(
         let display_range = context.module_info.display_range(function.id_range());
         let name = function.metadata().kind.as_func_id().func;
         let parent = get_scope_parent(ast, context.module_info, function.id_range());
-        let overridden_base_class = function.defining_cls().and_then(|class| {
-            get_super_class_member(
-                context.handle,
-                context.transaction,
-                context.module_ids,
-                class,
-                &name,
-            )
-        });
+        let overridden_base_class = function
+            .defining_cls()
+            .and_then(|class| get_super_class_member(class, &name, context));
         assert!(
             function_definitions
                 .insert(

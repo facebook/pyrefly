@@ -285,7 +285,7 @@ mod tests {
             get_path(&tdir),
             Some(Arc::new((*contents).to_owned())),
         )]);
-        transaction.run(&[handle.clone()].map(|x| (x.dupe(), Require::Everything)));
+        transaction.run(&[handle.dupe()], Require::Everything);
         let loads = transaction.get_errors([handle.clone()].iter());
         if kind == SuppressFlag::Add {
             suppress::suppress_errors(loads.collect_errors().shown);

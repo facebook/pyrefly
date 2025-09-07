@@ -342,6 +342,7 @@ impl ConfigFile {
             project_includes: Self::default_project_includes(),
             project_excludes: Self::default_project_excludes(),
             import_root: Some(layout.get_import_root(root)),
+            root: ConfigBase::default_for_ide_without_config(),
             ..Default::default()
         };
         // ignore failures rewriting path to config, since we're trying to construct

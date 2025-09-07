@@ -129,6 +129,7 @@ impl<'a> BindingsBuilder<'a> {
         let (mut class_object, class_indices) = self.class_object_and_indices(&x.name);
         let mut pydantic_frozen = None;
         let mut pydantic_config_dict_extra = None;
+        let mut pydantic_validate_by_name = false;
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let body = mem::take(&mut x.body);
         let decorators_with_ranges = self.ensure_and_bind_decorators_with_ranges(
@@ -263,6 +264,7 @@ impl<'a> BindingsBuilder<'a> {
                                     name,
                                     &mut pydantic_frozen,
                                     &mut pydantic_config_dict_extra,
+                                    &mut pydantic_validate_by_name,
                                 );
                                 (
                                     ClassFieldDefinition::AssignedInBody {
@@ -404,8 +406,11 @@ impl<'a> BindingsBuilder<'a> {
                 keywords: keywords.into_boxed_slice(),
                 decorators: decorators_with_ranges.clone().into_boxed_slice(),
                 is_new_type: false,
-                pydantic_metadata: self
-                    .make_pydantic_metadata(pydantic_frozen, pydantic_config_dict_extra),
+                pydantic_metadata: self.make_pydantic_metadata(
+                    pydantic_frozen,
+                    pydantic_config_dict_extra,
+                    pydantic_validate_by_name,
+                ),
             },
         );
     }

@@ -3140,16 +3140,6 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Instance-only attribute `final_no_default` of class `D` is not visible on the class",
-      "description": "Instance-only attribute `final_no_default` of class `D` is not visible on the class",
-      "line": 37,
-      "name": "no-access",
-      "stop_column": 19,
-      "stop_line": 37
-    },
-    {
-      "code": -2,
-      "column": 1,
       "concise_description": "Cannot set field `final_with_default`",
       "description": "Cannot set field `final_with_default`\n  This field is marked as Final",
       "line": 38,
@@ -3973,13 +3963,23 @@
     },
     {
       "code": -2,
-      "column": 23,
-      "concise_description": "Call to deprecated function `_directives_deprecated_library.norwegian_blue`",
-      "description": "Call to deprecated function `_directives_deprecated_library.norwegian_blue`",
+      "column": 1,
+      "concise_description": "`_directives_deprecated_library.norwegian_blue` is deprecated",
+      "description": "`_directives_deprecated_library.norwegian_blue` is deprecated",
       "line": 24,
       "name": "deprecated",
-      "stop_column": 26,
+      "stop_column": 23,
       "stop_line": 24
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "`_directives_deprecated_library.norwegian_blue` is deprecated",
+      "description": "`_directives_deprecated_library.norwegian_blue` is deprecated",
+      "line": 25,
+      "name": "deprecated",
+      "stop_column": 27,
+      "stop_line": 25
     },
     {
       "code": -2,
@@ -3995,7 +3995,7 @@
       "code": -2,
       "column": 5,
       "concise_description": "`+` is not supported between `Spam` and `Literal[1]`",
-      "description": "`+` is not supported between `Spam` and `Literal[1]`\n  Call to deprecated function `_directives_deprecated_library.Spam.__add__`",
+      "description": "`+` is not supported between `Spam` and `Literal[1]`\n  `_directives_deprecated_library.Spam.__add__` is deprecated",
       "line": 41,
       "name": "unsupported-operation",
       "stop_column": 13,
@@ -4005,7 +4005,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "`+=` is not supported between `Spam` and `Literal[1]`",
-      "description": "`+=` is not supported between `Spam` and `Literal[1]`\n  Call to deprecated function `_directives_deprecated_library.Spam.__add__`",
+      "description": "`+=` is not supported between `Spam` and `Literal[1]`\n  `_directives_deprecated_library.Spam.__add__` is deprecated",
       "line": 42,
       "name": "unsupported-operation",
       "stop_column": 10,
@@ -4014,8 +4014,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Call to deprecated function `_directives_deprecated_library.Spam.greasy`",
-      "description": "Call to deprecated function `_directives_deprecated_library.Spam.greasy`",
+      "concise_description": "`_directives_deprecated_library.Spam.greasy` is deprecated",
+      "description": "`_directives_deprecated_library.Spam.greasy` is deprecated",
       "line": 44,
       "name": "deprecated",
       "stop_column": 12,
@@ -4024,8 +4024,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Call to deprecated function `_directives_deprecated_library.Spam.shape`",
-      "description": "Call to deprecated function `_directives_deprecated_library.Spam.shape`",
+      "concise_description": "`_directives_deprecated_library.Spam.shape` is deprecated",
+      "description": "`_directives_deprecated_library.Spam.shape` is deprecated",
       "line": 47,
       "name": "deprecated",
       "stop_column": 11,
@@ -4034,8 +4034,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Call to deprecated function `_directives_deprecated_library.Spam.shape`",
-      "description": "Call to deprecated function `_directives_deprecated_library.Spam.shape`",
+      "concise_description": "`_directives_deprecated_library.Spam.shape` is deprecated",
+      "description": "`_directives_deprecated_library.Spam.shape` is deprecated",
       "line": 48,
       "name": "deprecated",
       "stop_column": 11,
@@ -4043,32 +4043,32 @@
     },
     {
       "code": -2,
-      "column": 10,
-      "concise_description": "Call to deprecated function `Invocable.__call__`",
-      "description": "Call to deprecated function `Invocable.__call__`",
+      "column": 1,
+      "concise_description": "`Invocable.__call__` is deprecated",
+      "description": "`Invocable.__call__` is deprecated",
       "line": 58,
       "name": "deprecated",
-      "stop_column": 12,
+      "stop_column": 10,
       "stop_line": 58
     },
     {
       "code": -2,
-      "column": 6,
-      "concise_description": "Call to deprecated function `lorem`",
-      "description": "Call to deprecated function `lorem`",
+      "column": 1,
+      "concise_description": "`lorem` is deprecated",
+      "description": "`lorem` is deprecated",
       "line": 69,
       "name": "deprecated",
-      "stop_column": 8,
+      "stop_column": 6,
       "stop_line": 69
     },
     {
       "code": -2,
-      "column": 10,
-      "concise_description": "Call to deprecated function `SupportsFoo1.foo`",
-      "description": "Call to deprecated function `SupportsFoo1.foo`",
+      "column": 5,
+      "concise_description": "`SupportsFoo1.foo` is deprecated",
+      "description": "`SupportsFoo1.foo` is deprecated",
       "line": 98,
       "name": "deprecated",
-      "stop_column": 12,
+      "stop_column": 10,
       "stop_line": 98
     }
   ],
@@ -4373,46 +4373,6 @@
     }
   ],
   "enums_members.py": [
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Any, str) failed",
-      "description": "assert_type(Any, str) failed",
-      "line": 27,
-      "name": "assert-type",
-      "stop_column": 28,
-      "stop_line": 27
-    },
-    {
-      "code": -2,
-      "column": 13,
-      "concise_description": "Instance-only attribute `genus` of class `Pet` is not visible on the class",
-      "description": "Instance-only attribute `genus` of class `Pet` is not visible on the class",
-      "line": 27,
-      "name": "missing-attribute",
-      "stop_column": 22,
-      "stop_line": 27
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Any, str) failed",
-      "description": "assert_type(Any, str) failed",
-      "line": 28,
-      "name": "assert-type",
-      "stop_column": 30,
-      "stop_line": 28
-    },
-    {
-      "code": -2,
-      "column": 13,
-      "concise_description": "Instance-only attribute `species` of class `Pet` is not visible on the class",
-      "description": "Instance-only attribute `species` of class `Pet` is not visible on the class",
-      "line": 28,
-      "name": "missing-attribute",
-      "stop_column": 24,
-      "stop_line": 28
-    },
     {
       "code": -2,
       "column": 5,
@@ -4944,8 +4904,8 @@
     {
       "code": -2,
       "column": 13,
-      "concise_description": "Instance-only attribute `attr` of class `Foo7` is not visible on the class",
-      "description": "Instance-only attribute `attr` of class `Foo7` is not visible on the class",
+      "concise_description": "Generic attribute `attr` of class `Foo7` is not visible on the class",
+      "description": "Generic attribute `attr` of class `Foo7` is not visible on the class",
       "line": 170,
       "name": "missing-attribute",
       "stop_column": 22,
@@ -5546,48 +5506,7 @@
       "stop_line": 65
     }
   ],
-  "generics_self_advanced.py": [
-    {
-      "code": -2,
-      "column": 20,
-      "concise_description": "assert_type(Any, list[Self]) failed",
-      "description": "assert_type(Any, list[Self]) failed",
-      "line": 43,
-      "name": "assert-type",
-      "stop_column": 39,
-      "stop_line": 43
-    },
-    {
-      "code": -2,
-      "column": 21,
-      "concise_description": "Instance-only attribute `a` of class `ChildB` is not visible on the class",
-      "description": "Instance-only attribute `a` of class `ChildB` is not visible on the class",
-      "line": 43,
-      "name": "missing-attribute",
-      "stop_column": 26,
-      "stop_line": 43
-    },
-    {
-      "code": -2,
-      "column": 20,
-      "concise_description": "assert_type(Any, Self) failed",
-      "description": "assert_type(Any, Self) failed",
-      "line": 44,
-      "name": "assert-type",
-      "stop_column": 36,
-      "stop_line": 44
-    },
-    {
-      "code": -2,
-      "column": 21,
-      "concise_description": "Instance-only attribute `a` of class `ChildB` is not visible on the class",
-      "description": "Instance-only attribute `a` of class `ChildB` is not visible on the class",
-      "line": 44,
-      "name": "missing-attribute",
-      "stop_column": 26,
-      "stop_line": 44
-    }
-  ],
+  "generics_self_advanced.py": [],
   "generics_self_attributes.py": [
     {
       "code": -2,
@@ -6078,8 +5997,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Instance-only attribute `label` of class `Node` is not visible on the class",
-      "description": "Instance-only attribute `label` of class `Node` is not visible on the class",
+      "concise_description": "Generic attribute `label` of class `Node` is not visible on the class",
+      "description": "Generic attribute `label` of class `Node` is not visible on the class",
       "line": 42,
       "name": "no-access",
       "stop_column": 16,
@@ -6088,8 +6007,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Instance-only attribute `label` of class `Node` is not visible on the class",
-      "description": "Instance-only attribute `label` of class `Node` is not visible on the class",
+      "concise_description": "Generic attribute `label` of class `Node` is not visible on the class",
+      "description": "Generic attribute `label` of class `Node` is not visible on the class",
       "line": 43,
       "name": "missing-attribute",
       "stop_column": 16,
@@ -6098,8 +6017,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Instance-only attribute `label` of class `Node` is not visible on the class",
-      "description": "Instance-only attribute `label` of class `Node` is not visible on the class",
+      "concise_description": "Generic attribute `label` of class `Node` is not visible on the class",
+      "description": "Generic attribute `label` of class `Node` is not visible on the class",
       "line": 44,
       "name": "no-access",
       "stop_column": 11,
@@ -6108,8 +6027,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Instance-only attribute `label` of class `Node` is not visible on the class",
-      "description": "Instance-only attribute `label` of class `Node` is not visible on the class",
+      "concise_description": "Generic attribute `label` of class `Node` is not visible on the class",
+      "description": "Generic attribute `label` of class `Node` is not visible on the class",
       "line": 45,
       "name": "missing-attribute",
       "stop_column": 11,
@@ -6118,8 +6037,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Instance-only attribute `label` of class `Node` is not visible on the class",
-      "description": "Instance-only attribute `label` of class `Node` is not visible on the class",
+      "concise_description": "Generic attribute `label` of class `Node` is not visible on the class",
+      "description": "Generic attribute `label` of class `Node` is not visible on the class",
       "line": 46,
       "name": "missing-attribute",
       "stop_column": 15,

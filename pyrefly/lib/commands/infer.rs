@@ -207,8 +207,8 @@ impl InferArgs {
         let mut cancellable_transaction = holder.as_ref().cancellable_transaction();
         let transaction = forgetter.as_mut();
 
-        for (handle, _) in handles.all(Require::Everything) {
-            transaction.run(&[(handle.dupe(), Require::Everything)]);
+        for handle in handles.all() {
+            transaction.run(&[handle.dupe()], Require::Everything);
             let stdlib = transaction.get_stdlib(&handle);
             let inferred_types: Option<Vec<(ruff_text_size::TextSize, Type, AnnotationKind)>> =
                 transaction.inferred_types(&handle, flags.return_types(), flags.containers());

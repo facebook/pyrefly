@@ -327,17 +327,14 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     /// Handles both checking yield / return expressions and binding the return type.
-    ///
-    /// The `implicit_return_if_inferring_return_type` argument should be None when
-    /// return type inference is disabled; it must be `Some(implicit_return_key)` to
-    /// get return type inference.
     fn analyze_return_type(
         &mut self,
         func_name: &Identifier,
         is_async: bool,
         yields_and_returns: YieldsAndReturns,
         return_ann_with_range: Option<(TextRange, Idx<KeyAnnotation>)>,
-        implicit_return_if_inferring_return_type: Option<Idx<Key>>,
+        implicit_return: Option<Idx<Key>>,
+        should_infer_return_type: bool,
         stub_or_impl: FunctionStubOrImpl,
         decorators: Box<[(Idx<Key>, TextRange)]>,
     ) {
@@ -377,10 +374,7 @@ impl<'a> BindingsBuilder<'a> {
             .into_boxed_slice();
 
         let return_type_binding = {
-            let kind = match (
-                return_ann_with_range,
-                implicit_return_if_inferring_return_type,
-            ) {
+            let kind = match (return_ann_with_range, implicit_return) {
                 (Some((range, annotation)), Some(implicit_return)) => {
                     // We have an explicit return annotation and we want to validate it.
                     ReturnTypeKind::ShouldValidateAnnotation {
@@ -400,7 +394,7 @@ impl<'a> BindingsBuilder<'a> {
                         is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
                     }
                 }
-                (None, Some(implicit_return)) => {
+                (None, Some(implicit_return)) if should_infer_return_type => {
                     // We don't have an explicit return annotation, but we want to infer it.
                     ReturnTypeKind::ShouldInferType {
                         returns: return_keys,
@@ -409,8 +403,9 @@ impl<'a> BindingsBuilder<'a> {
                         yield_froms: yield_from_keys,
                     }
                 }
-                (None, None) => {
-                    // We don't have an explicit return annotation, and we want to just treat it as returning `Any`.
+                (None, _) => {
+                    // We don't have an explicit return annotation, or we don't want to infer return type.
+                    // Just treat the return type as `Any`.
                     ReturnTypeKind::ShouldReturnAny {
                         is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
                     }
@@ -494,8 +489,7 @@ impl<'a> BindingsBuilder<'a> {
             )
         } else {
             match self.untyped_def_behavior {
-                UntypedDefBehavior::SkipAndInferReturnAny
-                | UntypedDefBehavior::CheckAndInferReturnAny => {
+                UntypedDefBehavior::SkipAndInferReturnAny => {
                     let (yields_and_returns, self_assignments) = self.function_body_scope(
                         parameters,
                         body,
@@ -510,7 +504,31 @@ impl<'a> BindingsBuilder<'a> {
                         is_async,
                         yields_and_returns,
                         return_ann_with_range,
-                        None, // this disables return type inference
+                        None,
+                        false, // this disables return type inference
+                        stub_or_impl,
+                        decorators.decorators.clone(),
+                    );
+                    self_assignments
+                }
+                UntypedDefBehavior::CheckAndInferReturnAny => {
+                    let implicit_return = self.implicit_return(&body, func_name);
+                    let (yields_and_returns, self_assignments) = self.function_body_scope(
+                        parameters,
+                        body,
+                        range,
+                        func_name,
+                        undecorated_idx,
+                        class_key,
+                        is_async,
+                    );
+                    self.analyze_return_type(
+                        func_name,
+                        is_async,
+                        yields_and_returns,
+                        return_ann_with_range,
+                        Some(implicit_return),
+                        false, // this disables return type inference
                         stub_or_impl,
                         decorators.decorators.clone(),
                     );
@@ -533,6 +551,7 @@ impl<'a> BindingsBuilder<'a> {
                         yields_and_returns,
                         return_ann_with_range,
                         Some(implicit_return),
+                        true,
                         stub_or_impl,
                         decorators.decorators.clone(),
                     );

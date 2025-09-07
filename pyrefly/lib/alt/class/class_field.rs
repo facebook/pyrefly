@@ -1255,42 +1255,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
 
-        // Enum handling:
-        // - Check whether the field is a member (which depends only on its type and name)
-        // - Validate that a member should not have an annotation, and should respect any explicit annotation on `_value_`
-        //
-        // TODO(stroxler, yangdanny): We currently operate on promoted types, which means we do not infer `Literal[...]`
-        // types for the `.value` / `._value_` attributes of literals. This is permitted in the spec although not optimal
-        // for most cases; we are handling it this way in part because generic enum behavior is not yet well-specified.
-        //
-        // We currently skip the check for `_value_` if the class defines `__new__`, since that can
-        // change the value of the enum member. https://docs.python.org/3/howto/enum.html#when-to-use-new-vs-init
-        let ty = if let Some(enum_) = metadata.enum_metadata()
-            && self.is_valid_enum_member(name, &ty, &initialization)
-        {
-            if direct_annotation.is_some() {
-                self.error(
-                    errors, range,ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
-                    format!("Enum member `{name}` may not be annotated directly. Instead, annotate the `_value_` attribute."),
-                );
-            }
-            if enum_.has_value
-                && let Some(enum_value_ty) = self.type_of_enum_value(enum_)
-                && !class.fields().contains(&dunder::NEW)
-                && (!matches!(value, ExprOrBinding::Expr(Expr::EllipsisLiteral(_)))
-                    || !self.module().path().is_interface())
-            {
-                self.check_enum_value_annotation(&ty, &enum_value_ty, name, range, errors);
-            }
-            Type::Literal(Lit::Enum(Box::new(LitEnum {
-                class: enum_.cls.clone(),
-                member: name.clone(),
-                ty: ty.clone(),
-            })))
-        } else {
-            ty
-        };
-
         // Identify whether this is a descriptor
         let mut descriptor = None;
         match &ty {
@@ -1318,6 +1282,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             _ => {}
+        };
+
+        // Enum handling:
+        // - Check whether the field is a member (which depends only on its type and name)
+        // - Validate that a member should not have an annotation, and should respect any explicit annotation on `_value_`
+        //
+        // TODO(stroxler, yangdanny): We currently operate on promoted types, which means we do not infer `Literal[...]`
+        // types for the `.value` / `._value_` attributes of literals. This is permitted in the spec although not optimal
+        // for most cases; we are handling it this way in part because generic enum behavior is not yet well-specified.
+        //
+        // We currently skip the check for `_value_` if the class defines `__new__`, since that can
+        // change the value of the enum member. https://docs.python.org/3/howto/enum.html#when-to-use-new-vs-init
+        let ty = if descriptor.is_none()
+            && let Some(enum_) = metadata.enum_metadata()
+            && self.is_valid_enum_member(name, &ty, &initialization)
+        {
+            if direct_annotation.is_some() {
+                self.error(
+                    errors, range,ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    format!("Enum member `{name}` may not be annotated directly. Instead, annotate the `_value_` attribute."),
+                );
+            }
+            if enum_.has_value
+                && let Some(enum_value_ty) = self.type_of_enum_value(enum_)
+                && !class.fields().contains(&dunder::NEW)
+                && (!matches!(value, ExprOrBinding::Expr(Expr::EllipsisLiteral(_)))
+                    || !self.module().path().is_interface())
+            {
+                self.check_enum_value_annotation(&ty, &enum_value_ty, name, range, errors);
+            }
+            Type::Literal(Lit::Enum(Box::new(LitEnum {
+                class: enum_.cls.clone(),
+                member: name.clone(),
+                ty: ty.clone(),
+            })))
+        } else {
+            ty
         };
 
         // Pin any vars in the type: leaking a var in a class field is particularly
@@ -1632,8 +1633,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 DescriptorBase::ClassDef(cls.class_object().dupe()),
             ),
             ClassFieldInner::Simple {
-                initialization:
-                    ClassFieldInitialization::Method | ClassFieldInitialization::Uninitialized,
+                initialization: ClassFieldInitialization::Method,
                 ..
             } => ClassAttribute::no_access(NoAccessReason::ClassUseOfInstanceAttribute(
                 cls.class_object().dupe(),
@@ -2276,12 +2276,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 *should_narrow = false;
             }
             ClassAttribute::ReadOnly(_, reason) => {
-                let msg = vec1![
-                    format!("Cannot set field `{attr_name}`"),
-                    reason.error_message()
-                ];
-                errors.add(range, ErrorInfo::Kind(ErrorKind::ReadOnly), msg);
-                *should_narrow = false;
+                // In pydantic, if a non-frozen model inherits from a frozen model,
+                // attributes of the frozen model are no longer readonly.
+                let should_raise_error = if let Some(instance_class) = instance_class {
+                    let class = instance_class.class_object();
+                    let metadata = self.get_metadata_for_class(class);
+                    !(metadata.is_pydantic_base_model()
+                        && metadata
+                            .dataclass_metadata()
+                            .is_some_and(|dm| !dm.kws.frozen))
+                } else {
+                    true
+                };
+
+                if should_raise_error {
+                    let msg = vec1![
+                        format!("Cannot set field `{attr_name}`"),
+                        reason.error_message()
+                    ];
+                    errors.add(range, ErrorInfo::Kind(ErrorKind::ReadOnly), msg);
+                    *should_narrow = false;
+                }
             }
             ClassAttribute::ReadWrite(attr_ty) => {
                 // If the attribute has a converter, then `want` should be the type expected by the converter.

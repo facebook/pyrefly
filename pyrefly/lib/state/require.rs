@@ -7,8 +7,6 @@
 
 use dupe::Dupe;
 
-use crate::state::epoch::Epoch;
-
 /// How much information do we require about a module?
 #[derive(Debug, Clone, Dupe, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Require {
@@ -48,62 +46,5 @@ impl Require {
 
     pub fn keep_answers(self) -> bool {
         self >= Require::Everything
-    }
-}
-
-/// The value for `Require` that we use if nothing is otherwise set.
-#[derive(Debug, Clone, Dupe, Copy)]
-pub struct RequireDefault(Epoch, Require);
-
-impl RequireDefault {
-    pub fn new(default: Require) -> Self {
-        let mut epoch = Epoch::zero();
-        epoch.next();
-        Self(epoch, default)
-    }
-}
-
-/// An override for a `RequireDefault` value.
-/// If the override was set since the epoch, we use the override value,
-/// otherwise we use the default value.
-#[derive(Debug, Clone, Dupe, Copy)]
-pub struct RequireOverride(Epoch, Require);
-
-impl Default for RequireOverride {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RequireOverride {
-    pub fn new() -> Self {
-        Self(Epoch::zero(), Require::Exports)
-    }
-
-    pub fn set(&mut self, default: RequireDefault, value: Require) {
-        self.0 = default.0;
-        self.1 = value;
-    }
-
-    pub fn get(self, default: RequireDefault) -> Require {
-        if self.0 == default.0 {
-            self.1
-        } else {
-            default.1
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_require() {
-        let default = RequireDefault::new(Require::Errors);
-        let mut over = RequireOverride::new();
-        assert_eq!(over.get(default), Require::Errors);
-        over.set(default, Require::Everything);
-        assert_eq!(over.get(default), Require::Everything);
     }
 }

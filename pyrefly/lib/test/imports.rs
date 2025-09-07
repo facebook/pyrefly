@@ -861,7 +861,7 @@ testcase!(
     r#"
 from foo import x # E: `x` is deprecated
 
-x()  # E: Call to deprecated function `foo.x`
+x()  # E: `foo.x` is deprecated
 "#,
 );
 
@@ -871,7 +871,7 @@ testcase!(
     r#"
 from foo import x as y # E: `x` is deprecated
 
-y()  # E: Call to deprecated function `foo.x`
+y()  # E: `foo.x` is deprecated
 "#,
 );
 
@@ -881,7 +881,7 @@ testcase!(
     r#"
 from foo import * # E: `x` is deprecated
 
-x()  # E: Call to deprecated function `foo.x`
+x()  # E: `foo.x` is deprecated
 "#,
 );
 
@@ -923,7 +923,7 @@ testcase!(
     r#"
 from foo import x # E: `x` is deprecated
 
-x()  # E: Call to deprecated function `foo.x`
+x()  # E: `foo.x` is deprecated
 "#,
 );
 

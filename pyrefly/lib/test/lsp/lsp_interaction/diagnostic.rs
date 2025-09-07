@@ -5,37 +5,33 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Message;
-use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_server::Response;
-use lsp_types::Url;
 
-use crate::test::lsp::lsp_interaction::util::TestCase;
-use crate::test::lsp::lsp_interaction::util::build_did_open_notification;
+use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
+use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
-#[allow(deprecated)]
-use crate::test::lsp::lsp_interaction::util::run_test_lsp;
 
 #[test]
-#[allow(deprecated)]
 fn test_unexpected_keyword_range() {
-    let root = get_test_files_root();
-    let file_path = root.path().join("unexpected_keyword.py");
-    let messages_from_language_client = vec![
-        Message::from(build_did_open_notification(file_path.clone())),
-        Message::from(Request {
-            id: RequestId::from(1),
-            method: "textDocument/diagnostic".to_owned(),
-            params: serde_json::json!({
-            "textDocument": {
-                "uri": Url::from_file_path(file_path.clone()).unwrap().to_string()
-            }}),
-        }),
-    ];
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(None),
+        ..Default::default()
+    });
 
-    let expected_messages_from_language_server = vec![Message::Response(Response {
-        id: RequestId::from(1),
+    interaction.server.did_change_configuration();
+
+    interaction.client.expect_configuration_request(2, None);
+    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
+
+    interaction.server.did_open("unexpected_keyword.py");
+    interaction.server.diagnostic("unexpected_keyword.py");
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
         result: Some(serde_json::json!({
             "items": [
                 {
@@ -52,15 +48,7 @@ fn test_unexpected_keyword_range() {
             "kind": "full"
         })),
         error: None,
-    })];
-
-    run_test_lsp(TestCase {
-        messages_from_language_client,
-        expected_messages_from_language_server,
-        workspace_folders: Some(vec![(
-            "test".to_owned(),
-            Url::from_file_path(root).unwrap(),
-        )]),
-        ..Default::default()
     });
+
+    interaction.shutdown();
 }

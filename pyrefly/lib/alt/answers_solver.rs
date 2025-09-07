@@ -401,7 +401,6 @@ pub struct AnswersSolver<'a, Ans: LookupAnswer> {
     pub uniques: &'a UniqueFactory,
     pub recurser: &'a Recurser<Var>,
     pub stdlib: &'a Stdlib,
-    infer_with_first_use: bool,
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -415,7 +414,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         recurser: &'a Recurser<Var>,
         stdlib: &'a Stdlib,
         thread_state: &'a ThreadState,
-        infer_with_first_use: bool,
     ) -> AnswersSolver<'a, Ans> {
         AnswersSolver {
             stdlib,
@@ -427,7 +425,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             recurser,
             current,
             thread_state,
-            infer_with_first_use,
         }
     }
 
@@ -764,7 +761,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Check if the infer_with_first_use config option is enabled.
     pub fn infer_with_first_use(&self) -> bool {
-        self.infer_with_first_use
+        self.current.infer_with_first_use()
     }
 
     pub fn distribute_over_union(&self, ty: &Type, mut f: impl FnMut(&Type) -> Type) -> Type {

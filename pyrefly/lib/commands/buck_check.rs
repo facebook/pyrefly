@@ -59,11 +59,7 @@ fn read_input_file(path: &Path) -> anyhow::Result<InputFile> {
 }
 
 fn compute_errors(sys_info: SysInfo, sourcedb: Box<impl SourceDatabase + 'static>) -> Vec<Error> {
-    let modules_to_check = sourcedb
-        .modules_to_check()
-        .into_iter()
-        .map(|h| (h, Require::Errors))
-        .collect::<Vec<_>>();
+    let modules_to_check = sourcedb.modules_to_check().into_iter().collect::<Vec<_>>();
 
     let mut config = ConfigFile::default();
     config.python_environment.python_platform = Some(sys_info.platform().clone());
@@ -76,10 +72,10 @@ fn compute_errors(sys_info: SysInfo, sourcedb: Box<impl SourceDatabase + 'static
     let config = ArcId::new(config);
 
     let state = State::new(ConfigFinder::new_constant(config));
-    state.run(&modules_to_check, Require::Exports, None);
+    state.run(&modules_to_check, Require::Errors, Require::Exports, None);
     let transaction = state.transaction();
     transaction
-        .get_errors(modules_to_check.iter().map(|(handle, _)| handle))
+        .get_errors(&modules_to_check)
         .collect_errors()
         .shown
 }

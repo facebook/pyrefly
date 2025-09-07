@@ -30,6 +30,7 @@ use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
 use crate::config::environment::environment::PythonEnvironment;
 use crate::config::finder::ConfigFinder;
+use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::InlayHintConfig;
 
@@ -62,7 +63,7 @@ pub struct Workspace {
     python_info: Option<PythonInfo>,
     search_path: Option<Vec<PathBuf>>,
     pub disable_language_services: bool,
-    pub disable_type_errors: Option<bool>,
+    pub display_type_errors: Option<DisplayTypeErrors>,
     pub lsp_analysis_config: Option<LspAnalysisConfig>,
 }
 
@@ -137,7 +138,7 @@ impl WeakConfigCache {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PyreflyClientConfig {
-    disable_type_errors: Option<bool>,
+    display_type_errors: Option<DisplayTypeErrors>,
     disable_language_services: Option<bool>,
     extra_paths: Option<Vec<PathBuf>>,
 }
@@ -289,7 +290,7 @@ impl Workspaces {
             if let Some(disable_language_services) = pyrefly.disable_language_services {
                 self.update_disable_language_services(scope_uri, disable_language_services);
             }
-            self.update_disable_type_errors(modified, scope_uri, pyrefly.disable_type_errors);
+            self.update_display_type_errors(modified, scope_uri, pyrefly.display_type_errors);
         }
         if let Some(analysis) = config.analysis {
             self.update_ide_settings(modified, scope_uri, analysis);
@@ -314,23 +315,23 @@ impl Workspaces {
     }
 
     /// Update typeCheckingMode setting for scope_uri, None if default workspace
-    fn update_disable_type_errors(
+    fn update_display_type_errors(
         &self,
         modified: &mut bool,
         scope_uri: &Option<Url>,
-        disable_type_errors: Option<bool>,
+        display_type_errors: Option<DisplayTypeErrors>,
     ) {
         let mut workspaces = self.workspaces.write();
         match scope_uri {
             Some(scope_uri) => {
                 if let Some(workspace) = workspaces.get_mut(&scope_uri.to_file_path().unwrap()) {
                     *modified = true;
-                    workspace.disable_type_errors = disable_type_errors;
+                    workspace.display_type_errors = display_type_errors;
                 }
             }
             None => {
                 *modified = true;
-                self.default.write().disable_type_errors = disable_type_errors
+                self.default.write().display_type_errors = display_type_errors
             }
         }
     }

@@ -215,6 +215,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .into_ty()
     }
 
+    /// Check whether a type corresponds to a deprecated function or method, and if so, log a deprecation warning.
+    pub fn check_for_deprecated_call(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
+        let deprecated_function = match ty {
+            Type::Function(f) if f.metadata.flags.is_deprecated => {
+                Some(f.metadata.kind.as_func_id().format(self.module().name()))
+            }
+            Type::BoundMethod(m) if m.func.metadata().flags.is_deprecated => Some(
+                m.func
+                    .metadata()
+                    .kind
+                    .as_func_id()
+                    .format(self.module().name()),
+            ),
+            Type::Overload(o) if o.metadata.flags.is_deprecated => {
+                Some(o.metadata.kind.as_func_id().format(self.module().name()))
+            }
+            _ => None,
+        };
+        if let Some(deprecated_function) = deprecated_function {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::Deprecated),
+                format!("`{}` is deprecated", deprecated_function),
+            );
+        }
+    }
+
     /// Like expr_infer_with_hint(), but returns a TypeInfo that includes narrowing information.
     pub fn expr_infer_type_info_with_hint(
         &self,
@@ -264,6 +292,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // at the end.
             _ => TypeInfo::of_ty(self.expr_infer_type_no_trace(x, hint, errors)),
         };
+        // Check for deprecation
+        self.check_for_deprecated_call(res.ty(), x.range(), errors);
         self.record_type_trace(x.range(), res.ty());
         res
     }
