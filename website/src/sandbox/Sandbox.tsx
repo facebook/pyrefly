@@ -367,13 +367,15 @@ export default function Sandbox({
         </div>
     );
 
-    // Setup default files when editor loads
     useEffect(() => {
         if (models.size === 0) {
-            createNewFile('sandbox.py', DEFAULT_SANDBOX_PROGRAM);
-            createNewFile('utils.py', DEFAULT_UTILS_PROGRAM);
-            // Ensure sandbox.py is the file that remains active after creating utils.py
-            setActiveFileName('sandbox.py');
+            const restored = restoreProjectFromURL(createNewFile, setActiveFileName, setModels);
+            
+            if (!restored) {
+                createNewFile('sandbox.py', DEFAULT_SANDBOX_PROGRAM);
+                createNewFile('utils.py', DEFAULT_UTILS_PROGRAM);
+                setActiveFileName('sandbox.py');
+            }
         }
     }, [createNewFile, models.size]);
 
@@ -604,8 +606,12 @@ export default function Sandbox({
 
     const handleVersionChange = (newVersion: string) => {
         setPythonVersion(newVersion);
-        if (model && !isCodeSnippet) {
-            updateURL(model.getValue(), newVersion);
+        if (models.size > 0 && !isCodeSnippet) {
+            const allFiles: Record<string, string> = {};
+            models.forEach((model, filename) => {
+                allFiles[filename] = model.getValue();
+            });
+            updateURL(allFiles, activeFileName, newVersion);
         }
     };
 
@@ -619,7 +625,9 @@ export default function Sandbox({
         codeSample,
         pythonVersion,
         handleVersionChange,
-        loading
+        loading,
+        models,
+        activeFileName
     );
     return (
         <div
@@ -649,6 +657,7 @@ export default function Sandbox({
                     editorHeightforCodeSnippet,
                     pythonVersion,
                     activeFileName,
+                    models
                 )}
                 {
                     <div
@@ -686,10 +695,19 @@ export default function Sandbox({
     );
 }
 
-function updateURL(code: string, version?: string): void {
-    const compressed = LZString.compressToEncodedURIComponent(code);
+interface ProjectState {
+    files: Record<string, string>;
+    activeFile: string;
+}
+
+function updateURL(allFiles: Record<string, string>, activeFile: string, version?: string): void {
+    const projectState: ProjectState = {
+        files: allFiles,
+        activeFile: activeFile
+    };
+    const compressed = LZString.compressToEncodedURIComponent(JSON.stringify(projectState));
     const params = new URLSearchParams();
-    params.set('code', compressed);
+    params.set('project', compressed);
     if (version) {
         params.set('version', version);
     }
@@ -697,11 +715,32 @@ function updateURL(code: string, version?: string): void {
     window.history.replaceState({}, '', newURL);
 }
 
-function getCodeFromURL(): string | null {
+function getProjectFromURL(): ProjectState | null {
     if (typeof window === 'undefined') return null;
     const params = new URLSearchParams(window.location.search);
+    
+    const project = params.get('project');
+    if (project) {
+        try {
+            const decompressed = LZString.decompressFromEncodedURIComponent(project);
+            return decompressed ? JSON.parse(decompressed) : null;
+        } catch (e) {
+            console.error('Failed to parse project from URL:', e);
+        }
+    }
+    
     const code = params.get('code');
-    return code ? LZString.decompressFromEncodedURIComponent(code) : null;
+    if (code) {
+        const decompressed = LZString.decompressFromEncodedURIComponent(code);
+        if (decompressed) {
+            return {
+                files: { 'sandbox.py': decompressed },
+                activeFile: 'sandbox.py'
+            };
+        }
+    }
+    
+    return null;
 }
 
 function getVersionFromURL(): string | null {
@@ -721,23 +760,35 @@ function fetchCurMonacoModelAndTriggerUpdate(
         return null;
     }
 
-    // Only apply URL code to sandbox.py and avoid during rename operations (security)
-    if (fileName === 'sandbox.py') {
-        const codeFromUrl = getCodeFromURL();
-        if (codeFromUrl != null && model != null) {
-            model.setValue(codeFromUrl);
-        }
-    }
-
-    // Force update to trigger initial inlay hint - only for sandbox.py
-    if (fileName === 'sandbox.py') {
-        model.setValue(model.getValue());
-    }
+    // Force update to trigger initial inlay hint
+    model.setValue(model.getValue());
 
     // Ensure tab size is correctly set
     model.updateOptions({ tabSize: 4, insertSpaces: true });
 
     return model;
+}
+
+function restoreProjectFromURL(
+    createNewFile: (fileName: string, content: string) => void,
+    setActiveFileName: (fileName: string) => void,
+    setModels: React.Dispatch<React.SetStateAction<Map<string, editor.ITextModel>>>
+): boolean {
+    const projectState = getProjectFromURL();
+    if (!projectState) return false;
+
+    monaco.editor.getModels().forEach(model => model.dispose());
+    setModels(new Map());
+
+    Object.entries(projectState.files).forEach(([fileName, content]) => {
+        createNewFile(fileName, content);
+    });
+
+    if (projectState.activeFile && projectState.files[projectState.activeFile]) {
+        setActiveFileName(projectState.activeFile);
+    }
+
+    return true;
 }
 
 function isMobile(): boolean {
@@ -753,6 +804,7 @@ function getPyreflyEditor(
     editorHeightforCodeSnippet: number | null,
     pythonVersion: string,
     activeFileName: string,
+    models: Map<string, editor.ITextModel>
 ): React.ReactElement {
     const { colorMode } = docusaurusTheme.useColorMode();
 
@@ -798,8 +850,16 @@ function getPyreflyEditor(
                 theme={editorTheme}
                 onChange={(value) => {
                     forceRecheck();
-                    if (typeof value === 'string' && activeFileName === 'sandbox.py') {
-                        updateURL(value, pythonVersion);
+                    if (typeof value === 'string' && !isCodeSnippet) {
+                        const allFiles: Record<string, string> = {};
+                        models.forEach((model, filename) => {
+                            if (filename === activeFileName) {
+                                allFiles[filename] = value;
+                            } else {
+                                allFiles[filename] = model.getValue();
+                            }
+                        });
+                        updateURL(allFiles, activeFileName, pythonVersion);
                     }
                 }}
                 onMount={onEditorMount}
@@ -828,7 +888,9 @@ function getMonacoButtons(
     codeSample: string,
     pythonVersion: string,
     handleVersionChange: (version: string) => void,
-    loading: boolean
+    loading: boolean,
+    models: Map<string, editor.ITextModel>,
+    activeFileName: string
 ): ReadonlyArray<React.ReactElement> {
     let buttons: ReadonlyArray<React.ReactElement> = [];
     if (isCodeSnippet) {
@@ -837,7 +899,7 @@ function getMonacoButtons(
             getCopyButton(model),
             /* Hide reset button if it's readonly, which is when it's a code snippet on mobile */
             !isMobile()
-                ? getResetButton(model, forceRecheck, codeSample, isCodeSnippet, pythonVersion)
+                ? getResetButton(model, forceRecheck, codeSample, isCodeSnippet, pythonVersion, models, activeFileName)
                 : null,
         ].filter(Boolean);
     } else {
@@ -848,7 +910,7 @@ function getMonacoButtons(
                 setPyodideStatus
             ),
             getShareUrlButton(),
-            getResetButton(model, forceRecheck, codeSample, isCodeSnippet, pythonVersion),
+            getResetButton(model, forceRecheck, codeSample, isCodeSnippet, pythonVersion, models, activeFileName),
             getGitHubIssuesButton(),
             <PythonVersionSelector
                 selectedVersion={pythonVersion}
@@ -973,7 +1035,9 @@ function getResetButton(
     forceRecheck: () => void,
     codeSample: string,
     isCodeSnippet: boolean,
-    pythonVersion: string
+    pythonVersion: string,
+    models: Map<string, editor.ITextModel>,
+    activeFileName: string
 ): React.ReactElement {
     return (
         <MonacoEditorButton
@@ -982,7 +1046,15 @@ function getResetButton(
                 if (model) {
                     model.setValue(codeSample);
                     if (!isCodeSnippet) {
-                        updateURL(codeSample, pythonVersion);
+                        const allFiles: Record<string, string> = {};
+                        models.forEach((model, filename) => {
+                            if (filename === activeFileName) {
+                                allFiles[filename] = codeSample;
+                            } else {
+                                allFiles[filename] = model.getValue();
+                            }
+                        });
+                        updateURL(allFiles, activeFileName, pythonVersion);
                     }
                     forceRecheck();
                 }
