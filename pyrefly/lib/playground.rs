@@ -191,7 +191,7 @@ impl Playground {
 
         let state = State::new(config_finder);
         let config_finder_for_self = ConfigFinder::new_constant(config.dupe());
-
+        
         Ok(Self {
             state,
             handles: HashMap::new(),
@@ -425,7 +425,7 @@ mod tests {
         files.insert("main.py".to_owned(), "from t".to_owned());
         state.update_sandbox_files(files);
         state.set_active_file("main.py");
-
+        
         let expected_headers = &[
             "Could not find import of `t`",
             "Parse error: Expected 'import', found newline",

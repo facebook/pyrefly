@@ -26,10 +26,6 @@ impl State {
         Self(playground)
     }
 
-    #[wasm_bindgen(js_name=updateSource)]
-    pub fn update_source(&mut self, source: String) {
-        self.0.update_source(source)
-    }
 
     #[wasm_bindgen(js_name=updateSandboxFiles)]
     pub fn update_sandbox_files(&mut self, files: JsValue) -> Result<(), JsValue> {
