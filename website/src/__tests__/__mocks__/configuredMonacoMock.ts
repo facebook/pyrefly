@@ -22,18 +22,27 @@ interface MockEditorModel {
 /**
  * Monaco editor mock
  */
+const mockModels = new Map<string, MockEditorModel>();
+
 const monaco = {
     editor: {
         onDidCreateModel: jest.fn(),
         setModelMarkers: jest.fn(),
-        getModels: (): MockEditorModel[] => [
-            {
-                uri: { path: SANDBOX_FILE_NAME },
-                getValue: () => 'mock code',
-                setValue: () => {},
-                updateOptions: () => {},
-            },
-        ],
+        getModels: (): MockEditorModel[] => Array.from(mockModels.values()),
+        createModel: (content: string, language: string, uri?: any): MockEditorModel => {
+            const path = uri?.path || '/mock-file.py';
+            const model: MockEditorModel = {
+                uri: { path },
+                getValue: () => content,
+                setValue: jest.fn((value: string) => { content = value; }),
+                updateOptions: jest.fn(),
+            };
+            mockModels.set(path, model);
+            return model;
+        },
+    },
+    Uri: {
+        file: (path: string) => ({ path }),
     },
     languages: {
         register: jest.fn(),

@@ -5,6 +5,31 @@ exports[`Sandbox Component render sandbox correctly 1`] = `
   <div
     id="sandbox-editor"
   >
+    <div>
+      <div>
+        <button>
+          sandbox.py
+        </button>
+      </div>
+      <div>
+        <button>
+          utils.py
+        </button>
+      </div>
+      <div>
+        <button
+          title="Add new file"
+        >
+          +
+        </button>
+        <button
+          disabled=""
+          title="Cannot delete sandbox.py"
+        >
+          ×
+        </button>
+      </div>
+    </div>
     <div
       id="sandbox-code-editor-container"
     >
@@ -20,9 +45,10 @@ exports[`Sandbox Component render sandbox correctly 1`] = `
 # - Write and run Python code directly in your browser
 
 from typing import *
+from utils import format_number
 
 def test(x: int):
-  return f"{x}"
+  return format_number(x)
 
 # reveal_type will produce a type error that tells you the type Pyrefly has
 # computed for the return (in this case, str)
@@ -48,9 +74,10 @@ reveal_type(test(42))
 # - Write and run Python code directly in your browser
 
 from typing import *
+from utils import format_number
 
 def test(x: int):
-  return f"{x}"
+  return format_number(x)
 
 # reveal_type will produce a type error that tells you the type Pyrefly has
 # computed for the return (in this case, str)

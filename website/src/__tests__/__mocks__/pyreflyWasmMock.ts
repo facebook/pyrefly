@@ -19,6 +19,25 @@ class MockState {
     updateSource(source?: string): void {}
 
     /**
+     * Updates multiple sandbox files
+     * @param files Dictionary of filename to content
+     */
+    updateSandboxFiles(files: Record<string, string>): void {}
+
+    /**
+     * Updates a single file
+     * @param filename The file name
+     * @param content The file content
+     */
+    updateSingleFile(filename: string, content: string): void {}
+
+    /**
+     * Sets the active file
+     * @param filename The file name
+     */
+    setActiveFile(filename: string): void {}
+
+    /**
      * Gets the errors from the analysis
      * @returns An empty array of errors
      */

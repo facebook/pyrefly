@@ -29,8 +29,15 @@ describe('pyrefly_wasm', () => {
     });
 
     beforeEach(() => {
-        // Update the source before each test
-        pyreService.updateSingleFile('main.py', DEFAULT_SANDBOX_PROGRAM);
+        // Initialize sandbox files with both main.py and utils.py
+        const utilsContent = `
+def format_number(x: int) -> str:
+    return str(x)
+`;
+        pyreService.updateSandboxFiles({
+            'main.py': DEFAULT_SANDBOX_PROGRAM,
+            'utils.py': utilsContent.trim()
+        });
     });
 
     describe('getErrors', () => {
@@ -104,16 +111,16 @@ movie: Movie = {'name': 'Blade Runner',
 
     describe('gotoDefinition', () => {
         it('should return definition location for function call', () => {
-            // Position of "test" in "test(42)"
-            const definition = pyreService.gotoDefinition(17, 13);
+            // Position of "test" in "test(42)" 
+            const definition = pyreService.gotoDefinition(18, 13);
 
             // Should return a location object
             expect(definition).toBeDefined();
 
             // expect that location is correct
-            expect(definition.startLineNumber).toBe(12);
+            expect(definition.startLineNumber).toBe(13);
             expect(definition.startColumn).toBe(5);
-            expect(definition.endLineNumber).toBe(12);
+            expect(definition.endLineNumber).toBe(13);
             expect(definition.endColumn).toBe(9);
         });
     });
@@ -127,18 +134,21 @@ tes
                 DEFAULT_SANDBOX_PROGRAM + typingForAutocomplete
             );
 
-            const completions = pyreService.autoComplete(18, 2);
+            const completions = pyreService.autoComplete(19, 4);
             expect(completions.length).toBeGreaterThan(0);
 
-            // Autocompletion kind is defined here: https://fburl.com/code/9v0zg9e7
-            expect(completions).toContainEqual(expect.objectContaining({label: 'test', detail: '(x: int) -> str', kind: 3}));
+            // Check that 'test' function appears in completions
+            const testCompletion = completions.find(c => c.label === 'test');
+            expect(testCompletion).toBeDefined();
+            expect(testCompletion.detail).toContain('(x: int) -> str');
+            expect(testCompletion.kind).toBe(3); // Function kind
         });
     });
 
     describe('hover', () => {
         it('should return type information for expressions', () => {
-            // Position of "test(42)" in reveal_type
-            const hoverInfo = pyreService.queryType(17, 15);
+            // Position of "test(42)" in reveal_type 
+            const hoverInfo = pyreService.queryType(18, 13);
 
             expect(hoverInfo).toBeDefined();
             expect(hoverInfo.contents).toBeDefined();
@@ -158,7 +168,7 @@ tes
 
             // Check the first hint
             const firstHint = hints[0];
-            expect(firstHint.position).toEqual({ lineNumber: 12, column: 17 });
+            expect(firstHint.position).toEqual({ lineNumber: 13, column: 17 });
             expect(firstHint.label).toEqual(' -> str');
         });
     });

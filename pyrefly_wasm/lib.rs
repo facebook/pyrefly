@@ -26,7 +26,6 @@ impl State {
         Self(playground)
     }
 
-
     #[wasm_bindgen(js_name=updateSandboxFiles)]
     pub fn update_sandbox_files(&mut self, files: JsValue) -> Result<(), JsValue> {
         let files_map: HashMap<String, String> = serde_wasm_bindgen::from_value(files)

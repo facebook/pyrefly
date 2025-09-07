@@ -102,6 +102,7 @@ export default function Sandbox({
 
     // File management functions
     const createNewFile = useCallback((fileName: string, content: string = '') => {
+
         // Lets see if model already exists in Monaco
         const existingModel = monaco.editor.getModels().find(m => m.uri.path === `/${fileName}`);
 
@@ -371,12 +372,19 @@ export default function Sandbox({
             const restored = restoreProjectFromURL(createNewFile, setActiveFileName, setModels);
             
             if (!restored) {
-                createNewFile('sandbox.py', DEFAULT_SANDBOX_PROGRAM);
-                createNewFile('utils.py', DEFAULT_UTILS_PROGRAM);
-                setActiveFileName('sandbox.py');
+                if (isCodeSnippet) {
+                    // For code snippets, use the provided filename and code sample
+                    createNewFile(sampleFilename, codeSample);
+                    setActiveFileName(sampleFilename);
+                } else {
+                    // For sandbox mode, create the default files
+                    createNewFile('sandbox.py', DEFAULT_SANDBOX_PROGRAM);
+                    createNewFile('utils.py', DEFAULT_UTILS_PROGRAM);
+                    setActiveFileName('sandbox.py');
+                }
             }
         }
-    }, [createNewFile, models.size]);
+    }, [createNewFile, models.size, isCodeSnippet, sampleFilename, codeSample]);
 
     // Initialize Python version from URL on component mount
     useEffect(() => {
