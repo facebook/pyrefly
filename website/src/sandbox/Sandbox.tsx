@@ -956,17 +956,53 @@ function getShareUrlButton(): React.ReactElement {
     );
 }
 
-function getGitHubIssuesButton(): React.ReactElement {
+function getGitHubIssuesButton(
+    model: editor.ITextModel | null,
+    pythonVersion: string
+): React.ReactElement {
     return (
         <MonacoEditorButton
             id="github-issues-button"
             onClick={() => {
-                window.open(
-                    'https://github.com/facebook/pyrefly/issues/new/choose',
-                    '_blank',
-                    'noopener,noreferrer'
-                );
-                return Promise.resolve();
+                const sandboxURL = window.location.href;
+                const code = model ? model.getValue() : '';
+
+                const title = 'Bug Report';
+                // Prefill issue form fields by query param names matching field IDs in issue_template.yml
+                const description = [
+                    '```python',
+                    code,
+                    '```',
+                    '',
+                    `Python: ${pythonVersion}`,
+                    '',
+                    '<!-- Describe your bug -->',
+                ].join('\n');
+
+                const baseIssueURL =
+                    'https://github.com/facebook/pyrefly/issues/new' +
+                    `?template=issue_template.yml` +
+                    `&labels=bug` +
+                    `&title=${encodeURIComponent(title)}` +
+                    `&sandbox=${encodeURIComponent(sandboxURL)}`;
+
+                const issueURLWithDesc =
+                    baseIssueURL + `&description=${encodeURIComponent(description)}`;
+
+                // Guardrail: if URL too long, fall back to a concise placeholder description
+                const MAX_URL_LEN = 1800;
+                if (issueURLWithDesc.length <= MAX_URL_LEN) {
+                    window.open(issueURLWithDesc, '_blank', 'noopener,noreferrer');
+                    return Promise.resolve();
+                } else {
+                    const placeholderDescription =
+                        '<!-- Code is too long to include here. Please paste the smallest reproducible snippet (≤30 lines), include your Python version, and briefly describe expected vs actual behavior. -->';
+                    const fallbackURL =
+                        baseIssueURL +
+                        `&description=${encodeURIComponent(placeholderDescription)}`;
+                    window.open(fallbackURL, '_blank', 'noopener,noreferrer');
+                    return Promise.resolve();
+                }
             }}
             defaultLabel="⚠️ Report Issue"
             runningLabel="⚠️ Report Issue"
