@@ -446,3 +446,29 @@ class Derived(Base):
     method = staticmethod(a_method)
     "#,
 );
+
+testcase!(
+    test_override_self,
+    r#"
+from typing import Self
+class Base:
+    def covariant(self) -> Self:
+        return self
+
+    def contravariant(self, other: Self) -> None:
+        pass
+
+    def invariant(self) -> list[Self]:
+        return []
+
+class Derived(Base):
+    def covariant(self) -> Self:
+        return self
+
+    def contravariant(self, other: Self) -> None:
+        pass
+
+    def invariant(self) -> list[Self]:
+        return []
+    "#,
+);

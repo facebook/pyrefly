@@ -1809,8 +1809,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // keys but not regular fields.
                 continue;
             }
-            let want_attribute =
-                self.as_instance_attribute(&want_class_field, &Instance::of_class(parent));
+            // Substitute `Self` with derived class to support contravariant occurrences of `Self`
+            let want_attribute = self.as_instance_attribute(
+                &want_class_field,
+                &Instance::of_protocol(parent, self.instantiate(cls)),
+            );
             if got_attribute.is_none() {
                 // Optimisation: Only compute the `got_attr` once, and only if we actually need it.
                 got_attribute = Some(self.as_instance_attribute(
