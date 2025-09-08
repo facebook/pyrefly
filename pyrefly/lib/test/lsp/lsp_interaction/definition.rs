@@ -132,8 +132,12 @@ fn definition_in_builtins() {
     interaction.initialize(InitializeSettings {
         ..Default::default()
     });
-    interaction.server.did_open("imports_builtins.py");
-    interaction.server.definition("imports_builtins.py", 7, 7);
+    interaction
+        .server
+        .did_open("imports_builtins/imports_builtins.py");
+    interaction
+        .server
+        .definition("imports_builtins/imports_builtins.py", 7, 7);
     interaction.client.expect_response_with(
         |response| {
             // expect typing.py, NOT typing.pyi
@@ -159,8 +163,10 @@ fn definition_in_builtins_without_interpreter_goes_to_stub() {
         )),
         ..Default::default()
     });
-    interaction.server.did_open("imports_builtins.py");
-    interaction.server.definition("imports_builtins.py", 7, 7);
+    interaction.server.did_open("imports_builtins_no_config.py");
+    interaction
+        .server
+        .definition("imports_builtins_no_config.py", 7, 7);
     interaction.client.expect_definition_response_absolute(
         result_file.to_string_lossy().to_string(),
         425,

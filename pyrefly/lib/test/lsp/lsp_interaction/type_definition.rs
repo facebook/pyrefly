@@ -21,10 +21,10 @@ fn builtins_import_goes_to_typeshed() {
     interaction.initialize(InitializeSettings {
         ..Default::default()
     });
-    interaction.server.did_open("imports_builtins.py");
+    interaction.server.did_open("imports_builtins_no_config.py");
     interaction
         .server
-        .type_definition("imports_builtins.py", 7, 7);
+        .type_definition("imports_builtins_no_config.py", 7, 7);
     interaction.client.expect_definition_response_absolute(
         result_file.to_string_lossy().to_string(),
         425,

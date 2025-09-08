@@ -1,0 +1,3 @@
+skip-interpreter-query = true
+site-package-path = ["site-packages"]
+project-excludes = ["site-packages"]
