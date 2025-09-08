@@ -108,6 +108,51 @@ the non-stubs package's `.pyi` files, then falls back to a `.py` file. See
 [Absolute Imports](#absolute-imports) for details on when non-stubs packages
 are allowed to be used for types, and how you can override that behavior.
 
+## Editable Installs
+
+When using static analysis tools with an editable install, the editable install should be configured to use `.pth`
+files that contain file paths (`/project/src/module`) rather than executable lines (started with `import`) that
+install import hooks. See [setuptools doc](https://setuptools.pypa.io/en/latest/userguide/development_mode.html)
+and [PEP 660](https://peps.python.org/pep-0660/) for more information.
+
+Import hooks can provide an editable installation that offers a more accurate representation of the actual installation
+environment. However, since resolving module locations through an import hook
+**requires executing Python code at runtime**, they are incompatible with Pyrefly and other static analysis tools that
+operate without code execution. Consequently, when an editable install is configured to use import hooks, Pyrefly
+will be unable to locate and analyze the corresponding source files, resulting in incomplete type checking and
+code analysis.
+
+Setuptools build system uses import hooks by default for editable installations. To ensure compatibility between
+setuptools-based editable installs and Pyrefly, setuptools must be configured to use path-based `.pth` files instead.
+This configuration should be performed through the build frontend (such as `pip`) by specifying the appropriate
+options during installation or in the project's configuration files.
+
+### uv with setuptools
+
+When using [uv](https://docs.astral.sh/uv/) with setuptools, uv can be
+[configured](https://docs.astral.sh/uv/reference/settings/#config-settings) to avoid import hooks.
+
+NOTE: The `uv_build` backend always uses path-based `.pth` files.
+
+### pip with setuptools
+When using `pip` with setuptools-based projects, there are two ways to avoid import hooks:
+[compat mode](https://setuptools.pypa.io/en/latest/userguide/development_mode.html#legacy-behavior)
+and [strict mode](https://setuptools.pypa.io/en/latest/userguide/development_mode.html#strict-editable-installs).
+
+### Hatch / Hatchling
+
+[Hatchling](https://hatch.pypa.io/1.9/config/build/) uses path-based `.pth` files by default.
+It will only use import hooks if you set [`dev-mode-exact` to true](https://hatch.pypa.io/latest/config/build/#dev-mode).
+
+### PDM
+
+[PDM](https://backend.pdm-project.org/) uses path-based `.pth` files by default.
+It will only use import hooks if you set
+[`editable-backend` to "editables"](https://backend.pdm-project.org/build_config/#choose-the-editable-build-format).
+
+### Poetry / Poetry-core
+[Poetry-core](https://github.com/python-poetry/poetry-core) backend always uses path-based `.pth` files.
+
 ## Debugging Import Issues
 
 Pyrefly has a `dump-config` command that dumps the import-related config options it is using for
