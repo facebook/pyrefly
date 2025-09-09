@@ -903,8 +903,26 @@ Configure the severity for each kind of error that Pyrefly emits: `error`, `warn
   [`enable_error_code`](https://mypy.readthedocs.io/en/stable/config_file.html#confval-enable_error_code) and
   [`disable_error_code`](https://mypy.readthedocs.io/en/stable/config_file.html#confval-disable_error_code)
   in mypy
-- Notes: setting `<error-code> = true` is the same as having no error code configuration present, which means
-  the error will be shown. Setting `<error-code> = false` will disable the error for type checking.
+- Notes:
+    - Setting `<error-code> = true` is the same as having no error code configuration present, which means
+      the error will be shown. Setting `<error-code> = false` will disable the error for type checking.
+    - If you want to disable type errors in IDE mode, you can also set
+      [`disable-type-errors-in-ide`](#disable-type-errors-in-ide), which will
+      automatically disable *all* type errors and Pyrefly diagnostics in the IDE.
+
+### `disable-type-errors-in-ide`
+
+Disables type errors from showing up when running Pyrefly in an IDE. This is primarily
+used when Pyrefly is acting in a language-server-only mode, but some kind of
+manual configuration is necessary for it to work properly, or when you would
+*only* want to see type errors on CLI/CI runs.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: none
+- Notes: if you want to disable errors on CLI/CI runs as well, or if you're looking
+  to turn on/off specific errors, you may be looking for the [`errors`](#errors) config
+  option instead.
 
 ### `replace-imports-with-any`
 
