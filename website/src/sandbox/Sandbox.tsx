@@ -41,7 +41,7 @@ export interface PyreflyState {
     setActiveFile: (filename: string) => void;
     getErrors: () => ReadonlyArray<PyreflyErrorMessage>;
     autoComplete: (line: number, column: number) => any;
-    gotoDefinition: (line: number, column: number) => any;
+    gotoDefinition: (line: number, column: number) => DefinitionResult | null;
     queryType: (line: number, column: number) => any;
     inlayHint: () => any;
 }
@@ -61,6 +61,17 @@ export async function initializePyreflyWasm(): Promise<any> {
         console.error(e);
         throw e;
     }
+}
+
+// Types for Pyrefly responses
+export interface DefinitionResult {
+    range: {
+        startLineNumber: number;
+        startColumn: number;
+        endLineNumber: number;
+        endColumn: number;
+    };
+    filename: string;
 }
 
 // This will be used in the component
@@ -471,9 +482,16 @@ export default function Sandbox({
         setAutoCompleteFunction(model, (l: number, c: number) =>
             pyreService.autoComplete(l, c)
         );
-        setGetDefFunction(model, (l: number, c: number) =>
-            pyreService.gotoDefinition(l, c)
-        );
+        setGetDefFunction(model, (l: number, c: number) => {
+            const result = pyreService.gotoDefinition(l, c);
+
+            if (result && result.filename !== activeFileName) {
+                setTimeout(() => {
+                    switchToFile(result.filename);
+                }, 100);
+            }
+            return result;
+        });
         setHoverFunctionForMonaco(model, (l: number, c: number) =>
             pyreService.queryType(l, c)
         );

@@ -161,6 +161,12 @@ pub struct InlayHint {
     position: Position,
 }
 
+#[derive(Serialize)]
+pub struct DefinitionResult {
+    pub range: Range,
+    pub filename: String,
+}
+
 pub struct Playground {
     state: State,
     handles: HashMap<String, Handle>,
@@ -336,7 +342,7 @@ impl Playground {
         })
     }
 
-    pub fn goto_definition(&mut self, pos: Position) -> Option<Range> {
+    pub fn goto_definition(&mut self, pos: Position) -> Option<DefinitionResult> {
         let handle = self.handles.get(&self.active_filename)?;
         let transaction = self.state.transaction();
         let position = self.to_text_size(&transaction, pos)?;
@@ -345,7 +351,20 @@ impl Playground {
             .goto_definition(handle, position)
             .into_iter()
             .next()
-            .map(|r| Range::new(r.module.display_range(r.range)))
+            .map(|r| {
+                // Find the filename corresponding to the module of the definition
+                let target_filename = self
+                    .handles
+                    .iter()
+                    .find(|(_, h)| h.module() == r.module.name())
+                    .map(|(filename, _)| filename.clone())
+                    .unwrap_or_else(|| self.active_filename.clone()); // Fallback to current file
+
+                DefinitionResult {
+                    range: Range::new(r.module.display_range(r.range)),
+                    filename: target_filename,
+                }
+            })
     }
 
     pub fn autocomplete(&self, pos: Position) -> Vec<AutoCompletionItem> {
@@ -520,6 +539,40 @@ mod tests {
                 error.filename
             );
         }
+    }
+
+    #[test]
+    fn test_cross_file_goto_definition() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = HashMap::new();
+        files.insert(
+            "sandbox.py".to_owned(),
+            "from utils import format_number\n\ndef test(x: int):\n  return format_number(x)"
+                .to_owned(),
+        );
+        files.insert(
+            "utils.py".to_owned(),
+            "def format_number(x: int) -> str:\n    return f\"Number: {x}\"".to_owned(),
+        );
+
+        state.update_sandbox_files(files);
+        state.set_active_file("sandbox.py");
+
+        let result = state.goto_definition(Position::new(4, 10));
+
+        assert!(
+            result.is_some(),
+            "Should find definition for cross-file function call"
+        );
+        let def_result = result.unwrap();
+        assert_eq!(
+            def_result.filename, "utils.py",
+            "Definition should be in utils.py"
+        );
+        assert_eq!(
+            def_result.range.start_line, 1,
+            "Definition should be on line 1"
+        );
     }
 
     #[test]
