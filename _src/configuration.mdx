@@ -217,7 +217,9 @@ directory or use a monorepo setup with the import root outside of the directory
 your configuration is defined in.
 
 See [Search Path Heuristics](#search-path-heuristics) for more information on the
-search paths that are automatically added, and are affected by this flag.
+search paths that are automatically added, and are affected by this flag. For more
+information on import resultion in general see the
+[import resolution docs](import-resolution.mdx).
 
 - Type: bool
 - Default: false
@@ -236,12 +238,16 @@ set in your config.
 
 The two heuristics that are currently supported are:
 1. Adding your import root to the end of your search path. Your import root is
-   a `src/` directory in the same directory as a config file *or* the
-   config file's directory itself if no `src/` directory can be found.
+   a `src/` directory in the same directory as a config file, the parent directory
+   containing your config file if there's an `__init__.py` or `__init__.pyi` present
+   *or* the config file's directory itself if none of the previously mentioned directories
+   or files can be found.
    See [Configuration Finding](#configuration-finding) for more information on
    what we'll find as a config file.
 2. If no config can be found, each directory from the given file to `/` will be
    added as a fallback search path.
+
+See more on [how Pyrefly does import resolution](import-resolution.mdx).
 
 ### `site-package-path`
 
@@ -249,16 +255,20 @@ A file path describing a root from which imports should
 be found and imported from. This takes the lowest priority in import
 resolution, after [`search-path`](#search-path) and `typeshed`.
 
+See more on [how Pyrefly does import resolution](import-resolution.mdx).
+
 - Type: list of directories
 - Default: result from [Environment Autoconfiguration](#environment-autoconfiguration), or
   `[]` if the Python interpreter cannot be queried
 - Flag equivalent: `--site-package-path`
 - Equivalent configs: none
-
-NOTE: Ideally, this should not be set manually, unless you're using a venv, running one-off tests,
-testing specific behavior, or having trouble with [Environment Autoconfiguration](#environment-autoconfiguration).
-Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
-to be reused between different systems and platforms.
+- Notes:
+  - Ideally, this should not be set manually, unless you're using a venv, running one-off tests,
+    testing specific behavior, or having trouble with [Environment Autoconfiguration](#environment-autoconfiguration).
+    Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
+    to be reused between different systems and platforms.
+  - If you're running into problems with editiable installations in your project,
+    please read up on [editable installs with static analysis tools](import-resolution.mdx#editable-installs).
 
 ### `python-platform`
 
@@ -604,7 +614,8 @@ We look for an interpreter with the following logic:
 4. Find a `venv` at the root of the project by searching for something that looks like a
    Python interpreter (matches `python(\d(\.\d+)?)?(.exe)?` regex), and looking
    for a `pyvenv.cfg` file in known locations. If we can't determine the root of your
-   project with a config file or other well-known root marker file (e.g. `setup.py`, `pyrightconfig.json`, `mypy.ini`), this step is skipped.
+   project with a config file or other well-known root marker file (e.g. `setup.py`,
+   `pyrightconfig.json`, `mypy.ini`), this step is skipped.
 4. Query `$(which python3)` and `$(which python)` (platform independent) to use
    a system-installed interpreter.
 5. Fall back to Pyrefly's default values for any unspecified config options.

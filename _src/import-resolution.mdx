@@ -7,13 +7,11 @@ description: How Pyrefly finds and resolves imports
 
 # Import Resolution
 
-This doc describes how imports in a given file are found and their bindings are
-resolved, including files that are being type checked.
-
-NOTE: This document helps describe the internal behavior of Pyrefly and how we attempt to resolve imports. You should not need to know how this works to use Pyrefly but it may assist in debugging issues with Pyrefly not finding your imports. If you encounter a bug, please leave an issue for us on GitHub.
+This doc describes how imports in a given file are found within Pyrefly while performing
+a type check or resolving IDE language support operations.
 
 NOTE: see the [Configuration documentation](./configuration.mdx) for more info on
-the config items referenced below.
+the config options referenced below.
 
 ## Relative Imports
 
@@ -24,67 +22,90 @@ directory, and more dots (e.g. `..other.file`) will continue to walk upward.
 
 ## Absolute Imports
 
-For absolute imports, Pyrefly uses the following import strategy:
+For absolute imports, Pyrefly searches for a match in each of the following groups. The
+matching process is explained in the next paragraph.
 
-1. Try to import from each entry in [`search_path`](./configuration.mdx#search_path) in the order they appear
-   using the module finding strategy.
+1. Try to import from the search path. See the [search path section](#search-path) for more information.
 2. Try to import from `typeshed`.
-3. Try to import implicit site packages. See the [implicit site packages section](#implicit-search-path)
-4. Try to find a stub package corresponding to the import we're trying to resolve in
-   [`site_package_path`](./configuration.mdx#site_package_path).
-   Entries earlier in the `site_package_path` list will be selected before those appearing later in the list.
-4. Try to find a non-stub package corresponding to the import we're trying to resolve in `site_package_path`.
-   Entries earlier in the `site_package_path` list will be selected before those appearing later in the list.
+3. Try to import from the fallback search path. See the [fallback search path section](#fallback-search-path) for
+more information on the contents of the search path.
+4. Try to import from the site package path. See the
+[site package path section](#site-package-path) for more information on the contents
+of the site package path.
 5. Return an import error.
 
-See [Site Package Path Typing Rules](#site-package-path-typing-rules) for more information about which
-modules are valid imports from [`site_package_path`](./configuration.mdx#site_package_path), and
-how to override that behavior.
+When searching for a match in one of the above groups, Pyrefly performs the following process
+over two passes, one looking for stub *packages*, and the other looking for source *packages*. See
+[Stub Files vs Source Files](#stub-files-vs-source-files) for more information.
 
-### Implicit Search Path
+1. Attempt to match each part of the name to directories in the group, selecting the first
+match that is found.
+2. If the result is a `.pyi` file or regular package (directory with an
+`__init__.py`/`__init__.pyi` file), return the result. Otherwise, keep searching and
+attempt to find a `.pyi` file or regular package.
 
-Pyrefly will use the following heuristics to guess
-the root of your project.
+### Search Path
 
-1. If we can find a Pyrefly config file using
-   [configuration finding logic](./configuration.mdx#configuration-finding), we will automatically
-   use that. When a configuration
-   is found, we will add either a subdirectory named `src/`, or the found root as a
-   [`search_path`](configuration.mdx#search_path) entry.
-2. If we're looking for a specific import and can match components of its specific name
-   with directories/files on the filesystem, we will use the root of the import as the
-   project root. Example: when importing `from a.b.c import q`, if our project structure
-   looks like `/x/y/z/a/b/c`, we can walk up the components of `a.b.c` to find a root at
-   `/x/y/z`.
-3. If the file we're importing is a non-namespace import, and we can't get it's parent
-   directory, return a basic-default config with no heuristics. For example:
-   ```
-   # Assume we have a file called mymodule.py in the same directory
-   import mymodule
-   ```
-4. Finally, with either the non-namespace import's parent directory or namespace import's
-   immediate directory, walk up the filesystem and add each directory we find until
-   root to the `fallback_search_path`.
+The search path ([see `search-path` in configuration docs](configuration.mdx#search-path))
+consists of several entries representing project files.
 
-### Site Package Path Typing Rules
+1. Search path from CLI args.
+2. Search path from config files.
+3. If [`disable-search-path-heuristics`](configuration.mdx#disable-search-path-heuristics)
+   is not set, Pyrefly appends an import root directory to the search path.
 
-When enabled with [`use_untyped_imports: false`](configuration.mdx#use_untyped_imports), we respect
-typing rules as defined by the typing spec for
-[stubs packages](https://typing.python.org/en/latest/spec/distributing.html#stub-only-packages),
-[partial stubs packages](https://typing.python.org/en/latest/spec/distributing.html#partial-stub-packages),
-and [py.typed](https://typing.python.org/en/latest/spec/distributing.html#packaging-type-information) files.
-That means:
-- if we can find any `-stubs` package, we do not fall back to non-stubs packages unless any of them contain a
-  `py.typed` file in their top-level containing the content `partial\n`.
-- if we can't find any `-stubs` packages, only accept a package's types if it contains a `py.typed` file. Here,
-  we only check for the existence of the file, not for any contents.
+The import root is:
+1. `src/` if there's a `src/` directory in the same directory as the config file.
+2. The parent directory (`..`) if there's an `__init__.py` or `__init__.pyi` in the same
+   directory as the config file.
+3. Otherwise, the directory containing the config file.
 
-You can control the above behavior with the following two configs:
-- [`use_untyped_imports`](./configuration.mdx#use_untyped_imports): don't worry about looking for any `py.typed`
-  file. Check for `-stubs` first and fall back to non-stubs, regardless of the presence of a `py.typed` with
-  `partial\n` or if the non-stubs packages contain a `py.typed`.
-- [`ignore_missing_source`](./configuration.mdx#ignore_missing_source): don't try to check for a backing non-stubs
-  package when we find a `-stubs` package. Immediately return the `-stubs` package when found.
+### Fallback Search Path
+
+The fallback search path is a heuristic automatically constructed by Pyrefly to attempt to
+find project files when there's no config file marking the project root, and Pyrefly
+is unable to determine from other heuristics where an import root might be.
+It is only constructed when
+[`disable-search-path-heuristics`](configuration.mdx#disable-search-path-heuristics)
+is not set.
+
+The fallback search path consists of each directory from the directory containing
+a given file to the root of your filesystem. For example, if you have the following setup:
+
+```
+/
+|- projects/
+   |- project_a/
+   |  |- b/
+   |  |  |- c.py
+   |  |- d.py
+   |- project_e/
+      |- f.py
+```
+
+`c.py`'s fallback search path would be `['/projects/project_a/b', '/projects/project_a',
+'/projects', '/']`
+- `d.py` could be importable with the paths `d`, `project_a.d`, or `projects.project_a.d`.
+- `f.py` could be importable with the paths `project_e.f` or `projects.project_e.f`.
+
+`e.py`'s fallback search path would be `['/projects/project_a', '/projects', '/']`
+- `c.py` could be importable with the paths `b.c`, `project_a.b.c`, or `projects.project_a.b.c`
+- `f.py` could be importable with the paths `project_e.f` or `projects.project_e.f`
+
+`f.py`'s fallback search path would be `['/projects/project_e', '/projects', '/']`
+- `c.py` could be importable with the paths `project_a.b.c` or `projects.project_a.b.c`
+- `d.py` could be importable with the paths `project_a.d` or `projects.project_a.d`
+
+### Site Package Path
+
+The site package path
+([see `site-package-path` in configuration docs](configuration.mdx#site-package-path))
+consists of several entries representing third-party packages.
+
+1. Site package path from a config file (if no CLI override is present) or CLI args.
+2. A site package path queried from a Python interpreter, if one could be found.
+   See [Environment Autoconfiguration](configuration.mdx#environment-autoconfiguration)
+   for more information on finding interpreters.
 
 ## Stub Files vs Source Files
 
@@ -107,6 +128,51 @@ imports by first searching for a relevant `-stubs` package, then by looking at
 the non-stubs package's `.pyi` files, then falls back to a `.py` file. See
 [Absolute Imports](#absolute-imports) for details on when non-stubs packages
 are allowed to be used for types, and how you can override that behavior.
+
+## Editable Installs
+
+When using static analysis tools with an editable install, the editable install should be configured to use `.pth`
+files that contain file paths (`/project/src/module`) rather than executable lines (started with `import`) that
+install import hooks. See [setuptools doc](https://setuptools.pypa.io/en/latest/userguide/development_mode.html)
+and [PEP 660](https://peps.python.org/pep-0660/) for more information.
+
+Import hooks can provide an editable installation that offers a more accurate representation of the actual installation
+environment. However, since resolving module locations through an import hook
+**requires executing Python code at runtime**, they are incompatible with Pyrefly and other static analysis tools that
+operate without code execution. Consequently, when an editable install is configured to use import hooks, Pyrefly
+will be unable to automatically locate and analyze the corresponding source files, resulting in incomplete type checking and
+code analysis.
+
+Setuptools build system uses import hooks by default for editable installations. To ensure compatibility between
+setuptools-based editable installs and Pyrefly, setuptools must be configured to use path-based `.pth` files instead.
+This configuration should be performed through the build frontend (such as `pip`) by specifying the appropriate
+options during installation or in the project's configuration files.
+
+### uv with setuptools
+
+When using [uv](https://docs.astral.sh/uv/) with setuptools, uv can be
+[configured](https://docs.astral.sh/uv/reference/settings/#config-settings) to avoid import hooks.
+
+NOTE: The `uv_build` backend always uses path-based `.pth` files.
+
+### pip with setuptools
+When using `pip` with setuptools-based projects, there are two ways to avoid import hooks:
+[compat mode](https://setuptools.pypa.io/en/latest/userguide/development_mode.html#legacy-behavior)
+and [strict mode](https://setuptools.pypa.io/en/latest/userguide/development_mode.html#strict-editable-installs).
+
+### Hatch / Hatchling
+
+[Hatchling](https://hatch.pypa.io/1.9/config/build/) uses path-based `.pth` files by default.
+It will only use import hooks if you set [`dev-mode-exact` to true](https://hatch.pypa.io/latest/config/build/#dev-mode).
+
+### PDM
+
+[PDM](https://backend.pdm-project.org/) uses path-based `.pth` files by default.
+It will only use import hooks if you set
+[`editable-backend` to "editables"](https://backend.pdm-project.org/build_config/#choose-the-editable-build-format).
+
+### Poetry / Poetry-core
+[Poetry-core](https://github.com/python-poetry/poetry-core) backend always uses path-based `.pth` files.
 
 ## Debugging Import Issues
 

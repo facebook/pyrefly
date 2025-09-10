@@ -30,8 +30,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.409aac25.css">
-<script src="/assets/js/runtime~main.ec300db9.js" defer="defer"></script>
-<script src="/assets/js/main.b0eb0953.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.72e1d83b.js" defer="defer"></script>
+<script src="/assets/js/main.66fccb7f.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -226,7 +226,9 @@ paths for your project, for example, if you have multiple projects in the same
 directory or use a monorepo setup with the import root outside of the directory
 your configuration is defined in.</p>
 <p>See <a href="#search-path-heuristics">Search Path Heuristics</a> for more information on the
-search paths that are automatically added, and are affected by this flag.</p>
+search paths that are automatically added, and are affected by this flag. For more
+information on import resultion in general see the
+<a href="/en/docs/import-resolution/">import resolution docs</a>.</p>
 <ul>
 <li>Type: bool</li>
 <li>Default: false</li>
@@ -247,28 +249,38 @@ set in your config.</p>
 <p>The two heuristics that are currently supported are:</p>
 <ol>
 <li>Adding your import root to the end of your search path. Your import root is
-a <code>src/</code> directory in the same directory as a config file <em>or</em> the
-config file&#x27;s directory itself if no <code>src/</code> directory can be found.
+a <code>src/</code> directory in the same directory as a config file, the parent directory
+containing your config file if there&#x27;s an <code>__init__.py</code> or <code>__init__.pyi</code> present
+<em>or</em> the config file&#x27;s directory itself if none of the previously mentioned directories
+or files can be found.
 See <a href="#configuration-finding">Configuration Finding</a> for more information on
 what we&#x27;ll find as a config file.</li>
 <li>If no config can be found, each directory from the given file to <code>/</code> will be
 added as a fallback search path.</li>
 </ol>
+<p>See more on <a href="/en/docs/import-resolution/">how Pyrefly does import resolution</a>.</p>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="site-package-path"><code>site-package-path</code><a href="#site-package-path" class="hash-link" aria-label="Direct link to site-package-path" title="Direct link to site-package-path">​</a></h3>
 <p>A file path describing a root from which imports should
 be found and imported from. This takes the lowest priority in import
 resolution, after <a href="#search-path"><code>search-path</code></a> and <code>typeshed</code>.</p>
+<p>See more on <a href="/en/docs/import-resolution/">how Pyrefly does import resolution</a>.</p>
 <ul>
 <li>Type: list of directories</li>
 <li>Default: result from <a href="#environment-autoconfiguration">Environment Autoconfiguration</a>, or
 <code>[]</code> if the Python interpreter cannot be queried</li>
 <li>Flag equivalent: <code>--site-package-path</code></li>
 <li>Equivalent configs: none</li>
-</ul>
-<p>NOTE: Ideally, this should not be set manually, unless you&#x27;re using a venv, running one-off tests,
+<li>Notes:<!-- -->
+<ul>
+<li>Ideally, this should not be set manually, unless you&#x27;re using a venv, running one-off tests,
 testing specific behavior, or having trouble with <a href="#environment-autoconfiguration">Environment Autoconfiguration</a>.
 Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
-to be reused between different systems and platforms.</p>
+to be reused between different systems and platforms.</li>
+<li>If you&#x27;re running into problems with editiable installations in your project,
+please read up on <a href="/en/docs/import-resolution/#editable-installs">editable installs with static analysis tools</a>.</li>
+</ul>
+</li>
+</ul>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="python-platform"><code>python-platform</code><a href="#python-platform" class="hash-link" aria-label="Direct link to python-platform" title="Direct link to python-platform">​</a></h3>
 <p>The value used with conditions based on type checking
 against
@@ -572,7 +584,8 @@ Both cannot be set in a config at the same time.</li>
 <li>Find a <code>venv</code> at the root of the project by searching for something that looks like a
 Python interpreter (matches <code>python(\d(\.\d+)?)?(.exe)?</code> regex), and looking
 for a <code>pyvenv.cfg</code> file in known locations. If we can&#x27;t determine the root of your
-project with a config file or other well-known root marker file (e.g. <code>setup.py</code>, <code>pyrightconfig.json</code>, <code>mypy.ini</code>), this step is skipped.</li>
+project with a config file or other well-known root marker file (e.g. <code>setup.py</code>,
+<code>pyrightconfig.json</code>, <code>mypy.ini</code>), this step is skipped.</li>
 <li>Query <code>$(which python3)</code> and <code>$(which python)</code> (platform independent) to use
 a system-installed interpreter.</li>
 <li>Fall back to Pyrefly&#x27;s default values for any unspecified config options.</li>
