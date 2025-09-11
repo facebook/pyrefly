@@ -20,5 +20,8 @@ static_interner = "0.1.1"
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 vec1 = { version = "1", features = ["serde"] }
 
+[dev-dependencies]
+pretty_assertions = { version = "1.2", features = ["alloc"], default-features = false }
+
 [lints]
 rust = { unexpected_cfgs = { check-cfg = ["cfg(fbcode_build)"], level = "warn" } }

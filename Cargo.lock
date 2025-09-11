@@ -2122,6 +2122,7 @@ version = "0.32.0"
 dependencies = [
  "anyhow",
  "dupe",
+ "pretty_assertions",
  "pyrefly_python",
  "pyrefly_util",
  "serde",
