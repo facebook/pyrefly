@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::ffi::OsStr;
 use std::fmt;
@@ -62,6 +63,12 @@ impl Ord for ModulePath {
         } else {
             self.0.cmp(&other.0)
         }
+    }
+}
+
+impl Borrow<Path> for ModulePath {
+    fn borrow(&self) -> &Path {
+        self.as_path()
     }
 }
 

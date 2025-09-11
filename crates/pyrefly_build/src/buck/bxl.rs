@@ -28,23 +28,10 @@ enum Include {
     Path(PathBuf),
 }
 
-impl Include {
-    #[expect(unused)]
-    fn to_targets(&self, db: &SmallMap<Target, PythonLibraryManifest>) -> Vec<Target> {
-        match &self {
-            Self::Target(target) => vec![target.dupe()],
-            Self::Path(path) => db
-                .iter()
-                .filter(|(_, manifest)| manifest.srcs.values().flatten().any(|p| p == path))
-                .map(|(t, _)| t.dupe())
-                .collect(),
-        }
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct BuckSourceDatabase {
     db: SmallMap<Target, PythonLibraryManifest>,
+    path_lookup: SmallMap<PathBuf, Target>,
     includes: SmallSet<Include>,
 }
 
@@ -52,18 +39,71 @@ impl BuckSourceDatabase {
     pub fn new(cwd: PathBuf, files: &SmallSet<PathBuf>) -> anyhow::Result<Self> {
         let raw_db = query_source_db(files.iter(), &cwd)?;
         let db = raw_db.produce_map();
+        let mut path_lookup: SmallMap<PathBuf, Target> = SmallMap::new();
+        for (target, manifest) in db.iter() {
+            for source in manifest.srcs.values().flatten() {
+                if let Some(old_target) = path_lookup.get_mut(&**source) {
+                    let new_target = (&*old_target).min(target);
+                    *old_target = new_target.dupe();
+                } else {
+                    path_lookup.insert(source.to_path_buf(), target.dupe());
+                }
+            }
+        }
         let includes = files
             .into_iter()
             .map(|f| Include::Path(f.to_path_buf()))
             .collect();
-        Ok(BuckSourceDatabase { db, includes })
+        Ok(BuckSourceDatabase {
+            db,
+            path_lookup,
+            includes,
+        })
+    }
+
+    fn handles_for_include(&self, include: &Include) -> Vec<Handle> {
+        match include {
+            Include::Target(target) => {
+                let manifest = self.db.get(target).unwrap();
+                manifest
+                    .srcs
+                    .iter()
+                    .flat_map(|(name, paths)| {
+                        paths.iter().map(|p| {
+                            Handle::new(
+                                name.dupe(),
+                                ModulePath::filesystem(p.to_path_buf()),
+                                manifest.sys_info.dupe(),
+                            )
+                        })
+                    })
+                    .collect()
+            }
+            Include::Path(path) => {
+                let target = self.path_lookup.get(path).unwrap();
+                let manifest = self.db.get(target).unwrap();
+                let module_name = manifest
+                    .srcs
+                    .iter()
+                    .find(|(_, paths)| paths.contains(path))
+                    .unwrap()
+                    .0;
+                vec![Handle::new(
+                    module_name.dupe(),
+                    ModulePath::filesystem(path.to_path_buf()),
+                    manifest.sys_info.dupe(),
+                )]
+            }
+        }
     }
 }
 
 impl SourceDatabase for BuckSourceDatabase {
-    fn modules_to_check(&self) -> Vec<crate::handle::Handle> {
-        // TODO(connernilsen): implement modules_to_check
-        vec![]
+    fn modules_to_check(&self) -> Vec<Handle> {
+        self.includes
+            .iter()
+            .flat_map(|i| self.handles_for_include(i))
+            .collect()
     }
 
     fn lookup(&self, _module: &ModuleName, _origin: Option<&Path>) -> Option<ModulePath> {
