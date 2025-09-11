@@ -118,12 +118,22 @@ impl SourceDatabase for BuckSourceDatabase {
         None
     }
 
-    fn handle_from_module_path(&self, _module_path: ModulePath) -> Handle {
-        // TODO(connernilsen): implement handles_from_module_path
+    fn handle_from_module_path(&self, module_path: ModulePath) -> Handle {
+        let Some(target) = self.path_lookup.get(module_path.as_path()) else {
+            return Handle::new(ModuleName::unknown(), module_path, SysInfo::default());
+        };
+
+        let manifest = self.db.get(target).unwrap();
+        let module_name = manifest
+            .srcs
+            .iter()
+            .find(|(_, paths)| paths.iter().any(|p| p == module_path.as_path()))
+            .unwrap()
+            .0;
         Handle::new(
-            ModuleName::unknown(),
-            ModulePath::memory(PathBuf::new()),
-            SysInfo::default(),
+            module_name.dupe(),
+            module_path.dupe(),
+            manifest.sys_info.dupe(),
         )
     }
 }
