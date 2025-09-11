@@ -41,11 +41,8 @@ fn dump_config(
     let (files_to_check, config_finder) = files.resolve(&config_override)?;
 
     let mut configs_to_files: SmallMap<ArcId<ConfigFile>, Vec<ModulePath>> = SmallMap::new();
-    let handles = Handles::new(
-        config_finder.checkpoint(files_to_check.files())?,
-        &config_finder,
-    );
-    let mut handles = handles.all();
+    let handles = Handles::new(config_finder.checkpoint(files_to_check.files())?);
+    let mut handles = handles.all(&config_finder);
     handles.sort_by(|a, b| a.path().cmp(b.path()));
     for handle in handles {
         let path = handle.path();

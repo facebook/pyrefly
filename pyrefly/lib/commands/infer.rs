@@ -198,7 +198,7 @@ impl InferArgs {
         let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
         let state = State::new(config_finder);
         let holder = Forgetter::new(state, false);
-        let handles = Handles::new(expanded_file_list, holder.as_ref().config_finder());
+        let handles = Handles::new(expanded_file_list);
         let mut forgetter = Forgetter::new(
             holder.as_ref().new_transaction(Require::Everything, None),
             true,
@@ -207,7 +207,7 @@ impl InferArgs {
         let mut cancellable_transaction = holder.as_ref().cancellable_transaction();
         let transaction = forgetter.as_mut();
 
-        for handle in handles.all() {
+        for handle in handles.all(holder.as_ref().config_finder()) {
             transaction.run(&[handle.dupe()], Require::Everything);
             let stdlib = transaction.get_stdlib(&handle);
             let inferred_types: Option<Vec<(ruff_text_size::TextSize, Type, AnnotationKind)>> =

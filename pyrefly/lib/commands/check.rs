@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Display;
@@ -24,12 +23,10 @@ use anstream::stdout;
 use anyhow::Context as _;
 use clap::Parser;
 use clap::ValueEnum;
-use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::display;
 use pyrefly_util::display::count;
 use pyrefly_util::display::number_thousands;
@@ -39,6 +36,8 @@ use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
 use pyrefly_util::memory::MemoryUsageTrace;
 use pyrefly_util::watcher::Watcher;
+use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::info;
 
@@ -371,46 +370,36 @@ impl OutputFormat {
 pub struct Handles {
     /// A mapping from a file to all other information needed to create a `Handle`.
     /// The value type is basically everything else in `Handle` except for the file path.
-    path_data: HashMap<PathBuf, (ModuleName, SysInfo)>,
+    path_data: HashSet<PathBuf>,
 }
 
 impl Handles {
-    pub fn new(files: Vec<PathBuf>, config_finder: &ConfigFinder) -> Self {
+    pub fn new(files: Vec<PathBuf>) -> Self {
         let mut handles = Self {
-            path_data: HashMap::new(),
+            path_data: HashSet::new(),
         };
         for file in files {
-            handles.register_file(file, config_finder);
+            handles.path_data.insert(file);
         }
         handles
     }
 
-    fn register_file(
-        &mut self,
-        path: PathBuf,
-        config_finder: &ConfigFinder,
-    ) -> &(ModuleName, SysInfo) {
-        let module_path = ModulePath::filesystem(path.clone());
-        let unknown = ModuleName::unknown();
-        let config = config_finder.python_file(unknown, &module_path);
-
-        let search_path = config.search_path();
-        let module_name = ModuleName::from_path(&path, search_path).unwrap_or(unknown);
-
-        self.path_data
-            .entry(path)
-            .or_insert((module_name, config.get_sys_info()))
-    }
-
-    pub fn all(&self) -> Vec<Handle> {
-        self.path_data
+    pub fn all(&self, config_finder: &ConfigFinder) -> Vec<Handle> {
+        let mut configs = SmallMap::new();
+        for path in &self.path_data {
+            let module_path = ModulePath::filesystem(path.to_path_buf());
+            let unknown = ModuleName::unknown();
+            configs
+                .entry(config_finder.python_file(unknown, &module_path))
+                .or_insert_with(SmallSet::new)
+                .insert(path);
+        }
+        configs
             .iter()
-            .map(|(path, (module_name, runtime_metadata))| {
-                Handle::new(
-                    module_name.dupe(),
-                    ModulePath::filesystem(path.to_path_buf()),
-                    runtime_metadata.dupe(),
-                )
+            .flat_map(|(c, files)| {
+                files
+                    .iter()
+                    .map(|p| c.handle_from_module_path(ModulePath::filesystem(p.to_path_buf())))
             })
             .collect()
     }
@@ -419,10 +408,9 @@ impl Handles {
         &mut self,
         created_files: impl Iterator<Item = &'a PathBuf>,
         removed_files: impl Iterator<Item = &'a PathBuf>,
-        config_finder: &ConfigFinder,
     ) {
         for file in created_files {
-            self.register_file(file.to_path_buf(), config_finder);
+            self.path_data.insert(file.to_path_buf());
         }
         for file in removed_files {
             self.path_data.remove(file);
@@ -533,7 +521,7 @@ impl CheckArgs {
         }
 
         let holder = Forgetter::new(State::new(config_finder), true);
-        let handles = Handles::new(expanded_file_list, holder.as_ref().config_finder());
+        let handles = Handles::new(expanded_file_list);
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
             holder
@@ -544,7 +532,7 @@ impl CheckArgs {
         self.run_inner(
             timings,
             transaction.as_mut(),
-            &handles.all(),
+            &handles.all(holder.as_ref().config_finder()),
             require_levels.specified,
         )
     }
@@ -601,7 +589,7 @@ impl CheckArgs {
         // - Config search is stable across incremental runs.
         let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
         let require_levels = self.get_required_levels();
-        let mut handles = Handles::new(expanded_file_list, &config_finder);
+        let mut handles = Handles::new(expanded_file_list);
         let state = State::new(config_finder);
         let mut transaction = state.new_committable_transaction(require_levels.default, None);
         loop {
@@ -609,7 +597,7 @@ impl CheckArgs {
             let res = self.run_inner(
                 timings,
                 transaction.as_mut(),
-                &handles.all(),
+                &handles.all(state.config_finder()),
                 require_levels.specified,
             );
             state.commit_transaction(transaction);
@@ -628,7 +616,6 @@ impl CheckArgs {
             handles.update(
                 events.created.iter().filter(|p| files_to_check.covers(p)),
                 events.removed.iter().filter(|p| files_to_check.covers(p)),
-                state.config_finder(),
             );
         }
     }
