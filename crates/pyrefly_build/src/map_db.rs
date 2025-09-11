@@ -64,4 +64,15 @@ impl SourceDatabase for MapDatabase {
     fn lookup(&self, module: &ModuleName, _: Option<&Path>) -> Option<ModulePath> {
         self.0.get(module).map(|paths| paths.last().dupe())
     }
+
+    fn handle_from_module_path(&self, module_path: ModulePath) -> Handle {
+        match self
+            .0
+            .iter()
+            .find(|(_, paths)| paths.iter().any(|p| p == &module_path))
+        {
+            Some((name, _)) => Handle::new(name.dupe(), module_path, self.1.dupe()),
+            None => Handle::new(ModuleName::unknown(), module_path, self.1.dupe()),
+        }
+    }
 }

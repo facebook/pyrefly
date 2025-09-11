@@ -60,4 +60,8 @@ impl Target {
 pub trait SourceDatabase: Send + Sync + fmt::Debug {
     fn modules_to_check(&self) -> Vec<Handle>;
     fn lookup(&self, module: &ModuleName, origin: Option<&Path>) -> Option<ModulePath>;
+    /// From a given [`ModulePath`], return the [`Handle`] that corresponds to it.
+    /// When no `ModulePath` can be found that corresponds, return a handle
+    /// with [`ModuleName::unknown()`], and [`pyrefly_python::sys_info::SysInfo::default()`].
+    fn handle_from_module_path(&self, module_path: ModulePath) -> Handle;
 }

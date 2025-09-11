@@ -65,6 +65,17 @@ impl SourceDatabase for PlaygroundSourceDatabase {
     fn lookup(&self, module_name: &ModuleName, _: Option<&Path>) -> Option<ModulePath> {
         self.module_mappings.get(module_name).cloned()
     }
+
+    fn handle_from_module_path(&self, path: ModulePath) -> Handle {
+        // It should be fine to just iterate through this naively, since there generally
+        // shouldn't be too many files open in the web editor.
+        let name = self
+            .module_mappings
+            .iter()
+            .find(|(_, p)| *p == &path)
+            .map_or_else(ModuleName::unknown, |(n, _)| n.dupe());
+        Handle::new(name, path, self.sys_info.dupe())
+    }
 }
 
 #[derive(Serialize)]

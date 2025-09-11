@@ -14,9 +14,12 @@ use std::path::PathBuf;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use dupe::Dupe as _;
 use itertools::Itertools;
+use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
@@ -557,6 +560,21 @@ impl ConfigFile {
             }
             None
         })
+    }
+
+    pub fn handle_from_module_path(&self, module_path: ModulePath) -> Handle {
+        match &self
+            .source_db
+            .as_ref()
+            .map(|db| db.handle_from_module_path(module_path.dupe()))
+        {
+            Some(handle) => handle.dupe(),
+            None => {
+                let name = ModuleName::from_path(module_path.as_path(), self.search_path())
+                    .unwrap_or_else(ModuleName::unknown);
+                Handle::new(name, module_path, self.get_sys_info())
+            }
+        }
     }
 
     /// Configures values that must be updated *after* overwriting with CLI flag values,

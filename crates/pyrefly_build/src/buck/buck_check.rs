@@ -144,6 +144,19 @@ impl SourceDatabase for BuckCheckSourceDatabase {
             .or_else(|| self.dependencies.get(module))
             .map(|p| ModulePath::filesystem(p.first().clone()))
     }
+
+    fn handle_from_module_path(&self, module_path: ModulePath) -> Handle {
+        let find = |i: &SmallMap<ModuleName, Vec1<PathBuf>>| {
+            i.iter()
+                .find(|s| s.1.iter().any(|p| p == module_path.as_path()))
+                .map(|s| s.0.dupe())
+        };
+        if let Some(result) = find(&self.sources).or_else(|| find(&self.dependencies)) {
+            Handle::new(result, module_path, self.sys_info.dupe())
+        } else {
+            Handle::new(ModuleName::unknown(), module_path, self.sys_info.dupe())
+        }
+    }
 }
 
 impl BuckCheckSourceDatabase {
