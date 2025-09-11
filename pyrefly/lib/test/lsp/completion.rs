@@ -1497,7 +1497,6 @@ Completion Results:
     );
 }
 
-// todo(kylei): extra completion
 #[test]
 fn kwarg_completion_in_str() {
     let code = r#"
@@ -1520,7 +1519,6 @@ foo(x="x")
 3 | foo(x="x")
            ^
 Completion Results:
-- (Variable) x=: str
 "#
         .trim(),
         report.trim(),

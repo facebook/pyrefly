@@ -487,15 +487,6 @@ impl<'a> Transaction<'a> {
         ans.get_chosen_overload_trace(range)
     }
 
-    fn empty_line_at(&self, handle: &Handle, position: TextSize) -> bool {
-        if let Some(mod_module) = self.get_ast(handle)
-            && Ast::locate_node(&mod_module, position).is_empty()
-        {
-            return true;
-        }
-        false
-    }
-
     fn identifier_at(&self, handle: &Handle, position: TextSize) -> Option<IdentifierWithContext> {
         let mod_module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&mod_module, position);
@@ -2052,11 +2043,21 @@ impl<'a> Transaction<'a> {
                 self.add_builtins_autoimport_completions(handle, Some(&identifier), &mut result);
             }
             None => {
-                self.add_kwargs_completions(handle, position, &mut result);
-                if self.empty_line_at(handle, position) {
-                    self.add_keyword_completions(handle, &mut result);
-                    self.add_local_variable_completions(handle, None, position, &mut result);
-                    self.add_builtins_autoimport_completions(handle, None, &mut result);
+                // todo(kylei): optimization, avoid duplicate ast walks
+                if let Some(mod_module) = self.get_ast(handle) {
+                    let nodes = Ast::locate_node(&mod_module, position);
+                    if nodes.is_empty() {
+                        self.add_keyword_completions(handle, &mut result);
+                        self.add_local_variable_completions(handle, None, position, &mut result);
+                        self.add_builtins_autoimport_completions(handle, None, &mut result);
+                    }
+                    // in foo(x=<>, y=2<>), the first containing node is AnyNodeRef::Arguments(_)
+                    // in foo(<>), the first containing node is AnyNodeRef::ExprCall
+                    if let Some(first) = nodes.first()
+                        && matches!(first, AnyNodeRef::ExprCall(_) | AnyNodeRef::Arguments(_))
+                    {
+                        self.add_kwargs_completions(handle, position, &mut result);
+                    }
                 }
             }
         }
