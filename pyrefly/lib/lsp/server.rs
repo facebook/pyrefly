@@ -162,6 +162,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
@@ -923,6 +924,29 @@ impl Server {
         open_files: &RwLock<HashMap<PathBuf, Arc<String>>>,
         transaction: &mut Transaction<'_>,
     ) -> Vec<Handle> {
+        open_files
+            .read()
+            .keys()
+            .map(|p| {
+                (
+                    p,
+                    state.config_finder().python_file(
+                        ModuleName::unknown(),
+                        &ModulePath::filesystem(p.to_path_buf()),
+                    ),
+                )
+            })
+            .fold(
+                SmallMap::new(),
+                |mut acc: SmallMap<_, SmallSet<PathBuf>>, (path, config)| {
+                    acc.entry(config).or_default().insert(path.to_path_buf());
+                    acc
+                },
+            )
+            .into_iter()
+            .for_each(|(config, paths)| {
+                let _ = config.setup_sourcedb_for_files(&paths);
+            });
         let handles = open_files
             .read()
             .keys()
