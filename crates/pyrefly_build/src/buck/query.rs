@@ -91,7 +91,7 @@ enum TargetManifest {
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub(crate) struct TargetManifestDatabase {
     db: SmallMap<Target, TargetManifest>,
-    root: PathBuf,
+    pub root: PathBuf,
 }
 
 impl TargetManifestDatabase {
@@ -121,8 +121,6 @@ impl TargetManifestDatabase {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::LazyLock;
-
     use pretty_assertions::assert_eq;
     use pyrefly_python::sys_info::PythonPlatform;
     use pyrefly_python::sys_info::PythonVersion;
@@ -133,6 +131,90 @@ mod tests {
     impl TargetManifestDatabase {
         fn new(db: SmallMap<Target, TargetManifest>, root: PathBuf) -> Self {
             TargetManifestDatabase { db, root }
+        }
+
+        /// This is a simplified sourcedb taken from the BXL output run on pyre/client/log/log.py.
+        /// We also add a few extra entries to model some of the behavior around multiple entries
+        /// (i.e. multiple file paths corresponding to a module path, multiple module paths in
+        /// different targets).
+        pub fn get_test_database() -> Self {
+            TargetManifestDatabase::new(
+                smallmap! {
+                    Target::from_string("build_root//third-party/pypi/colorama/0.4.6:py".to_owned()) => TargetManifest::lib(
+                        &[
+                        (
+                            "colorama",
+                            &[
+                            "third-party/pypi/colorama/0.4.6/colorama/__init__.py",
+                            "third-party/pypi/colorama/0.4.6/colorama/__init__.pyi",
+                            ]
+                        ),
+                        ],
+                        &[],
+                    ),
+                    Target::from_string("build_root//third-party/pypi/colorama:colorama".to_owned()) => TargetManifest::alias(
+                        "build_root//third-party/pypi/colorama/0.4.6:py"
+                    ),
+                    Target::from_string("build_root//third-party/pypi/click/8.1.7:py".to_owned()) => TargetManifest::lib(
+                        &[
+                        (
+                            "click",
+                            &[
+                            "third-party/pypi/click/8.1.7/src/click/__init__.pyi",
+                            "third-party/pypi/click/8.1.7/src/click/__init__.py",
+                            ],
+                        )
+                        ],
+                        &[
+                        "build_root//third-party/pypi/colorama:colorama"
+                        ],
+                    ),
+                    Target::from_string("build_root//third-party/pypi/click:click".to_owned()) => TargetManifest::alias(
+                        "build_root//third-party/pypi/click/8.1.7:py"
+                    ),
+                    Target::from_string("sub_root//pyre/client/log:log".to_owned()) => TargetManifest::lib(
+                        &[
+                        (
+                            "pyre.client.log",
+                            &[
+                            "sub_root/pyre/client/log/__init__.py"
+                            ]
+                        ),
+                        (
+                            "pyre.client.log.log",
+                            &[
+                            "sub_root/pyre/client/log/log.py",
+                            "sub_root/pyre/client/log/log.pyi",
+                            ]
+                        ),
+                        ],
+                        &[
+                        "build_root//third-party/pypi/click:click"
+                        ],
+                    ),
+                    Target::from_string("sub_root//pyre/client/log:log2".to_owned()) => TargetManifest::lib(
+                        &[
+                        (
+                            "log",
+                            &[
+                            "sub_root/pyre/client/log/__init__.py"
+                            ]
+                        ),
+                        (
+                            "log.log",
+                            &[
+                            "sub_root/pyre/client/log/log.py",
+                            "sub_root/pyre/client/log/log.pyi",
+                            ]
+                        )
+                        ],
+                        &[
+                        "build_root//third-party/pypi/click:click"
+                        ],
+                    )
+                },
+                PathBuf::from("/path/to/this/repository"),
+            )
         }
     }
 
@@ -183,90 +265,6 @@ mod tests {
             }
         }
     }
-
-    // This is a simplified sourcedb taken from the BXL output run on pyre/client/log/log.py.
-    // We also add a few extra entries to model some of the behavior around multiple entries
-    // (i.e. multiple file paths corresponding to a module path, multiple module paths in
-    // different targets).
-    static EXAMPLE_BUILD: LazyLock<TargetManifestDatabase> = LazyLock::new(|| {
-        TargetManifestDatabase::new(
-            smallmap! {
-                Target::from_string("build_root//third-party/pypi/colorama/0.4.6:py".to_owned()) => TargetManifest::lib(
-                    &[
-                        (
-                            "colorama",
-                            &[
-                                "third-party/pypi/colorama/0.4.6/colorama/__init__.py",
-                                "third-party/pypi/colorama/0.4.6/colorama/__init__.pyi",
-                            ]
-                        ),
-                    ],
-                    &[],
-                ),
-                Target::from_string("build_root//third-party/pypi/colorama:colorama".to_owned()) => TargetManifest::alias(
-                    "build_root//third-party/pypi/colorama/0.4.6:py"
-                ),
-                Target::from_string("build_root//third-party/pypi/click/8.1.7:py".to_owned()) => TargetManifest::lib(
-                    &[
-                        (
-                            "click",
-                            &[
-                                "third-party/pypi/click/8.1.7/src/click/__init__.pyi",
-                                "third-party/pypi/click/8.1.7/src/click/__init__.py",
-                            ],
-                        )
-                    ],
-                    &[
-                        "build_root//third-party/pypi/colorama:colorama"
-                    ],
-                ),
-                Target::from_string("build_root//third-party/pypi/click:click".to_owned()) => TargetManifest::alias(
-                    "build_root//third-party/pypi/click/8.1.7:py"
-                ),
-                Target::from_string("sub_root//pyre/client/log:log".to_owned()) => TargetManifest::lib(
-                    &[
-                        (
-                            "pyre.client.log",
-                            &[
-                                "sub_root/pyre/client/log/__init__.py"
-                            ]
-                        ),
-                        (
-                            "pyre.client.log.log",
-                            &[
-                                "sub_root/pyre/client/log/log.py",
-                                "sub_root/pyre/client/log/log.pyi",
-                            ]
-                        ),
-                    ],
-                    &[
-                        "build_root//third-party/pypi/click:click"
-                    ],
-                ),
-                Target::from_string("sub_root//pyre/client/log:log2".to_owned()) => TargetManifest::lib(
-                    &[
-                        (
-                            "log",
-                            &[
-                                "sub_root/pyre/client/log/__init__.py"
-                            ]
-                        ),
-                        (
-                            "log.log",
-                            &[
-                                "sub_root/pyre/client/log/log.py",
-                                "sub_root/pyre/client/log/log.pyi",
-                            ]
-                        )
-                    ],
-                    &[
-                        "build_root//third-party/pypi/click:click"
-                    ],
-                )
-            },
-            PathBuf::from("/path/to/this/repository"),
-        )
-    });
 
     #[test]
     fn example_json_parses() {
@@ -340,7 +338,7 @@ mod tests {
 }
         "#;
         let parsed: TargetManifestDatabase = serde_json::from_str(EXAMPLE_JSON).unwrap();
-        assert_eq!(parsed, *EXAMPLE_BUILD);
+        assert_eq!(parsed, TargetManifestDatabase::get_test_database());
     }
 
     #[test]
@@ -413,6 +411,9 @@ mod tests {
                 ],
             )
         };
-        assert_eq!(EXAMPLE_BUILD.clone().produce_map(), expected);
+        assert_eq!(
+            TargetManifestDatabase::get_test_database().produce_map(),
+            expected
+        );
     }
 }
