@@ -48,7 +48,6 @@ impl fmt::Display for Target {
 }
 
 impl Target {
-    #[allow(unused)]
     pub fn from_string(x: String) -> Self {
         Target(TARGET_INTERNER.intern(x))
     }

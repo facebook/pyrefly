@@ -16,6 +16,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use dupe::Dupe as _;
 use itertools::Itertools;
+use pyrefly_build::BuildSystem;
 use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_python::module_name::ModuleName;
@@ -286,6 +287,10 @@ pub struct ConfigFile {
     )]
     pub use_ignore_files: bool,
 
+    /// Should this config use a build system? If so, which one?
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_system: Option<BuildSystem>,
+
     /// Database understanding the mapping between source files and import paths,
     /// especially within the context of a build system. This is used for getting handles
     /// for a path and doing module finding.
@@ -324,6 +329,7 @@ impl Default for ConfigFile {
             python_environment: Default::default(),
             root: Default::default(),
             sub_configs: Default::default(),
+            build_system: Default::default(),
             source_db: Default::default(),
             use_ignore_files: true,
             ignore_missing_source: true,
@@ -880,6 +886,7 @@ mod tests {
                 search_path_from_file: vec![PathBuf::from("../..")],
                 disable_search_path_heuristics: false,
                 import_root: None,
+                build_system: Default::default(),
                 use_ignore_files: true,
                 fallback_search_path: Vec::new(),
                 python_environment: PythonEnvironment {
@@ -1148,6 +1155,7 @@ mod tests {
             },
             root: Default::default(),
             source_db: Default::default(),
+            build_system: Default::default(),
             sub_configs: vec![SubConfig {
                 matches: Glob::new("sub/project/**".to_owned()).unwrap(),
                 settings: Default::default(),
@@ -1201,6 +1209,7 @@ mod tests {
             fallback_search_path: Vec::new(),
             python_environment,
             root: Default::default(),
+            build_system: Default::default(),
             source_db: Default::default(),
             sub_configs: vec![SubConfig {
                 matches: sub_config_matches,

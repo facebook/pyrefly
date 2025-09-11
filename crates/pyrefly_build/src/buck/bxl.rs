@@ -6,10 +6,12 @@
  */
 
 use std::ops::Deref;
+use std::path::Path;
 use std::path::PathBuf;
 
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
@@ -18,6 +20,8 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
+use crate::handle::Handle;
+use crate::source_db::SourceDatabase;
 use crate::source_db::Target;
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]
@@ -94,5 +98,41 @@ impl TargetManifestDatabase {
                 .iter_srcs()
                 .map(move |(module, paths)| (target, module, paths.mapped_ref(|p| root.join(p))))
         })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+pub struct BuckSourceDatabase {
+    cwd: PathBuf,
+    db: Option<TargetManifestDatabase>,
+}
+
+impl BuckSourceDatabase {
+    pub fn new(config_path: PathBuf) -> Self {
+        BuckSourceDatabase {
+            cwd: config_path,
+            db: None,
+        }
+    }
+}
+
+impl SourceDatabase for BuckSourceDatabase {
+    fn modules_to_check(&self) -> Vec<crate::handle::Handle> {
+        // TODO(connernilsen): implement modules_to_check
+        vec![]
+    }
+
+    fn lookup(&self, _module: &ModuleName, _origin: Option<&Path>) -> Option<ModulePath> {
+        // TODO(connernilsen): implement lookup
+        None
+    }
+
+    fn handle_from_module_path(&self, _module_path: ModulePath) -> Handle {
+        // TODO(connernilsen): implement handles_from_module_path
+        Handle::new(
+            ModuleName::unknown(),
+            ModulePath::memory(PathBuf::new()),
+            SysInfo::default(),
+        )
     }
 }
