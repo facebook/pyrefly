@@ -35,6 +35,7 @@ use tracing::debug;
 
 use crate::absolutize::Absolutize as _;
 use crate::fs_anyhow;
+use crate::includes::Includes;
 use crate::prelude::SliceExt;
 use crate::prelude::VecExt;
 use crate::upward_search::UpwardSearch;
@@ -653,21 +654,23 @@ impl FilteredGlobs {
             filter: GlobFilter::new(excludes, ignorefile_search_start),
         }
     }
+}
 
+impl Includes for FilteredGlobs {
     /// Given a glob pattern, return the directories that can contain files that match the pattern.
-    pub fn roots(&self) -> Vec<PathBuf> {
+    fn roots(&self) -> Vec<PathBuf> {
         self.includes.roots()
     }
 
-    pub fn files(&self) -> anyhow::Result<Vec<PathBuf>> {
+    fn files(&self) -> anyhow::Result<Vec<PathBuf>> {
         self.includes.filtered_files(&self.filter, None)
     }
 
-    pub fn covers(&self, path: &Path) -> bool {
+    fn covers(&self, path: &Path) -> bool {
         self.includes.covers(path) && !self.filter.is_excluded(path)
     }
 
-    pub fn errors(&mut self) -> Vec<anyhow::Error> {
+    fn errors(&mut self) -> Vec<anyhow::Error> {
         self.filter.errors()
     }
 }

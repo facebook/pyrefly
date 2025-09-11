@@ -152,6 +152,7 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::globs::Globs;
+use pyrefly_util::includes::Includes as _;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;

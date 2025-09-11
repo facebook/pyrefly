@@ -17,6 +17,7 @@ use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::Globs;
+use pyrefly_util::includes::Includes;
 use tracing::debug;
 use tracing::info;
 
@@ -91,7 +92,7 @@ fn get_globs_and_config_for_project(
     config: Option<PathBuf>,
     project_excludes: Option<Globs>,
     args: &ConfigOverrideArgs,
-) -> anyhow::Result<(FilteredGlobs, ConfigFinder)> {
+) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder)> {
     let (config, mut errors) = match config {
         Some(explicit) => get_explicit_config(&explicit, args),
         None => {
@@ -138,7 +139,7 @@ fn get_globs_and_config_for_project(
 
     add_config_errors(&config_finder, errors)?;
 
-    Ok((filtered_globs, config_finder))
+    Ok((Box::new(filtered_globs), config_finder))
 }
 
 /// Get inputs for a per-file check. If an explicit config is passed in, we use it; otherwise, we
@@ -148,7 +149,7 @@ fn get_globs_and_config_for_files(
     files_to_check: Globs,
     project_excludes: Option<Globs>,
     args: &ConfigOverrideArgs,
-) -> anyhow::Result<(FilteredGlobs, ConfigFinder)> {
+) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder)> {
     let project_excludes = project_excludes.unwrap_or_else(ConfigFile::default_project_excludes);
     let files_to_check = absolutize(files_to_check);
     let (config_finder, errors) = match config {
@@ -179,7 +180,7 @@ fn get_globs_and_config_for_files(
     };
     add_config_errors(&config_finder, errors)?;
     Ok((
-        FilteredGlobs::new(files_to_check, project_excludes, None),
+        Box::new(FilteredGlobs::new(files_to_check, project_excludes, None)),
         config_finder,
     ))
 }
@@ -188,7 +189,7 @@ impl FilesArgs {
     pub fn resolve(
         self,
         config_override: &ConfigOverrideArgs,
-    ) -> anyhow::Result<(FilteredGlobs, ConfigFinder)> {
+    ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder)> {
         let project_excludes = if let Some(project_excludes) = self.project_excludes {
             Some(absolutize(Globs::new(project_excludes)?))
         } else {
@@ -210,7 +211,7 @@ impl FilesArgs {
         files: Vec<String>,
         config: Option<PathBuf>,
         args: &ConfigOverrideArgs,
-    ) -> anyhow::Result<(FilteredGlobs, ConfigFinder)> {
+    ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder)> {
         FilesArgs {
             files,
             config,

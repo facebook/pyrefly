@@ -36,7 +36,7 @@ use pyrefly_util::display::number_thousands;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
-use pyrefly_util::globs::FilteredGlobs;
+use pyrefly_util::includes::Includes;
 use pyrefly_util::memory::MemoryUsageTrace;
 use pyrefly_util::watcher::Watcher;
 use tracing::debug;
@@ -86,7 +86,7 @@ impl FullCheckArgs {
 async fn run_check(
     args: CheckArgs,
     watch: bool,
-    files_to_check: FilteredGlobs,
+    files_to_check: Box<dyn Includes>,
     config_finder: ConfigFinder,
 ) -> anyhow::Result<CommandExitStatus> {
     if watch {
@@ -516,7 +516,7 @@ impl Timings {
 impl CheckArgs {
     pub fn run_once(
         self,
-        files_to_check: FilteredGlobs,
+        files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
         let mut timings = Timings::new();
@@ -594,7 +594,7 @@ impl CheckArgs {
     pub async fn run_watch(
         self,
         mut watcher: Watcher,
-        files_to_check: FilteredGlobs,
+        files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
     ) -> anyhow::Result<()> {
         // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:

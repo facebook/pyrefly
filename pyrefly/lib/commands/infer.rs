@@ -13,7 +13,7 @@ use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
-use pyrefly_util::globs::FilteredGlobs;
+use pyrefly_util::includes::Includes;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextSize;
 use tracing::error;
@@ -191,7 +191,7 @@ impl InferArgs {
     }
 
     pub fn run_inner(
-        files_to_check: FilteredGlobs,
+        files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
         flags: InferFlags,
     ) -> anyhow::Result<CommandExitStatus> {
@@ -335,7 +335,7 @@ mod test {
         t.add(&path.display().to_string(), input);
         let includes =
             Globs::new(vec![format!("{}/**/*", tdir.path().display()).to_owned()]).unwrap();
-        let f_globs = FilteredGlobs::new(includes, Globs::empty(), None);
+        let f_globs = Box::new(FilteredGlobs::new(includes, Globs::empty(), None));
         let config_finder = t.config_finder();
         let result = InferArgs::run_inner(f_globs, config_finder, flags);
         assert!(
