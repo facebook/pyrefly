@@ -108,7 +108,6 @@ impl Deref for TargetManifestDatabase {
 }
 
 impl TargetManifestDatabase {
-    #[expect(unused)]
     pub fn new(db: SmallMap<Target, TargetManifest>, root: PathBuf) -> Self {
         Self { db, root }
     }
