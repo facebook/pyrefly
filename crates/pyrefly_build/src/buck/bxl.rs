@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -113,8 +114,26 @@ impl SourceDatabase for BuckSourceDatabase {
             .collect()
     }
 
-    fn lookup(&self, _module: &ModuleName, _origin: Option<&Path>) -> Option<ModulePath> {
-        // TODO(connernilsen): implement lookup
+    fn lookup(&self, module: &ModuleName, origin: Option<&Path>) -> Option<ModulePath> {
+        let origin = origin?;
+        let start_target = self.path_lookup.get(origin)?;
+        let mut queue = VecDeque::new();
+        queue.push_front(start_target);
+
+        while let Some(current_target) = queue.pop_front() {
+            let Some(manifest) = self.db.get(current_target) else {
+                continue;
+            };
+
+            if let Some(paths) = manifest.srcs.get(module) {
+                // TODO(connernilsen): for now, just take the first item on the path, but we
+                // should respect preferences at some point
+                return Some(ModulePath::filesystem(paths.first().to_path_buf()));
+            }
+
+            manifest.deps.iter().for_each(|t| queue.push_back(t));
+        }
+
         None
     }
 
