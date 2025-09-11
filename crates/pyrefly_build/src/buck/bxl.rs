@@ -12,9 +12,10 @@ use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::SysInfo;
+use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
-use crate::buck::query::TargetManifestDatabase;
+use crate::buck::query::PythonLibraryManifest;
 use crate::buck::query::query_source_db;
 use crate::handle::Handle;
 use crate::source_db::SourceDatabase;
@@ -29,13 +30,13 @@ enum Include {
 
 impl Include {
     #[expect(unused)]
-    fn to_targets(&self, db: &TargetManifestDatabase) -> Vec<Target> {
+    fn to_targets(&self, db: &SmallMap<Target, PythonLibraryManifest>) -> Vec<Target> {
         match &self {
             Self::Target(target) => vec![target.dupe()],
             Self::Path(path) => db
-                .iter_srcs()
-                .filter(|(_, _, paths)| paths.contains(path))
-                .map(|(t, _, _)| t.dupe())
+                .iter()
+                .filter(|(_, manifest)| manifest.srcs.values().flatten().any(|p| p == path))
+                .map(|(t, _)| t.dupe())
                 .collect(),
         }
     }
@@ -43,20 +44,19 @@ impl Include {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct BuckSourceDatabase {
-    cwd: PathBuf,
-    db: TargetManifestDatabase,
+    db: SmallMap<Target, PythonLibraryManifest>,
     includes: SmallSet<Include>,
 }
 
 impl BuckSourceDatabase {
     pub fn new(cwd: PathBuf, files: &SmallSet<PathBuf>) -> anyhow::Result<Self> {
         let raw_db = query_source_db(files.iter(), &cwd)?;
-        let db: TargetManifestDatabase = serde_json::from_slice(&raw_db)?;
+        let db = raw_db.produce_map();
         let includes = files
             .into_iter()
             .map(|f| Include::Path(f.to_path_buf()))
             .collect();
-        Ok(BuckSourceDatabase { cwd, db, includes })
+        Ok(BuckSourceDatabase { db, includes })
     }
 }
 

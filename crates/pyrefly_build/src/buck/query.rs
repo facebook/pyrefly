@@ -6,11 +6,11 @@
  */
 
 use std::ffi::OsStr;
-use std::ops::Deref;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use anyhow::Context as _;
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::sys_info::SysInfo;
@@ -24,7 +24,7 @@ use crate::source_db::Target;
 pub fn query_source_db<'a>(
     files: impl Iterator<Item = &'a PathBuf>,
     cwd: &Path,
-) -> anyhow::Result<Vec<u8>> {
+) -> anyhow::Result<TargetManifestDatabase> {
     // TODO(connernilsen): handle querying targets too later on
     let mut cmd = Command::new("buck2");
     cmd.arg("bxl");
@@ -46,50 +46,46 @@ pub fn query_source_db<'a>(
         ));
     }
 
-    Ok(result.stdout)
+    serde_json::from_slice(&result.stdout).with_context(|| {
+        "Failed to construct valid `TargetManifestDatabase` from BXL query result".to_owned()
+    })
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+pub(crate) struct PythonLibraryManifest {
+    pub deps: SmallSet<Target>,
+    pub srcs: SmallMap<ModuleName, Vec1<PathBuf>>,
+    #[serde(flatten)]
+    pub sys_info: SysInfo,
+}
+
+impl PythonLibraryManifest {
+    fn replace_alias_deps(&mut self, aliases: &SmallMap<Target, Target>) {
+        self.deps = self
+            .deps
+            .iter()
+            .map(|t| {
+                if let Some(replace) = aliases.get(t) {
+                    replace.dupe()
+                } else {
+                    t.dupe()
+                }
+            })
+            .collect();
+    }
+
+    fn rewrite_relative_to_root(&mut self, root: &Path) {
+        self.srcs
+            .iter_mut()
+            .for_each(|(_, paths)| paths.iter_mut().for_each(|p| *p = root.join(&p)));
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum TargetManifest {
-    Library {
-        deps: SmallSet<Target>,
-        srcs: SmallMap<ModuleName, Vec1<PathBuf>>,
-        #[serde(flatten)]
-        sys_info: SysInfo,
-    },
-    Alias {
-        alias: Target,
-    },
-}
-
-impl TargetManifest {
-    #[expect(unused)]
-    pub fn new_library(
-        srcs: SmallMap<ModuleName, Vec1<PathBuf>>,
-        deps: SmallSet<Target>,
-        sys_info: SysInfo,
-    ) -> Self {
-        Self::Library {
-            srcs,
-            deps,
-            sys_info: sys_info.dupe(),
-        }
-    }
-
-    #[expect(unused)]
-    pub fn new_alias(alias: Target) -> Self {
-        Self::Alias { alias }
-    }
-
-    pub(crate) fn iter_srcs<'a>(
-        &'a self,
-    ) -> Box<dyn Iterator<Item = (&'a ModuleName, &'a Vec1<PathBuf>)> + 'a> {
-        match &self {
-            Self::Library { srcs, .. } => Box::new(srcs.iter()),
-            Self::Alias { .. } => Box::new(std::iter::empty::<(&ModuleName, &Vec1<PathBuf>)>()),
-        }
-    }
+enum TargetManifest {
+    Library(PythonLibraryManifest),
+    Alias { alias: Target },
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]
@@ -98,29 +94,27 @@ pub(crate) struct TargetManifestDatabase {
     root: PathBuf,
 }
 
-impl Deref for TargetManifestDatabase {
-    type Target = SmallMap<Target, TargetManifest>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.db
-    }
-}
-
 impl TargetManifestDatabase {
-    #[allow(unused)]
-    pub fn new(db: SmallMap<Target, TargetManifest>, root: PathBuf) -> Self {
-        Self { db, root }
-    }
-
-    #[allow(unused)]
-    pub(crate) fn iter_srcs<'a>(
-        &'a self,
-    ) -> impl Iterator<Item = (&'a Target, &'a ModuleName, Vec1<PathBuf>)> + 'a {
-        let root = &self.root;
-        self.db.iter().flat_map(move |(target, manifest)| {
-            manifest
-                .iter_srcs()
-                .map(move |(module, paths)| (target, module, paths.mapped_ref(|p| root.join(p))))
-        })
+    pub fn produce_map(self) -> SmallMap<Target, PythonLibraryManifest> {
+        let mut result = SmallMap::new();
+        let aliases: SmallMap<Target, Target> = self
+            .db
+            .iter()
+            .filter_map(|(t, manifest)| match manifest {
+                TargetManifest::Alias { alias } => Some((t.dupe(), alias.dupe())),
+                _ => None,
+            })
+            .collect();
+        for (target, manifest) in self.db {
+            match manifest {
+                TargetManifest::Alias { .. } => continue,
+                TargetManifest::Library(mut lib) => {
+                    lib.replace_alias_deps(&aliases);
+                    lib.rewrite_relative_to_root(&self.root);
+                    result.insert(target, lib);
+                }
+            }
+        }
+        result
     }
 }
