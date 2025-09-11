@@ -21,7 +21,6 @@ use vec1::Vec1;
 
 use crate::source_db::Target;
 
-#[expect(unused)]
 pub fn query_source_db<'a>(
     files: impl Iterator<Item = &'a PathBuf>,
     cwd: &Path,
@@ -108,6 +107,7 @@ impl Deref for TargetManifestDatabase {
 }
 
 impl TargetManifestDatabase {
+    #[allow(unused)]
     pub fn new(db: SmallMap<Target, TargetManifest>, root: PathBuf) -> Self {
         Self { db, root }
     }

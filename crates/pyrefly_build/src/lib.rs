@@ -32,6 +32,7 @@ use std::path::PathBuf;
 use dupe::Dupe;
 use serde::Deserialize;
 use serde::Serialize;
+use starlark_map::small_set::SmallSet;
 
 pub mod buck;
 pub mod handle;
@@ -48,11 +49,15 @@ impl BuildSystem {
     pub fn get_source_db(
         &self,
         mut config_path: PathBuf,
-    ) -> Box<dyn source_db::SourceDatabase + 'static> {
+        files: &SmallSet<PathBuf>,
+    ) -> anyhow::Result<Box<dyn source_db::SourceDatabase + 'static>> {
         // pop off the config file name from the path
         config_path.pop();
         match &self {
-            Self::Buck => Box::new(buck::bxl::BuckSourceDatabase::new(config_path)),
+            Self::Buck => Ok(Box::new(buck::bxl::BuckSourceDatabase::new(
+                config_path,
+                files,
+            )?)),
         }
     }
 }

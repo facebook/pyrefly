@@ -12,10 +12,10 @@ use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::SysInfo;
-use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
 use crate::buck::query::TargetManifestDatabase;
+use crate::buck::query::query_source_db;
 use crate::handle::Handle;
 use crate::source_db::SourceDatabase;
 use crate::source_db::Target;
@@ -24,7 +24,6 @@ use crate::source_db::Target;
 enum Include {
     #[expect(unused)]
     Target(Target),
-    #[expect(unused)]
     Path(PathBuf),
 }
 
@@ -50,12 +49,14 @@ pub struct BuckSourceDatabase {
 }
 
 impl BuckSourceDatabase {
-    pub fn new(config_path: PathBuf) -> Self {
-        BuckSourceDatabase {
-            cwd: config_path,
-            db: TargetManifestDatabase::new(SmallMap::new(), PathBuf::new()),
-            includes: SmallSet::new(),
-        }
+    pub fn new(cwd: PathBuf, files: &SmallSet<PathBuf>) -> anyhow::Result<Self> {
+        let raw_db = query_source_db(files.iter(), &cwd)?;
+        let db: TargetManifestDatabase = serde_json::from_slice(&raw_db)?;
+        let includes = files
+            .into_iter()
+            .map(|f| Include::Path(f.to_path_buf()))
+            .collect();
+        Ok(BuckSourceDatabase { cwd, db, includes })
     }
 }
 
