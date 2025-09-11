@@ -65,9 +65,8 @@ impl LspEvent {
             | Self::DidChangeWatchedFiles(_)
             | Self::DidChangeWorkspaceFolders(_)
             | Self::DidChangeConfiguration(_)
-            | Self::LspResponse(_)
             | Self::Exit => LspEventKind::Mutation,
-            Self::LspRequest(_) => LspEventKind::Query,
+            Self::LspRequest(_) | Self::LspResponse(_) => LspEventKind::Query,
         }
     }
 }

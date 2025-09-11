@@ -7,7 +7,7 @@
  * @format
  */
 
-import {ExtensionContext, workspace} from 'vscode';
+import { ExtensionContext, workspace } from 'vscode';
 import * as vscode from 'vscode';
 import {
   CancellationToken,
@@ -21,7 +21,7 @@ import {
   ResponseError,
   ServerOptions,
 } from 'vscode-languageclient/node';
-import {PythonExtension} from '@vscode/python-extension';
+import { PythonExtension } from '@vscode/python-extension';
 
 let client: LanguageClient;
 let statusBarItem: vscode.StatusBarItem;
@@ -131,10 +131,10 @@ async function overridePythonPath(
     ) {
       return undefined;
     }
-    let scopeUri = configurationItems[index].scopeUri;
-    return await pythonExtension.environments.getActiveEnvironmentPath(
-      scopeUri === undefined ? undefined : vscode.Uri.file(scopeUri),
-    ).path;
+    const scopeUri = configurationItems[index].scopeUri;
+    const resource = scopeUri === undefined ? undefined : vscode.Uri.parse(scopeUri);
+    const env = await pythonExtension.environments.getActiveEnvironmentPath(resource);
+    return env?.path;
   };
   const newResult = await Promise.all(
     configuration.map(async (item, index) => {
@@ -142,7 +142,7 @@ async function overridePythonPath(
       if (pythonPath === undefined) {
         return item;
       } else {
-        return {...item, pythonPath};
+        return { ...item, pythonPath };
       }
     }),
   );
@@ -173,7 +173,7 @@ export async function activate(context: ExtensionContext) {
   let clientOptions: LanguageClientOptions = {
     initializationOptions: rawInitialisationOptions,
     // Register the server for Starlark documents
-    documentSelector: [{scheme: 'file', language: 'python'}],
+    documentSelector: [{ scheme: 'file', language: 'python' }],
     middleware: {
       workspace: {
         configuration: async (
