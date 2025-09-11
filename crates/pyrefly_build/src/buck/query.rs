@@ -13,8 +13,6 @@ use std::process::Command;
 
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_python::sys_info::PythonPlatform;
-use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use serde::Deserialize;
 use starlark_map::small_map::SmallMap;
@@ -58,8 +56,8 @@ pub(crate) enum TargetManifest {
     Library {
         deps: SmallSet<Target>,
         srcs: SmallMap<ModuleName, Vec1<PathBuf>>,
-        python_version: PythonVersion,
-        python_platform: PythonPlatform,
+        #[serde(flatten)]
+        sys_info: SysInfo,
     },
     Alias {
         alias: Target,
@@ -76,8 +74,7 @@ impl TargetManifest {
         Self::Library {
             srcs,
             deps,
-            python_version: sys_info.version().dupe(),
-            python_platform: sys_info.platform().clone(),
+            sys_info: sys_info.dupe(),
         }
     }
 

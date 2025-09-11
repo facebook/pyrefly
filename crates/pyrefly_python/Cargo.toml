@@ -27,4 +27,5 @@ static_interner = "0.1.1"
 thiserror = "2.0.12"
 
 [dev-dependencies]
+serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 toml = { version = "0.9.2", features = ["preserve_order"] }
