@@ -6,6 +6,7 @@
  */
 
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 use lsp_server::Message;
