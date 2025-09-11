@@ -2,20 +2,19 @@
 
 ## Docs
 
-- [Infer](autotype): Pyrefly infer feature and documentation
+- [Infer](autotype): Automatically add type annotations to your code with the Pyrefly infer feature.
 - [Configuration](configuration): Configure Pyrefly settings and options
-- [Error Kinds](error-kinds): Pyrefly error categories and suppression codes
-- [Error Suppressions](error-suppressions): How to suppress errors in Pyrefly
-- [Getting Started](getting-started): Quick start guide for Pyrefly
+- [Pyrefly Error Kinds](error-kinds): Pyrefly error categories and suppression codes
+- [Pyrefly Error Suppressions](error-suppressions): Learn how to suppress type check errors in Pyrefly with code comments.
 - [IDE Installation](IDE): How to add Pyrefly Language Server and Typechecking to your IDE
-- [Supported Features](IDE-features): Supported features for Pyrefly's IDE extension
-- [Import Resolution](import-resolution): How Pyrefly finds and resolves imports
-- [Introduction](index): Guides and references for all you need to know about Pyrefly
+- [IDE Supported Features](IDE-features): Supported features for Pyrefly's IDE extension
+- [Import Resolution](import-resolution): How imports in a given file are found by Pyrefly and their bindings are resolved, including files that are being type checked
+- [Introduction](index): Guides and references for all you need to know about Pyrefly type checker and IDE extension.
 - [Installation](installation): How to install Pyrefly
-- [Migrating from Mypy](migrating-from-mypy): How to switch from Mypy to Pyrefly
-- [Migrating from Pyright](migrating-from-pyright): How to switch from Pyright to Pyrefly
-- [Migration Guide](migrating-to-pyrefly): How to switch from another type checker to Pyrefly
+- [Migrating from Mypy](migrating-from-mypy): How to switch your type checker configuration from Mypy to Pyrefly
+- [Migrating from Pyright](migrating-from-pyright): How to switch your type checker configuration from Pyright to Pyrefly
+- [Migration Guides](migrating-to-pyrefly): How to switch from another type checker to Pyrefly
 - [FAQ](pyrefly-faq): Frequently Asked Questions about Pyrefly, a PEP 484 compliant Type Checker for Python and IDE extension.
-- [Typing Features and PEPS](python-features-and-peps): Typing Features and PEPS available in each Python Version.
-- [Python Typing for New Developers](python-typing-for-beginners): A gentle, example‑driven introduction to static type hints in Python.
+- [Typing Features and PEPS](python-features-and-peps): Typing features and associated PEPs available in each Python version.
+- [Python Typing 101](python-typing-for-beginners): A gentle, example‑driven introduction to static type hints in Python.
 - [Typing for Python Developers](typing-for-python-developers): Get to know Python's Type System with working examples

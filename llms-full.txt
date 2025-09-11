@@ -1,5 +1,5 @@
 ---
-title: Supported Features
+title: IDE Supported Features
 
 description: Supported features for Pyrefly's IDE extension
 ---
@@ -502,7 +502,7 @@ See the documentation [here](https://lsp.sublimetext.io/language_servers/#pyrefl
 ---
 title: Infer
 
-description: Pyrefly infer feature and documentation
+description: Automatically add type annotations to your code with the Pyrefly infer feature.
 ---
 
 # Pyrefly Infer
@@ -1513,12 +1513,12 @@ assert-type = false
 ---
 
 ---
-title: Error Kinds
+title: Pyrefly Error Kinds
 
 description: Pyrefly error categories and suppression codes
 ---
 
-# Error Kinds
+# Pyrefly Error Kinds
 
 An _error kind_ categorizes an error by the part of the typing specification
 that an error is related to. Every error has exactly one kind.
@@ -2405,9 +2405,9 @@ async def bar():
 ---
 
 ---
-title: Error Suppressions
+title: Pyrefly Error Suppressions
 
-description: How to suppress errors in Pyrefly
+description: Learn how to suppress type check errors in Pyrefly with code comments.
 ---
 import CodeSnippet from '@site/src/sandbox/CodeSnippet'
 
@@ -2492,21 +2492,10 @@ This will add ` # pyrefly: ignore` comments to your code that will enable you to
 ---
 
 ---
-title: Getting Started
-
-description: Quick start guide for Pyrefly
----
-
-Pyrefly isn't ready just yet,  but you can see our roadmap [here](https://github.com/facebook/pyrefly/milestone/1). We will be populating this section soon!
-
-
----
-
----
 title: Import Resolution
 slug: /import-resolution
 
-description: How Pyrefly finds and resolves imports
+description: How imports in a given file are found by Pyrefly and their bindings are resolved, including files that are being type checked
 ---
 
 # Import Resolution
@@ -2689,7 +2678,7 @@ command-line invocation.
 
 ---
 title: Introduction
-description: Guides and references for all you need to know about Pyrefly
+description: Guides and references for all you need to know about Pyrefly type checker and IDE extension.
 ---
 
 import CodeSnippet from '@site/src/sandbox/CodeSnippet'
@@ -2743,54 +2732,56 @@ Pyrefly is available on [PyPI](https://pypi.org/project/pyrefly/) with a new rel
 
 ## Install
 
-You can use `uv`, `poetry`, `pip`, `pixi` or `conda` to install the package if you want to experiment with our tool.
+You can use `uv`, `poetry`, `pip`, `pixi` or `conda` to install Pyrefly. The following commands show you how to install Pyrefly and run 2 basic commands: `init` and `check`.
+
+* `pyrefly init` will update your `pyproject.toml` file (or create a `pyrefly.toml` file) in your project directory, including some basic configuration. It will also attempt to [migrate](../migrating-to-pyrefly) your existing type checker configuration.
+* `pyrefly check --summarize-errors` will run the Pyrefly type checker on your project, providing a list of type errors and a summary of error types. The `--summarize-errors` flag is optional, remove it if you don't want summary stats.
 
 Simply `cd` into your project directory and run:
 
-### Using UV
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
-```
-uvx pyrefly init
-uvx pyrefly check
-```
-
-This will install Pyrefly using UV, [migrate](../migrating-to-pyrefly) your existing type checker configuration, and run the Pyrefly type checker.
-
-### Using Poetry
-
-```
-poetry add --group dev pyrefly
-poetry run pyrefly init
-poetry run pyrefly check
-```
-
-### Using Pip
-
-```
-pip install pyrefly
-pyrefly init
-pyrefly check
-```
-
-### Using Pixi
-
-```
-pixi add pyrefly
-pixi run pyrefly init
-pixi run pyrefly check
-```
-
-### Using Conda
-
-```
-conda install -c conda-forge pyrefly
-pyrefly init
-pyrefly check
-```
+<Tabs>
+  <TabItem value="pip" label="Pip" default>
+    ```
+    pip install pyrefly
+    pyrefly init
+    pyrefly check --summarize-errors
+    ```
+  </TabItem>
+  <TabItem value="conda" label="Conda">
+    ```
+    conda install -c conda-forge pyrefly
+    pyrefly init
+    pyrefly check --summarize-errors
+    ```
+  </TabItem>
+  <TabItem value="uv" label="UV">
+    ```
+    uvx pyrefly init
+    uvx pyrefly check --summarize-errors
+    ```
+  </TabItem>
+  <TabItem value="poetry" label="Poetry">
+    ```
+    poetry add --group dev pyrefly
+    poetry run pyrefly init
+    poetry run pyrefly check --summarize-errors
+    ```
+  </TabItem>
+  <TabItem value="pixi" label="Pixi">
+    ```
+    pixi add pyrefly
+    pixi run pyrefly init
+    pixi run pyrefly check --summarize-errors
+    ```
+  </TabItem>
+</Tabs>
 
 ## Configure
 
-Set up a basic configuration file to type-check your project. You can add configuration options to a `pyproject.toml` file or create a `pyrefly.toml` file in your project directory. All [configuration options are documented here](../configuration).
+You can set up a basic configuration file to type-check your project. You can add configuration options to a `pyproject.toml` file or create a `pyrefly.toml` file in your project directory. All [configuration options are documented here](../configuration).
 
 ```
 [tool.pyrefly]
@@ -2908,12 +2899,12 @@ We maintain a dedicated repository for this integration here: [facebook/pyrefly-
 That repository contains:
 
 - Two pre-commit hooks depending on your setup
-- Installation instructions  
+- Installation instructions
 - Example configuration snippets for your project and CI
 
 To get started, follow the setup steps in the repo’s [README](https://github.com/facebook/pyrefly-pre-commit#readme).
 
-## Install pre-commit
+### Install pre-commit
 
 You only need to do this once per clone. You can also include this in your as script or in your build/setup commands like `setup.py` or `setup.cfg` so it's installed for everyone.
 
@@ -2929,9 +2920,10 @@ pre-commit autoupdate
 pre-commit run --all-files
 ```
 
-## Testing the hook
+### Testing the hook
 
-### Introduce a cheap error
+**1. Introduce a cheap error**
+
 Edit any `.py` file and deliberately return `None` where the function is annotated to return `int`.
 
 ```python
@@ -2939,7 +2931,7 @@ def foo() -> int:
     return None
 ```
 
-### Stage & commit
+**2. Stage & commit**
 
 Output:
 
@@ -2956,10 +2948,11 @@ ERROR /myproject/test.py:2:12-16: Returned type `None` is not assignable to decl
 
 You should see Pyrefly fail as above, preventing the commit from being created.
 
-### Fix & recommit
+**3. Fix & recommit**
+
 Correct the code, `git add` it again, and re‑run `git commit`; this time the hook passes.
 
-## How this helps your project
+### How this helps your project
 
 - **Earlier feedback**: Developers see type mistakes immediately, not minutes later in CI.
 - **Consistent enforcement**: Every commit—local or on CI—runs the same pyrefly check command.
@@ -2972,7 +2965,7 @@ Correct the code, `git add` it again, and re‑run `git commit`; this time the h
 ---
 title: Migrating from Mypy
 
-description: How to switch from Mypy to Pyrefly
+description: How to switch your type checker configuration from Mypy to Pyrefly
 ---
 
 ## Running Pyrefly
@@ -3115,7 +3108,7 @@ This table will be expanded as more diagnostics are supported.
 ---
 title: Migrating from Pyright
 
-description: How to switch from Pyright to Pyrefly
+description: How to switch your type checker configuration from Pyright to Pyrefly
 ---
 
 ## Running Pyrefly
@@ -3227,7 +3220,7 @@ This table will be expanded as more diagnostics are supported.
 ---
 
 ---
-title: Migration Guide
+title: Migration Guides
 description: How to switch from another type checker to Pyrefly
 ---
 
@@ -3257,45 +3250,51 @@ description:
 
 # Pyrefly Frequently Asked Questions
 
-### How do I pronounce Pyrefly?
+## How do I pronounce Pyrefly?
 
 It's pronounced PIE-ur-fly, rhyming with "firefly."
 
-### What is the relationship to Pyre?
+## What is the relationship to Pyre?
 
 Pyrefly is a ground-up rebuild that doesn’t share any core type checking code with Pyre. Not only is Pyrefly written in a new language (Rust instead of OCaml), but its design deviates in a major way from [Pyre](https://pyre-check.org/). Rust enables us to deliver substantial performance improvements and support multiple operating systems (including Windows). Beyond the core type checker itself, there are helper tooling and many lessons learned that we will take from Pyre and the community of Python type checking maintainers who have done tremendous work to get the state of type checking to where it is today.
 
-### Yet another Type Checker! Why not improve the ones adopted by the community already?
+## Is Pyrefly a type checker or a language server?
+
+Yes 😉
+
+Pyrefly is both of these things, and you can use one without the other if you choose.
+
+* type checking: Pyrefly can be used as a standalone type checker - directly run in your terminal, added to your CI or integrated into your IDE via an extension (made possible by leveraging language server capabilities)
+* language server: Pyrefly can be used as a standalone Python language server, integrated into your IDE with all the typical IDE features you would expect (hover, go-to-definition etc.). You can use it with or without type checking enabled.
+
+## Yet another Type Checker! Why not improve the ones adopted by the community already?
 
 We are standing on the shoulders of giants. The contributions to Python typing by Mypy, Pyright, Pytype, Pyre and others have been invaluable. We borrowed concepts and learned from them as we rolled our own. Open source conformance matters to us a lot. While we might make some opinionated decisions, we'll adhere to the PEP process. Pyre was the only type checker that could scale for Meta’s needs and was starting to show its age, so we started with a ground-up rewrite aimed at usability and performance.
 
 We built a custom engine for incremental computation and designed our type-checking algorithm based on years of experience in gradual typing theory and Rust expertise. By open-sourcing this technology we hope it can serve projects of any size well.
 
-### Why Rust?
+## Why Rust?
 
 We would have preferred to write Pyrefly in Python, but we didn't think we could hit our ambitious performance goals using Python today (hopefully future work around free-threaded Python and JIT changes that). After ruling out Python, we wanted something that was safe, cross-platform, compiled to WASM (for a Playground experience). Rust and Go are probably the best choices for those goals, and our team at Meta had more experience with Rust.
 
-### Do you plan to build an LSP?
 
-Yes. See our [roadmap](https://github.com/facebook/pyrefly/milestone/1) for details.
-
-### Where do I report bugs?
+## Where do I report bugs?
 
 Please open an [issue on our GitHub](https://github.com/facebook/pyrefly/issues) page. You can leave feature requests there as well :) Our current goal is to get through our first major milestone, and after that we can look at bugs and features beyond the current roadmap.
 
-### Can I contribute to Pyrefly?
+## Can I contribute to Pyrefly?
 
 Please see the: [contributing guidelines](https://github.com/facebook/pyrefly/blob/main/CONTRIBUTING.md).
 
-### How do I know this project won't go unmaintained after a year?
+## How do I know this project won't go unmaintained after a year?
 
 Great question. We have made a substantial investment in Pyrefly, use it internally and aligned open source maintainability as a key principle for starting this project in the first place. We’re in it for the long haul. Using it is the best way to encourage further investment from our leadership.
 
-### This is cool, I want to learn more about the technical details.
+## This is cool, I want to learn more about the technical details.
 
 See our [README.md](https://github.com/facebook/pyrefly/blob/main/README.md) for the high level design. We plan to add more detailed documentation along with announcements on [https://engineering.fb.com](https://engineering.fb.com/)
 
-### I don't like Python's Type System. Stop wasting your time.
+## I don't like Python's Type System. Stop wasting your time.
 
 Tell us more - seriously! We want to hear your objections to typing. We hope that better tooling, improvements to the type system and well typed libraries will help provide make development easier. If all else fails our fast code navigation and inference algorithm might spark joy in your IDE, so give us a chance.
 
@@ -3306,6 +3305,7 @@ _Curious about something else or just want to chat about bolting types onto Pyth
 
 ---
 title: Typing Features and PEPS
+description: Typing features and associated PEPs available in each Python version.
 ---
 
 *Typing Features and PEPS available in each Python Version.*
@@ -3337,17 +3337,17 @@ title: Typing Features and PEPS
 ---
 
 ---
-title: Python Typing for New Developers
+title: Python Typing 101
 description: A gentle, example‑driven introduction to static type hints in Python.
 ---
 
 import CodeSnippet from '@site/src/sandbox/CodeSnippet'
 
-# Python Typing for New Developers
+# Python Typing 101
 
 *A beginner‑friendly guide to adding type hints in Python.*
 
-**Note:** This tutorial assumes you understand some basic Python syntax, but are new to programming or type hints. To learn more about Python, see the [Python Tutorial](https://docs.python.org/3/tutorial/) and [Getting Started Guide](https://www.python.org/about/gettingstarted/)
+**Note:** This tutorial assumes you understand some basic Python syntax, but are new to programming with type hints. To learn more about Python, see the [Python Tutorial](https://docs.python.org/3/tutorial/) and [Getting Started Guide](https://www.python.org/about/gettingstarted/)
 
 ## 1. What is a Type?
 
@@ -3593,7 +3593,7 @@ import CodeSnippet from '@site/src/sandbox/CodeSnippet'
 
 **Goal:** In five minutes you'll know how Python's static type system _infers_, _defines_, and _composes_ types—and you'll have copy‑paste snippets to start using right away.
 
-If you are new to Python, check out our [Python Typing for New Developers guide](../python-typing-for-beginners/).
+If you are new to Python typing, check out our [Python Typing 101 guide](../python-typing-for-beginners/).
 
 Python's type system allows you to annotate variables so you, your teammates and your type checker can find bugs before you run your code. Think of it as documentation that's automatically validated and will help your IDE help you.
 

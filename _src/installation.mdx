@@ -7,54 +7,56 @@ Pyrefly is available on [PyPI](https://pypi.org/project/pyrefly/) with a new rel
 
 ## Install
 
-You can use `uv`, `poetry`, `pip`, `pixi` or `conda` to install the package if you want to experiment with our tool.
+You can use `uv`, `poetry`, `pip`, `pixi` or `conda` to install Pyrefly. The following commands show you how to install Pyrefly and run 2 basic commands: `init` and `check`.
+
+* `pyrefly init` will update your `pyproject.toml` file (or create a `pyrefly.toml` file) in your project directory, including some basic configuration. It will also attempt to [migrate](../migrating-to-pyrefly) your existing type checker configuration.
+* `pyrefly check --summarize-errors` will run the Pyrefly type checker on your project, providing a list of type errors and a summary of error types. The `--summarize-errors` flag is optional, remove it if you don't want summary stats.
 
 Simply `cd` into your project directory and run:
 
-### Using UV
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
-```
-uvx pyrefly init
-uvx pyrefly check
-```
-
-This will install Pyrefly using UV, [migrate](../migrating-to-pyrefly) your existing type checker configuration, and run the Pyrefly type checker.
-
-### Using Poetry
-
-```
-poetry add --group dev pyrefly
-poetry run pyrefly init
-poetry run pyrefly check
-```
-
-### Using Pip
-
-```
-pip install pyrefly
-pyrefly init
-pyrefly check
-```
-
-### Using Pixi
-
-```
-pixi add pyrefly
-pixi run pyrefly init
-pixi run pyrefly check
-```
-
-### Using Conda
-
-```
-conda install -c conda-forge pyrefly
-pyrefly init
-pyrefly check
-```
+<Tabs>
+  <TabItem value="pip" label="Pip" default>
+    ```
+    pip install pyrefly
+    pyrefly init
+    pyrefly check --summarize-errors
+    ```
+  </TabItem>
+  <TabItem value="conda" label="Conda">
+    ```
+    conda install -c conda-forge pyrefly
+    pyrefly init
+    pyrefly check --summarize-errors
+    ```
+  </TabItem>
+  <TabItem value="uv" label="UV">
+    ```
+    uvx pyrefly init
+    uvx pyrefly check --summarize-errors
+    ```
+  </TabItem>
+  <TabItem value="poetry" label="Poetry">
+    ```
+    poetry add --group dev pyrefly
+    poetry run pyrefly init
+    poetry run pyrefly check --summarize-errors
+    ```
+  </TabItem>
+  <TabItem value="pixi" label="Pixi">
+    ```
+    pixi add pyrefly
+    pixi run pyrefly init
+    pixi run pyrefly check --summarize-errors
+    ```
+  </TabItem>
+</Tabs>
 
 ## Configure
 
-Set up a basic configuration file to type-check your project. You can add configuration options to a `pyproject.toml` file or create a `pyrefly.toml` file in your project directory. All [configuration options are documented here](../configuration).
+You can set up a basic configuration file to type-check your project. You can add configuration options to a `pyproject.toml` file or create a `pyrefly.toml` file in your project directory. All [configuration options are documented here](../configuration).
 
 ```
 [tool.pyrefly]
@@ -172,12 +174,12 @@ We maintain a dedicated repository for this integration here: [facebook/pyrefly-
 That repository contains:
 
 - Two pre-commit hooks depending on your setup
-- Installation instructions  
+- Installation instructions
 - Example configuration snippets for your project and CI
 
 To get started, follow the setup steps in the repo’s [README](https://github.com/facebook/pyrefly-pre-commit#readme).
 
-## Install pre-commit
+### Install pre-commit
 
 You only need to do this once per clone. You can also include this in your as script or in your build/setup commands like `setup.py` or `setup.cfg` so it's installed for everyone.
 
@@ -193,9 +195,10 @@ pre-commit autoupdate
 pre-commit run --all-files
 ```
 
-## Testing the hook
+### Testing the hook
 
-### Introduce a cheap error
+**1. Introduce a cheap error**
+
 Edit any `.py` file and deliberately return `None` where the function is annotated to return `int`.
 
 ```python
@@ -203,7 +206,7 @@ def foo() -> int:
     return None
 ```
 
-### Stage & commit
+**2. Stage & commit**
 
 Output:
 
@@ -220,10 +223,11 @@ ERROR /myproject/test.py:2:12-16: Returned type `None` is not assignable to decl
 
 You should see Pyrefly fail as above, preventing the commit from being created.
 
-### Fix & recommit
+**3. Fix & recommit**
+
 Correct the code, `git add` it again, and re‑run `git commit`; this time the hook passes.
 
-## How this helps your project
+### How this helps your project
 
 - **Earlier feedback**: Developers see type mistakes immediately, not minutes later in CI.
 - **Consistent enforcement**: Every commit—local or on CI—runs the same pyrefly check command.
