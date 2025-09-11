@@ -392,14 +392,15 @@ impl Handles {
             configs
                 .entry(config_finder.python_file(unknown, &module_path))
                 .or_insert_with(SmallSet::new)
-                .insert(path);
+                .insert(path.to_path_buf());
         }
         configs
-            .iter()
+            .into_iter()
             .flat_map(|(c, files)| {
+                let _ = c.setup_sourcedb_for_files(&files);
                 files
-                    .iter()
-                    .map(|p| c.handle_from_module_path(ModulePath::filesystem(p.to_path_buf())))
+                    .into_iter()
+                    .map(move |p| c.handle_from_module_path(ModulePath::filesystem(p)))
             })
             .collect()
     }

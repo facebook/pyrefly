@@ -35,6 +35,7 @@ use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
 use serde::Deserialize;
 use serde::Serialize;
+use starlark_map::small_set::SmallSet;
 use tracing::debug;
 
 use crate::base::ConfigBase;
@@ -588,6 +589,16 @@ impl ConfigFile {
         }
     }
 
+    pub fn setup_sourcedb_for_files(&self, files: &SmallSet<PathBuf>) -> anyhow::Result<()> {
+        let Some(build_system) = &self.build_system else {
+            return Ok(());
+        };
+        let mut source_db = self.source_db.write();
+        *source_db =
+            Some(build_system.get_source_db(self.source.root().unwrap().to_path_buf(), files)?);
+        Ok(())
+    }
+
     /// Configures values that must be updated *after* overwriting with CLI flag values,
     /// which should probably be everything except for `PathBuf` or `Globs` types.
     pub fn configure(&mut self) -> Vec<ConfigError> {
@@ -638,6 +649,17 @@ impl ConfigFile {
 
         if self.root.permissive_ignores.is_none() {
             self.root.permissive_ignores = Some(false);
+        }
+
+        if self.build_system.is_some()
+            && matches!(
+                &self.source,
+                ConfigSource::Marker(_) | ConfigSource::Synthetic
+            )
+        {
+            configure_errors.push(anyhow::anyhow!(
+                "Invalid config state: build_system is set on project without config."
+            ));
         }
 
         fn validate<'a>(
