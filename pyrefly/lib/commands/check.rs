@@ -51,7 +51,6 @@ use crate::error::error::print_error_counts;
 use crate::error::legacy::LegacyErrors;
 use crate::error::summarise::print_error_summary;
 use crate::error::suppress;
-use crate::module::from_path::module_from_path;
 use crate::module::typeshed::stdlib_search_path;
 use crate::report;
 use crate::state::require::Require;
@@ -396,7 +395,7 @@ impl Handles {
         let config = config_finder.python_file(unknown, &module_path);
 
         let search_path = config.search_path();
-        let module_name = module_from_path(&path, search_path).unwrap_or(unknown);
+        let module_name = ModuleName::from_path(&path, search_path).unwrap_or(unknown);
 
         self.path_data
             .entry(path)

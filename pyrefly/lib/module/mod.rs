@@ -6,7 +6,6 @@
  */
 
 pub mod finder;
-pub mod from_path;
 pub mod parse;
 pub mod typeshed;
 
