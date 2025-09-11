@@ -421,7 +421,7 @@ pub fn find_import_filtered(
     let origin = origin.map(|p| p.as_path());
     if module != ModuleName::builtins() && config.replace_imports_with_any(origin, module) {
         Err(FindError::Ignored)
-    } else if let Some(sourcedb) = &config.source_db
+    } else if let Some(sourcedb) = config.source_db.read().as_ref()
         && let Some(path) = sourcedb.lookup(&module, origin)
     {
         Ok(path.clone())

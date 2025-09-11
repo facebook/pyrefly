@@ -19,6 +19,7 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
+use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::SliceExt;
 use starlark_map::small_map::SmallMap;
 
@@ -84,7 +85,7 @@ impl Incremental {
                 ModulePath::memory(PathBuf::from(file)),
             );
         }
-        config.source_db = Some(ArcId::new(Box::new(sourcedb)));
+        config.source_db = Arc::new(RwLock::new(Some(Box::new(sourcedb))));
         config.configure();
         let config = ArcId::new(config);
 

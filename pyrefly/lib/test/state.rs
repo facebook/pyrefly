@@ -19,6 +19,7 @@ use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::SliceExt;
 
 use crate::config::config::ConfigFile;
@@ -98,12 +99,12 @@ fn test_multiple_path() {
             ModulePath::memory(PathBuf::from(path)),
         );
     }
-    config.source_db = Some(ArcId::new(Box::new(sourcedb)));
+    config.source_db = Arc::new(RwLock::new(Some(Box::new(sourcedb))));
     config.configure();
     let config = ArcId::new(config);
 
     let state = State::new(ConfigFinder::new_constant(config.clone()));
-    let handles = config.source_db.as_ref().unwrap().modules_to_check();
+    let handles = config.source_db.read().as_ref().unwrap().modules_to_check();
     let mut transaction = state.new_transaction(Require::Exports, None);
     transaction.set_memory(
         FILES.map(|(_, path, contents)| {

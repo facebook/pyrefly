@@ -233,7 +233,7 @@ impl Workspaces {
             // we print the errors here instead of returning them since
             // it gives the most immediate feedback for config loading errors
             let mut config_errors = config.configure();
-            if config.source_db.is_some() {
+            if config.source_db.read().is_some() {
                 // TODO(connernilsen): support sourcedb-pased LSP
                 config_errors.push(ConfigError::error(anyhow::anyhow!(
                     "BUILD SYSTEMS DO NOT YET WORK IN LSP MODE"

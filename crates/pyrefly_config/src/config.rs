@@ -10,10 +10,12 @@ use std::fmt;
 use std::fmt::Display;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use derivative::Derivative;
 use dupe::Dupe as _;
 use itertools::Itertools;
 use pyrefly_build::BuildSystem;
@@ -25,11 +27,11 @@ use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::absolutize::Absolutize as _;
-use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::Glob;
 use pyrefly_util::globs::Globs;
+use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
 use serde::Deserialize;
 use serde::Serialize;
@@ -178,8 +180,9 @@ impl ImportLookupPathPart<'_> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Derivative)]
 #[serde(rename_all = "kebab-case")]
+#[derivative(PartialEq, Eq)]
 pub struct ConfigFile {
     #[serde(skip)]
     pub source: ConfigSource,
@@ -295,7 +298,8 @@ pub struct ConfigFile {
     /// especially within the context of a build system. This is used for getting handles
     /// for a path and doing module finding.
     #[serde(skip, default)]
-    pub source_db: Option<ArcId<Box<dyn SourceDatabase>>>,
+    #[derivative(PartialEq = "ignore")]
+    pub source_db: Arc<RwLock<Option<Box<dyn SourceDatabase>>>>,
 
     /// Skips the check to ensure any `-stubs` `site_package_path` entries have an
     /// installed non-stubs package.
@@ -571,6 +575,7 @@ impl ConfigFile {
     pub fn handle_from_module_path(&self, module_path: ModulePath) -> Handle {
         match &self
             .source_db
+            .read()
             .as_ref()
             .map(|db| db.handle_from_module_path(module_path.dupe()))
         {
