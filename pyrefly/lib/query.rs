@@ -168,6 +168,11 @@ impl Query {
     }
 
     fn make_handle(&self, name: ModuleName, path: ModulePath) -> Handle {
+        let config = self.state.config_finder().python_file(name.dupe(), &path);
+        if config.source_db.is_some() {
+            panic!("Pyrefly doesn't support sourcedb-powered queries yet");
+        }
+        // TODO(connernilsen): make this work with build systems
         Handle::new(name, path, self.sys_info.dupe())
     }
 

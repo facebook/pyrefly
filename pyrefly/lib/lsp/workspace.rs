@@ -13,6 +13,7 @@ use dupe::Dupe;
 use itertools::Itertools;
 use lsp_types::Url;
 use lsp_types::WorkspaceFoldersChangeEvent;
+use pyrefly_config::finder::ConfigError;
 use pyrefly_python::COMPILED_FILE_SUFFIXES;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_util::arc_id::ArcId;
@@ -231,7 +232,13 @@ impl Workspaces {
 
             // we print the errors here instead of returning them since
             // it gives the most immediate feedback for config loading errors
-            let config_errors = config.configure();
+            let mut config_errors = config.configure();
+            if config.source_db.is_some() {
+                // TODO(connernilsen): support sourcedb-pased LSP
+                config_errors.push(ConfigError::error(anyhow::anyhow!(
+                    "BUILD SYSTEMS DO NOT YET WORK IN LSP MODE"
+                )));
+            }
             if !config_errors.is_empty() {
                 for error in config.configure() {
                     error.print();
