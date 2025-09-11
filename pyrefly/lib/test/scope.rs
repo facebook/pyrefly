@@ -636,7 +636,7 @@ __all__ += []  # E: Could not find name `__all__`
 
 // https://github.com/facebook/pyrefly/issues/264
 testcase!(
-    bug = "This was implemented but we backed it out due to subtleties - see D82224938. All these should show `Literal['string']`",
+    bug = "All these should show `Literal['string']`. The issue with comprehension persists, see also the next test case.",
     test_class_scope_lookups_when_skip,
     r#"
 from typing import reveal_type
@@ -650,9 +650,9 @@ class A:
     x = 42
     def f():
         reveal_type(x) # E: revealed type: Literal['string']
-    lambda_f = lambda: reveal_type(x) # E: revealed type: Literal[42]
+    lambda_f = lambda: reveal_type(x) # E: revealed type: Literal['string']
     class B:
-        reveal_type(x) # E: revealed type: Literal[42]
+        reveal_type(x) # E: revealed type: Literal['string']
     [reveal_type(x) for _ in range(1)] # E: revealed type: Literal[42]
 "#,
 );
