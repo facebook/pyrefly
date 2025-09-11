@@ -833,7 +833,6 @@ Completion Results:
     );
 }
 
-// todo(kylei): completion on literal
 #[test]
 fn completion_literal() {
     let code = r#"
@@ -850,7 +849,135 @@ foo(
 4 | foo(
         ^
 Completion Results:
+- (Value) 'foo': Literal['foo']
 - (Variable) x=: Literal['foo']
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_union() {
+    let code = r#"
+from typing import Literal, Union
+def foo(x: Union[Literal['foo'] | Literal['bar']]): ...
+foo(
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+4 | foo(
+        ^
+Completion Results:
+- (Value) 'bar': Literal['bar']
+- (Value) 'foo': Literal['foo']
+- (Variable) x=: Literal['bar', 'foo']
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_union_being_typed() {
+    let code = r#"
+from typing import Literal, Union
+def foo(x: Union[Literal['foo'] | Literal['bar']]): ...
+foo('
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+4 | foo('
+         ^
+Completion Results:
+- (Value) 'bar': Literal['bar']
+- (Value) 'foo': Literal['foo']
+- (Variable) x=: Literal['bar', 'foo']
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_union_alias() {
+    let code = r#"
+from typing import Literal, Union
+MyUnion = Union[Literal['foo'], Literal['bar']]
+def foo(x: MyUnion): ...
+foo(
+#   ^
+
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+5 | foo(
+        ^
+Completion Results:
+- (Value) 'bar': Literal['bar']
+- (Value) 'foo': Literal['foo']
+- (Variable) x=: Literal['bar', 'foo']
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_union_multiple_types() {
+    let code = r#"
+from typing import Literal, Union, LiteralString
+def foo(x: Union[Literal['foo'] | Literal[1] | LiteralString]): ...
+foo(
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+4 | foo(
+        ^
+Completion Results:
+- (Value) 1: Literal[1]
+- (Variable) x=: Literal[1] | LiteralString
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_nested() {
+    let code = r#"
+from typing import Literal, Union
+class Foo: ...
+def foo(x: Union[Union[Literal['foo']] | Literal[1] | Foo]): ...
+foo(
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+5 | foo(
+        ^
+Completion Results:
+- (Value) 'foo': Literal['foo']
+- (Value) 1: Literal[1]
+- (Variable) x=: Literal['foo', 1] | Foo
 "#
         .trim(),
         report.trim(),

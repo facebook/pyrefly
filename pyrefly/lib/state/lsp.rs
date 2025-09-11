@@ -1914,6 +1914,42 @@ impl<'a> Transaction<'a> {
             });
     }
 
+    fn add_literal_completions(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        completions: &mut Vec<CompletionItem>,
+    ) {
+        if let Some((callables, chosen_overload_index, arg_index)) =
+            self.get_callables_from_call(handle, position)
+            && let Some(callable) = callables.get(chosen_overload_index)
+            && let Some(params) =
+                Self::normalize_singleton_function_type_into_params(callable.clone())
+            && let Some(param) = params.get(arg_index)
+        {
+            Self::add_literal_completions_from_type(param.as_type(), completions);
+        }
+    }
+
+    fn add_literal_completions_from_type(param_type: &Type, completions: &mut Vec<CompletionItem>) {
+        match param_type {
+            Type::Literal(lit) => {
+                completions.push(CompletionItem {
+                    label: lit.to_string(),
+                    kind: Some(CompletionItemKind::VALUE),
+                    detail: Some(format!("{}", param_type)),
+                    ..Default::default()
+                });
+            }
+            Type::Union(types) => {
+                for union_type in types {
+                    Self::add_literal_completions_from_type(union_type, completions);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn completion(
         &self,
         handle: &Handle,
@@ -2051,6 +2087,7 @@ impl<'a> Transaction<'a> {
                         self.add_local_variable_completions(handle, None, position, &mut result);
                         self.add_builtins_autoimport_completions(handle, None, &mut result);
                     }
+                    self.add_literal_completions(handle, position, &mut result);
                     // in foo(x=<>, y=2<>), the first containing node is AnyNodeRef::Arguments(_)
                     // in foo(<>), the first containing node is AnyNodeRef::ExprCall
                     if let Some(first) = nodes.first()
