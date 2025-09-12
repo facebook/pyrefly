@@ -393,6 +393,59 @@ Completion Results:
 }
 
 #[test]
+fn from_import_deprecated() {
+    let foo_code = r#"
+from warnings import deprecated
+
+def func_ok():
+    ...
+@deprecated("this is not ok")
+def func_not_ok():
+    ...
+"#;
+    let main_code = r#"
+from foo import func
+#          ^        ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main_code), ("foo", foo_code)],
+        get_default_test_report(),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from foo import func
+               ^
+Completion Results:
+
+2 | from foo import func
+                        ^
+Completion Results:
+- (Variable) deprecated
+- (Variable) [DEPRECATED] func_not_ok
+- (Variable) func_ok
+- (Variable) __annotations__
+- (Variable) __builtins__
+- (Variable) __cached__
+- (Variable) __debug__
+- (Variable) __dict__
+- (Variable) __doc__
+- (Variable) __file__
+- (Variable) __loader__
+- (Variable) __name__
+- (Variable) __package__
+- (Variable) __path__
+- (Variable) __spec__
+
+
+# foo.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn from_import_basic() {
     let foo_code = r#"
 imperial_guard = "cool"

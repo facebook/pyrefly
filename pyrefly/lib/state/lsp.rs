@@ -13,6 +13,7 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
+use lsp_types::CompletionItemTag;
 use lsp_types::DocumentSymbol;
 use lsp_types::ParameterInformation;
 use lsp_types::ParameterLabel;
@@ -2005,11 +2006,17 @@ impl<'a> Transaction<'a> {
                         })
                     }
                     let exports = self.get_exports(&handle);
-                    for name in exports.keys() {
+                    for (name, export) in exports.iter() {
+                        let is_deprecated = matches!(export, ExportLocation::ThisModule(export) if export.is_deprecated);
                         result.push(CompletionItem {
                             label: name.to_string(),
                             // todo(kylei): completion kind for exports
                             kind: Some(CompletionItemKind::VARIABLE),
+                            tags: if is_deprecated {
+                                Some(vec![CompletionItemTag::DEPRECATED])
+                            } else {
+                                None
+                            },
                             ..Default::default()
                         })
                     }
