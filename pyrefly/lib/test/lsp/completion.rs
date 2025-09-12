@@ -1305,6 +1305,39 @@ Completion Results:
 }
 
 #[test]
+fn autoimport_relative_on_deprecated() {
+    let code = r#"
+T = foooooo
+#       ^
+"#;
+    let bar_code = r#"
+from warnings import deprecated
+@deprecated("this is not ok")
+def foooooo():
+    ...
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("bar", bar_code)],
+        get_test_report(Default::default(), ImportFormat::Relative),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | T = foooooo
+            ^
+Completion Results:
+- (Function) [DEPRECATED] foooooo: from .bar import foooooo
+
+
+
+# bar.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn autoimport_completions_on_builtins() {
     let code = r#"
 T = Literal
