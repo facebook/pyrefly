@@ -23,6 +23,8 @@ use crate::handle::Handle;
 use crate::source_db::SourceDatabase;
 use crate::source_db::Target;
 
+/// An enum representing something that has been included by the build system, and
+/// which the build system should query for when building the sourcedb.
 #[derive(Debug, PartialEq, Eq, Hash)]
 enum Include {
     #[allow(unused)]
@@ -32,8 +34,18 @@ enum Include {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct BuckSourceDatabase {
+    /// The mapping from targets to their manifests, including sources, dependencies,
+    /// and metadata. This is the source of truth.
     db: SmallMap<Target, PythonLibraryManifest>,
+    /// An index for doing fast lookups of a path to its owning target.
+    /// Invariants:
+    /// - if a path exists in `path_lookup`, its target must exist in `db`.
+    /// - if a path exists in `path_lookup`, its target's `srcs` must have a
+    ///   module name with `path` as a module path.
     path_lookup: SmallMap<PathBuf, Target>,
+    /// The set of items the sourcedb has been queried for. Not all of the targets
+    /// or files listed here will necessarily appear in the sourcedb, for example,
+    /// if the given target does not exist, or if the file is not tracked by Buck.
     includes: SmallSet<Include>,
 }
 
@@ -70,39 +82,45 @@ impl BuckSourceDatabase {
     }
 
     fn handles_for_include(&self, include: &Include) -> Vec<Handle> {
-        match include {
-            Include::Target(target) => {
-                let manifest = self.db.get(target).unwrap();
-                manifest
-                    .srcs
-                    .iter()
-                    .flat_map(|(name, paths)| {
-                        paths.iter().map(|p| {
-                            Handle::new(
-                                name.dupe(),
-                                ModulePath::filesystem(p.to_path_buf()),
-                                manifest.sys_info.dupe(),
-                            )
+        fn get_include(this: &BuckSourceDatabase, include: &Include) -> Option<Vec<Handle>> {
+            match include {
+                Include::Target(target) => {
+                    let manifest = this.db.get(target)?;
+                    Some(manifest
+                        .srcs
+                        .iter()
+                        .flat_map(|(name, paths)| {
+                            paths.iter().map(|p| {
+                                Handle::new(
+                                    name.dupe(),
+                                    ModulePath::filesystem(p.to_path_buf()),
+                                    manifest.sys_info.dupe(),
+                                )
+                            })
                         })
-                    })
-                    .collect()
-            }
-            Include::Path(path) => {
-                let target = self.path_lookup.get(path).unwrap();
-                let manifest = self.db.get(target).unwrap();
-                let module_name = manifest
-                    .srcs
-                    .iter()
-                    .find(|(_, paths)| paths.contains(path))
-                    .unwrap()
-                    .0;
-                vec![Handle::new(
-                    module_name.dupe(),
-                    ModulePath::filesystem(path.to_path_buf()),
-                    manifest.sys_info.dupe(),
-                )]
+                    .collect())
+                }
+                Include::Path(path) => {
+                    let target = this.path_lookup.get(path)?;
+                    // if we get a target from `path_lookup`, it must exist in manifest
+                    let manifest = this.db.get(target).unwrap();
+                    let module_name = manifest
+                        .srcs
+                        .iter()
+                        .find(|(_, paths)| paths.contains(path))
+                        // similarly, if we get a target for a path in `path_lookup`, it must exist
+                        // in that target's srcs
+                        .unwrap()
+                        .0;
+                    Some(vec![Handle::new(
+                        module_name.dupe(),
+                        ModulePath::filesystem(path.to_path_buf()),
+                        manifest.sys_info.dupe(),
+                    )])
+                }
             }
         }
+        get_include(self, include).unwrap_or_default()
     }
 }
 
@@ -142,11 +160,14 @@ impl SourceDatabase for BuckSourceDatabase {
             return Handle::new(ModuleName::unknown(), module_path, SysInfo::default());
         };
 
+        // if we get a target from `path_lookup`, it must exist in manifest
         let manifest = self.db.get(target).unwrap();
         let module_name = manifest
             .srcs
             .iter()
             .find(|(_, paths)| paths.iter().any(|p| p == module_path.as_path()))
+            // similarly, if we get a target for a path in `path_lookup`, it must exist
+            // in that target's srcs
             .unwrap()
             .0;
         Handle::new(

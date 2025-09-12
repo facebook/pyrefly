@@ -6,6 +6,7 @@
  */
 
 use std::ffi::OsStr;
+use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
