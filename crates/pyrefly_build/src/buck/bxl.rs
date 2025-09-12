@@ -86,19 +86,21 @@ impl BuckSourceDatabase {
             match include {
                 Include::Target(target) => {
                     let manifest = this.db.get(target)?;
-                    Some(manifest
-                        .srcs
-                        .iter()
-                        .flat_map(|(name, paths)| {
-                            paths.iter().map(|p| {
-                                Handle::new(
-                                    name.dupe(),
-                                    ModulePath::filesystem(p.to_path_buf()),
-                                    manifest.sys_info.dupe(),
-                                )
+                    Some(
+                        manifest
+                            .srcs
+                            .iter()
+                            .flat_map(|(name, paths)| {
+                                paths.iter().map(|p| {
+                                    Handle::new(
+                                        name.dupe(),
+                                        ModulePath::filesystem(p.to_path_buf()),
+                                        manifest.sys_info.dupe(),
+                                    )
+                                })
                             })
-                        })
-                    .collect())
+                            .collect(),
+                    )
                 }
                 Include::Path(path) => {
                     let target = this.path_lookup.get(path)?;

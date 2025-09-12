@@ -1300,6 +1300,38 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    pub fn invalidate_for_build_system_config(&mut self, config: ArcId<ConfigFile>) {
+        // First do the work of clearing out the loaders for our config, but preserve all the other
+        // loaders.
+        let new_loaders = LockedMap::new();
+        self.data
+            .updated_loaders
+            .iter_unordered()
+            .chain(self.readable.loaders.iter())
+            .filter(|(c, _)| *c != &config)
+            .for_each(|(c, l)| {
+                new_loaders.insert(c.dupe(), l.dupe());
+            });
+        new_loaders.insert(config.dupe(), Arc::new(LoaderFindCache::new(config.dupe())));
+        self.data.updated_loaders = new_loaders;
+
+        // Then mark all handles under that config as dirty.
+        let mut dirty_set = self.data.dirty.lock();
+        for module_data in self.data.updated_modules.values() {
+            if config == *module_data.config.read() {
+                module_data.state.write(Step::Load).unwrap().dirty.find = true;
+                dirty_set.insert(module_data.dupe());
+            }
+        }
+        for (handle, module_data) in self.readable.modules.iter() {
+            if self.data.updated_modules.get(handle).is_none() && module_data.config == config {
+                let module_data = self.get_module(handle);
+                module_data.state.write(Step::Load).unwrap().dirty.find = true;
+                dirty_set.insert(module_data.dupe());
+            }
+        }
+    }
+
     /// Called if the `load_from_memory` portion of loading might have changed.
     /// Specify which in-memory files might have changed, use None to say they don't exist anymore.
     pub fn set_memory(&mut self, files: Vec<(PathBuf, Option<Arc<String>>)>) {

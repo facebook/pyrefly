@@ -145,6 +145,7 @@ use lsp_types::request::WorkspaceConfiguration;
 use lsp_types::request::WorkspaceSymbolRequest;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::config::ConfigSource;
+use pyrefly_config::finder::ConfigFinder;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
@@ -924,29 +925,6 @@ impl Server {
         open_files: &RwLock<HashMap<PathBuf, Arc<String>>>,
         transaction: &mut Transaction<'_>,
     ) -> Vec<Handle> {
-        open_files
-            .read()
-            .keys()
-            .map(|p| {
-                (
-                    p,
-                    state.config_finder().python_file(
-                        ModuleName::unknown(),
-                        &ModulePath::filesystem(p.to_path_buf()),
-                    ),
-                )
-            })
-            .fold(
-                SmallMap::new(),
-                |mut acc: SmallMap<_, SmallSet<PathBuf>>, (path, config)| {
-                    acc.entry(config).or_default().insert(path.to_path_buf());
-                    acc
-                },
-            )
-            .into_iter()
-            .for_each(|(config, paths)| {
-                let _ = config.setup_sourcedb_for_files(&paths);
-            });
         let handles = open_files
             .read()
             .keys()
@@ -1011,6 +989,35 @@ impl Server {
         }
     }
 
+    fn reload_configs_for_open_files(
+        config_finder: &ConfigFinder,
+        files: &RwLock<HashMap<PathBuf, Arc<String>>>,
+    ) {
+        files
+            .read()
+            .keys()
+            .map(|p| {
+                (
+                    p,
+                    config_finder.python_file(
+                        ModuleName::unknown(),
+                        &ModulePath::filesystem(p.to_path_buf()),
+                    ),
+                )
+            })
+            .fold(
+                SmallMap::new(),
+                |mut acc: SmallMap<_, SmallSet<PathBuf>>, (path, config)| {
+                    acc.entry(config).or_default().insert(path.to_path_buf());
+                    acc
+                },
+            )
+            .into_iter()
+            .for_each(|(config, paths)| {
+                let _ = config.setup_sourcedb_for_files(&paths);
+            });
+    }
+
     fn validate_in_memory<'a>(&'a self, ide_transaction_manager: &mut TransactionManager<'a>) {
         let mut possibly_committable_transaction =
             ide_transaction_manager.get_possibly_committable_transaction(&self.state);
@@ -1018,6 +1025,12 @@ impl Server {
             Ok(transaction) => transaction.as_mut(),
             Err(transaction) => transaction,
         };
+        // TODO:(connernilsen): this needs to move up somewhere?
+        // otherwise, right now, it seems like it will get into a recursive loop.
+        // probably in a lot of places before this is called
+        // did_open, did_close, did_save, did_change_watched_file when target
+        Self::reload_configs_for_open_files(self.state.config_finder(), &self.open_files);
+        self.invalidate_find_for_config(/* configs from before */);
         let handles =
             Self::validate_in_memory_for_transaction(&self.state, &self.open_files, transaction);
 
@@ -1989,6 +2002,10 @@ impl Server {
 
     fn invalidate_config(&self) {
         self.invalidate(|t| t.invalidate_config());
+    }
+
+    fn invalidate_find_for_config(&self, config: ArcId<ConfigFile>) {
+        self.invalidate(|t| t.invalidate_for_build_system_config(config));
     }
 }
 
