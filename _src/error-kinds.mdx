@@ -234,6 +234,29 @@ That means everywhere that we call `Base.f` can safely call `Sub.f`.
 
 The opposite case, where `Base.f` takes `float` and `Sub.f` takes `int`, is an error because `Sub.f` cannot accept every `float` value.
 
+Note that bad overrides caused by inconsistent parameter names are separately reported as [bad-param-name-override](#bad-param-name-override).
+
+## bad-param-name-override
+
+Arises when a subclass overrides a method of its base class while changing the name of a positional parameter.
+This is a type of [bad override](#bad-override) but has a separate error kind so that it can be selectively disabled if desired.
+Changing the name of a parameter breaks callers that pass in an argument by name:
+
+```python
+class Base:
+  def f(self, a: int) -> None:
+    pass
+
+class Sub(Base):
+  def f(self, b: int) -> None:
+    pass
+
+def f(base: Base):
+  base.f(a=0)
+
+f(Sub())  # oops!
+```
+
 ## bad-return
 
 Arises when a function does not return a value that is compatible with the function's return type annotation.

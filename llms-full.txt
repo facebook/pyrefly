@@ -1748,6 +1748,29 @@ That means everywhere that we call `Base.f` can safely call `Sub.f`.
 
 The opposite case, where `Base.f` takes `float` and `Sub.f` takes `int`, is an error because `Sub.f` cannot accept every `float` value.
 
+Note that bad overrides caused by inconsistent parameter names are separately reported as [bad-param-name-override](#bad-param-name-override).
+
+## bad-param-name-override
+
+Arises when a subclass overrides a method of its base class while changing the name of a positional parameter.
+This is a type of [bad override](#bad-override) but has a separate error kind so that it can be selectively disabled if desired.
+Changing the name of a parameter breaks callers that pass in an argument by name:
+
+```python
+class Base:
+  def f(self, a: int) -> None:
+    pass
+
+class Sub(Base):
+  def f(self, b: int) -> None:
+    pass
+
+def f(base: Base):
+  base.f(a=0)
+
+f(Sub())  # oops!
+```
+
 ## bad-return
 
 Arises when a function does not return a value that is compatible with the function's return type annotation.
@@ -3232,6 +3255,132 @@ Welcome to the Pyrefly migration guide. This section provides resources to help 
 - [Migrating from Pyright](migrating-from-pyright.mdx) - Guide for transitioning from Pyright to Pyrefly
 
 Choose the appropriate guide based on your current type checker to get started with your migration to Pyrefly.
+
+
+---
+
+---
+title: Experimental Pydantic Support
+description: Pyrefly experimental support for Pydantic.
+---
+
+# Experimental Pydantic Support
+
+Pyrefly includes **experimental support** for [Pydantic](https://pydantic.dev/), a popular Python library for data validation and parsing. This feature aims to provide improved static type checking and IDE integration for Pydantic models.
+
+> **Note:** This support is experimental and actively evolving. The design may change based on feedback and development.
+
+---
+
+## What is Pydantic?
+
+Pydantic is a Python library designed for data validation and parsing using Python type annotations. While it shares similarities with dataclasses in creating structured data containers, Pydantic additionally provides extensive runtime data validation.
+
+---
+
+## Validation Modes
+
+Pydantic supports two validation modes for Pydantic models:
+
+- **Lax (Default)**: Values are automatically converted when possible. For example, the string `"123"` will be interpreted as an integer.
+- **Strict**: Coercion is disabled, and only exactly matching types are accepted.
+
+Pyrefly reads your model config to determine the validation mode, so it can strike a balance between providing useful typing and IDE support while maintaining Pydantic's flexibility.
+
+---
+
+## How Pyrefly Supports Pydantic
+
+- Understands Pydantic constructs like `BaseModel`, `Field`, `ConfigDict`, and model-level config options.
+- Performs static analysis that mirrors Pydantic’s runtime validation logic, minimizing false positives in your IDE.
+- Provides immediate feedback (e.g. red squiggles or type errors) when the code would fail under Pydantic's actual behavior.
+- Does **not** require a plugin or manual config — support is builtin and automatic.
+
+---
+
+## Comparison to Existing Tools
+
+[Mypy’s Pydantic plugin](https://docs.pydantic.dev/1.10/mypy_plugin/) has five configuration options to control how strict the checking is — for example, whether coercion is allowed or extra fields are permitted.
+**Pyrefly works differently**. It doesn't rely on external config. Instead, it inspects your code directly — things like `strict=True` or `extra='forbid'` and strikes a balance between Pydantic's flexibility and Pyrefly's type checking.
+
+---
+
+## How to Use
+
+You don’t need to enable or configure anything to use Pyrefly’s Pydantic support.
+
+Just:
+
+1. Install `pydantic` (preferably v2).
+2. Write your Pydantic models as usual.
+3. Run Pyrefly on your code.
+
+Pyrefly will recognize Pydantic constructs like `BaseModel`, `Field`, and `model_config`, and provide appropriate type checking automatically.
+
+---
+## Examples
+
+
+
+### Immutable fields with ConfigDict
+
+```python
+from pydantic import BaseModel, ConfigDict
+
+# Marking a model as frozen (immutable)
+class Model(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    x: int = 42
+m = Model()
+m.x = 10  # Error: Cannot set field `x` because the model is frozen
+```
+
+
+### Strict vs Non-Strict Field Validation
+
+```python
+from pydantic import BaseModel, Field
+
+# Non-strict mode: runtime coercion allowed
+class User(BaseModel):
+    name: str
+    age: int
+
+# This passes at runtime and in Pyrefly.
+y = User(name="Alice", age="30")
+
+# Strict mode: enforce exact types, no coercion
+class User2(BaseModel):
+    name: str
+    age: int = Field(strict=True)
+
+# This triggers type errors in Pyrefly and red squiggles in the IDE,
+# and will also fail at runtime due to type mismatch.
+z = User2(name="Alice", age="30")
+```
+
+### Handling Extra Fields in Pydantic Models
+
+By default, Pydantic models allow extra fields (fields not defined in the model) to be passed during initialization. This behavior is consistent with Pyrefly’s support, which follows the default `extra='allow'` behavior.
+
+
+```python
+from pydantic import BaseModel
+
+# Extra fields allowed by default
+class ModelAllow(BaseModel):
+    x: int
+
+# This works fine: extra field `y` is allowed and ignored
+ModelAllow(x=1, y=2)
+
+# Explicitly forbid extra fields by setting `extra='forbid'`
+class ModelForbid(BaseModel, extra="forbid"):
+    x: int
+
+# This will raise a type error because of unexpected field `y`, which is consistent with runtime behavior.
+ModelForbid(x=1, y=2)
+```
 
 
 ---
