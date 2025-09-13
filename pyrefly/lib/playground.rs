@@ -215,10 +215,26 @@ impl Playground {
         let mut module_mappings = HashMap::new();
 
         for (filename, content) in &files {
-            let module_name =
-                ModuleName::from_str(filename.strip_suffix(".py").unwrap_or(filename));
+            // Convert file paths to proper Python module names
+            // e.g., "pydantic/main.py" -> "pydantic.main"
+            // e.g., "pydantic/__init__.py" -> "pydantic" (not "pydantic.__init__")
+            // e.g., "src/utils/helper.py" -> "src.utils.helper"
+            let raw_module_name = filename
+                .strip_suffix(".py")
+                .unwrap_or(filename)
+                .replace('/', ".");
 
-            let module_path = PathBuf::from(format!("{}.py", module_name.as_str()));
+            // Handle __init__.py files correctly - they should map to the package name, not package.__init__
+            let module_name_str = if raw_module_name.ends_with(".__init__") {
+                raw_module_name.strip_suffix(".__init__").unwrap_or(&raw_module_name).to_owned()
+            } else {
+                raw_module_name
+            };
+
+            let module_name = ModuleName::from_str(&module_name_str);
+
+            // Keep the original file path structure for the module path
+            let module_path = PathBuf::from(filename);
             let memory_path = ModulePath::memory(module_path.clone());
 
             module_mappings.insert(module_name, memory_path.dupe());
