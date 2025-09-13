@@ -118,10 +118,10 @@ movie: Movie = {'name': 'Blade Runner',
             expect(definition).toBeDefined();
 
             // expect that location is correct
-            expect(definition.startLineNumber).toBe(13);
-            expect(definition.startColumn).toBe(5);
-            expect(definition.endLineNumber).toBe(13);
-            expect(definition.endColumn).toBe(9);
+            expect(definition.range.startLineNumber).toBe(13);
+            expect(definition.range.startColumn).toBe(5);
+            expect(definition.range.endLineNumber).toBe(13);
+            expect(definition.range.endColumn).toBe(9);
         });
     });
 
