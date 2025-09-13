@@ -91,6 +91,10 @@ export default function Sandbox({
     const [activeFileName, setActiveFileName] = useState<string>('sandbox.py');
     const [renamingFile, setRenamingFile] = useState<string | null>(null);
     const [renameInputValue, setRenameInputValue] = useState<string>('');
+    const [folders, setFolders] = useState<Set<string>>(new Set());
+    const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+    const [creatingFolder, setCreatingFolder] = useState<boolean>(false);
+    const [newFolderPath, setNewFolderPath] = useState<string>('');
     const [pyodideStatus, setPyodideStatus] = useState<PyodideStatus>(
         PyodideStatus.NOT_INITIALIZED
     );
@@ -100,8 +104,64 @@ export default function Sandbox({
     const [pythonVersion, setPythonVersion] = useState('3.12');
     const model = models.get(activeFileName) || null;
 
+    // Helper functions for folder and path management
+    const createFolderIfNotExists = useCallback((folderPath: string) => {
+        if (folderPath && !folders.has(folderPath)) {
+            setFolders(prev => new Set(prev).add(folderPath));
+        }
+    }, [folders]);
+
+    const getParentFolder = useCallback((filePath: string): string => {
+        const parts = filePath.split('/');
+        return parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+    }, []);
+
+    const getFileName = useCallback((filePath: string): string => {
+        const parts = filePath.split('/');
+        return parts[parts.length - 1];
+    }, []);
+
+    const getAllFoldersInPath = useCallback((filePath: string): string[] => {
+        const parts = filePath.split('/');
+        const folders: string[] = [];
+        for (let i = 1; i < parts.length; i++) {
+            folders.push(parts.slice(0, i).join('/'));
+        }
+        return folders;
+    }, []);
+
+    // Create __init__.py files for Python packages
+    const createInitFiles = useCallback((fileName: string, currentModels: Map<string, editor.ITextModel>) => {
+        const parentFolder = getParentFolder(fileName);
+        if (parentFolder) {
+            const allFoldersInPath = getAllFoldersInPath(fileName);
+            allFoldersInPath.forEach(folder => {
+                const initFile = `${folder}/__init__.py`;
+
+                // Only create __init__.py if it doesn't exist yet
+                if (!currentModels.has(initFile)) {
+                    const existingModel = monaco.editor.getModels().find(m => m.uri.path === `/${initFile}`);
+
+                    if (!existingModel) {
+                        const initModel = monaco.editor.createModel('', 'python', monaco.Uri.file(`/${initFile}`));
+                        setModels(prev => new Map(prev).set(initFile, initModel));
+                    }
+                }
+            });
+        }
+    }, [getParentFolder, getAllFoldersInPath]);
+
     // File management functions
     const createNewFile = useCallback((fileName: string, content: string = '') => {
+        // Create any parent folders if they don't exist
+        const parentFolder = getParentFolder(fileName);
+        if (parentFolder) {
+            const allFoldersInPath = getAllFoldersInPath(fileName);
+            allFoldersInPath.forEach(folder => createFolderIfNotExists(folder));
+
+            // Create __init__.py files for Python packages
+            createInitFiles(fileName, models);
+        }
 
         // Lets see if model already exists in Monaco
         const existingModel = monaco.editor.getModels().find(m => m.uri.path === `/${fileName}`);
@@ -118,6 +178,31 @@ export default function Sandbox({
 
         setModels(prev => new Map(prev).set(fileName, newModel));
         setActiveFileName(fileName);
+    }, [getParentFolder, getAllFoldersInPath, createFolderIfNotExists, createInitFiles]);
+
+    // Create a new folder
+    const createNewFolder = useCallback((folderPath: string) => {
+        if (!folderPath.trim() || folders.has(folderPath)) return false;
+
+        // Create all parent folders if they don't exist
+        const allFoldersInPath = getAllFoldersInPath(folderPath + '/dummy');
+        allFoldersInPath.forEach(folder => createFolderIfNotExists(folder));
+
+        setExpandedFolders(prev => new Set(prev).add(folderPath));
+        return true;
+    }, [folders, getAllFoldersInPath, createFolderIfNotExists]);
+
+    // Toggle folder expansion
+    const toggleFolder = useCallback((folderPath: string) => {
+        setExpandedFolders(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(folderPath)) {
+                newSet.delete(folderPath);
+            } else {
+                newSet.add(folderPath);
+            }
+            return newSet;
+        });
     }, []);
 
     // Switch to a different file
@@ -262,6 +347,18 @@ export default function Sandbox({
             return newMap;
         });
 
+        // Clean up empty folders after file deletion
+        const parentFolder = getParentFolder(fileName);
+        if (parentFolder) {
+            setTimeout(() => {
+                const remainingFiles = Array.from(models.keys()).filter(f => f !== fileName);
+                const hasFilesInFolder = remainingFiles.some(f => f.startsWith(parentFolder + '/'));
+                if (!hasFilesInFolder) {
+                    setFolders(prev => new Set(Array.from(prev).filter(f => !f.startsWith(parentFolder))));
+                    setExpandedFolders(prev => new Set(Array.from(prev).filter(f => !f.startsWith(parentFolder))));
+                }
+            }, 10);
+        }
 
         // If this was the active file, switch to sandbox.py
         if (activeFileName === fileName) {
@@ -285,94 +382,273 @@ export default function Sandbox({
         }, 100);
 
         return true;
-    }, [models, activeFileName, renamingFile]);
+    }, [models, activeFileName, renamingFile, getParentFolder]);
 
-    const TabBar = () => (
-        <div {...stylex.props(styles.tabBar)}>
-            {Array.from(models.keys()).map(fileName => (
-                <div key={fileName} {...stylex.props(styles.tabContainer)}>
-                    {renamingFile === fileName ? (
-                        <div {...stylex.props(
-                            styles.renameContainer,
-                            !isValidFilename(renameInputValue, fileName) && styles.invalidInput
-                        )}>
-                            <input
-                                {...stylex.props(styles.renameInput)}
-                                value={renameInputValue}
-                                onChange={(e) => setRenameInputValue(e.target.value)}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter' || (e.ctrlKey && e.key === 's')) {
-                                        e.preventDefault();
-                                        handleRenameSave();
-                                    } else if (e.key === 'Escape') {
-                                        setRenamingFile(null);
-                                        setRenameInputValue('');
-                                    }
-                                }}
-                                onBlur={handleRenameSave}
-                                placeholder="Enter filename"
-                                autoFocus
-                            />
-                            <span {...stylex.props(styles.extensionLabel)}>.py</span>
-                        </div>
-                    ) : (
-                        <button
-                            onClick={() => switchToFile(fileName)}
-                            {...stylex.props(
-                                styles.tabButton,
-                                fileName === activeFileName && styles.tabButtonActive
+    // Build file tree structure
+    const buildFileTree = useCallback(() => {
+        const tree: Record<string, any> = {};
+        const allFiles = Array.from(models.keys());
+
+        // Add all folders first
+        folders.forEach(folder => {
+            const parts = folder.split('/');
+            let current = tree;
+            for (const part of parts) {
+                if (!current[part]) {
+                    current[part] = { type: 'folder', children: {} };
+                }
+                current = current[part].children;
+            }
+        });
+
+        // Add files
+        allFiles.forEach(filePath => {
+            const parts = filePath.split('/');
+            let current = tree;
+
+            // Navigate to parent folder
+            for (let i = 0; i < parts.length - 1; i++) {
+                const part = parts[i];
+                if (!current[part]) {
+                    current[part] = { type: 'folder', children: {} };
+                }
+                current = current[part].children;
+            }
+
+            // Add the file
+            const fileName = parts[parts.length - 1];
+            current[fileName] = { type: 'file', path: filePath };
+        });
+
+        return tree;
+    }, [models, folders]);
+
+    // Render file tree recursively
+    const renderFileTree = useCallback((tree: Record<string, any>, path: string = ''): React.ReactElement[] => {
+        return Object.entries(tree)
+            .sort(([a, aData], [b, bData]) => {
+                // Folders first, then files, both alphabetically
+                if (aData.type !== bData.type) {
+                    return aData.type === 'folder' ? -1 : 1;
+                }
+                return a.localeCompare(b);
+            })
+            .map(([name, data]) => {
+                if (data.type === 'folder') {
+                    const folderPath = path ? `${path}/${name}` : name;
+                    const isExpanded = expandedFolders.has(folderPath);
+
+                    return (
+                        <div key={folderPath}>
+                            <div {...stylex.props(styles.folderItem)}>
+                                <button
+                                    onClick={() => toggleFolder(folderPath)}
+                                    {...stylex.props(styles.folderButton)}
+                                >
+                                    <span {...stylex.props(styles.folderIcon)}>
+                                        {isExpanded ? '📂' : '📁'}
+                                    </span>
+                                    {name}
+                                </button>
+                            </div>
+                            {isExpanded && (
+                                <div {...stylex.props(styles.folderChildren)}>
+                                    {renderFileTree(data.children, folderPath)}
+                                </div>
                             )}
+                        </div>
+                    );
+                } else {
+                    const filePath = data.path;
+                    const isActive = filePath === activeFileName;
+                    const isRenaming = renamingFile === filePath;
+
+                    return (
+                        <div key={filePath} {...stylex.props(styles.fileItem)}>
+                            {isRenaming ? (
+                                <div {...stylex.props(
+                                    styles.renameContainer,
+                                    !isValidFilename(renameInputValue, filePath) && styles.invalidInput
+                                )}>
+                                    <input
+                                        {...stylex.props(styles.renameInput)}
+                                        value={renameInputValue}
+                                        onChange={(e) => setRenameInputValue(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || (e.ctrlKey && e.key === 's')) {
+                                                e.preventDefault();
+                                                handleRenameSave();
+                                            } else if (e.key === 'Escape') {
+                                                setRenamingFile(null);
+                                                setRenameInputValue('');
+                                            }
+                                        }}
+                                        onBlur={handleRenameSave}
+                                        placeholder="Enter filename"
+                                        autoFocus
+                                    />
+                                    <span {...stylex.props(styles.extensionLabel)}>.py</span>
+                                </div>
+                            ) : (
+                                <button
+                                    onClick={() => switchToFile(filePath)}
+                                    {...stylex.props(
+                                        styles.fileButton,
+                                        isActive && styles.fileButtonActive
+                                    )}
+                                >
+                                    <span {...stylex.props(styles.fileIcon)}>📄</span>
+                                    {name}
+                                </button>
+                            )}
+                        </div>
+                    );
+                }
+            });
+    }, [models, folders, expandedFolders, activeFileName, renamingFile, renameInputValue, toggleFolder, switchToFile, handleRenameSave, isValidFilename]);
+
+    const TabBar = () => {
+        const fileTree = buildFileTree();
+        const hasNestedStructure = Object.values(fileTree).some(item => item.type === 'folder') || Array.from(models.keys()).some(f => f.includes('/'));
+
+        return (
+            <div {...stylex.props(styles.tabBar)}>
+                {hasNestedStructure ? (
+                    <div {...stylex.props(styles.fileTreeContainer)}>
+                        <div {...stylex.props(styles.fileTree)}>
+                            {renderFileTree(fileTree)}
+                        </div>
+                    </div>
+                ) : (
+                    Array.from(models.keys()).map(fileName => (
+                        <div key={fileName} {...stylex.props(styles.tabContainer)}>
+                            {renamingFile === fileName ? (
+                                <div {...stylex.props(
+                                    styles.renameContainer,
+                                    !isValidFilename(renameInputValue, fileName) && styles.invalidInput
+                                )}>
+                                    <input
+                                        {...stylex.props(styles.renameInput)}
+                                        value={renameInputValue}
+                                        onChange={(e) => setRenameInputValue(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || (e.ctrlKey && e.key === 's')) {
+                                                e.preventDefault();
+                                                handleRenameSave();
+                                            } else if (e.key === 'Escape') {
+                                                setRenamingFile(null);
+                                                setRenameInputValue('');
+                                            }
+                                        }}
+                                        onBlur={handleRenameSave}
+                                        placeholder="Enter filename"
+                                        autoFocus
+                                    />
+                                    <span {...stylex.props(styles.extensionLabel)}>.py</span>
+                                </div>
+                            ) : (
+                                <button
+                                    onClick={() => switchToFile(fileName)}
+                                    {...stylex.props(
+                                        styles.tabButton,
+                                        fileName === activeFileName && styles.tabButtonActive
+                                    )}
+                                >
+                                    {fileName}
+                                </button>
+                            )}
+                        </div>
+                    ))
+                )}
+                <div {...stylex.props(styles.buttonGroup)}>
+                    <button
+                        onClick={() => deleteFile(activeFileName)}
+                        {...stylex.props(
+                            styles.actionButton,
+                            styles.deleteButton,
+                            activeFileName === 'sandbox.py' && styles.disabledButton
+                        )}
+                        title={activeFileName === 'sandbox.py' ? 'Cannot delete sandbox.py' : renamingFile ? 'Cancel' : 'Delete file'}
+                        disabled={activeFileName === 'sandbox.py'}
+                        onMouseDown={(e) => {
+                            e.preventDefault();
+                        }}
+                    >
+                        ×
+                    </button>
+                    {renamingFile ? (
+                        <button
+                            onClick={handleRenameSave}
+                            {...stylex.props(
+                               styles.actionButton,
+                                styles.saveButton,
+                                !isValidFilename(renameInputValue, renamingFile) && styles.disabledButton
+                            )}
+                            title={isValidFilename(renameInputValue, renamingFile) ? "Save file name" : "Invalid filename"}
+                            disabled={!isValidFilename(renameInputValue, renamingFile)}
                         >
-                            {fileName}
+                            ✓
                         </button>
+                    ) : (
+                        <>
+                            <button
+                                onClick={() => {
+                                    setCreatingFolder(true);
+                                    setNewFolderPath('');
+                                }}
+                                {...stylex.props(styles.actionButton)}
+                                title="Add new folder"
+                            >
+                                📁+
+                            </button>
+                            <button
+                                onClick={createNewTempFile}
+                                {...stylex.props(styles.actionButton)}
+                                title="Add new file"
+                            >
+                                📄+
+                            </button>
+                        </>
                     )}
                 </div>
-            ))}
-            <div {...stylex.props(styles.buttonGroup)}>
-                <button
-                    onClick={() => deleteFile(activeFileName)}
-                    {...stylex.props(
-                        styles.actionButton,
-                        styles.deleteButton,
-                        activeFileName === 'sandbox.py' && styles.disabledButton
-                    )}
-                    title={activeFileName === 'sandbox.py' ? 'Cannot delete sandbox.py' : renamingFile ? 'Cancel' : 'Delete file'}
-                    disabled={activeFileName === 'sandbox.py'}
-                    onMouseDown={(e) => {
-                        e.preventDefault();
-                    }}
-                >
-                    ×
-                </button>
-                {renamingFile ? (
-                    <button
-                        onClick={handleRenameSave}
-                        {...stylex.props(
-                           styles.actionButton,
-                            styles.saveButton,
-                            !isValidFilename(renameInputValue, renamingFile) && styles.disabledButton
-                        )}
-                        title={isValidFilename(renameInputValue, renamingFile) ? "Save file name" : "Invalid filename"}
-                        disabled={!isValidFilename(renameInputValue, renamingFile)}
-                    >
-                        ✓
-                    </button>
-                ) : (
-                    <button
-                        onClick={createNewTempFile}
-                        {...stylex.props(styles.actionButton)}
-                        title="Add new file"
-                    >
-                        +
-                    </button>
+                {creatingFolder && (
+                    <div {...stylex.props(styles.folderCreationContainer)}>
+                        <input
+                            {...stylex.props(styles.folderInput)}
+                            value={newFolderPath}
+                            onChange={(e) => setNewFolderPath(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    const success = createNewFolder(newFolderPath.trim());
+                                    if (success) {
+                                        setCreatingFolder(false);
+                                        setNewFolderPath('');
+                                    }
+                                } else if (e.key === 'Escape') {
+                                    setCreatingFolder(false);
+                                    setNewFolderPath('');
+                                }
+                            }}
+                            onBlur={() => {
+                                const success = createNewFolder(newFolderPath.trim());
+                                if (success || !newFolderPath.trim()) {
+                                    setCreatingFolder(false);
+                                    setNewFolderPath('');
+                                }
+                            }}
+                            placeholder="Enter folder path (e.g., utils or src/modules)"
+                            autoFocus
+                        />
+                    </div>
                 )}
             </div>
-        </div>
-    );
+        );
+    };
 
     useEffect(() => {
         if (models.size === 0) {
-            const restored = restoreProjectFromURL(createNewFile, setActiveFileName, setModels);
+            const restored = restoreProjectFromURL(createNewFile, setActiveFileName, setModels, setFolders, setExpandedFolders);
 
             if (!restored) {
                 if (isCodeSnippet) {
@@ -621,7 +897,7 @@ export default function Sandbox({
             models.forEach((model, filename) => {
                 allFiles[filename] = model.getValue();
             });
-            updateURL(allFiles, activeFileName, newVersion);
+            updateURL(allFiles, activeFileName, newVersion, Array.from(folders));
         }
     };
 
@@ -637,7 +913,8 @@ export default function Sandbox({
         handleVersionChange,
         loading,
         models,
-        activeFileName
+        activeFileName,
+        folders
     );
     return (
         <div
@@ -667,7 +944,8 @@ export default function Sandbox({
                     editorHeightforCodeSnippet,
                     pythonVersion,
                     activeFileName,
-                    models
+                    models,
+                    folders
                 )}
                 {
                     <div
@@ -708,13 +986,17 @@ export default function Sandbox({
 interface ProjectState {
     files: Record<string, string>;
     activeFile: string;
+    folders?: string[];
 }
 
-function updateURL(allFiles: Record<string, string>, activeFile: string, version?: string): void {
+function updateURL(allFiles: Record<string, string>, activeFile: string, version?: string, folders?: string[]): void {
     const projectState: ProjectState = {
         files: allFiles,
         activeFile: activeFile
     };
+    if (folders && folders.length > 0) {
+        projectState.folders = folders;
+    }
     const compressed = LZString.compressToEncodedURIComponent(JSON.stringify(projectState));
     const params = new URLSearchParams();
     params.set('project', compressed);
@@ -782,13 +1064,21 @@ function fetchCurMonacoModelAndTriggerUpdate(
 function restoreProjectFromURL(
     createNewFile: (fileName: string, content: string) => void,
     setActiveFileName: (fileName: string) => void,
-    setModels: React.Dispatch<React.SetStateAction<Map<string, editor.ITextModel>>>
+    setModels: React.Dispatch<React.SetStateAction<Map<string, editor.ITextModel>>>,
+    setFolders?: React.Dispatch<React.SetStateAction<Set<string>>>,
+    setExpandedFolders?: React.Dispatch<React.SetStateAction<Set<string>>>
 ): boolean {
     const projectState = getProjectFromURL();
     if (!projectState) return false;
 
     monaco.editor.getModels().forEach(model => model.dispose());
     setModels(new Map());
+
+    // Restore folders if they exist
+    if (projectState.folders && setFolders && setExpandedFolders) {
+        setFolders(new Set(projectState.folders));
+        setExpandedFolders(new Set(projectState.folders));
+    }
 
     Object.entries(projectState.files).forEach(([fileName, content]) => {
         createNewFile(fileName, content);
@@ -814,7 +1104,8 @@ function getPyreflyEditor(
     editorHeightforCodeSnippet: number | null,
     pythonVersion: string,
     activeFileName: string,
-    models: Map<string, editor.ITextModel>
+    models: Map<string, editor.ITextModel>,
+    folders: Set<string>
 ): React.ReactElement {
     const { colorMode } = docusaurusTheme.useColorMode();
 
@@ -869,7 +1160,7 @@ function getPyreflyEditor(
                                 allFiles[filename] = model.getValue();
                             }
                         });
-                        updateURL(allFiles, activeFileName, pythonVersion);
+                        updateURL(allFiles, activeFileName, pythonVersion, Array.from(folders));
                     }
                 }}
                 onMount={onEditorMount}
@@ -900,7 +1191,8 @@ function getMonacoButtons(
     handleVersionChange: (version: string) => void,
     loading: boolean,
     models: Map<string, editor.ITextModel>,
-    activeFileName: string
+    activeFileName: string,
+    folders: Set<string>
 ): ReadonlyArray<React.ReactElement> {
     let buttons: ReadonlyArray<React.ReactElement> = [];
     if (isCodeSnippet) {
@@ -909,7 +1201,7 @@ function getMonacoButtons(
             getCopyButton(model),
             /* Hide reset button if it's readonly, which is when it's a code snippet on mobile */
             !isMobile()
-                ? getResetButton(model, forceRecheck, codeSample, isCodeSnippet, pythonVersion, models, activeFileName)
+                ? getResetButton(model, forceRecheck, codeSample, isCodeSnippet, pythonVersion, models, activeFileName, folders)
                 : null,
         ].filter(Boolean);
     } else {
@@ -920,7 +1212,7 @@ function getMonacoButtons(
                 setPyodideStatus
             ),
             getShareUrlButton(),
-            getResetButton(model, forceRecheck, codeSample, isCodeSnippet, pythonVersion, models, activeFileName),
+            getResetButton(model, forceRecheck, codeSample, isCodeSnippet, pythonVersion, models, activeFileName, folders),
             getGitHubIssuesButton(model, pythonVersion),
             <PythonVersionSelector
                 selectedVersion={pythonVersion}
@@ -1083,7 +1375,8 @@ function getResetButton(
     isCodeSnippet: boolean,
     pythonVersion: string,
     models: Map<string, editor.ITextModel>,
-    activeFileName: string
+    activeFileName: string,
+    folders: Set<string>
 ): React.ReactElement {
     return (
         <MonacoEditorButton
@@ -1100,7 +1393,7 @@ function getResetButton(
                                 allFiles[filename] = model.getValue();
                             }
                         });
-                        updateURL(allFiles, activeFileName, pythonVersion);
+                        updateURL(allFiles, activeFileName, pythonVersion, Array.from(folders));
                     }
                     forceRecheck();
                 }
@@ -1336,5 +1629,100 @@ const styles = stylex.create({
         fontSize: '14px',
         fontWeight: 'bold',
         marginLeft: '2px',
+    },
+    // File tree styles
+    fileTreeContainer: {
+        flex: 1,
+        maxHeight: '150px',
+        overflowY: 'auto',
+        overflowX: 'hidden',
+        minWidth: '200px',
+    },
+    fileTree: {
+        padding: '4px',
+        fontSize: '14px',
+    },
+    folderItem: {
+        marginBottom: '2px',
+    },
+    folderButton: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '4px',
+        border: 'none',
+        background: 'transparent',
+        color: 'var(--color-text)',
+        cursor: 'pointer',
+        padding: '4px 8px',
+        fontSize: '14px',
+        width: '100%',
+        textAlign: 'left',
+        borderRadius: '3px',
+        ':hover': {
+            backgroundColor: 'var(--color-background-secondary)',
+        },
+    },
+    folderIcon: {
+        fontSize: '12px',
+        lineHeight: 1,
+    },
+    folderChildren: {
+        marginLeft: '16px',
+        borderLeft: '1px solid var(--color-background-secondary)',
+        paddingLeft: '8px',
+    },
+    fileItem: {
+        marginBottom: '1px',
+    },
+    fileButton: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '4px',
+        border: 'none',
+        background: 'transparent',
+        color: 'var(--color-text)',
+        cursor: 'pointer',
+        padding: '4px 8px',
+        fontSize: '14px',
+        width: '100%',
+        textAlign: 'left',
+        borderRadius: '3px',
+        ':hover': {
+            backgroundColor: 'var(--color-background-secondary)',
+        },
+    },
+    fileButtonActive: {
+        backgroundColor: 'var(--color-primary-lighter, var(--color-background-secondary))',
+        fontWeight: 'bold',
+    },
+    fileIcon: {
+        fontSize: '12px',
+        lineHeight: 1,
+        opacity: 0.7,
+    },
+    folderCreationContainer: {
+        position: 'absolute',
+        top: '100%',
+        left: '0',
+        right: '0',
+        zIndex: 100,
+        backgroundColor: 'var(--color-background)',
+        border: '1px solid var(--color-primary)',
+        borderRadius: '0 0 4px 4px',
+        padding: '8px',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+    },
+    folderInput: {
+        width: '100%',
+        border: '1px solid var(--color-border)',
+        borderRadius: '3px',
+        padding: '6px 8px',
+        fontSize: '14px',
+        backgroundColor: 'var(--color-background)',
+        color: 'var(--color-text)',
+        outline: 'none',
+        ':focus': {
+            borderColor: 'var(--color-primary)',
+        },
     },
 });
