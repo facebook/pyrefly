@@ -109,6 +109,39 @@ Completion Results:
     );
 }
 
+// TODO: Mark deprecated properties as deprecated
+#[test]
+fn dot_complete_with_deprecated() {
+    let code = r#"
+from warnings import deprecated
+class Foo:
+    x: int
+    @deprecated("this is not ok")
+    def not_ok(self): ...
+    @deprecated("this is also not ok")
+    @property
+    def also_not_ok(self) -> int: ...
+foo = Foo()
+foo. 
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+11 | foo. 
+         ^
+Completion Results:
+- (Field) also_not_ok: int
+- (Method) [DEPRECATED] not_ok: (self: Foo) -> None
+- (Field) x: int
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
 #[test]
 fn dot_complete_types_test() {
     let code = r#"

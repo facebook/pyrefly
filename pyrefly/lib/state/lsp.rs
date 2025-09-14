@@ -2071,10 +2071,19 @@ impl<'a> Transaction<'a> {
                                     Some(Type::Function(_)) => Some(CompletionItemKind::FUNCTION),
                                     _ => Some(CompletionItemKind::FIELD),
                                 };
+                                let ty = &x.ty;
+                                let is_deprecated =
+                                    ty.as_ref().map(|ty| ty.is_deprecated()).unwrap_or(false);
+                                let detail = ty.clone().map(|t| t.as_hover_string());
                                 result.push(CompletionItem {
                                     label: x.name.as_str().to_owned(),
-                                    detail: x.ty.clone().map(|t| t.as_hover_string()),
+                                    detail,
                                     kind,
+                                    tags: if is_deprecated {
+                                        Some(vec![CompletionItemTag::DEPRECATED])
+                                    } else {
+                                        None
+                                    },
                                     ..Default::default()
                                 });
                             });
