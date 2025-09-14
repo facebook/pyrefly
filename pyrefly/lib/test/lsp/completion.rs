@@ -246,6 +246,31 @@ Completion Results:
 }
 
 #[test]
+fn variable_complete_with_deprecation() {
+    let code = r#"
+from warnings import deprecated
+@deprecated("this is not ok")
+def not_ok(): ...
+def foo():
+  n
+# ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+6 |   n
+      ^
+Completion Results:
+- (Function) [DEPRECATED] not_ok: () -> None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn variable_with_globals_complete_test() {
     let code = r#"
 FileExistsOrNot = 1

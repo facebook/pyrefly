@@ -1891,16 +1891,25 @@ impl<'a> Transaction<'a> {
                     continue;
                 }
                 let binding = bindings.get(idx);
-                let detail = self.get_type(handle, key).map(|t| t.to_string());
+                let kind = binding
+                    .symbol_kind()
+                    .map_or(CompletionItemKind::VARIABLE, |k| {
+                        k.to_lsp_completion_item_kind()
+                    });
+                let ty = self.get_type(handle, key);
+                let is_deprecated = matches!(kind, CompletionItemKind::FUNCTION)
+                    && ty.as_ref().map(|t| t.is_deprecated()).unwrap_or(false);
+                let detail = ty.map(|t| t.to_string());
                 has_added_any = true;
                 completions.push(CompletionItem {
                     label: label.to_owned(),
                     detail,
-                    kind: binding
-                        .symbol_kind()
-                        .map_or(Some(CompletionItemKind::VARIABLE), |k| {
-                            Some(k.to_lsp_completion_item_kind())
-                        }),
+                    kind: Some(kind),
+                    tags: if is_deprecated {
+                        Some(vec![CompletionItemTag::DEPRECATED])
+                    } else {
+                        None
+                    },
                     ..Default::default()
                 })
             }
