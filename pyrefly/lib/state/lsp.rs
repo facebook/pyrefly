@@ -2021,7 +2021,10 @@ impl<'a> Transaction<'a> {
                     }
                     let exports = self.get_exports(&handle);
                     for (name, export) in exports.iter() {
-                        let is_deprecated = matches!(export, ExportLocation::ThisModule(export) if export.is_deprecated);
+                        let is_deprecated = match export {
+                            ExportLocation::ThisModule(export) => export.is_deprecated,
+                            ExportLocation::OtherModule(_, _) => false,
+                        };
                         result.push(CompletionItem {
                             label: name.to_string(),
                             // todo(kylei): completion kind for exports
