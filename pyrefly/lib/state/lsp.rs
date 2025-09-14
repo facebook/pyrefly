@@ -1935,9 +1935,10 @@ impl<'a> Transaction<'a> {
         match param_type {
             Type::Literal(lit) => {
                 completions.push(CompletionItem {
-                    label: lit.to_string(),
+                    // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
+                    label: lit.to_string_escaped(true),
                     kind: Some(CompletionItemKind::VALUE),
-                    detail: Some(format!("{}", param_type)),
+                    detail: Some(format!("{param_type}")),
                     ..Default::default()
                 });
             }

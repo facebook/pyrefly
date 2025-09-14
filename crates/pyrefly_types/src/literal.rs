@@ -54,7 +54,7 @@ pub struct LitEnum {
 impl Display for Lit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Lit::Str(x) => write!(f, "'{x}'"),
+            Lit::Str(_) => write!(f, "{}", self.to_string_escaped(true)),
             Lit::Int(x) => write!(f, "{x}"),
             Lit::Bool(x) => {
                 let s = if *x { "True" } else { "False" };
@@ -170,6 +170,36 @@ impl Lit {
             Lit::Bool(true) => Some(1),
             Lit::Bool(false) => Some(0),
             _ => None,
+        }
+    }
+
+    pub fn to_string_escaped(&self, use_single_quotes_for_string: bool) -> String {
+        match self {
+            Lit::Str(s) => {
+                let escaped: String = s
+                    .chars()
+                    .map(|c| match c {
+                        // https://docs.python.org/3/reference/lexical_analysis.html#escape-sequences
+                        '\\' => "\\\\".to_owned(),
+                        '\'' if use_single_quotes_for_string => "\\'".to_owned(),
+                        '\"' if !use_single_quotes_for_string => "\\\"".to_owned(),
+                        '\x07' => "\\a".to_owned(), // \a
+                        '\x08' => "\\b".to_owned(), // \b
+                        '\x0c' => "\\f".to_owned(), // \f
+                        '\n' => "\\n".to_owned(),
+                        '\r' => "\\r".to_owned(),
+                        '\t' => "\\t".to_owned(),
+                        '\x0b' => "\\v".to_owned(), // \v
+                        _ => c.to_string(),
+                    })
+                    .collect::<String>();
+                if use_single_quotes_for_string {
+                    format!("'{escaped}'")
+                } else {
+                    format!("\"{escaped}\"")
+                }
+            }
+            lit => lit.to_string(),
         }
     }
 }
