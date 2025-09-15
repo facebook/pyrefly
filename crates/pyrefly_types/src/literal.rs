@@ -54,7 +54,7 @@ pub struct LitEnum {
 impl Display for Lit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Lit::Str(x) => write!(f, "'{x}'"),
+            Lit::Str(x) => write!(f, "{:?}", x.chars().flat_map(|c| c.escape_default())),
             Lit::Int(x) => write!(f, "{x}"),
             Lit::Bool(x) => {
                 let s = if *x { "True" } else { "False" };

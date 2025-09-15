@@ -1015,7 +1015,6 @@ Completion Results:
     );
 }
 
-// todo(kylei): escape escape characters
 #[test]
 fn completion_literal_with_escape_characters() {
     let code = r#"
@@ -1032,11 +1031,8 @@ foo("
 4 | foo("
          ^
 Completion Results:
-- (Value) 'a
-b': Literal['a
-b']
-- (Variable) x=: Literal['a
-b']"#
+- (Value) 'a\nb': Literal['a\nb']
+- (Variable) x=: Literal['a\nb']"#
             .trim(),
         report.trim(),
     );
