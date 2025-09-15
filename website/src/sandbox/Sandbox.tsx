@@ -489,9 +489,18 @@ export default function Sandbox({
             const result = pyreService.gotoDefinition(l, c);
 
             if (result && result.filename !== activeFileName) {
+                switchToFile(result.filename);
                 setTimeout(() => {
-                    switchToFile(result.filename);
-                }, 100);
+                    const editor = editorRef.current;
+                    if (editor) {
+                        editor.setPosition({
+                            lineNumber: result.range.startLineNumber,
+                            column: result.range.startColumn
+                        });
+                        editor.revealLineInCenter(result.range.startLineNumber);
+                    }
+                }, 50);
+                return null;
             }
             return result;
         });

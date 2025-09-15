@@ -553,7 +553,7 @@ mod tests {
         );
         files.insert(
             "utils.py".to_owned(),
-            "def format_number(x: int) -> str:\n    return f\"Number: {x}\"".to_owned(),
+            "# Utility functions\n# Some comments\n# More comments\n\ndef format_number(x: int) -> str:\n    return f\"Number: {x}\"".to_owned(),
         );
 
         state.update_sandbox_files(files);
@@ -571,8 +571,8 @@ mod tests {
             "Definition should be in utils.py"
         );
         assert_eq!(
-            def_result.range.start_line, 1,
-            "Definition should be on line 1"
+            def_result.range.start_line, 5,
+            "Definition should be on line 5"
         );
     }
 
