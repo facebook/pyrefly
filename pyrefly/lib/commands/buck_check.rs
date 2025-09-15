@@ -93,7 +93,7 @@ fn write_output_to_stdout(legacy_errors: &LegacyErrors) -> anyhow::Result<()> {
 }
 
 fn write_output(errors: &[Error], path: Option<&Path>) -> anyhow::Result<()> {
-    let legacy_errors = LegacyErrors::from_errors(errors);
+    let legacy_errors = LegacyErrors::from_errors(PathBuf::new().as_path(), errors);
     if let Some(path) = path {
         write_output_to_file(path, &legacy_errors)
     } else {

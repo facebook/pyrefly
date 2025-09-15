@@ -101,7 +101,7 @@ $ $PYREFLY snippet "x: int = 'hello'" --output-format=json
       "column": 10,
       "stop_line": 1,
       "stop_column": 17,
-      "path": "in-memory snippet",
+      "path": "snippet",
       "code": -2,
       "name": "bad-assignment",
       "description": "`Literal['hello']` is not assignable to `int`",

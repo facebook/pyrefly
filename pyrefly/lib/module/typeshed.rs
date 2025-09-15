@@ -83,6 +83,7 @@ impl BundledTypeshed {
             config_file.root.errors = Some(ErrorDisplayConfig::new(HashMap::from([
                 // The stdlib is full of deliberately incorrect overrides, so ignore them
                 (ErrorKind::BadOverride, Severity::Ignore),
+                (ErrorKind::BadParamNameOverride, Severity::Ignore),
             ])));
             config_file.configure();
             ArcId::new(config_file)

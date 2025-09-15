@@ -10,6 +10,23 @@ exports[`Home page renders external site correctly 1`] = `
       Pyrefly is a static type checker for Python
     </div>
     <div>
+      <div>
+        <div>
+          <span>
+            📝 The 2025 Python Typing and Tooling Survey is now open! Help shape the future of typed Python by taking the survey
+          </span>
+          <div>
+            <button>
+              Take the Survey
+            </button>
+          </div>
+        </div>
+        <button
+          aria-label="Dismiss banner"
+        >
+          ✕
+        </button>
+      </div>
       <section
         id="header-section"
       >
@@ -410,6 +427,23 @@ exports[`Home page renders internal site correctly 1`] = `
       Pyrefly is a static type checker for Python
     </div>
     <div>
+      <div>
+        <div>
+          <span>
+            📝 The 2025 Python Typing and Tooling Survey is now open! Help shape the future of typed Python by taking the survey
+          </span>
+          <div>
+            <button>
+              Take the Survey
+            </button>
+          </div>
+        </div>
+        <button
+          aria-label="Dismiss banner"
+        >
+          ✕
+        </button>
+      </div>
       <section
         id="header-section"
       >

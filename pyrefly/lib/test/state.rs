@@ -112,7 +112,8 @@ fn test_multiple_path() {
     );
     transaction.run(&handles, Require::Everything);
     let loads = transaction.get_errors(handles.iter());
-    print_errors(&loads.collect_errors().shown);
+    let project_root = PathBuf::new();
+    print_errors(project_root.as_path(), &loads.collect_errors().shown);
     loads.check_against_expectations().unwrap();
     assert_eq!(loads.collect_errors().shown.len(), 3);
 }

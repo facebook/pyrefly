@@ -247,7 +247,9 @@ impl TestEnv {
         transaction.as_mut().run(&handles, Require::Everything);
         state.commit_transaction(transaction);
         subscriber.finish();
+        let project_root = PathBuf::new();
         print_errors(
+            project_root.as_path(),
             &state
                 .transaction()
                 .get_errors(handles.iter())
@@ -490,7 +492,8 @@ pub fn testcase_for_macro(
             )]);
             t.run(&[h.dupe()], Require::Everything);
             let errors = t.get_errors([&h]);
-            print_errors(&errors.collect_errors().shown);
+            let project_root = PathBuf::new();
+            print_errors(project_root.as_path(), &errors.collect_errors().shown);
             check(errors)?;
         } else {
             let (state, handle) = env.clone().to_state();

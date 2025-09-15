@@ -37,6 +37,7 @@ use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
+use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprName;
@@ -61,6 +62,8 @@ use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
 use crate::types::display::TypeDisplayContext;
+
+const REPR: Name = Name::new_static("__repr__");
 
 pub struct Query {
     /// The state that we use.
@@ -196,16 +199,17 @@ impl Query {
         self.files.lock().extend(files.clone());
         let mut transaction = self
             .state
-            .new_committable_transaction(Require::Everything, None);
+            .new_committable_transaction(Require::Exports, None);
         let handles = files.into_map(|(name, file)| self.make_handle(name, file));
         transaction.as_mut().run(&handles, Require::Everything);
         let errors = transaction.as_mut().get_errors(&handles);
         self.state.commit_transaction(transaction);
+        let project_root = PathBuf::new();
         errors.collect_errors().shown.map(|e| {
             // We deliberately don't have a Display for `Error`, to encourage doing the right thing.
             // But we just hack something up as this code is experimental.
             let mut s = Cursor::new(Vec::new());
-            e.write_line(&mut s, false).unwrap();
+            e.write_line(&mut s, project_root.as_path(), false).unwrap();
             String::from_utf8_lossy(&s.into_inner()).into_owned()
         })
     }
@@ -314,10 +318,42 @@ impl Query {
                 _ => panic!("target_from_def_kind - unsupported function kind: {kind:?}"),
             }
         }
+        fn repr_from_arguments(
+            arguments: &Arguments,
+            answers: &Answers,
+            transaction: &Transaction<'_>,
+            handle: &Handle,
+        ) -> Option<Callee> {
+            // Use the type of the first argument to find the callee.
+            if let Some(arg_type) = answers.get_type_trace(arguments.args[0].range())
+                && let Type::ClassType(class) = &arg_type
+            {
+                let repr_callees = callee_from_mro(
+                    class.class_object(),
+                    transaction,
+                    handle,
+                    "__repr__",
+                    |_solver, c| {
+                        if c.contains(&REPR) {
+                            Some(format!("{}.{}.__repr__", c.module_name(), c.name()))
+                        } else {
+                            None
+                        }
+                    },
+                );
+                if !repr_callees.is_empty() {
+                    return Some(repr_callees[0].clone());
+                }
+            }
+            None
+        }
         fn callee_from_function(
             f: &Function,
             call_target: Option<&Expr>,
+            call_arguments: Option<&Arguments>,
             answers: &Answers,
+            transaction: &Transaction<'_>,
+            handle: &Handle,
         ) -> Callee {
             if f.metadata.flags.is_staticmethod {
                 Callee {
@@ -333,6 +369,16 @@ impl Query {
                     class_name: Some(class_name_from_def_kind(&f.metadata.kind)),
                 }
             } else {
+                // Check if this is a builtins function that needs special casing.
+                if let FunctionKind::Def(def) = &f.metadata.kind
+                    && def.module.as_str() == "builtins"
+                    && def.func == "repr"
+                    && let Some(args) = call_arguments
+                    && let Some(callee) = repr_from_arguments(args, answers, transaction, handle)
+                {
+                    return callee;
+                }
+
                 let class_name = class_name_from_call_target(call_target, answers);
                 let kind = if class_name.is_some() {
                     String::from(CALLEE_KIND_METHOD)
@@ -469,7 +515,7 @@ impl Query {
                 let def0 = &defs[0];
                 if def0.module.name() == handle.module() {
                     match &def0.metadata {
-                        DefinitionMetadata::Variable(s) => {
+                        DefinitionMetadata::Variable(_) => {
                             let name = module_info.code_at(defs[0].definition_range);
                             vec![Callee {
                                 kind: String::from(CALLEE_KIND_FUNCTION),
@@ -565,6 +611,7 @@ impl Query {
             ty: &Type,
             call_target: Option<&Expr>,
             callee_range: TextRange,
+            call_arguments: Option<&Arguments>,
             module_info: &ModuleInfo,
             transaction: &Transaction<'_>,
             handle: &Handle,
@@ -576,6 +623,7 @@ impl Query {
                         b,
                         call_target,
                         callee_range,
+                        call_arguments,
                         module_info,
                         transaction,
                         handle,
@@ -595,6 +643,7 @@ impl Query {
                                 t,
                                 call_target,
                                 callee_range,
+                                call_arguments,
                                 module_info,
                                 transaction,
                                 handle,
@@ -619,7 +668,14 @@ impl Query {
                     .collect_vec(),
 
                 Type::Function(f) => {
-                    vec![callee_from_function(f, call_target, answers)]
+                    vec![callee_from_function(
+                        f,
+                        call_target,
+                        call_arguments,
+                        answers,
+                        transaction,
+                        handle,
+                    )]
                 }
                 Type::Overload(f) => {
                     let class_name = class_name_from_call_target(call_target, answers);
@@ -636,7 +692,7 @@ impl Query {
                         class_name,
                     }]
                 }
-                Type::Callable(c) => for_callable(callee_range, module_info, transaction, handle),
+                Type::Callable(..) => for_callable(callee_range, module_info, transaction, handle),
                 Type::Type(box ty) => {
                     init_or_new_from_type(ty, callee_range, transaction, handle, module_info)
                 }
@@ -644,12 +700,28 @@ impl Query {
                 Type::ClassDef(cls) => find_init_or_new(cls, transaction, handle),
                 Type::Forall(v) => match &v.body {
                     Forallable::Function(func) => {
-                        vec![callee_from_function(func, call_target, answers)]
+                        vec![callee_from_function(
+                            func,
+                            call_target,
+                            call_arguments,
+                            answers,
+                            transaction,
+                            handle,
+                        )]
                     }
                     Forallable::Callable(_) => {
                         for_callable(callee_range, module_info, transaction, handle)
                     }
-                    _ => panic!("unsupported forallable type {:?}", v.body),
+                    Forallable::TypeAlias(t) => callee_from_type(
+                        &t.as_type(),
+                        call_target,
+                        callee_range,
+                        call_arguments,
+                        module_info,
+                        transaction,
+                        handle,
+                        answers,
+                    ),
                 },
                 Type::SelfType(c) | Type::ClassType(c) => callee_from_mro(
                     c.class_object(),
@@ -669,6 +741,7 @@ impl Query {
                     &t.as_type(),
                     call_target,
                     callee_range,
+                    call_arguments,
                     module_info,
                     transaction,
                     handle,
@@ -690,26 +763,30 @@ impl Query {
             handle: &Handle,
             res: &mut Vec<(DisplayRange, Callee)>,
         ) {
-            let (callee_ty, callee_range, call_target) = if let Expr::Attribute(attr) = x {
-                (
-                    answers.try_get_getter_for_range(attr.range()),
-                    attr.range(),
-                    None,
-                )
-            } else if let Expr::Call(call) = x {
-                (
-                    answers.get_type_trace(call.func.range()),
-                    call.func.range(),
-                    Some(&*call.func),
-                )
-            } else {
-                (None, x.range(), None)
-            };
+            let (callee_ty, callee_range, call_target, call_arguments) =
+                if let Expr::Attribute(attr) = x {
+                    (
+                        answers.try_get_getter_for_range(attr.range()),
+                        attr.range(),
+                        None,
+                        None,
+                    )
+                } else if let Expr::Call(call) = x {
+                    (
+                        answers.get_type_trace(call.func.range()),
+                        call.func.range(),
+                        Some(&*call.func),
+                        Some(&call.arguments),
+                    )
+                } else {
+                    (None, x.range(), None, None)
+                };
             if let Some(func_ty) = callee_ty {
                 callee_from_type(
                     &func_ty,
                     call_target,
                     callee_range,
+                    call_arguments,
                     module_info,
                     transaction,
                     handle,
@@ -884,8 +961,10 @@ impl Query {
         let errors = t.get_errors([&h]).collect_errors();
         if !errors.shown.is_empty() {
             let mut res = Vec::new();
+            let project_root = PathBuf::new();
             for e in errors.shown {
-                e.write_line(&mut Cursor::new(&mut res), true).unwrap();
+                e.write_line(&mut Cursor::new(&mut res), project_root.as_path(), true)
+                    .unwrap();
             }
             return Err(format!(
                 "Errors from is_subtype `{lt}` <: `{gt}`\n{}\n\nSource code:\n{before}",

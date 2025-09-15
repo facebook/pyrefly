@@ -33,7 +33,7 @@ export default function PythonVersionSelector({
                 aria-label="Select Python version"
             >
                 {SUPPORTED_VERSIONS.map((version) => (
-                    <option key={version} value={version}>
+                    <option key={version} value={version} {...stylex.props(styles.option)}>
                         Python {version}
                     </option>
                 ))}
@@ -75,5 +75,9 @@ const styles = stylex.create({
         paddingRight: '8px',
         boxSizing: 'border-box',
         display: 'block'
+    },
+    option: {
+        color: 'var(--color-text)',
+        backgroundColor: 'var(--color-background)',
     },
 });

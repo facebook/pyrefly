@@ -340,11 +340,26 @@ export default function Sandbox({
                 </div>
             ))}
             <div {...stylex.props(styles.buttonGroup)}>
+                <button
+                    onClick={() => deleteFile(activeFileName)}
+                    {...stylex.props(
+                        styles.actionButton,
+                        styles.deleteButton,
+                        activeFileName === 'sandbox.py' && styles.disabledButton
+                    )}
+                    title={activeFileName === 'sandbox.py' ? 'Cannot delete sandbox.py' : renamingFile ? 'Cancel' : 'Delete file'}
+                    disabled={activeFileName === 'sandbox.py'}
+                    onMouseDown={(e) => {
+                        e.preventDefault();
+                    }}
+                >
+                    ×
+                </button>
                 {renamingFile ? (
                     <button
                         onClick={handleRenameSave}
                         {...stylex.props(
-                            styles.actionButton,
+                           styles.actionButton,
                             styles.saveButton,
                             !isValidFilename(renameInputValue, renamingFile) && styles.disabledButton
                         )}
@@ -362,18 +377,6 @@ export default function Sandbox({
                         +
                     </button>
                 )}
-                <button
-                    onClick={() => deleteFile(activeFileName)}
-                    {...stylex.props(
-                        styles.actionButton,
-                        styles.deleteButton,
-                        activeFileName === 'sandbox.py' && styles.disabledButton
-                    )}
-                    title={activeFileName === 'sandbox.py' ? 'Cannot delete sandbox.py' : 'Delete file'}
-                    disabled={activeFileName === 'sandbox.py'}
-                >
-                    ×
-                </button>
             </div>
         </div>
     );

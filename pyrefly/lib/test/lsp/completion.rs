@@ -13,6 +13,7 @@ use ruff_text_size::TextSize;
 
 use crate::state::lsp::ImportFormat;
 use crate::state::state::State;
+use crate::test::util::get_batched_lsp_operations_report;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 
 #[derive(Default)]
@@ -37,17 +38,27 @@ fn get_test_report(
             kind,
             insert_text,
             data,
+            tags,
+            text_edit,
             ..
         } in state
             .transaction()
             .completion(handle, position, import_format)
         {
+            let is_deprecated = if let Some(tags) = tags {
+                tags.contains(&lsp_types::CompletionItemTag::DEPRECATED)
+            } else {
+                false
+            };
             if (filter.include_keywords || kind != Some(CompletionItemKind::KEYWORD))
                 && (filter.include_builtins || data != Some(serde_json::json!("builtin")))
             {
                 report.push_str("\n- (");
                 report.push_str(&format!("{:?}", kind.unwrap()));
                 report.push_str(") ");
+                if is_deprecated {
+                    report.push_str("[DEPRECATED] ");
+                }
                 report.push_str(&label);
                 if let Some(detail) = detail {
                     report.push_str(": ");
@@ -57,6 +68,10 @@ fn get_test_report(
                     report.push_str(" inserting `");
                     report.push_str(&insert_text);
                     report.push('`');
+                }
+                if let Some(text_edit) = text_edit {
+                    report.push_str(" with text edit: ");
+                    report.push_str(&format!("{:?}", &text_edit));
                 }
             }
         }
@@ -93,6 +108,39 @@ Completion Results:
 Completion Results:
 - (Field) x: int
 - (Field) y: int
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+// TODO: Mark deprecated properties as deprecated
+#[test]
+fn dot_complete_with_deprecated() {
+    let code = r#"
+from warnings import deprecated
+class Foo:
+    x: int
+    @deprecated("this is not ok")
+    def not_ok(self): ...
+    @deprecated("this is also not ok")
+    @property
+    def also_not_ok(self) -> int: ...
+foo = Foo()
+foo. 
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+11 | foo. 
+         ^
+Completion Results:
+- (Field) also_not_ok: int
+- (Method) [DEPRECATED] not_ok: (self: Foo) -> None
+- (Field) x: int
 "#
         .trim(),
         report.trim(),
@@ -229,6 +277,31 @@ Completion Results:
          ^
 Completion Results:
 - (Function) bar: () -> None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn variable_complete_with_deprecation() {
+    let code = r#"
+from warnings import deprecated
+@deprecated("this is not ok")
+def not_ok(): ...
+def foo():
+  n
+# ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+6 |   n
+      ^
+Completion Results:
+- (Function) [DEPRECATED] not_ok: () -> None
 "#
         .trim(),
         report.trim(),
@@ -373,6 +446,59 @@ from foo import
 2 | from foo import 
                    ^
 Completion Results:
+
+
+# foo.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn from_import_deprecated() {
+    let foo_code = r#"
+from warnings import deprecated
+
+def func_ok():
+    ...
+@deprecated("this is not ok")
+def func_not_ok():
+    ...
+"#;
+    let main_code = r#"
+from foo import func
+#          ^        ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main_code), ("foo", foo_code)],
+        get_default_test_report(),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from foo import func
+               ^
+Completion Results:
+
+2 | from foo import func
+                        ^
+Completion Results:
+- (Variable) deprecated
+- (Variable) [DEPRECATED] func_not_ok
+- (Variable) func_ok
+- (Variable) __annotations__
+- (Variable) __builtins__
+- (Variable) __cached__
+- (Variable) __debug__
+- (Variable) __dict__
+- (Variable) __doc__
+- (Variable) __file__
+- (Variable) __loader__
+- (Variable) __name__
+- (Variable) __package__
+- (Variable) __path__
+- (Variable) __spec__
 
 
 # foo.py
@@ -832,7 +958,6 @@ Completion Results:
     );
 }
 
-// todo(kylei): completion on literal
 #[test]
 fn completion_literal() {
     let code = r#"
@@ -849,9 +974,190 @@ foo(
 4 | foo(
         ^
 Completion Results:
+- (Value) 'foo': Literal['foo']
 - (Variable) x=: Literal['foo']
 "#
         .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_union() {
+    let code = r#"
+from typing import Literal, Union
+def foo(x: Union[Literal['foo'] | Literal['bar']]): ...
+foo(
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+4 | foo(
+        ^
+Completion Results:
+- (Value) 'bar': Literal['bar']
+- (Value) 'foo': Literal['foo']
+- (Variable) x=: Literal['bar', 'foo']
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_union_being_typed() {
+    let code = r#"
+from typing import Literal, Union
+def foo(x: Union[Literal['foo'] | Literal['bar']]): ...
+foo('
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+4 | foo('
+         ^
+Completion Results:
+- (Value) 'bar': Literal['bar']
+- (Value) 'foo': Literal['foo']
+- (Variable) x=: Literal['bar', 'foo']
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_union_alias() {
+    let code = r#"
+from typing import Literal, Union
+MyUnion = Union[Literal['foo'], Literal['bar']]
+def foo(x: MyUnion): ...
+foo(
+#   ^
+
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+5 | foo(
+        ^
+Completion Results:
+- (Value) 'bar': Literal['bar']
+- (Value) 'foo': Literal['foo']
+- (Variable) x=: Literal['bar', 'foo']
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_union_multiple_types() {
+    let code = r#"
+from typing import Literal, Union, LiteralString
+def foo(x: Union[Literal['foo'] | Literal[1] | LiteralString]): ...
+foo(
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+4 | foo(
+        ^
+Completion Results:
+- (Value) 1: Literal[1]
+- (Variable) x=: Literal[1] | LiteralString
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_nested() {
+    let code = r#"
+from typing import Literal, Union
+class Foo: ...
+def foo(x: Union[Union[Literal['foo']] | Literal[1] | Foo]): ...
+foo(
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+5 | foo(
+        ^
+Completion Results:
+- (Value) 'foo': Literal['foo']
+- (Value) 1: Literal[1]
+- (Variable) x=: Literal['foo', 1] | Foo
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+// todo(kylei): provide editttext to remove the quotes
+#[test]
+fn completion_literal_do_not_duplicate_quotes() {
+    let code = r#"
+from typing import Literal, Union
+class Foo: ...
+def foo(x: Union[Union[Literal['foo']] | Literal[1] | Foo]): ...
+foo(''
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+5 | foo(''
+         ^
+Completion Results:
+- (Value) 'foo': Literal['foo']
+- (Value) 1: Literal[1]
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+// todo(kylei): escape escape characters
+#[test]
+fn completion_literal_with_escape_characters() {
+    let code = r#"
+from typing import Literal
+def foo(x: Literal["a\nb"]): ...
+foo("
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+4 | foo("
+         ^
+Completion Results:
+- (Value) 'a
+b': Literal['a
+b']
+- (Variable) x=: Literal['a
+b']"#
+            .trim(),
         report.trim(),
     );
 }
@@ -1104,6 +1410,39 @@ T = foooooo
             ^
 Completion Results:
 - (Variable) foooooo: from .bar import foooooo
+
+
+
+# bar.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn autoimport_relative_on_deprecated() {
+    let code = r#"
+T = foooooo
+#       ^
+"#;
+    let bar_code = r#"
+from warnings import deprecated
+@deprecated("this is not ok")
+def foooooo():
+    ...
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("bar", bar_code)],
+        get_test_report(Default::default(), ImportFormat::Relative),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | T = foooooo
+            ^
+Completion Results:
+- (Function) [DEPRECATED] foooooo: from .bar import foooooo
 
 
 
@@ -1490,6 +1829,34 @@ Completion Results:
 
 
 # lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn kwarg_completion_in_str() {
+    let code = r#"
+def foo(x: str): ...
+foo(x="x")
+#      ^"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code)],
+        get_test_report(
+            ResultsFilter {
+                include_keywords: true,
+                ..Default::default()
+            },
+            ImportFormat::Absolute,
+        ),
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | foo(x="x")
+           ^
+Completion Results:
 "#
         .trim(),
         report.trim(),

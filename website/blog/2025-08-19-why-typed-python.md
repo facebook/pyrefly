@@ -164,7 +164,7 @@ Typing is one of those skills that gets better the more you practice it in your 
 - Official [Python typing](https://docs.python.org/3/library/typing.html) documentation \- The typing module docs provide comprehensive coverage of all available types
 - [PEP 484 and related PEPs](https://pyrefly.org/en/docs/python-features-and-peps/) \- Understanding the foundational specifications helps you grasp the "why" behind typing decisions
 - Documentation for your chosen typechecker, e.g. [Pyrefly Docs on learning typing](https://pyrefly.org/en/docs/typing-for-python-developers/)
-- Join community forums and get support, e.g. [Pyrefly Discord](https://discord.gg/Cf7mFQtW7W), Typing Discourse\[ADD LINK\]
+- Join community forums and get support, e.g. [Pyrefly Discord](https://discord.gg/Cf7mFQtW7W), [Typing Discourse](https://discuss.python.org/c/typing)
 
 ## Conclusion
 

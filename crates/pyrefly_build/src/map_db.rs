@@ -7,6 +7,7 @@
 
 use std::ops::Deref;
 use std::ops::DerefMut;
+use std::path::Path;
 
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
@@ -60,7 +61,7 @@ impl SourceDatabase for MapDatabase {
             .collect()
     }
 
-    fn lookup(&self, module: &ModuleName, _: Option<&Handle>) -> Option<ModulePath> {
+    fn lookup(&self, module: &ModuleName, _: Option<&Path>) -> Option<ModulePath> {
         self.0.get(module).map(|paths| paths.last().dupe())
     }
 }

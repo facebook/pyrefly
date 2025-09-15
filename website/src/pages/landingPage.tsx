@@ -14,7 +14,9 @@ import WhyPyrefly from '../components/landing-page/whyPyrefly';
 import PyreflyVideo from '../components/landing-page/PyreflyVideo';
 import LandingPageSection from '../components/landing-page/landingPageSection';
 import LandingPageHeader from '../components/landing-page/landingPageHeader';
+import Banner from '../components/Banner';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
+import { log, LoggingEvent } from '../utils/LoggingUtils';
 
 export default function LandingPage(): React.ReactElement {
     const { siteConfig } = useDocusaurusContext();
@@ -25,6 +27,19 @@ export default function LandingPage(): React.ReactElement {
             title="Pyrefly: A Static Type Checker for Python"
             description={siteConfig.description}
         >
+            <Banner
+                text="📝 The 2025 Python Typing and Tooling Survey is now open! Help shape the future of typed Python by taking the survey"
+                variant="tertiary"
+                cta={{
+                    text: "Take the Survey",
+                    href: "https://forms.gle/6d9WxYEF4zNGLvUq5",
+                    external: true,
+                    onClick: () =>log(LoggingEvent.CLICK, {
+                        button_id: 'take_typing_survey_2025',
+                        })
+                }}
+                dismissible={true}
+            />
             <LandingPageSection
                 id="header-section"
                 isFirstSection={true}

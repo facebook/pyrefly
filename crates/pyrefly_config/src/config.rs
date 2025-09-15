@@ -38,6 +38,7 @@ use crate::environment::interpreters::Interpreters;
 use crate::error::ErrorConfig;
 use crate::error::ErrorDisplayConfig;
 use crate::finder::ConfigError;
+use crate::module_wildcard::Match;
 use crate::pyproject::PyProject;
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
@@ -483,7 +484,18 @@ impl ConfigFile {
              // we can use unwrap here, because the value in the root config must
              // be set in `ConfigFile::configure()`.
              self.root.replace_imports_with_any.as_deref().unwrap());
-        wildcards.iter().any(|p| p.matches(module))
+        // Need to filter out any files that would be a not case.
+        let mut found_match = None;
+        for w in wildcards {
+            if w.matches(module) == Match::Negative {
+                found_match = Some(false);
+                break;
+            } else if w.matches(module) == Match::Positive {
+                found_match = Some(true);
+                break;
+            }
+        }
+        found_match == Some(true)
     }
 
     pub fn ignore_missing_imports(&self, path: Option<&Path>, module: ModuleName) -> bool {
@@ -495,7 +507,9 @@ impl ConfigFile {
              // we can use unwrap here, because the value in the root config must
              // be set in `ConfigFile::configure()`.
              self.root.ignore_missing_imports.as_deref().unwrap());
-        wildcards.iter().any(|p| p.matches(module))
+        wildcards
+            .iter()
+            .any(|p| p.matches(module) == Match::Positive)
     }
 
     pub fn untyped_def_behavior(&self, path: &Path) -> UntypedDefBehavior {
@@ -1526,5 +1540,67 @@ mod tests {
         config.interpreters.python_interpreter = Some(ConfigOrigin::cli(PathBuf::from("abcd")));
         let reparsed = ConfigFile::parse_config(&toml::to_string(&config).unwrap()).unwrap();
         assert_eq!(reparsed.interpreters.python_interpreter, None);
+    }
+
+    #[test]
+    fn test_negation_replace_imports_with_any() {
+        let config = ConfigFile {
+            root: ConfigBase {
+                errors: Some(Default::default()),
+                replace_imports_with_any: Some(vec![
+                    ModuleWildcard::new("!example.path.specific.*").unwrap(),
+                    ModuleWildcard::new("example.path.*").unwrap(),
+                ]),
+                ignore_missing_imports: None,
+                untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
+                disable_type_errors_in_ide: Some(true),
+                ignore_errors_in_generated_code: Some(false),
+                infer_with_first_use: Some(true),
+                extras: Default::default(),
+                permissive_ignores: Some(false),
+            },
+            sub_configs: vec![],
+            ..Default::default()
+        };
+
+        assert!(!config.replace_imports_with_any(
+            Some(Path::new("example/path")),
+            ModuleName::from_str("example.path.specific.a")
+        ));
+        assert!(config.replace_imports_with_any(
+            Some(Path::new("example/path")),
+            ModuleName::from_str("example.path.b")
+        ));
+    }
+
+    #[test]
+    fn test_negation_replace_imports_with_any_reorder() {
+        let config = ConfigFile {
+            root: ConfigBase {
+                errors: Some(Default::default()),
+                replace_imports_with_any: Some(vec![
+                    ModuleWildcard::new("example.path.*").unwrap(),
+                    ModuleWildcard::new("!example.path.specific.*").unwrap(),
+                ]),
+                ignore_missing_imports: None,
+                untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
+                disable_type_errors_in_ide: Some(true),
+                ignore_errors_in_generated_code: Some(false),
+                infer_with_first_use: Some(true),
+                extras: Default::default(),
+                permissive_ignores: Some(false),
+            },
+            sub_configs: vec![],
+            ..Default::default()
+        };
+        // Based on the order this one will always be true.
+        assert!(config.replace_imports_with_any(
+            Some(Path::new("example/path")),
+            ModuleName::from_str("example.path.specific.a")
+        ));
+        assert!(config.replace_imports_with_any(
+            Some(Path::new("example/path")),
+            ModuleName::from_str("example.path.b")
+        ));
     }
 }

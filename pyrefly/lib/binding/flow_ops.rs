@@ -131,13 +131,13 @@ impl MergeItem {
 }
 
 impl<'a> BindingsBuilder<'a> {
-    fn merge_flow(&mut self, mut xs: Vec<Flow>, range: TextRange, is_loop: bool) -> Flow {
+    fn merge_flow(&mut self, mut flows: Vec<Flow>, range: TextRange, is_loop: bool) -> Flow {
         // Short circuit in the one case we know we safely can.
         //
         // Note that it is impossible to hit this in a loop, which is essential because we
         // could panic due to unbound speculative Phi keys if we try to short circuit a loop.
-        if xs.len() == 1 && xs[0].has_terminated {
-            return xs.pop().unwrap();
+        if flows.len() == 1 && flows[0].has_terminated {
+            return flows.pop().unwrap();
         }
 
         // We normally only merge the live branches (where control flow is not
@@ -145,7 +145,7 @@ impl<'a> BindingsBuilder<'a> {
         // the Phi keys and potentially analyze downstream code, so in that case
         // we'll use the terminated branches.
         let (terminated_branches, live_branches): (Vec<_>, Vec<_>) =
-            xs.into_iter().partition(|x| x.has_terminated);
+            flows.into_iter().partition(|flow| flow.has_terminated);
         let has_terminated = live_branches.is_empty();
         let branches = if has_terminated {
             terminated_branches
@@ -155,7 +155,7 @@ impl<'a> BindingsBuilder<'a> {
 
         // Collect all the branches into a `MergeItem` per name we need to merge
         let mut merge_items: SmallMap<Name, MergeItem> =
-            SmallMap::with_capacity(branches.first().map_or(0, |x| x.info.len()));
+            SmallMap::with_capacity(branches.first().map_or(0, |flow| flow.info.len()));
         let n_branches = branches.len();
         for flow in branches {
             for (name, info) in flow.info.into_iter_hashed() {

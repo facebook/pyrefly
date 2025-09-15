@@ -84,6 +84,30 @@ def f(x: X[int]):
 );
 
 testcase!(
+    test_any_alias_implicit,
+    r#"
+from typing import Any, TypeAlias, assert_type
+T = Any
+def f(x: T):
+    assert_type(x, Any)
+f(0)
+f(None)
+"#,
+);
+
+testcase!(
+    test_any_alias_explicit,
+    r#"
+from typing import Any, TypeAlias, assert_type
+T: TypeAlias = Any
+def f(x: T):
+    assert_type(x, Any)
+f(0)
+f(None)
+"#,
+);
+
+testcase!(
     test_generic_alias_explicit,
     r#"
 from typing import TypeAlias, TypeVar, assert_type

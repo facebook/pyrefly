@@ -1609,6 +1609,14 @@ def foo[T](x: type[T]):
     "#,
 );
 
+testcase!(
+    test_any_value_lookup,
+    r#"
+from typing import Any
+Any.foo.bar # E: Class `Any` has no class attribute `foo`
+    "#,
+);
+
 // T, P, and Ts are values of type TypeVar, ParamSpec, and TypeVarTuple respectively.
 // They should behave like values when we try to access attributes on them.
 testcase!(

@@ -283,18 +283,20 @@ impl Ignore {
         false
     }
 
-    /// Get all pyrefly ignores.
-    pub fn get_pyrefly_ignores(&self) -> SmallSet<LineNumber> {
-        self.ignores
-            .iter()
-            .filter(|ignore| {
+    // gets either just pyrefly ignores or pyrefly and type: ignore comments
+    pub fn get_pyrefly_ignores(&self, all: bool) -> SmallSet<LineNumber> {
+        let ignore_iter = self.ignores.iter();
+        let filtered_ignores: Box<dyn Iterator<Item = (&LineNumber, &Vec<Suppression>)>> = if all {
+            Box::new(ignore_iter.filter(|ignore| {
                 ignore
                     .1
                     .iter()
-                    .any(|s| s.tool == Tool::Pyrefly && s.kind.is_empty())
-            })
-            .map(|(line, _)| *line)
-            .collect()
+                    .any(|s| (s.tool == Tool::Pyrefly || s.tool == Tool::Any))
+            }))
+        } else {
+            Box::new(ignore_iter.filter(|ignore| ignore.1.iter().any(|s| s.tool == Tool::Pyrefly)))
+        };
+        filtered_ignores.map(|(line, _)| *line).collect()
     }
 }
 

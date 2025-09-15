@@ -299,8 +299,8 @@ impl Bindings {
         let scope_trace = builder.scopes.finish();
         let last_scope = scope_trace.toplevel_scope();
         let exported = exports.exports(lookup);
-        for (k, static_info) in last_scope.stat.0.iter_hashed() {
-            let info = last_scope.flow.info.get_hashed(k);
+        for (name, static_info) in last_scope.stat.0.iter_hashed() {
+            let info = last_scope.flow.info.get_hashed(name);
             let binding = match info {
                 Some(FlowInfo { key, .. }) => {
                     if let Some(ann) = static_info.annot {
@@ -317,14 +317,14 @@ impl Bindings {
                             .table
                             .types
                             .0
-                            .insert(static_info.as_key(k.into_key())),
+                            .insert(static_info.as_key(name.into_key())),
                     )
                 }
             };
-            if exported.contains_key_hashed(k) {
+            if exported.contains_key_hashed(name) {
                 builder
                     .table
-                    .insert(KeyExport(k.into_key().clone()), BindingExport(binding));
+                    .insert(KeyExport(name.into_key().clone()), BindingExport(binding));
             }
         }
         Self(Arc::new(BindingsInner {
@@ -788,24 +788,25 @@ impl<'a> BindingsBuilder<'a> {
     ) -> Result<(Idx<Key>, Option<Idx<Key>>), LookupError> {
         let mut barrier = false;
         let ok_no_usage = |idx| Ok((idx, None));
-        let is_static_type_information = matches!(usage, Usage::StaticTypeInformation);
-        let is_current_scope_class = matches!(self.scopes.current().kind, ScopeKind::Class(_));
-        let mut is_current_scope = true;
-        for scope in self.scopes.iter_rev() {
+        let is_current_scope_annotation =
+            matches!(self.scopes.current().kind, ScopeKind::Annotation);
+        for (lookup_depth, scope) in self.scopes.iter_rev().enumerate() {
+            let is_class = matches!(scope.kind, ScopeKind::Class(_));
+            // From https://docs.python.org/3/reference/executionmodel.html#resolution-of-names:
+            //   The scope of names defined in a class block is limited to the
+            //   class block; it does not extend to the code blocks of
+            //   methods. This includes comprehensions and generator
+            //   expressions, but it does not include annotation scopes, which
+            //   have access to their enclosing class scopes."""
+            if is_class
+                && !((lookup_depth == 0) || (is_current_scope_annotation && lookup_depth == 1))
+            {
+                // Note: class body scopes have `barrier = false`, so skipping the barrier update is okay.
+                continue;
+            }
+
             if let Some(flow) = scope.flow.info.get_hashed(name)
                 && !barrier
-                // Handles the special case of class fields:
-                // From https://docs.python.org/3/reference/executionmodel.html#resolution-of-names:
-                // """The scope of names defined in a class block is limited to the
-                // class block; it does not extend to the code blocks of
-                // methods. This includes comprehensions and generator
-                // expressions, but it does not include annotation scopes, which
-                // have access to their enclosing class scopes."""
-                && (
-                    is_static_type_information // Annotations can see class fields
-                    || (is_current_scope_class && is_current_scope) // The class body can see class fields in the current scope
-                    || !matches!(flow.style, FlowStyle::ClassField { .. }) // Other scopes cannot see class fields
-                )
             {
                 let (idx, maybe_pinned_idx) = self.detect_possible_first_use(flow.key, usage);
                 if let Some(pinned_idx) = maybe_pinned_idx {
@@ -814,9 +815,11 @@ impl<'a> BindingsBuilder<'a> {
                     return ok_no_usage(idx);
                 }
             }
-            if !matches!(scope.kind, ScopeKind::Class(_))
-                && let Some(info) = scope.stat.0.get_hashed(name)
-            {
+            // Class body scopes are dynamic, not static, so if we don't find a name in the
+            // current flow we keep looking. In every other kind of scope, anything the Python
+            // compiler has identified as local shadows enclosing scopes, so we should prefer
+            // inner static lookups to outer flow lookups.
+            if !is_class && let Some(info) = scope.stat.0.get_hashed(name) {
                 match kind {
                     LookupKind::Regular => {
                         let key = info.as_key(name.into_key());
@@ -829,7 +832,6 @@ impl<'a> BindingsBuilder<'a> {
                     }
                 }
             }
-            is_current_scope = false;
             barrier = barrier || scope.barrier;
         }
         Err(LookupError::NotFound)

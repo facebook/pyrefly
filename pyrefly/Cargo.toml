@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly"
-version = "0.32.0"
+version = "0.33.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -53,12 +53,13 @@ static_assertions = "1.1.0"
 tokio = { version = "1.47.1", features = ["macros", "rt"] }
 toml = { version = "0.9.2", features = ["preserve_order"] }
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
+tsp_types = { path = "../crates/tsp_types" }
 vec1 = { version = "1", features = ["serde"] }
 yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
 
 [dev-dependencies]
 pretty_assertions = { version = "1.2", features = ["alloc"], default-features = false }
-tempfile = "3.15"
+tempfile = "3.22"
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 tikv-jemallocator = "0.6.0"

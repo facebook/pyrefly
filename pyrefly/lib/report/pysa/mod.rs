@@ -83,6 +83,10 @@ impl ClassId {
     }
 }
 
+/// Represents a unique identifier for a function, inside a module
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+struct FunctionId(DisplayRange);
+
 #[derive(Debug, Clone, Serialize)]
 struct PysaProjectModule {
     module_id: ModuleId,
@@ -231,8 +235,8 @@ struct FunctionDefinition {
 struct DefinitionRef {
     module_id: ModuleId,
     module_name: String, // For debugging purposes only. Reader should use the module id.
-    location: String,
-    identifier: String,
+    function_id: FunctionId,
+    identifier: String, // For debugging purposes only
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -495,7 +499,7 @@ fn add_expression_definitions(
                 Some(module_id) => Some(DefinitionRef {
                     module_id,
                     module_name: module_info.name().to_string(),
-                    location: location_key(&display_range),
+                    function_id: FunctionId(display_range),
                     identifier: identifier.to_owned(),
                 }),
                 None => {

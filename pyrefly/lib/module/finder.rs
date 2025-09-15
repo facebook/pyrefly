@@ -9,7 +9,6 @@ use std::iter;
 use std::path::Path;
 use std::path::PathBuf;
 
-use pyrefly_build::handle::Handle;
 use pyrefly_python::COMPILED_FILE_SUFFIXES;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -416,11 +415,11 @@ fn find_module_prefixes<'a>(
 pub fn find_import_filtered(
     config: &ConfigFile,
     module: ModuleName,
-    origin: Option<&Handle>,
+    origin: Option<&ModulePath>,
     style_filter: Option<ModuleStyle>,
 ) -> Result<ModulePath, FindError> {
-    let path = origin.map(|h| h.path().as_path());
-    if module != ModuleName::builtins() && config.replace_imports_with_any(path, module) {
+    let origin = origin.map(|p| p.as_path());
+    if module != ModuleName::builtins() && config.replace_imports_with_any(origin, module) {
         Err(FindError::Ignored)
     } else if let Some(sourcedb) = &config.source_db
         && let Some(path) = sourcedb.lookup(&module, origin)
@@ -459,7 +458,7 @@ pub fn find_import_filtered(
         style_filter,
     )? {
         Ok(path)
-    } else if config.ignore_missing_imports(path, module) {
+    } else if config.ignore_missing_imports(origin, module) {
         Err(FindError::Ignored)
     } else {
         Err(FindError::import_lookup_path(
@@ -478,7 +477,7 @@ pub fn find_import_filtered(
 pub fn find_import(
     config: &ConfigFile,
     module: ModuleName,
-    origin: Option<&Handle>,
+    origin: Option<&ModulePath>,
 ) -> Result<ModulePath, FindError> {
     find_import_filtered(config, module, origin, None)
 }

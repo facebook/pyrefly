@@ -1158,10 +1158,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let metaclass_type = Type::ClassType(metaclass.clone());
         for (base_name, m) in base_metaclasses {
             let base_metaclass_type = Type::ClassType((*m).clone());
-            if !self
-                .solver()
-                .is_subset_eq(&metaclass_type, &base_metaclass_type, self.type_order())
-            {
+            if !self.is_subset_eq(&metaclass_type, &base_metaclass_type) {
                 self.error(errors,
                     cls.range(),
                     ErrorInfo::Kind(ErrorKind::InvalidInheritance),

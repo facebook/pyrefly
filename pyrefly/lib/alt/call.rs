@@ -602,6 +602,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let res = match call_target {
             CallTarget::Class(cls) => {
+                if cls.has_qname("typing", "Any") {
+                    return self.error(
+                        errors,
+                        range,
+                        ErrorInfo::new(ErrorKind::BadInstantiation, context),
+                        format!("`{}` can not be instantiated", cls.name()),
+                    );
+                }
                 if self
                     .get_metadata_for_class(cls.class_object())
                     .is_protocol()

@@ -75,11 +75,11 @@
                 "python.pyrefly.disableLanguageServices": {
                     "type": "boolean",
                     "default": false,
-                    "description": "If true, pyrefly will not provide other IDE services like completions, hover, definition, etc. To control type errors, see `python.pyrefly.disableTypeErrors`"
+                    "description": "If true, pyrefly will not provide other IDE services like completions, hover, definition, etc. To control type errors, see `python.pyrefly.displayTypeErrors`"
                 },
                 "python.pyrefly.displayTypeErrors": {
                     "type": "string",
-                    "description": "If default, pyrefly will not provide typecheck squiggles in the IDE by default, unless a file is covered by a pyrefly.toml. If force-off, pyrefly will never provide typecheck squiggles in the IDE. If force-on, pyrefly will always provide typecheck squiggles in the IDE.",
+                    "description": "If 'default', Pyrefly will only provide type check squiggles in the IDE if your file is covered by a Pyrefly configuration. If 'force-off', Pyrefly will never provide type check squiggles in the IDE. If 'force-on', Pyrefly will always provide type check squiggles in the IDE.",
                     "default": "default",
                     "enum": [
                         "default",

@@ -9,7 +9,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use dupe::Dupe;
-use pyrefly_build::handle::Handle;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModuleStyle;
@@ -113,7 +112,7 @@ impl LoaderFindCache {
     pub fn find_import_prefer_executable(
         &self,
         module: ModuleName,
-        origin: Option<&Handle>,
+        origin: Option<&ModulePath>,
     ) -> Result<ModulePath, FindError> {
         match self.executable_cache.get(&module) {
             Some(Some(module)) => Ok(module.dupe()),
@@ -141,7 +140,7 @@ impl LoaderFindCache {
     pub fn find_import(
         &self,
         module: ModuleName,
-        origin: Option<&Handle>,
+        origin: Option<&ModulePath>,
     ) -> Result<ModulePath, FindError> {
         self.cache
             .ensure(&module, || find_import(&self.config, module, origin))

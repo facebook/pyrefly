@@ -27,6 +27,7 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::callable::Callable;
+use crate::callable::FuncId;
 use crate::callable::FuncMetadata;
 use crate::callable::Function;
 use crate::callable::FunctionKind;
@@ -1420,6 +1421,16 @@ impl Type {
                 BoundMethodType::Forall(forall) => Some(forall.body.signature),
                 BoundMethodType::Overload(_) => None,
             },
+            _ => None,
+        }
+    }
+
+    /// Return the FuncId if this type corresponds to a function or method.
+    pub fn to_funcid(&self) -> Option<FuncId> {
+        match &self {
+            Type::Function(f) => Some(f.metadata.kind.as_func_id()),
+            Type::BoundMethod(m) => Some(m.func.metadata().kind.as_func_id()),
+            Type::Overload(o) => Some(o.metadata.kind.as_func_id()),
             _ => None,
         }
     }

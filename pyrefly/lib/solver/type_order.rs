@@ -20,6 +20,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::variance_inference::VarianceMap;
 use crate::binding::binding::KeyVariance;
+use crate::solver::solver::SubsetError;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
@@ -106,8 +107,8 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         got: &Type,
         protocol: &ClassType,
         name: &Name,
-        is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
-    ) -> bool {
+        is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
+    ) -> Result<(), SubsetError> {
         self.0
             .is_protocol_subset_at_attr(got, protocol, name, is_subset)
     }

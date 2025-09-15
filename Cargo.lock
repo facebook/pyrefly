@@ -2057,7 +2057,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anstream",
  "anyhow",
@@ -2100,13 +2100,14 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "tsp_types",
  "vec1",
  "yansi 1.0.1",
 ]
 
 [[package]]
 name = "pyrefly_build"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "dupe",
@@ -2122,7 +2123,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_bundled"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "starlark_map",
@@ -2132,7 +2133,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_config"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2166,7 +2167,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_derive"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2175,7 +2176,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_python"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "dupe",
@@ -2198,7 +2199,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_types"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "compact_str 0.8.0",
  "dupe",
@@ -2218,7 +2219,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_util"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anstream",
  "anyhow",
@@ -2901,15 +2902,15 @@ dependencies = [
 
 [[package]]
 name = "tempfile"
-version = "3.20.0"
+version = "3.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8a64e3985349f2441a1a9ef0b853f869006c3855f2cda6862a94d26ebb9d6a1"
+checksum = "84fa4d11fadde498443cca10fd3ac23c951f0dc59e080e9f4b93d4df4e4eea53"
 dependencies = [
  "fastrand",
  "getrandom 0.3.3",
  "once_cell",
  "rustix 1.0.8",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3244,6 +3245,16 @@ checksum = "859eb650cfee7434994602c3a68b25d77ad9e68c8a6cd491616ef86661382eb3"
 dependencies = [
  "serde",
  "stable_deref_trait",
+]
+
+[[package]]
+name = "tsp_types"
+version = "0.33.0"
+dependencies = [
+ "lsp-server",
+ "lsp-types",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

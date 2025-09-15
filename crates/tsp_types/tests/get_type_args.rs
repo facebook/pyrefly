@@ -47,7 +47,7 @@ fn test_get_type_args_params_construction() {
 
     let params = GetTypeArgsParams {
         snapshot: 42,
-        type_: type_param.clone(),
+        type_: type_param,
     };
 
     // Verify parameter construction

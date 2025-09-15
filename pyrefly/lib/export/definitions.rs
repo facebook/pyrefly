@@ -38,7 +38,7 @@ use starlark_map::small_set::SmallSet;
 use crate::types::globals::Global;
 
 /// How a name is defined. If a name is defined outside of this
-/// module, we additionally store the module we got it from
+/// module, we additionally store the module we got it from.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DefinitionStyle {
     /// Defined in this module, e.g. `x = 1` or `def x(): ...`
@@ -49,7 +49,6 @@ pub enum DefinitionStyle {
     /// Imported with an alias, e.g. `from x import y as z`
     /// Name is the previous name before the alias
     ImportAs(ModuleName, Name),
-
     /// Imported with an alias, where the alias is identical, e.g. `from x import y as y`
     ImportAsEq(ModuleName),
     /// Imported from another module, e.g. `from x import y`
@@ -79,7 +78,12 @@ pub struct Definition {
 /// since they are separate scopes.
 #[derive(Debug, Clone, Default)]
 pub struct Definitions {
-    /// All the things defined in this module.
+    /// All the names defined in this scope.
+    ///
+    /// If a name is a mutable capture (declared with a `global` or `nonlocal`
+    /// statement) and is mutated in this scope, it will be included, even though it
+    /// does not belong to the static scope. We can discover the fact that it is a
+    /// mutable capture by checking `globals` and `nonlocals`.
     pub definitions: SmallMap<Name, Definition>,
     /// All the global names declared in this scope.
     /// TODO(grievejia): This field is currently unused, but may be useful in the future.
@@ -261,8 +265,7 @@ impl<'a> DefinitionsBuilder<'a> {
     ) {
         match self.inner.definitions.entry(x.clone()) {
             Entry::Occupied(mut e) => {
-                let style = cmp::min(&e.get().style, &style);
-                e.get_mut().style = style.clone();
+                e.get_mut().style = cmp::min(&e.get().style, &style).clone();
                 if e.get().annot.is_none() {
                     e.get_mut().annot = annot;
                 }

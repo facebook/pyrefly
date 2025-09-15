@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
+use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -61,7 +62,7 @@ impl SourceDatabase for PlaygroundSourceDatabase {
             .collect()
     }
 
-    fn lookup(&self, module_name: &ModuleName, _context: Option<&Handle>) -> Option<ModulePath> {
+    fn lookup(&self, module_name: &ModuleName, _: Option<&Path>) -> Option<ModulePath> {
         self.module_mappings.get(module_name).cloned()
     }
 }

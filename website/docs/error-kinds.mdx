@@ -1,10 +1,10 @@
 ---
-title: Error Kinds
+title: Pyrefly Error Kinds
 
 description: Pyrefly error categories and suppression codes
 ---
 
-# Error Kinds
+# Pyrefly Error Kinds
 
 An _error kind_ categorizes an error by the part of the typing specification
 that an error is related to. Every error has exactly one kind.
@@ -233,6 +233,29 @@ Is this OK? Yes! `int` is treated as a subclass of `float`, or to put it another
 That means everywhere that we call `Base.f` can safely call `Sub.f`.
 
 The opposite case, where `Base.f` takes `float` and `Sub.f` takes `int`, is an error because `Sub.f` cannot accept every `float` value.
+
+Note that bad overrides caused by inconsistent parameter names are separately reported as [bad-param-name-override](#bad-param-name-override).
+
+## bad-param-name-override
+
+Arises when a subclass overrides a method of its base class while changing the name of a positional parameter.
+This is a type of [bad override](#bad-override) but has a separate error kind so that it can be selectively disabled if desired.
+Changing the name of a parameter breaks callers that pass in an argument by name:
+
+```python
+class Base:
+  def f(self, a: int) -> None:
+    pass
+
+class Sub(Base):
+  def f(self, b: int) -> None:
+    pass
+
+def f(base: Base):
+  base.f(a=0)
+
+f(Sub())  # oops!
+```
 
 ## bad-return
 

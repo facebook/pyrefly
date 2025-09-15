@@ -104,7 +104,7 @@ function ErrorMessage({
                     </span>
                 )
             }
-            {`${rangeStr}: ${error.message_header} `}
+            {`${error.filename}:${rangeStr}: ${error.message_header} `}
             {'['}
             {errorKindUrl}
             {']'}

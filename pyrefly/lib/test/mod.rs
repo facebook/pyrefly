@@ -53,6 +53,7 @@ mod state;
 mod subscript_narrow;
 mod suppression;
 mod sys_info;
+mod tsp;
 mod tuple;
 mod type_alias;
 mod type_var_tuple;

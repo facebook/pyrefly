@@ -63,12 +63,12 @@ fn initialize_tsp_connection(
     let initialization_params: InitializeParams =
         serde_json::from_value(initialization_params).unwrap();
 
-    // Use TSP-specific capabilities
+    // Use TSP-specific capabilities (same as LSP but without serverInfo)
     let server_capabilities =
         serde_json::to_value(tsp_capabilities(args.indexing_mode, &initialization_params)).unwrap();
-
     let initialize_data = serde_json::json!({
         "capabilities": server_capabilities,
+        // Note: TSP doesn't include serverInfo, unlike LSP
     });
 
     connection.initialize_finish(request_id, initialize_data)?;

@@ -18,15 +18,25 @@ class C:
 "#,
 );
 
+// The python compiler enforces static scoping rules in most cases - for example, if a function
+// defines a name and we try to read it before we write it, Python will normally not fall back
+// to searching in enclosing scopes.
+//
+// But class body scopes are dynamic - Python just checks the currently-defined
+// locals and then keeps looking. This allows Python developers to do things
+// like shadow a global in a class body with a simple assignment where the RHS
+// uses the name being defined in the LHS.
 testcase!(
-    test_more_class_scope,
+    test_class_scope_is_dynamic,
     r#"
 x: int = 0
+z: int = 0
 class C:
+    z: str = str(z)
     x: str = x # E: `int` is not assignable to `str`
     y: int = x # E: `str` is not assignable to `int`
+    # Inside of a method, x refers to the global x: int
     def m(self) -> str:
-        # x refers to global x: int
         return x # E: Returned type `int` is not assignable to declared return type `str`
 "#,
 );
@@ -41,6 +51,21 @@ def test():
     await make_int()  # E: `await` can only be used inside an async function
 async def test_async():
     await make_int()  # ok
+"#,
+);
+
+testcase!(
+    bug = "Pyrefly's uninitialized local checks behave unpredictably depending on parent scopes",
+    test_uninitialized_local_shadows,
+    r#"
+from typing import reveal_type
+x = 5
+def f():
+    # These two lines ought to analyze the same, but we don't catch the use of an uninitialized local `x`.
+    reveal_type(y)  # E: `y` is uninitialized  # E: revealed type: Literal['y']
+    reveal_type(x)  # E: revealed type: Literal['x']
+    y = "y"
+    x = "x"
 "#,
 );
 
@@ -387,6 +412,44 @@ def f() -> None:
 );
 
 testcase!(
+    bug = "A mutable capture is not actually in scope, it can't define a class attribute.",
+    test_mutable_capture_class_body,
+    r#"
+from typing import assert_type
+x = 5
+class C:
+    global x
+    x = 7
+assert_type(C().x, int)  # This should be a lookup error
+"#,
+);
+
+testcase!(
+    bug = "We allow mutable captures to mutate in ways that invalidate through-barrier types on globals and nonlocals",
+    test_mutable_capture_incompatible_assign,
+    r#"
+from typing import reveal_type
+x = 5
+def f():
+    global x
+    reveal_type(x)  # E: revealed type: Literal['str', 5]
+    x = b'bytes'  # This ought to be an error (unless the reveal_type above were to account for the mutation)
+x = "str"
+"#,
+);
+
+testcase!(
+    bug = "We don't detect a case that crashes at runtime (the compiler rejects this)",
+    test_mutable_capture_read_before_declared,
+    r#"
+x = 42
+def f():
+    print(x)  # Should error, the compiler crashes with "SyntaxError: name 'x' is used prior to global declaration"
+    global x
+"#,
+);
+
+testcase!(
     test_del_name,
     r#"
 x: int
@@ -405,6 +468,18 @@ y + 1  # E: `y` is uninitialized
 z: int
 z = str(z)  # E: `z` is uninitialized  # E: `str` is not assignable to variable `z` with type `int`
 "#,
+);
+
+testcase!(
+    bug = "The duplication of flow and static leads to us accidentally allowing uninitialized reads when a var shadows an enclosing scope",
+    test_uninitialized_when_shadowing,
+    r#"
+from typing import assert_type
+x: int = 5
+def f():
+    assert_type(x, str)  # This should error, it crashes at runtime. We do understand the type, but we fail to track initialization.
+    x: str = "foo"
+    "#,
 );
 
 testcase!(
@@ -634,24 +709,74 @@ __all__ += []  # E: Could not find name `__all__`
 "#,
 );
 
-// https://github.com/facebook/pyrefly/issues/264
+// Nested scopes - except for parameter scopes - cannot see a containing class
+// body. This applies not only to methods but also other scopes like lambda, inner
+// class bodies, and comprehensions. See https://github.com/facebook/pyrefly/issues/264
 testcase!(
-    test_class_var_scope,
+    bug = "All these should show `Literal['string']`. The issue with comprehension persists, see also the next test case.",
+    test_class_scope_lookups_when_skip,
     r#"
 from typing import reveal_type
-
 x = 'string'
-
 class A:
     x = 42
     def f():
         reveal_type(x) # E: revealed type: Literal['string']
-
     lambda_f = lambda: reveal_type(x) # E: revealed type: Literal['string']
-
     class B:
         reveal_type(x) # E: revealed type: Literal['string']
-
     [reveal_type(x) for _ in range(1)] # E: revealed type: Literal['string']
 "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1073 and
+// https://github.com/facebook/pyrefly/issues/1074
+testcase!(
+    test_class_scope_lookups_when_permitted,
+    r#"
+# There are some cases where we want to be sure class body lookup is permitted:
+# - Comprehension iterators are evaluated in the parent scope, not the comprehension
+#   scope, so it is legal to use class body vars.
+# - Method parameters are defined in a scope that *can* see the class body,
+#   so parameter defaults may use class body vars.
+class C:
+    X = "X"
+    x_chars = [char for char in X]
+    def __init__(self, x: str = X):
+        self.x = x
+    "#,
+);
+
+testcase!(
+    bug = "We don't yet handle all class body members correctly",
+    test_class_scope_edge_cases,
+    r#"
+from typing import assert_type, Any
+
+# The leftmost iterator of a comprehension evaluates in the parent scope, but
+# other iterators evaluate in the comprehension scope. This behavior is only really
+# evident in class bodies - this test checks that we get it exactly right.
+class A:
+    xs = [1, 2, 3]
+    ys = [(a, b) for a in xs for b in ["a", "b"]]
+    zs = [(a, b) for a in ["a", "b"] for b in xs]  # E: Could not find name `xs`
+assert_type(A.ys, list[tuple[int, str]])
+assert_type(A.zs, list[tuple[str, Any]])
+
+# The visibility rules should cover all elements of the class scope (at one point
+# implementation detatils made it depend on the flow style, so that we only
+# caught cases involving assignment but not other kinds of definitions).
+class B:
+    @staticmethod
+    def f(): pass
+    cb = lambda _: f()  # E: Could not find name `f`
+
+# The visibility rules should understand scope layering - an annotation scope
+# can only see the containing class body, not any class body further up the scope stack
+class C:
+    x = 5
+    class Inner:
+        def g(self, z = x):  # E: Could not find name `x`
+            pass
+    "#,
 );

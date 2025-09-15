@@ -6,6 +6,7 @@
  */
 
 use std::fmt;
+use std::path::Path;
 
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
@@ -58,5 +59,5 @@ impl Target {
 /// paths to the files contained in the build system.
 pub trait SourceDatabase: Send + Sync + fmt::Debug {
     fn modules_to_check(&self) -> Vec<Handle>;
-    fn lookup(&self, module: &ModuleName, origin: Option<&Handle>) -> Option<ModulePath>;
+    fn lookup(&self, module: &ModuleName, origin: Option<&Path>) -> Option<ModulePath>;
 }

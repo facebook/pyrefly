@@ -133,6 +133,35 @@ const config: Config = {
             media: "(prefers-color-scheme: dark)",
           },
         },
+        // Open Graph meta tags for social media previews
+        {
+          tagName: "meta",
+          attributes: {
+            property: "og:image",
+            content: baseUrl + "img/Pyrefly-Symbol.svg",
+          },
+        },
+        {
+          tagName: "meta",
+          attributes: {
+            property: "og:image:width",
+            content: "1200",
+          },
+        },
+        {
+          tagName: "meta",
+          attributes: {
+            property: "og:image:height",
+            content: "630",
+          },
+        },
+        {
+          tagName: "meta",
+          attributes: {
+            property: "og:image:type",
+            content: "image/svg+xml",
+          },
+        },
       ],
     organizationName: 'facebook', // Usually your GitHub org/user name.
     projectName: 'Pyre', // Usually your repo name.

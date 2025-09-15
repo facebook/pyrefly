@@ -112,6 +112,9 @@ pub enum ErrorKind {
     BadKeywordArgument,
     /// A subclass field or method incorrectly overrides a field/method of a parent class.
     BadOverride,
+    /// A subclass method incorrectly changes the name of a positional parameter while overriding
+    /// a method of a parent class.
+    BadParamNameOverride,
     /// Attempting to return a value that does not match the function's return type.
     /// Can also arise when returning values from generators.
     BadReturn,

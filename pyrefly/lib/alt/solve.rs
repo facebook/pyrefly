@@ -91,6 +91,7 @@ use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::style::ErrorStyle;
+use crate::solver::solver::SubsetError;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
 use crate::types::callable::Function;
@@ -320,12 +321,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Check that got is assignable to want
     pub fn is_subset_eq(&self, got: &Type, want: &Type) -> bool {
+        self.is_subset_eq_with_reason(got, want).is_ok()
+    }
+
+    pub fn is_subset_eq_with_reason(&self, got: &Type, want: &Type) -> Result<(), SubsetError> {
         self.solver().is_subset_eq(got, want, self.type_order())
     }
 
     /// Check that got and want are consistent with each other
     pub fn is_equal(&self, got: &Type, want: &Type) -> bool {
-        self.solver().is_equal(got, want, self.type_order())
+        self.solver().is_equal(got, want, self.type_order()).is_ok()
     }
 
     pub fn expr_class_keyword(&self, x: &Expr, errors: &ErrorCollector) -> Annotation {
@@ -1001,10 +1006,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return Type::any_error();
         }
         let untyped = self.untype_opt(ty.clone(), range);
-        let mut ty = if let Type::ClassDef(cls) = ty {
-            // TODO: should we be promoting this or making a Forall type?
-            self.promote(&cls, range)
-        } else if let Some(untyped) = untyped {
+        let mut ty = if let Some(untyped) = untyped {
             let validated =
                 self.validate_type_form(untyped, range, TypeFormContext::TypeAlias, errors);
             if validated.is_error() {

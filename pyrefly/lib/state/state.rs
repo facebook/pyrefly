@@ -566,7 +566,7 @@ impl<'a> Transaction<'a> {
             Some(path) => path.dupe(),
             None => self
                 .get_cached_loader(&self.get_module(handle).config.read())
-                .find_import(module, Some(handle))?,
+                .find_import(module, Some(handle.path()))?,
         };
         Ok(Handle::new(module, path, handle.sys_info().dupe()))
     }
@@ -582,7 +582,7 @@ impl<'a> Transaction<'a> {
             Some(path) => path.dupe(),
             None => self
                 .get_cached_loader(&self.get_module(handle).config.read())
-                .find_import_prefer_executable(module, Some(handle))?,
+                .find_import_prefer_executable(module, Some(handle.path()))?,
         };
         Ok(Handle::new(module, path, handle.sys_info().dupe()))
     }
@@ -695,7 +695,9 @@ impl<'a> Transaction<'a> {
             let loader = self.get_cached_loader(&module_data.config.read());
             let mut is_dirty = false;
             for dependency_handle in module_data.deps.read().values().flatten() {
-                match loader.find_import(dependency_handle.module(), Some(&module_data.handle)) {
+                match loader
+                    .find_import(dependency_handle.module(), Some(module_data.handle.path()))
+                {
                     Ok(path) if &path == dependency_handle.path() => {}
                     _ => {
                         is_dirty = true;
@@ -1268,7 +1270,8 @@ impl<'a> Transaction<'a> {
         self.invalidate(|_| true, |dirty| dirty.find = true);
     }
 
-    /// The data returned by the ConfigFinder might have changed.
+    /// The data returned by the ConfigFinder might have changed. Note: invalidate find is not also required to run. When
+    /// a config changes, this function guarantees the next transaction run will invalidate find accordingly.
     pub fn invalidate_config(&mut self) {
         // We clear the global config cache, rather than making a dedicated copy.
         // This is reasonable, because we will cache the result on ModuleData.

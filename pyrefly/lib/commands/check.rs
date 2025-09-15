@@ -168,6 +168,7 @@ impl SnippetCheckArgs {
                 suppress_errors: false,
                 expectations: false,
                 remove_unused_ignores: false,
+                all: false,
             },
             config_override: self.config_override,
         };
@@ -243,6 +244,11 @@ struct OutputArgs {
     /// Deprecated: will be removed in the next release. Use `--summary=none` instead.
     #[arg(long)]
     no_summary: bool,
+
+    /// When specified, strip this prefix from any paths in the output.
+    /// Pass "" to show absolute paths. When omitted, we will use the current working directory.
+    #[arg(long)]
+    relative_to: Option<String>,
 }
 
 #[derive(Clone, Debug, ValueEnum, Default, PartialEq, Eq)]
@@ -269,69 +275,94 @@ struct BehaviorArgs {
     /// Remove unused ignores from the input files.
     #[arg(long)]
     remove_unused_ignores: bool,
+    /// If we are removing unused ignores, should we remove all unsused ignores or only Pyre-fly specific `pyrefly: ignore`s?
+    #[arg(long, requires("remove_unused_ignores"))]
+    all: bool,
 }
 
 impl OutputFormat {
     fn write_error_text_to_file(
         path: &Path,
+        relative_to: &Path,
         errors: &[Error],
         verbose: bool,
     ) -> anyhow::Result<()> {
         let mut file = BufWriter::new(File::create(path)?);
         for e in errors {
-            e.write_line(&mut file, verbose)?;
+            e.write_line(&mut file, relative_to, verbose)?;
         }
         file.flush()?;
         Ok(())
     }
 
-    fn write_error_text_to_console(errors: &[Error], verbose: bool) -> anyhow::Result<()> {
+    fn write_error_text_to_console(
+        relative_to: &Path,
+        errors: &[Error],
+        verbose: bool,
+    ) -> anyhow::Result<()> {
         for error in errors {
-            error.print_colors(verbose);
+            error.print_colors(relative_to, verbose);
         }
         Ok(())
     }
 
-    fn write_error_json(writer: &mut impl Write, errors: &[Error]) -> anyhow::Result<()> {
-        let legacy_errors = LegacyErrors::from_errors(errors);
+    fn write_error_json(
+        writer: &mut impl Write,
+        relative_to: &Path,
+        errors: &[Error],
+    ) -> anyhow::Result<()> {
+        let legacy_errors = LegacyErrors::from_errors(relative_to, errors);
         serde_json::to_writer_pretty(writer, &legacy_errors)?;
         Ok(())
     }
 
-    fn buffered_write_error_json(writer: impl Write, errors: &[Error]) -> anyhow::Result<()> {
+    fn buffered_write_error_json(
+        writer: impl Write,
+        relative_to: &Path,
+        errors: &[Error],
+    ) -> anyhow::Result<()> {
         let mut writer = BufWriter::new(writer);
-        Self::write_error_json(&mut writer, errors)?;
+        Self::write_error_json(&mut writer, relative_to, errors)?;
         writer.flush()?;
         Ok(())
     }
 
-    fn write_error_json_to_file(path: &Path, errors: &[Error]) -> anyhow::Result<()> {
-        fn f(path: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    fn write_error_json_to_file(
+        path: &Path,
+        relative_to: &Path,
+        errors: &[Error],
+    ) -> anyhow::Result<()> {
+        fn f(path: &Path, relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
             let file = File::create(path)?;
-            OutputFormat::buffered_write_error_json(file, errors)
+            OutputFormat::buffered_write_error_json(file, relative_to, errors)
         }
-        f(path, errors)
+        f(path, relative_to, errors)
             .with_context(|| format!("while writing JSON errors to `{}`", path.display()))
     }
 
-    fn write_error_json_to_console(errors: &[Error]) -> anyhow::Result<()> {
-        Self::buffered_write_error_json(stdout(), errors)
+    fn write_error_json_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+        Self::buffered_write_error_json(stdout(), relative_to, errors)
     }
 
-    fn write_errors_to_file(&self, path: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    fn write_errors_to_file(
+        &self,
+        path: &Path,
+        relative_to: &Path,
+        errors: &[Error],
+    ) -> anyhow::Result<()> {
         match self {
-            Self::MinText => Self::write_error_text_to_file(path, errors, false),
-            Self::FullText => Self::write_error_text_to_file(path, errors, true),
-            Self::Json => Self::write_error_json_to_file(path, errors),
+            Self::MinText => Self::write_error_text_to_file(path, relative_to, errors, false),
+            Self::FullText => Self::write_error_text_to_file(path, relative_to, errors, true),
+            Self::Json => Self::write_error_json_to_file(path, relative_to, errors),
             Self::OmitErrors => Ok(()),
         }
     }
 
-    fn write_errors_to_console(&self, errors: &[Error]) -> anyhow::Result<()> {
+    fn write_errors_to_console(&self, relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
         match self {
-            Self::MinText => Self::write_error_text_to_console(errors, false),
-            Self::FullText => Self::write_error_text_to_console(errors, true),
-            Self::Json => Self::write_error_json_to_console(errors),
+            Self::MinText => Self::write_error_text_to_console(relative_to, errors, false),
+            Self::FullText => Self::write_error_text_to_console(relative_to, errors, true),
+            Self::Json => Self::write_error_json_to_console(relative_to, errors),
             Self::OmitErrors => Ok(()),
         }
     }
@@ -653,15 +684,22 @@ impl CheckArgs {
             error.print();
         }
 
+        let relative_to = self.output.relative_to.as_ref().map_or_else(
+            || std::env::current_dir().ok().unwrap_or_default(),
+            |x| PathBuf::from_str(x.as_str()).unwrap(),
+        );
+
         let errors = loads.collect_errors();
         if let Some(path) = &self.output.output {
-            self.output
-                .output_format
-                .write_errors_to_file(path, &errors.shown)?;
+            self.output.output_format.write_errors_to_file(
+                path,
+                relative_to.as_path(),
+                &errors.shown,
+            )?;
         } else {
             self.output
                 .output_format
-                .write_errors_to_console(&errors.shown)?;
+                .write_errors_to_console(relative_to.as_path(), &errors.shown)?;
         }
         memory_trace.stop();
         if let Some(limit) = self.output.count_errors {
@@ -744,7 +782,7 @@ impl CheckArgs {
             suppress::suppress_errors(errors.shown.clone());
         }
         if self.behavior.remove_unused_ignores {
-            suppress::remove_unused_ignores(&loads);
+            suppress::remove_unused_ignores(&loads, self.behavior.all);
         }
         if self.behavior.expectations {
             loads.check_against_expectations()?;

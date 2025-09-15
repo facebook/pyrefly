@@ -47,7 +47,7 @@ pub struct Export {
 pub enum ExportLocation {
     // This export is defined in this module.
     ThisModule(Export),
-    // Export from another module ModuleName. If it's alised, the old name (before the alias) is provided.
+    // Export from another module ModuleName. If it's aliased, the old name (before the alias) is provided.
     OtherModule(ModuleName, Option<Name>),
 }
 

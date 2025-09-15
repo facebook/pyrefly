@@ -153,12 +153,12 @@ pub fn find_unused_ignores<'a>(
     all_unused_ignores
 }
 
-pub fn remove_unused_ignores(loads: &Errors) {
+pub fn remove_unused_ignores(loads: &Errors, all: bool) {
     let errors = loads.collect_errors();
     let mut all_ignores: SmallMap<&PathBuf, SmallSet<LineNumber>> = SmallMap::new();
     for (module_path, ignore) in loads.collect_ignores() {
         if let ModulePathDetails::FileSystem(path) = module_path.details() {
-            all_ignores.insert(path, ignore.get_pyrefly_ignores());
+            all_ignores.insert(path, ignore.get_pyrefly_ignores(all));
         }
     }
 
@@ -178,7 +178,7 @@ pub fn remove_unused_ignores(loads: &Errors) {
 
     // TODO: right now we only remove pyrefly ignores, but we should have options to clean up
     // other comment based ignores as well
-    let regex = Regex::new(r"# pyrefly: ignore.*$").unwrap();
+    let regex = Regex::new(r"(#\s*pyrefly:\s*ignore.*$|#\s*type:\s*ignore.*$)").unwrap();
     let mut removed_ignores: SmallMap<&PathBuf, usize> = SmallMap::new();
     for (path, ignores) in path_ignores {
         let mut unused_ignore_count = 0;
@@ -255,14 +255,14 @@ mod tests {
     }
 
     fn assert_suppress_errors(before: &str, after: &str) {
-        assert_suppressions(before, after, SuppressFlag::Add)
+        assert_suppressions(before, after, SuppressFlag::Add, false)
     }
 
-    fn assert_remove_ignores(before: &str, after: &str) {
-        assert_suppressions(before, after, SuppressFlag::Remove)
+    fn assert_remove_ignores(before: &str, after: &str, all: bool) {
+        assert_suppressions(before, after, SuppressFlag::Remove, all)
     }
 
-    fn assert_suppressions(before: &str, after: &str, kind: SuppressFlag) {
+    fn assert_suppressions(before: &str, after: &str, kind: SuppressFlag, all: bool) {
         let tdir = tempfile::tempdir().unwrap();
 
         let mut config = ConfigFile::default();
@@ -290,7 +290,7 @@ mod tests {
         if kind == SuppressFlag::Add {
             suppress::suppress_errors(loads.collect_errors().shown);
         } else {
-            suppress::remove_unused_ignores(&loads);
+            suppress::remove_unused_ignores(&loads, all);
         }
 
         let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
@@ -430,7 +430,7 @@ def f() -> int:
 
     return 1
 "#;
-        assert_remove_ignores(input, want);
+        assert_remove_ignores(input, want, false);
     }
 
     #[test]
@@ -445,7 +445,7 @@ def g() -> str:
 
     return "hello"
 "#;
-        assert_remove_ignores(input, want);
+        assert_remove_ignores(input, want, false);
     }
 
     #[test]
@@ -458,7 +458,7 @@ def g() -> str:
 def g() -> str:
     return "hello"
 "#;
-        assert_remove_ignores(input, want);
+        assert_remove_ignores(input, want, false);
     }
 
     #[test]
@@ -477,7 +477,7 @@ def f() -> int:
 
     return 1
 "##;
-        assert_remove_ignores(input, output);
+        assert_remove_ignores(input, output, false);
     }
 
     #[test]
@@ -492,7 +492,7 @@ def f() -> int:
     return 1
 "#,
         );
-        assert_remove_ignores(&input, &input);
+        assert_remove_ignores(&input, &input, false);
     }
 
     #[test]
@@ -501,6 +501,30 @@ def f() -> int:
 def g() -> int:
     return "hello" # pyrefly: ignore # bad-return
 "#;
-        assert_remove_ignores(input, input);
+        assert_remove_ignores(input, input, false);
+    }
+    #[test]
+    fn test_remove_generic_suppression() {
+        let before = r#"
+def g() -> str:
+    return "hello" # type: ignore # bad-return
+"#;
+        let after = r#"
+def g() -> str:
+    return "hello"
+"#;
+        assert_remove_ignores(before, after, true);
+    }
+    #[test]
+    fn test_remove_generic_suppression_error_type() {
+        let before = r#"
+def g() -> str:
+    return "hello" # type: ignore[bad-test]
+"#;
+        let after = r#"
+def g() -> str:
+    return "hello"
+"#;
+        assert_remove_ignores(before, after, true);
     }
 }
