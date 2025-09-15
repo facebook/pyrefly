@@ -7,6 +7,7 @@
 
 /// This file contains a new implementation of the lsp_interaction test suite. Soon it will replace the old one.
 use std::io;
+use std::iter::once;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -469,22 +470,22 @@ impl TestClient {
         }
     }
 
-    pub fn expect_configuration_request(&self, id: i32, scope_uri: Option<&Url>) {
+    pub fn expect_configuration_request(&self, id: i32, scope_uris: Option<Vec<&Url>>) {
         use lsp_types::ConfigurationItem;
         use lsp_types::ConfigurationParams;
         use lsp_types::request::WorkspaceConfiguration;
 
-        let items = if let Some(uri) = scope_uri {
-            Vec::from([
-                ConfigurationItem {
+        let items = if let Some(uris) = scope_uris {
+            uris.into_iter()
+                .map(|uri| ConfigurationItem {
                     scope_uri: Some(uri.clone()),
                     section: Some("python".to_owned()),
-                },
-                ConfigurationItem {
+                })
+                .chain(once(ConfigurationItem {
                     scope_uri: None,
                     section: Some("python".to_owned()),
-                },
-            ])
+                }))
+                .collect::<Vec<_>>()
         } else {
             Vec::from([ConfigurationItem {
                 scope_uri: None,

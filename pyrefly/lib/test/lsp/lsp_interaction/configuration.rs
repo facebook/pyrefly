@@ -39,7 +39,7 @@ fn test_did_change_configuration() {
 
     interaction
         .client
-        .expect_configuration_request(2, Some(&scope_uri));
+        .expect_configuration_request(2, Some(vec![&scope_uri]));
     interaction
         .server
         .send_configuration_response(2, serde_json::json!([{}]));
@@ -191,7 +191,7 @@ fn test_disable_language_services() {
 
     interaction
         .client
-        .expect_configuration_request(2, Some(&scope_uri));
+        .expect_configuration_request(2, Some(vec![&scope_uri]));
     interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"disableLanguageServices": true}}, {"pyrefly": {"disableLanguageServices": true}}]));
 
     interaction.server.definition("foo.py", 6, 16);
@@ -274,7 +274,7 @@ fn test_did_change_workspace_folder() {
 
     interaction
         .client
-        .expect_configuration_request(2, Some(&scope_uri));
+        .expect_configuration_request(2, Some(vec![&scope_uri]));
     interaction
         .server
         .send_configuration_response(2, serde_json::json!([{}, {}]));
@@ -347,7 +347,7 @@ fn test_disable_type_errors_workspace_folder() {
 
     interaction
         .client
-        .expect_configuration_request(2, Some(&scope_uri));
+        .expect_configuration_request(2, Some(vec![&scope_uri]));
     interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-off"}}, {"pyrefly": {"displayTypeErrors": "force-off"}}]));
     interaction.server.diagnostic("type_errors.py");
 
@@ -361,7 +361,7 @@ fn test_disable_type_errors_workspace_folder() {
 
     interaction
         .client
-        .expect_configuration_request(3, Some(&scope_uri));
+        .expect_configuration_request(3, Some(vec![&scope_uri]));
     interaction.server.send_configuration_response(3, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction.server.diagnostic("type_errors.py");
 
@@ -448,7 +448,7 @@ fn test_disable_type_errors_config() {
 
     interaction
         .client
-        .expect_configuration_request(2, Some(&scope_uri));
+        .expect_configuration_request(2, Some(vec![&scope_uri]));
     interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction.server.diagnostic("type_errors.py");
 
@@ -600,7 +600,7 @@ fn test_diagnostics_in_workspace() {
     interaction.server.did_change_configuration();
     interaction
         .client
-        .expect_configuration_request(2, Some(&scope_uri));
+        .expect_configuration_request(2, Some(vec![&scope_uri]));
     interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction.server.diagnostic("type_errors.py");
 

@@ -39,6 +39,7 @@ fn get_test_report(
             insert_text,
             data,
             tags,
+            text_edit,
             ..
         } in state
             .transaction()
@@ -67,6 +68,10 @@ fn get_test_report(
                     report.push_str(" inserting `");
                     report.push_str(&insert_text);
                     report.push('`');
+                }
+                if let Some(text_edit) = text_edit {
+                    report.push_str(" with text edit: ");
+                    report.push_str(&format!("{:?}", &text_edit));
                 }
             }
         }
@@ -1100,6 +1105,59 @@ Completion Results:
 - (Variable) x=: Literal['foo', 1] | Foo
 "#
         .trim(),
+        report.trim(),
+    );
+}
+
+// todo(kylei): provide editttext to remove the quotes
+#[test]
+fn completion_literal_do_not_duplicate_quotes() {
+    let code = r#"
+from typing import Literal, Union
+class Foo: ...
+def foo(x: Union[Union[Literal['foo']] | Literal[1] | Foo]): ...
+foo(''
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+5 | foo(''
+         ^
+Completion Results:
+- (Value) 'foo': Literal['foo']
+- (Value) 1: Literal[1]
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+// todo(kylei): escape escape characters
+#[test]
+fn completion_literal_with_escape_characters() {
+    let code = r#"
+from typing import Literal
+def foo(x: Literal["a\nb"]): ...
+foo("
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+4 | foo("
+         ^
+Completion Results:
+- (Value) 'a
+b': Literal['a
+b']
+- (Variable) x=: Literal['a
+b']"#
+            .trim(),
         report.trim(),
     );
 }

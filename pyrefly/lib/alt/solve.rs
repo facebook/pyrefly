@@ -1006,10 +1006,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return Type::any_error();
         }
         let untyped = self.untype_opt(ty.clone(), range);
-        let mut ty = if let Type::ClassDef(cls) = ty {
-            // TODO: should we be promoting this or making a Forall type?
-            self.promote(&cls, range)
-        } else if let Some(untyped) = untyped {
+        let mut ty = if let Some(untyped) = untyped {
             let validated =
                 self.validate_type_form(untyped, range, TypeFormContext::TypeAlias, errors);
             if validated.is_error() {
