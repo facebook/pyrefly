@@ -1,4 +1,3 @@
-# @lint-ignore-every LICENSELINT
 """RootModel class and type definitions."""
 
 from __future__ import annotations as _annotations

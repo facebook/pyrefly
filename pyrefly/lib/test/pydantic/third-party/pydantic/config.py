@@ -1,4 +1,3 @@
-# @lint-ignore-every LICENSELINT
 """Configuration for Pydantic models."""
 
 from __future__ import annotations as _annotations

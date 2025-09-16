@@ -1,4 +1,3 @@
-# @lint-ignore-every LICENSELINT
 """Private logic for creating models."""
 
 from __future__ import annotations as _annotations

@@ -1,4 +1,3 @@
-# @lint-ignore-every LICENSELINT
 """Defining fields on models."""
 
 from __future__ import annotations as _annotations

@@ -1,4 +1,3 @@
-# @lint-ignore-every LICENSELINT
 import typing
 from importlib import import_module
 from warnings import warn
