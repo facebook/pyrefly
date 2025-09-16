@@ -20,7 +20,7 @@ testcase!(
     r#"
 from typing import assert_type
 
-from django.db import models # E: Could not find import of `django.db` 
+from django.db import models
 
 class Person(models.Model):
     first_name = models.CharField(max_length=30)
