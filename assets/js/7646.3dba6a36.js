@@ -1,1 +1,0 @@
-"use strict";(self.webpackChunknew_website=self.webpackChunknew_website||[]).push([[7646],{17646:e=>{e.exports=JSON.parse('{"tags":[{"label":"typechecking","permalink":"/blog/tags/typechecking","count":2},{"label":"python-typing-basics","permalink":"/blog/tags/python-typing-basics","count":1},{"label":"news","permalink":"/blog/tags/news","count":1}]}')}}]);
