@@ -5,11 +5,18 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
+
+fn django_env() -> TestEnv {
+    let path = std::env::var("DJANGO_TEST_PATH").expect("DJANGO_TEST_PATH must be set");
+    TestEnv::new_with_site_package_path(&path)
+}
 
 testcase!(
     bug = "Discover django models and discover the correct field type",
     test_model,
+    django_env(),
     r#"
 from typing import assert_type
 
