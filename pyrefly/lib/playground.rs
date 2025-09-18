@@ -267,9 +267,8 @@ impl Playground {
                 continue;
             }
 
-            let module_name = ModuleName::from_str(
-                filename.strip_suffix(".py").unwrap_or(filename),
-            );
+            let module_name =
+                ModuleName::from_str(filename.strip_suffix(".py").unwrap_or(filename));
             let module_path = PathBuf::from(format!("{}.py", module_name.as_str()));
             let memory_path = ModulePath::memory(module_path.clone());
 
