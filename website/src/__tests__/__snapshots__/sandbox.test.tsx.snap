@@ -28,6 +28,11 @@ exports[`Sandbox Component render sandbox correctly 1`] = `
         >
           +
         </button>
+        <button
+          title="Add pyrefly.toml config file"
+        >
+          cfg
+        </button>
       </div>
     </div>
     <div

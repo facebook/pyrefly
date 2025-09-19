@@ -113,7 +113,8 @@ export default function Sandbox({
             newModel = existingModel;
         } else {
             // Create new file from scratch
-            newModel = monaco.editor.createModel(content, 'python', monaco.Uri.file(`/${fileName}`));
+            const language = fileName.endsWith('.toml') ? 'toml' : 'python';
+            newModel = monaco.editor.createModel(content, language, monaco.Uri.file(`/${fileName}`));
         }
 
         setModels(prev => new Map(prev).set(fileName, newModel));
@@ -165,17 +166,18 @@ export default function Sandbox({
     const renameFile = useCallback((oldName: string, newName: string) => {
         if (!newName.trim() || models.has(newName)) return false;
 
-        // Ensure .py extension
-        const finalName = newName.endsWith('.py') ? newName : `${newName}.py`;
+        // Allow .py and .toml; default to .py if no known extension
+        const finalName = (newName.endsWith('.py') || newName.endsWith('.toml')) ? newName : `${newName}.py`;
         if (models.has(finalName)) return false;
 
         const oldModel = models.get(oldName);
         if (!oldModel) return false;
 
         // Create new model with new name
+        const language = finalName.endsWith('.toml') ? 'toml' : 'python';
         const newModel = monaco.editor.createModel(
             oldModel.getValue(),
-            'python',
+            language,
             monaco.Uri.file(`/${finalName}`)
         );
 
@@ -213,9 +215,10 @@ export default function Sandbox({
             return false;
         }
 
-        const finalName = inputValue.trim().endsWith('.py')
-            ? inputValue.trim()
-            : `${inputValue.trim()}.py`;
+        const trimmed = inputValue.trim();
+        const finalName = (trimmed.endsWith('.py') || trimmed.endsWith('.toml'))
+            ? trimmed
+            : `${trimmed}.py`;
 
         // Allow saving with the same name (no change)
         if (finalName === currentFileName) {
@@ -313,7 +316,7 @@ export default function Sandbox({
                                 placeholder="Enter filename"
                                 autoFocus
                             />
-                            <span {...stylex.props(styles.extensionLabel)}>.py</span>
+                            <span {...stylex.props(styles.extensionLabel)}></span>
                         </div>
                     ) : (
                         <button
@@ -348,7 +351,7 @@ export default function Sandbox({
                     <button
                         onClick={handleRenameSave}
                         {...stylex.props(
-                           styles.actionButton,
+                            styles.actionButton,
                             styles.saveButton,
                             !isValidFilename(renameInputValue, renamingFile) && styles.disabledButton
                         )}
@@ -366,6 +369,27 @@ export default function Sandbox({
                         +
                     </button>
                 )}
+                <button
+                    onClick={() => {
+                        if (!models.has('pyrefly.toml')) {
+                            const template = [
+                                '# Pyrefly sandbox configuration',
+                                'python-version = "3.12"',
+                                '',
+                                '[errors]',
+                                'reveal-type = false',
+                                ''
+                            ].join('\n');
+                            createNewFile('pyrefly.toml', template);
+                        } else {
+                            switchToFile('pyrefly.toml');
+                        }
+                    }}
+                    {...stylex.props(styles.actionButton)}
+                    title={models.has('pyrefly.toml') ? 'Open pyrefly.toml' : 'Add pyrefly.toml config file'}
+                >
+                    cfg
+                </button>
             </div>
         </div>
     );
@@ -621,7 +645,12 @@ export default function Sandbox({
             models.forEach((model, filename) => {
                 allFiles[filename] = model.getValue();
             });
-            updateURL(allFiles, activeFileName, newVersion);
+            // If a pyrefly.toml exists, prefer config as source of truth: update URL without ?version
+            if (models.has('pyrefly.toml')) {
+                updateURL(allFiles, activeFileName);
+            } else {
+                updateURL(allFiles, activeFileName, newVersion);
+            }
         }
     };
 
@@ -635,7 +664,8 @@ export default function Sandbox({
         codeSample,
         pythonVersion,
         handleVersionChange,
-        loading,
+        // Disable selector when pyrefly.toml exists so config is the source of truth
+        loading || models.has('pyrefly.toml'),
         models,
         activeFileName
     );
@@ -869,7 +899,12 @@ function getPyreflyEditor(
                                 allFiles[filename] = model.getValue();
                             }
                         });
-                        updateURL(allFiles, activeFileName, pythonVersion);
+                        // If pyrefly.toml exists, omit ?version from URL – config is the source of truth
+                        if (models.has('pyrefly.toml')) {
+                            updateURL(allFiles, activeFileName);
+                        } else {
+                            updateURL(allFiles, activeFileName, pythonVersion);
+                        }
                     }
                 }}
                 onMount={onEditorMount}
