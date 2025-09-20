@@ -85,6 +85,10 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         self.0.get_metadata_for_class(cls).is_new_type()
     }
 
+    pub fn is_final(self, cls: &Class) -> bool {
+        self.0.get_metadata_for_class(cls).is_final()
+    }
+
     pub fn get_protocol_member_names(self, cls: &Class) -> SmallSet<Name> {
         let meta = self.0.get_metadata_for_class(cls);
         if let Some(proto) = meta.protocol_metadata() {
