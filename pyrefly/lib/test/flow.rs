@@ -1450,3 +1450,14 @@ def f(v):
         print(value)
     "#,
 );
+
+testcase!(
+    test_trycatch_implicit_return,
+    r#"
+def f() -> int:
+    try:
+        return 1
+    finally:
+        pass
+    "#,
+);

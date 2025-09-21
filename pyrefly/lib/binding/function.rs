@@ -699,7 +699,13 @@ fn function_last_expressions<'a>(
                 }
             }
             Stmt::Try(x) => {
-                if !x.finalbody.is_empty() {
+                // If final body is not empty, _and_ contains a return statement,
+                // process it.
+                if !x.finalbody.is_empty()
+                    && x.finalbody
+                        .iter()
+                        .any(|stmt| matches!(stmt, Stmt::Return(_)))
+                {
                     f(sys_info, &x.finalbody, res)?;
                 } else {
                     if x.orelse.is_empty() {
