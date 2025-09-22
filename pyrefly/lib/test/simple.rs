@@ -1003,7 +1003,7 @@ import typing
 typing.reveal_type(0)  # E: revealed type: Literal[0]
 # Make sure that calling by bare name without importing reveals the type, as this is very convenient for debugging.
 # It's fine if a name error is also generated.
-reveal_type(0)  # E: revealed type: Literal[0]  # E: `reveal_type` must be imported from typing for runtime usage
+reveal_type(0)  # E: revealed type: Literal[0]  # E: `reveal_type` must be imported from `typing` for runtime usage
     "#,
 );
 

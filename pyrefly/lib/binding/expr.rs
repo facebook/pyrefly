@@ -321,7 +321,7 @@ impl<'a> BindingsBuilder<'a> {
                     self.error(
                         name.range,
                         ErrorInfo::Kind(ErrorKind::UnknownName),
-                        format!("`{}` must be imported from typing for runtime usage", name),
+                        format!("`{}` must be imported from `typing` for runtime usage", name),
                     );
                 } else {
                     // Record a type error and fall back to `Any`.
