@@ -55,6 +55,12 @@ use crate::graph::index::Idx;
 use crate::types::callable::unexpected_keyword;
 use crate::types::types::Type;
 
+/// Match on an expression by name. Should be used only for special names that we essentially treat like keywords,
+/// like reveal_type.
+fn is_special_name(name: &str) -> bool {
+    matches!(name, "reveal_type" | "assert_type")
+}
+
 /// Looking up names in an expression requires knowing the identity of the binding
 /// we are computing for usage tracking.
 ///
@@ -311,12 +317,20 @@ impl<'a> BindingsBuilder<'a> {
                 self.insert_binding(key, value)
             }
             NameLookupResult::NotFound => {
-                // Record a type error and fall back to `Any`.
-                self.error(
-                    name.range,
-                    ErrorInfo::Kind(ErrorKind::UnknownName),
-                    format!("Could not find name `{name}`"),
-                );
+                if is_special_name(&name.id.as_str()) {
+                    self.error(
+                        name.range,
+                        ErrorInfo::Kind(ErrorKind::UnknownName),
+                        format!("`{}` must be imported from typing for runtime usage", name),
+                    );
+                } else {
+                    // Record a type error and fall back to `Any`.
+                    self.error(
+                        name.range,
+                        ErrorInfo::Kind(ErrorKind::UnknownName),
+                        format!("Could not find name `{name}`"),
+                    );
+                }
                 self.insert_binding(key, Binding::Type(Type::any_error()))
             }
         }

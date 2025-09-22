@@ -991,7 +991,7 @@ import typing
 typing.assert_type(0, str)  # E: assert_type(Literal[0], str) failed
 # Make sure that calling by bare name without importing performs the assertion, as this is very convenient for debugging.
 # It's fine if a name error is also generated.
-assert_type(0, str)  # E: assert_type(Literal[0], str) failed  # E: Could not find name `assert_type`
+assert_type(0, str)  # E: assert_type(Literal[0], str) failed  # E: `assert_type` must be imported from typing for runtime usage
     "#,
 );
 
@@ -1003,7 +1003,7 @@ import typing
 typing.reveal_type(0)  # E: revealed type: Literal[0]
 # Make sure that calling by bare name without importing reveals the type, as this is very convenient for debugging.
 # It's fine if a name error is also generated.
-reveal_type(0)  # E: revealed type: Literal[0]  # E: Could not find name `reveal_type`
+reveal_type(0)  # E: revealed type: Literal[0]  # E: `reveal_type` must be imported from typing for runtime usage
     "#,
 );
 
