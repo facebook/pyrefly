@@ -2680,11 +2680,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors)
                     } else {
                         if let Some(Type::SelfType(want_class)) = hint.as_ref()
-                            && !self.type_order().is_final(want_class.class_object()) {
-                                let expr_type = self.expr(expr, None, errors);
-                                if let Type::ClassType(got_class) = &expr_type
-                                    && got_class.class_object() == want_class.class_object() {
-                                        self.error(
+                            && !self.type_order().is_final(want_class.class_object())
+                        {
+                            let expr_type = self.expr(expr, None, errors);
+                            if let Type::ClassType(got_class) = &expr_type
+                                && got_class.class_object() == want_class.class_object()
+                            {
+                                self.error(
                                             errors,
                                             expr.range(),
                                             ErrorInfo::Kind(ErrorKind::BadReturn),
@@ -2694,9 +2696,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                                 want_class.class_object().name()
                                             ),
                                         );
-                                    }
-                                return expr_type;
                             }
+                            return expr_type;
+                        }
 
                         let tcc: &dyn Fn() -> TypeCheckContext =
                             &|| TypeCheckContext::of_kind(TypeCheckKind::ExplicitFunctionReturn);
