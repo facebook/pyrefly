@@ -991,7 +991,7 @@ import typing
 typing.assert_type(0, str)  # E: assert_type(Literal[0], str) failed
 # Make sure that calling by bare name without importing performs the assertion, as this is very convenient for debugging.
 # It's fine if a name error is also generated.
-assert_type(0, str)  # E: assert_type(Literal[0], str) failed  # E: `assert_type` must be imported from typing for runtime usage
+assert_type(0, str)  # E: assert_type(Literal[0], str) failed  # E: `assert_type` must be imported from `typing` for runtime usage
     "#,
 );
 
