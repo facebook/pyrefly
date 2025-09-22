@@ -203,7 +203,15 @@ Rich syntax highlighting based on token type and origin.
 
 ### [Inlay hints](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_inlayHint)
 
-Inline hints for types, parameter names, and return values. This is enabled by default; you can disable them using the [VSCode Setting](https://code.visualstudio.com/docs/editing/editingevolved#_inlay-hints).
+Inline hints for types, parameter names, and return values.
+
+:::info
+If you have the default VS Code Python extension installed at the same time as Pyrefly, inlay hints will be turned off by default. In all other cases, inlay hints will be on by default.
+:::
+
+You can turn inlay hints on or off using the [VSCode Setting](https://code.visualstudio.com/docs/editing/editingevolved#_inlay-hints) `editor.inlayHints.enabled`.
+
+
 <video
   src="/videos/inlay-hints.mp4"
   width="720"
@@ -218,16 +226,11 @@ Inline hints for types, parameter names, and return values. This is enabled by d
 
 ### [Notebook support](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#notebookDocument)
 
-Works with Jupyter and notebook-style cells.
-<!-- <video
-  src="/videos/jupyter-notebooks.mp4"
-  width="720"
-  muted
-  loop
-  autoPlay
-  playsInline
-  preload="metadata"
-/> -->
+Right now, Pyrefly does not work with Jupyter notebooks in VS Code. Please follow [this issue](https://github.com/facebook/pyrefly/issues/381) for updates.
+
+You may use Pyrefly with Jupyter notebooks in Jupyter Lab, via the [jupyterlab-lsp](https://jupyterlab-lsp.readthedocs.io/en/latest/Installation.html) extension. Pyrefly will appear on the list of automatically-detected language servers.
+
+Notebook support is experimental. Please report any bugs on our Github.
 
 ---
 
