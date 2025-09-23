@@ -2773,6 +2773,8 @@ You can use `uv`, `poetry`, `pip`, `pixi` or `conda` to install Pyrefly. The fol
 
 * `pyrefly init` will update your `pyproject.toml` file (or create a `pyrefly.toml` file) in your project directory, including some basic configuration. It will also attempt to [migrate](../migrating-to-pyrefly) your existing type checker configuration.
 * `pyrefly check --summarize-errors` will run the Pyrefly type checker on your project, providing a list of type errors and a summary of error types. The `--summarize-errors` flag is optional, remove it if you don't want summary stats.
+* `pyrefly check --suppress-errors` will mark all existing errors as ignored, allowing you to start with a clean check.
+
 
 Simply `cd` into your project directory and run:
 

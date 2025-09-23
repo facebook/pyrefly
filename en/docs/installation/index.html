@@ -34,8 +34,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.409aac25.css">
-<script src="/assets/js/runtime~main.e224c823.js" defer="defer"></script>
-<script src="/assets/js/main.d7a78caa.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.f11c4b18.js" defer="defer"></script>
+<script src="/assets/js/main.9faa141d.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -45,6 +45,7 @@
 <ul>
 <li><code>pyrefly init</code> will update your <code>pyproject.toml</code> file (or create a <code>pyrefly.toml</code> file) in your project directory, including some basic configuration. It will also attempt to <a href="/en/docs/migrating-to-pyrefly/">migrate</a> your existing type checker configuration.</li>
 <li><code>pyrefly check --summarize-errors</code> will run the Pyrefly type checker on your project, providing a list of type errors and a summary of error types. The <code>--summarize-errors</code> flag is optional, remove it if you don&#x27;t want summary stats.</li>
+<li><code>pyrefly check --suppress-errors</code> will mark all existing errors as ignored, allowing you to start with a clean check.</li>
 </ul>
 <p>Simply <code>cd</code> into your project directory and run:</p>
 <!-- -->
