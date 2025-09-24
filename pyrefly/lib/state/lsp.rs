@@ -1025,8 +1025,9 @@ impl<'a> Transaction<'a> {
     ) -> Option<(TextRangeWithModule, Option<TextRange>)> {
         match definition {
             AttrDefinition::FullyResolved(text_range_with_module_info) => {
-                // TODO(kylei): attribute docstrings
-                Some((text_range_with_module_info, None))
+                let docstring_range = self
+                    .get_attribute_docstring_range(&text_range_with_module_info, handle.sys_info());
+                Some((text_range_with_module_info, docstring_range))
             }
             AttrDefinition::PartiallyResolvedImportedModuleAttribute { module_name } => {
                 let (handle, export) =
@@ -1038,6 +1039,39 @@ impl<'a> Transaction<'a> {
                 ))
             }
         }
+    }
+
+    fn get_attribute_docstring_range(
+        &self,
+        text_range_with_module: &TextRangeWithModule,
+        sys_info: &SysInfo,
+    ) -> Option<TextRange> {
+        let handle = Handle::new(
+            text_range_with_module.module.name(),
+            text_range_with_module.module.path().dupe(),
+            sys_info.dupe(),
+        );
+
+        let ast = self.get_ast(&handle).unwrap_or_else(|| {
+            Ast::parse(text_range_with_module.module.contents())
+                .0
+                .into()
+        });
+
+        let covering_nodes = Ast::locate_node(&ast, text_range_with_module.range.start());
+
+        for node in covering_nodes.iter() {
+            match node {
+                AnyNodeRef::StmtFunctionDef(stmt) => {
+                    return Docstring::range_from_stmts(&stmt.body);
+                }
+                AnyNodeRef::StmtClassDef(stmt) => {
+                    return Docstring::range_from_stmts(&stmt.body);
+                }
+                _ => continue,
+            }
+        }
+        None
     }
 
     fn key_to_export(
