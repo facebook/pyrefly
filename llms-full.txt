@@ -1909,6 +1909,23 @@ An error related to the import mechanism, such as when a module cannot be found.
 The error message will include which paths were searched, such as the site package paths.
 You may be missing a dependency, or you may need to inform Pyrefly where the module lives. See [Configuration](configuration.mdx) for further information.
 
+## inconsistent-overload
+
+The signature of a function overload is inconsistent with the implementation.
+See the [typing specification](https://typing.python.org/en/latest/spec/overload.html#implementation-consistency)
+for details on the consistency checks Pyrefly performs.
+
+Example:
+```python
+from typing import overload
+@overload
+def f(x: int) -> int: ...
+@overload
+def f(x: str) -> str: ...  # error, overload accepts `str` but implementation only accepts `int`
+def f(x: int) -> int | str:
+    return x
+```
+
 ## index-error
 
 Attempting to access a container with an incorrect index.
@@ -2023,7 +2040,6 @@ def just_one(x: int) -> None:
 def just_one(x: str) -> None:
   ...
 ```
-
 
 ## invalid-param-spec
 
