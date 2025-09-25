@@ -26,7 +26,6 @@ def get_choices_using_property(choices: type[IntegerChoices]) -> list[tuple[int,
 );
 
 testcase!(
-    bug = "We should properly interpret IntegerChoices and propagate the write types through the enum (IntegerChoices is an enum)",
     test_int_choices_enums,
     django_env(),
     r#"
@@ -34,14 +33,13 @@ from django.db.models import IntegerChoices
 from django.utils.translation import gettext_lazy as _
 from typing_extensions import assert_type
 
-
 class Suit(IntegerChoices):
     DIAMOND = 1, _("Diamond")
     SPADE = 2, _("Spade")
     HEART = 3, _("Heart")
     CLUB = 4, _("Club")
 
-assert_type(Suit.CLUB.value, int) # E: assert_type(tuple[Literal[4], _StrPromise], int)
+assert_type(Suit.CLUB.value, int) 
 "#,
 );
 
