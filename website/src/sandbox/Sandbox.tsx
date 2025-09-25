@@ -164,9 +164,19 @@ export default function Sandbox({
     // Rename a file
     const renameFile = useCallback((oldName: string, newName: string) => {
         if (!newName.trim() || models.has(newName)) return false;
-
-        // Allow .py and .toml; default to .py if no known extension
-        const finalName = (newName.endsWith('.py') || newName.endsWith('.toml')) ? newName : `${newName}.py`;
+        // Allow renaming to `pyrefly.toml` specifically; otherwise use `.py`
+        let finalName: string;
+        const trimmedNew = newName.trim();
+        if (trimmedNew === 'pyrefly.toml' || trimmedNew.endsWith('/pyrefly.toml')) {
+            finalName = 'pyrefly.toml';
+        } else if (trimmedNew.endsWith('.toml')) {
+            // Reject arbitrary .toml names
+            return false;
+        } else if (trimmedNew.endsWith('.py')) {
+            finalName = trimmedNew;
+        } else {
+            finalName = `${trimmedNew}.py`;
+        }
         if (models.has(finalName)) return false;
 
         const oldModel = models.get(oldName);
@@ -215,9 +225,15 @@ export default function Sandbox({
         }
 
         const trimmed = inputValue.trim();
-        const finalName = (trimmed.endsWith('.py') || trimmed.endsWith('.toml'))
-            ? trimmed
-            : `${trimmed}.py`;
+        const finalName = trimmed === 'pyrefly.toml'
+            ? 'pyrefly.toml'
+            : (trimmed.endsWith('.toml')
+                ? '' // invalid arbitrary .toml
+                : (trimmed.endsWith('.py') ? trimmed : `${trimmed}.py`));
+
+        if (finalName === '') {
+            return false;
+        }
 
         // Allow saving with the same name (no change)
         if (finalName === currentFileName) {
@@ -386,12 +402,20 @@ export default function Sandbox({
                     createNewFile('sandbox.py', DEFAULT_SANDBOX_PROGRAM);
                     createNewFile('utils.py', DEFAULT_UTILS_PROGRAM);
                     // Add a default pyrefly.toml so users can immediately tweak configuration
+                    // Respect legacy ?version= from URL for backward compatibility
+                    let initialVersion = '3.12';
+                    try {
+                        const params = new URLSearchParams(window.location.search);
+                        const v = params.get('version');
+                        if (v && /^\d+\.\d+$/.test(v)) {
+                            initialVersion = v;
+                        }
+                    } catch { }
+
                     const defaultConfig = [
-                        '# Pyrefly sandbox configuration',
-                        'python-version = "3.12"',
-                        '',
-                        '[errors]',
-                        'reveal-type = false',
+                        '# Pyrefly sandbox configuration.',
+                        '# See https://pyrefly.org/en/docs/configuration/ for available configuration options.',
+                        `python-version = "${initialVersion}"`,
                         ''
                     ].join('\n');
                     createNewFile('pyrefly.toml', defaultConfig);
@@ -431,6 +455,16 @@ export default function Sandbox({
                 setInternalError(JSON.stringify(e));
             });
     }, [isInViewport, pythonVersion]); // Re-run when isInViewport or pythonVersion changes
+
+    // Back-compat: initialize Python version from URL (?version=) on first load
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const params = new URLSearchParams(window.location.search);
+        const v = params.get('version');
+        if (v && /^\d+\.\d+$/.test(v)) {
+            setPythonVersion(v);
+        }
+    }, []);
 
     // Need to add createModel handler in case monaco model was not created at mount time
     monaco.editor.onDidCreateModel((_newModel) => {
