@@ -706,6 +706,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
         errors: &ErrorCollector,
     ) -> Option<EnumMetadata> {
+        let is_django = bases_with_metadata.iter().any(|(base, base_meta)| {
+            base.has_toplevel_qname(ModuleName::django_models_enums().as_str(), "Choices")
+                || base_meta
+                    .enum_metadata()
+                    .as_ref()
+                    .is_some_and(|meta| meta.is_django)
+        });
+
         if let Some(metaclass) = metaclass
             && self
                 .as_superclass(metaclass, self.stdlib.enum_meta().class_object())
@@ -733,6 +741,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &Type::ClassType(self.stdlib.enum_flag().clone()),
                     )
                 }),
+                is_django,
             })
         } else {
             None

@@ -335,6 +335,8 @@ pub struct EnumMetadata {
     pub is_flag: bool,
     /// Is there any `_value_` field present.
     pub has_value: bool,
+    /// Whether this is a special Django enum.
+    pub is_django: bool,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]

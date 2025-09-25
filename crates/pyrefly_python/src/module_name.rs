@@ -156,6 +156,10 @@ impl ModuleName {
         Self::from_str("pydantic.root_model")
     }
 
+    pub fn django_models_enums() -> Self {
+        Self::from_str("django.db.models.enums")
+    }
+
     /// The "unknown" module name, which corresponds to `__unknown__`.
     /// Used for files directly opened or passed on the command line which aren't on the search path.
     pub fn unknown() -> Self {
