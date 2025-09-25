@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use pyrefly_types::class::ClassType;
 use pyrefly_types::read_only::ReadOnlyReason;
+use pyrefly_types::tuple::Tuple;
 use ruff_python_ast::name::Name;
 use starlark_map::small_set::SmallSet;
 
@@ -17,6 +18,8 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::class::class_field::ClassFieldInitialization;
 use crate::alt::types::class_metadata::ClassMetadata;
+use crate::alt::types::class_metadata::ClassSynthesizedField;
+use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::types::class::Class;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
@@ -144,5 +147,68 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             None
         }
+    }
+
+    pub fn get_django_enum_synthesized_fields(
+        &self,
+        cls: &Class,
+    ) -> Option<ClassSynthesizedFields> {
+        let metadata = self.get_metadata_for_class(cls);
+        let enum_metadata = metadata.enum_metadata()?;
+        if !enum_metadata.is_django {
+            return None;
+        }
+
+        // Infer value type from actual enum members
+        let enum_members = self.get_enum_members(cls);
+        let value_types: Vec<_> = enum_members
+            .iter()
+            .filter_map(|lit| {
+                if let Lit::Enum(lit_enum) = lit {
+                    Some(lit_enum.ty.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let base_value_type = if value_types.is_empty() {
+            Type::any_implicit()
+        } else {
+            self.unions(value_types)
+        };
+
+        // Check if __empty__ makes values optional
+        let empty_name = ruff_python_ast::name::Name::new_static("__empty__");
+        let has_empty = self
+            .get_field_from_current_class_only(cls, &empty_name)
+            .is_some();
+        let values_type = if has_empty {
+            self.union(base_value_type.clone(), Type::None)
+        } else {
+            base_value_type
+        };
+
+        // Helper to create synthesized fields
+        let mut fields = starlark_map::small_map::SmallMap::new();
+        let str_type = self.stdlib.str().clone().to_type();
+
+        // Synthesize class attributes: labels, values, choices
+        let field_specs = [
+            ("labels", self.stdlib.list(str_type.clone()).to_type()),
+            ("values", self.stdlib.list(values_type.clone()).to_type()),
+            (
+                "choices",
+                self.stdlib
+                    .list(Type::Tuple(Tuple::Concrete(vec![values_type, str_type])))
+                    .to_type(),
+            ),
+        ];
+
+        for (name, ty) in field_specs {
+            fields.insert(Name::new_static(name), ClassSynthesizedField::new(ty));
+        }
+
+        Some(ClassSynthesizedFields::new(fields))
     }
 }

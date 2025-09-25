@@ -1629,6 +1629,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(new_fields) = self.get_total_ordering_synthesized_fields(errors, cls) {
                     fields = fields.combine(new_fields);
                 }
+                if let Some(new_fields) = self.get_django_enum_synthesized_fields(cls) {
+                    fields = fields.combine(new_fields);
+                }
                 fields
             }
         };
