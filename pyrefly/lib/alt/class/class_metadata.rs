@@ -742,6 +742,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }),
                 is_django,
+                class_iteration_yields: {
+                    Type::ClassType(self.promote_nontypeddict_silently_to_classtype(cls))
+                },
             })
         } else {
             None
