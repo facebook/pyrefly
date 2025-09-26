@@ -75,6 +75,12 @@ pub enum SpecialDecorator<'a> {
     DataclassTransformCall(&'a TypeMap),
     EnumNonmember,
     AbstractMethod,
+    /// Deprecated: use @abstractmethod with @classmethod
+    AbstractClassMethod(Name),
+    /// Deprecated: use @abstractmethod with @staticmethod
+    AbstractStaticMethod(Name),
+    /// Deprecated: use @abstractmethod with @property
+    AbstractProperty(Name),
 }
 
 impl UndecoratedFunction {

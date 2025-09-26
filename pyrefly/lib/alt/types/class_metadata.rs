@@ -52,6 +52,8 @@ pub struct ClassMetadata {
     has_base_any: bool,
     is_new_type: bool,
     is_final: bool,
+    inherits_from_abc: bool,
+    abstract_methods: Vec<Name>,
     total_ordering_metadata: Option<TotalOrderingMetadata>,
     /// If this class is decorated with `typing.dataclass_transform(...)`, the keyword arguments
     /// that were passed to the `dataclass_transform` call.
@@ -86,6 +88,8 @@ impl ClassMetadata {
         has_base_any: bool,
         is_new_type: bool,
         is_final: bool,
+        inherits_from_abc: bool,
+        abstract_methods: Vec<Name>,
         total_ordering_metadata: Option<TotalOrderingMetadata>,
         dataclass_transform_metadata: Option<DataclassTransformKeywords>,
         pydantic_model_kind: Option<PydanticModelKind>,
@@ -103,6 +107,8 @@ impl ClassMetadata {
             has_base_any,
             is_new_type,
             is_final,
+            inherits_from_abc,
+            abstract_methods,
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
@@ -123,6 +129,8 @@ impl ClassMetadata {
             has_base_any: false,
             is_new_type: false,
             is_final: false,
+            inherits_from_abc: false,
+            abstract_methods: Vec::new(),
             total_ordering_metadata: None,
             dataclass_transform_metadata: None,
             pydantic_model_kind: None,
@@ -152,6 +160,14 @@ impl ClassMetadata {
 
     pub fn is_final(&self) -> bool {
         self.is_final
+    }
+
+    pub fn inherits_from_abc(&self) -> bool {
+        self.inherits_from_abc
+    }
+
+    pub fn abstract_methods(&self) -> &[Name] {
+        &self.abstract_methods
     }
 
     pub fn has_generic_base_class(&self) -> bool {

@@ -28,6 +28,7 @@ use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::class::class_field::ClassField;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
@@ -274,6 +275,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.validate_frozen_dataclass_inheritance(cls, dm, &bases_with_metadata, errors);
         }
 
+        // Compute abstract class metadata before consuming bases_with_metadata
+        let inherits_from_abc = self.check_inherits_from_abc(cls, &bases_with_metadata);
+        let abstract_methods = if inherits_from_abc {
+            self.collect_unimplemented_abstract_methods(cls, &bases_with_metadata)
+        } else {
+            Vec::new()
+        };
+
         // Compute final base class list.
         let bases = if is_typed_dict && bases_with_metadata.is_empty() {
             // This is a "fallback" class that contains attributes that are available on all TypedDict subclasses.
@@ -298,6 +307,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .as_ref()
             .map(|m| m.pydantic_model_kind.clone());
 
+        // Check if @final class has abstract methods (Issue #957)
+        if is_final && !abstract_methods.is_empty() {
+            let methods_str = abstract_methods
+                .iter()
+                .map(|n| format!("`{}`", n))
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.error(
+                errors,
+                cls.range(),
+                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                format!(
+                    "Final class `{}` has unimplemented abstract methods: {}",
+                    cls.name(),
+                    methods_str
+                ),
+            );
+        }
+
         ClassMetadata::new(
             bases,
             metaclass,
@@ -311,6 +339,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             has_base_any,
             is_new_type,
             is_final,
+            inherits_from_abc,
+            abstract_methods,
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
@@ -1227,5 +1257,206 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
             .collect();
         ClassMro::new(cls, bases_with_mros, errors)
+    }
+
+    /// Check if a class inherits from abc.ABC
+    fn check_inherits_from_abc(
+        &self,
+        _cls: &Class,
+        bases_with_metadata: &Vec<(Class, Arc<ClassMetadata>)>,
+    ) -> bool {
+        // Check if any base is abc.ABC
+        for (base, _) in bases_with_metadata {
+            if base.module_name().as_str() == "abc" && base.name().as_str() == "ABC" {
+                return true;
+            }
+        }
+
+        // Check if any base inherits from abc.ABC
+        for (_, metadata) in bases_with_metadata {
+            if metadata.inherits_from_abc() {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Collect unimplemented abstract methods for a class
+    fn collect_unimplemented_abstract_methods(
+        &self,
+        cls: &Class,
+        bases_with_metadata: &Vec<(Class, Arc<ClassMetadata>)>,
+    ) -> Vec<Name> {
+        use starlark_map::small_set::SmallSet;
+
+        let mut abstract_methods = SmallSet::new();
+
+        // Collect abstract methods from all base classes
+        for (_, metadata) in bases_with_metadata {
+            for method in metadata.abstract_methods() {
+                abstract_methods.insert(method.clone());
+            }
+        }
+
+        // Check which abstract methods are implemented in this class
+        for field_name in cls.fields() {
+            if abstract_methods.contains(field_name) {
+                // Check if this field is a concrete (non-abstract) implementation
+                if let Some(field) = self.get_from_class(
+                    cls,
+                    &crate::binding::binding::KeyClassField(cls.index(), field_name.clone()),
+                ) {
+                    if self.is_concrete_implementation(&field) {
+                        abstract_methods.shift_remove(field_name);
+                    }
+                }
+            }
+        }
+
+        // Also check for any new abstract methods defined in this class
+        for field_name in cls.fields() {
+            if let Some(field) = self.get_from_class(
+                cls,
+                &crate::binding::binding::KeyClassField(cls.index(), field_name.clone()),
+            ) {
+                if self.is_abstract_field(&field, cls, field_name) {
+                    abstract_methods.insert(field_name.clone());
+                }
+            }
+        }
+
+        abstract_methods.into_iter().collect()
+    }
+
+    /// Check if a field is an abstract method
+    fn is_abstract_field(&self, field: &Arc<ClassField>, cls: &Class, field_name: &Name) -> bool {
+        let ty = field.ty();
+        match ty {
+            Type::Function(f) => f.metadata.flags.is_abstract_method,
+            Type::Overload(o) => {
+                // Check if any signature in the overload is abstract
+                use crate::types::types::OverloadType;
+                o.signatures.iter().any(|sig| match sig {
+                    OverloadType::Function(f) => f.metadata.flags.is_abstract_method,
+                    OverloadType::Forall(forall) => forall.body.metadata.flags.is_abstract_method,
+                })
+            }
+            // If the resolved type is not a proper function type (e.g. Any),
+            // try to get the function metadata directly from the binding system
+            _ => {
+                // Only attempt this for classes from the current module
+                if cls.module_name() == self.module().name() {
+                    self.get_function_metadata_for_method(cls, field_name)
+                        .map_or(false, |metadata| metadata.flags.is_abstract_method)
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    /// Check if a field is a concrete (non-abstract) implementation
+    fn is_concrete_implementation(&self, field: &Arc<ClassField>) -> bool {
+        let ty = field.ty();
+        match ty {
+            Type::Function(f) => !f.metadata.flags.is_abstract_method,
+            Type::Overload(o) => {
+                // All overload signatures must be concrete
+                use crate::types::types::OverloadType;
+                o.signatures.iter().all(|sig| match sig {
+                    OverloadType::Function(f) => !f.metadata.flags.is_abstract_method,
+                    OverloadType::Forall(forall) => !forall.body.metadata.flags.is_abstract_method,
+                })
+            }
+            // Non-function types are considered concrete implementations
+            _ => true,
+        }
+    }
+
+    /// Get function metadata for a class method by accessing the binding system directly
+    fn get_function_metadata_for_method(
+        &self,
+        cls: &Class,
+        field_name: &Name,
+    ) -> Option<pyrefly_types::callable::FuncMetadata> {
+        // Try to access the function through the decorated function system
+        // This follows the pattern used in other parts of the codebase
+
+        // First try to get the decorated function if this method was decorated
+        // We can access this through the class's function definitions
+        if let Some(decorated_func) = self.find_decorated_function_in_class(cls, field_name) {
+            return Some(decorated_func.metadata().clone());
+        }
+
+        // If not found as a decorated function, try to find it as an undecorated function
+        // This handles cases where the function might not have decorators but still has metadata
+        let class_def_idx = cls.index();
+        let bindings = self.bindings();
+
+        // Look through undecorated functions using the public API
+        use crate::binding::binding::BindingClass;
+        use crate::binding::binding::KeyUndecoratedFunction;
+        for idx in bindings.keys::<KeyUndecoratedFunction>() {
+            let binding = bindings.get(idx);
+            // Check if this function belongs to our class and has the right name
+            if let Some(class_key) = binding.class_key {
+                let class_binding = bindings.get(class_key);
+                // Check the class index based on the enum variant
+                let class_idx = match class_binding {
+                    BindingClass::ClassDef(c) => c.def_index,
+                    BindingClass::FunctionalClassDef(idx, _, _) => *idx,
+                };
+                if class_idx == class_def_idx && binding.def.name.id == field_name.as_str() {
+                    // Found the undecorated function, get its metadata directly
+                    let undecorated_func = self.get_idx(idx);
+                    return Some(undecorated_func.metadata.clone());
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Find a decorated function in a class by name
+    fn find_decorated_function_in_class(
+        &self,
+        cls: &Class,
+        field_name: &Name,
+    ) -> Option<crate::alt::types::decorated_function::DecoratedFunction> {
+        // Try to find the decorated function through the class's bindings
+        // This follows the pattern of accessing bindings for class members
+
+        // Get the class definition index
+        let class_def_idx = cls.index();
+
+        // Try to find the function binding for this class field
+        // We need to look for decorated functions that belong to this class
+        let bindings = self.bindings();
+
+        // Iterate through decorated functions using the public API
+        use crate::binding::binding::BindingClass;
+        use crate::binding::binding::KeyDecoratedFunction;
+        for idx in bindings.keys::<KeyDecoratedFunction>() {
+            let binding = bindings.get(idx);
+            // Get the undecorated function to check its name and class
+            let undecorated = bindings.get(binding.undecorated_idx);
+
+            // Check if this function belongs to our class and has the right name
+            if let Some(class_key) = undecorated.class_key {
+                let class_binding = bindings.get(class_key);
+                // Check the class index based on the enum variant
+                let class_idx = match class_binding {
+                    BindingClass::ClassDef(c) => c.def_index,
+                    BindingClass::FunctionalClassDef(idx, _, _) => *idx,
+                };
+                if class_idx == class_def_idx && undecorated.def.name.id == field_name.as_str() {
+                    // Found the decorated function for this method
+                    return Some(self.get_decorated_function(idx));
+                }
+            }
+        }
+
+        None
     }
 }
