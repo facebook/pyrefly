@@ -433,6 +433,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(DataclassTransformKeywords::from_type_map(kws));
                 true
             }
+            SpecialDecorator::AbstractMethod => {
+                flags.is_abstract_method = true;
+                true
+            }
             _ => false,
         }
     }

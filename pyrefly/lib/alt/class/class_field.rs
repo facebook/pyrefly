@@ -266,6 +266,8 @@ enum ClassFieldInner {
         /// If this is a descriptor, data derived from `ty`.
         descriptor: Option<Descriptor>,
         is_function_without_return_annotation: bool,
+        /// Whether this field is an abstract method
+        is_abstract: bool,
     },
 }
 
@@ -297,6 +299,7 @@ impl ClassField {
         read_only_reason: Option<ReadOnlyReason>,
         descriptor: Option<Descriptor>,
         is_function_without_return_annotation: bool,
+        is_abstract: bool,
         is_inherited: IsInherited,
     ) -> Self {
         Self(
@@ -307,6 +310,7 @@ impl ClassField {
                 read_only_reason,
                 descriptor,
                 is_function_without_return_annotation,
+                is_abstract,
             },
             is_inherited,
         )
@@ -329,6 +333,7 @@ impl ClassField {
                 read_only_reason: None,
                 descriptor: None,
                 is_function_without_return_annotation: false,
+                is_abstract: false,
             },
             IsInherited::Maybe,
         )
@@ -343,6 +348,7 @@ impl ClassField {
                 read_only_reason: None,
                 descriptor: None,
                 is_function_without_return_annotation: false,
+                is_abstract: false,
             },
             IsInherited::Maybe,
         )
@@ -363,6 +369,7 @@ impl ClassField {
                 read_only_reason,
                 descriptor,
                 is_function_without_return_annotation,
+                is_abstract,
             } => {
                 let mut ty = ty.clone();
                 f(&mut ty);
@@ -380,6 +387,7 @@ impl ClassField {
                         descriptor,
                         is_function_without_return_annotation:
                             *is_function_without_return_annotation,
+                        is_abstract: *is_abstract,
                     },
                     self.1.clone(),
                 )
@@ -530,6 +538,12 @@ impl ClassField {
     pub fn ty(&self) -> Type {
         match &self.0 {
             ClassFieldInner::Simple { ty, .. } => ty.clone(),
+        }
+    }
+
+    pub fn is_abstract(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Simple { is_abstract, .. } => *is_abstract,
         }
     }
 
@@ -1368,6 +1382,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // first-use based inference we use with assignments, to get more useful types here.
         let ty = self.solver().deep_force(ty);
 
+        // Check if this field is an abstract method
+        let is_abstract = match &ty {
+            Type::Function(f) => f.metadata.flags.is_abstract_method,
+            Type::Overload(o) => {
+                // Check if any signature in the overload is abstract
+                o.signatures.iter().any(|sig| match sig {
+                    OverloadType::Function(f) => f.metadata.flags.is_abstract_method,
+                    OverloadType::Forall(forall) => forall.body.metadata.flags.is_abstract_method,
+                })
+            }
+            _ => false,
+        };
+
         // Create the resulting field and check for override inconsistencies before returning
         let class_field = ClassField::new(
             ty,
@@ -1376,6 +1403,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             read_only_reason,
             descriptor,
             is_function_without_return_annotation,
+            is_abstract,
             is_inherited,
         );
         if let RawClassFieldInitialization::Method(MethodThatSetsAttr {

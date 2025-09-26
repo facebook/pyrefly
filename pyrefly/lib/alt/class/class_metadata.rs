@@ -28,6 +28,7 @@ use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::class::class_field::ClassField;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
@@ -45,6 +46,7 @@ use crate::binding::base_class::BaseClassExpr;
 use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::base_class::BaseClassGenericKind;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyClassField;
 use crate::binding::pydantic::FROZEN_DEFAULT;
 use crate::binding::pydantic::PydanticMetadataBinding;
 use crate::binding::pydantic::VALIDATE_BY_ALIAS;
@@ -277,6 +279,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.validate_frozen_dataclass_inheritance(cls, dm, &bases_with_metadata, errors);
         }
 
+        // Compute abstract class metadata before consuming bases_with_metadata
+        let inherits_from_abc = self.check_inherits_from_abc(cls, &bases_with_metadata);
+        let abstract_methods = if inherits_from_abc {
+            self.collect_unimplemented_abstract_methods(cls, &bases_with_metadata)
+        } else {
+            Vec::new()
+        };
+
         // Compute final base class list.
         let bases = if is_typed_dict && bases_with_metadata.is_empty() {
             // This is a "fallback" class that contains attributes that are available on all TypedDict subclasses.
@@ -301,6 +311,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .as_ref()
             .map(|m| m.pydantic_model_kind.clone());
 
+        // Check if @final class has abstract methods
+        if is_final && !abstract_methods.is_empty() {
+            let methods_str = abstract_methods
+                .iter()
+                .map(|n| format!("`{}`", n))
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.error(
+                errors,
+                cls.range(),
+                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                format!(
+                    "Final class `{}` has unimplemented abstract methods: {}",
+                    cls.name(),
+                    methods_str
+                ),
+            );
+        }
+
         ClassMetadata::new(
             bases,
             metaclass,
@@ -314,6 +343,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             has_base_any,
             is_new_type,
             is_final,
+            inherits_from_abc,
+            abstract_methods,
             is_deprecated,
             total_ordering_metadata,
             dataclass_transform_metadata,
@@ -1241,5 +1272,62 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
             .collect();
         ClassMro::new(cls, bases_with_mros, errors)
+    }
+
+    /// Check if a class inherits from abc.ABC
+    fn check_inherits_from_abc(
+        &self,
+        _cls: &Class,
+        bases_with_metadata: &Vec<(Class, Arc<ClassMetadata>)>,
+    ) -> bool {
+        // Check if any base is abc.ABC or inherits from it (simplified per Danny's feedback)
+        bases_with_metadata.iter().any(|(base, metadata)| {
+            base.has_toplevel_qname("abc", "ABC") || metadata.inherits_from_abc()
+        })
+    }
+
+    /// Collect unimplemented abstract methods for a class
+    fn collect_unimplemented_abstract_methods(
+        &self,
+        cls: &Class,
+        bases_with_metadata: &Vec<(Class, Arc<ClassMetadata>)>,
+    ) -> Vec<Name> {
+        use starlark_map::small_set::SmallSet;
+
+        let mut abstract_methods = SmallSet::new();
+
+        // Collect abstract methods from all base classes
+        for (_, metadata) in bases_with_metadata {
+            for method in metadata.abstract_methods() {
+                abstract_methods.insert(method.clone());
+            }
+        }
+
+        // Check which abstract methods are implemented in this class
+        for field_name in cls.fields() {
+            if abstract_methods.contains(field_name) {
+                // Check if this field is a concrete (non-abstract) implementation
+                let field: Option<Arc<ClassField>> =
+                    self.get_from_class(cls, &KeyClassField(cls.index(), field_name.clone()));
+                if let Some(field) = field {
+                    if !field.is_abstract() {
+                        abstract_methods.shift_remove(field_name);
+                    }
+                }
+            }
+        }
+
+        // Also check for any new abstract methods defined in this class
+        for field_name in cls.fields() {
+            let field: Option<Arc<ClassField>> =
+                self.get_from_class(cls, &KeyClassField(cls.index(), field_name.clone()));
+            if let Some(field) = field {
+                if field.is_abstract() {
+                    abstract_methods.insert(field_name.clone());
+                }
+            }
+        }
+
+        abstract_methods.into_iter().collect()
     }
 }
