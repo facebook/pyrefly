@@ -6,9 +6,11 @@
  */
 
 use std::iter;
+use std::iter::once;
 use std::path::Path;
 use std::path::PathBuf;
 
+use itertools::Itertools;
 use pyrefly_python::COMPILED_FILE_SUFFIXES;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -499,6 +501,25 @@ pub fn find_import_prefixes(config: &ConfigFile, module: ModuleName) -> Vec<Modu
     }
 
     results
+}
+
+/// Find all legitimate imports that start with `module`
+pub fn find_relative_import_prefixes(
+    config: &ConfigFile,
+    module: ModuleName,
+    dots: u32,
+) -> Vec<ModuleName> {
+    find_module_prefixes(
+        module,
+        config.search_path().chain(
+            config
+                // fallback search path is a list of parent directories. only take the nth one corresponding to the relative root
+                .fallback_search_path
+                .iter()
+                .skip((dots as usize).saturating_sub(1))
+                .take(1),
+        ),
+    )
 }
 
 #[cfg(test)]

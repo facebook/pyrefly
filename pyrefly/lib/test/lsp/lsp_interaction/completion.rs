@@ -570,12 +570,15 @@ fn test_module_completion() {
     });
 }
 
-// TODO: Handle relative import (via ModuleName::new_maybe_relative)
 #[test]
 #[allow(deprecated)]
-fn test_relative_module_completion() {
+fn test_relative_module_completion_one_level_up() {
     let root = get_test_files_root();
-    let foo = root.path().join("relative_test").join("relative_import.py");
+    let foo = root
+        .path()
+        .join("relative_test")
+        .join("nested")
+        .join("relative_import.py");
 
     run_test_lsp(TestCase {
         messages_from_language_client: vec![
@@ -589,7 +592,7 @@ fn test_relative_module_completion() {
                     },
                     "position": {
                         "line": 5,
-                        "character": 10
+                        "character": 8
                     }
                 }),
             }),
@@ -598,7 +601,45 @@ fn test_relative_module_completion() {
             id: RequestId::from(2),
             result: Some(serde_json::json!({
                 "isIncomplete": false,
-                "items": [],
+                "items": [{"detail":"bar","kind":9,"label":"bar","sortText":"0"}],
+            })),
+            error: None,
+        })],
+        ..Default::default()
+    });
+}
+#[test]
+#[allow(deprecated)]
+fn test_relative_module_completion_same_dir() {
+    let root = get_test_files_root();
+    let foo = root
+        .path()
+        .join("relative_test")
+        .join("nested")
+        .join("src.py");
+
+    run_test_lsp(TestCase {
+        messages_from_language_client: vec![
+            Message::from(build_did_open_notification(foo.clone())),
+            Message::from(Request {
+                id: RequestId::from(2),
+                method: "textDocument/completion".to_owned(),
+                params: serde_json::json!({
+                    "textDocument": {
+                        "uri": Url::from_file_path(foo).unwrap().to_string()
+                    },
+                    "position": {
+                        "line": 5,
+                        "character": 7
+                    }
+                }),
+            }),
+        ],
+        expected_messages_from_language_server: vec![Message::Response(Response {
+            id: RequestId::from(2),
+            result: Some(serde_json::json!({
+                "isIncomplete": false,
+                "items": [{"detail":"relative_import","kind":9,"label":"relative_import","sortText":"0"}],
             })),
             error: None,
         })],

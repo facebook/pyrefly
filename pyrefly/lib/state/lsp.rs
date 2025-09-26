@@ -2049,7 +2049,40 @@ impl<'a> Transaction<'a> {
                     }
                 }
             }
-            // TODO: Handle relative import (via ModuleName::new_maybe_relative)
+            Some(IdentifierWithContext {
+                identifier,
+                context: IdentifierContext::ImportedModule { name, dots },
+            }) if dots > 0 => {
+                if let Some(current_module) = self.get_module_info(handle) {
+                    let module_names = if let Some(module_name) = name.new_maybe_relative(
+                        current_module.path().is_init(),
+                        dots,
+                        Some(identifier.id()),
+                    ) {
+                        // If we have a config, it is always better to use the official module name with this API.
+                        self.relative_import_prefixes(handle, module_name, dots)
+                    } else {
+                        // new_maybe_relative failed meaning this import is "outside" of the project. we should still try showing completions best effort.
+                        self.relative_import_prefixes(
+                            handle,
+                            ModuleName::from_name(identifier.id()),
+                            dots,
+                        )
+                    };
+                    for module_name in module_names.iter() {
+                        result.push(CompletionItem {
+                            label: module_name
+                                .components()
+                                .last()
+                                .unwrap_or(&Name::empty())
+                                .to_string(),
+                            detail: Some(module_name.to_string()),
+                            kind: Some(CompletionItemKind::MODULE),
+                            ..Default::default()
+                        })
+                    }
+                }
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::ImportedModule { .. },

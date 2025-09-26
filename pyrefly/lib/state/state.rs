@@ -97,6 +97,7 @@ use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::module::finder::find_import_prefixes;
+use crate::module::finder::find_relative_import_prefixes;
 use crate::module::typeshed::BundledTypeshed;
 use crate::state::dirty::Dirty;
 use crate::state::epoch::Epoch;
@@ -587,9 +588,17 @@ impl<'a> Transaction<'a> {
         Ok(Handle::new(module, path, handle.sys_info().dupe()))
     }
 
-    /// Create a handle for import `module` within the handle `handle`
     pub fn import_prefixes(&self, handle: &Handle, module: ModuleName) -> Vec<ModuleName> {
         find_import_prefixes(&self.get_module(handle).config.read(), module)
+    }
+
+    pub fn relative_import_prefixes(
+        &self,
+        handle: &Handle,
+        module: ModuleName,
+        dots: u32,
+    ) -> Vec<ModuleName> {
+        find_relative_import_prefixes(&self.get_module(handle).config.read(), module, dots)
     }
 
     fn clean(
