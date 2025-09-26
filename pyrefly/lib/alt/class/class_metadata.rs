@@ -46,6 +46,7 @@ use crate::binding::base_class::BaseClassExpr;
 use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::base_class::BaseClassGenericKind;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyClassField;
 use crate::binding::pydantic::FROZEN_DEFAULT;
 use crate::binding::pydantic::PydanticMetadataBinding;
 use crate::binding::pydantic::VALIDATE_BY_ALIAS;
@@ -233,9 +234,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let is_final = decorators.iter().any(|(decorator, _)| {
             decorator.ty().callee_kind() == Some(CalleeKind::Function(FunctionKind::Final))
         });
-        let is_deprecated = decorators.iter().any(|(decorator, _)| {
-             matches!(decorator.ty(), Type::ClassType(cls) if cls.has_qname("warnings", "deprecated"))
-        });
 
         let total_ordering_metadata = decorators.iter().find_map(|(decorator, decorator_range)| {
             decorator.ty().callee_kind().and_then(|kind| {
@@ -344,7 +342,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_final,
             inherits_from_abc,
             abstract_methods,
-            is_deprecated,
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
@@ -429,7 +426,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bases_with_metadata
             .iter()
             .find_map(|(base_class_object, metadata)| {
-                if base_class_object.has_toplevel_qname(
+                if base_class_object.has_qname(
                     ModuleName::type_checker_internals().as_str(),
                     "NamedTupleFallback",
                 ) {
@@ -439,20 +436,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     metadata.named_tuple_metadata().cloned()
                 }
-            })
-    }
-
-    fn extract_validate_flag(
-        &self,
-        keywords: &[(Name, Annotation)],
-        key: &Name,
-        default: bool,
-    ) -> bool {
-        keywords
-            .iter()
-            .find(|(name, _)| name == key)
-            .map_or(default, |(_, ann)| {
-                ann.get_type().as_bool().unwrap_or(default)
             })
     }
 
@@ -466,7 +449,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<PydanticMetadata> {
         let has_pydantic_base_model_base_class =
             bases_with_metadata.iter().any(|(base_class_object, _)| {
-                base_class_object.has_toplevel_qname(ModuleName::pydantic().as_str(), "BaseModel")
+                base_class_object.has_qname(ModuleName::pydantic().as_str(), "BaseModel")
             });
 
         let is_pydantic_base_model = has_pydantic_base_model_base_class
@@ -480,8 +463,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let has_pydantic_root_model_base_class =
             bases_with_metadata.iter().any(|(base_class_object, _)| {
-                base_class_object
-                    .has_toplevel_qname(ModuleName::pydantic_root_model().as_str(), "RootModel")
+                base_class_object.has_qname(ModuleName::pydantic_root_model().as_str(), "RootModel")
             });
 
         let has_root_model_kind = bases_with_metadata.iter().any(|(_, metadata)| {
@@ -506,10 +488,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Note: class keywords take precedence over ConfigDict keywords.
         // But another design choice is to error if there is a conflict. We can consider this design for v2.
-        let validate_by_alias =
-            self.extract_validate_flag(keywords, &VALIDATE_BY_ALIAS, *validate_by_alias);
-        let validate_by_name =
-            self.extract_validate_flag(keywords, &VALIDATE_BY_NAME, *validate_by_name);
+        // Extract validate_by_alias & validate_by_name
+        // TODO: Rename variable to validate_by_alias and refactor the code snippets below since they are quite similar.
+        let class_validate_by_alias = keywords
+            .iter()
+            .find(|(name, _)| name == &VALIDATE_BY_ALIAS)
+            .map_or(*validate_by_alias, |(_, ann)| {
+                ann.get_type().as_bool().unwrap_or(*validate_by_alias)
+            });
+
+        let validate_by_name = keywords
+            .iter()
+            .find(|(name, _)| name == &VALIDATE_BY_NAME)
+            .map_or(*validate_by_name, |(_, ann)| {
+                ann.get_type().as_bool().unwrap_or(*validate_by_name)
+            });
 
         // Here, "ignore" and "allow" translate to true, while "forbid" translates to false.
         // With no keyword, the default is "true" and I default to "false" on a wrong keyword.
@@ -569,7 +562,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         Some(PydanticMetadata {
             frozen: *frozen,
-            validate_by_alias,
+            class_validate_by_alias,
             validate_by_name,
             extra,
             pydantic_model_kind,
@@ -740,14 +733,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
         errors: &ErrorCollector,
     ) -> Option<EnumMetadata> {
-        let is_django = bases_with_metadata.iter().any(|(base, base_meta)| {
-            base.has_toplevel_qname(ModuleName::django_models_enums().as_str(), "Choices")
-                || base_meta
-                    .enum_metadata()
-                    .as_ref()
-                    .is_some_and(|meta| meta.is_django)
-        });
-
         if let Some(metaclass) = metaclass
             && self
                 .as_superclass(metaclass, self.stdlib.enum_meta().class_object())
@@ -775,7 +760,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &Type::ClassType(self.stdlib.enum_flag().clone()),
                     )
                 }),
-                is_django,
             })
         } else {
             None
@@ -888,7 +872,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             },
             |pyd| ClassValidationFlags {
                 validate_by_name: pyd.validate_by_name,
-                validate_by_alias: pyd.validate_by_alias,
+                validate_by_alias: pyd.class_validate_by_alias,
             },
         );
 
@@ -1202,7 +1186,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let metaclass_type = Type::ClassType(metaclass.clone());
         for (base_name, m) in base_metaclasses {
             let base_metaclass_type = Type::ClassType((*m).clone());
-            if !self.is_subset_eq(&metaclass_type, &base_metaclass_type) {
+            if !self
+                .solver()
+                .is_subset_eq(&metaclass_type, &base_metaclass_type, self.type_order())
+            {
                 self.error(errors,
                     cls.range(),
                     ErrorInfo::Kind(ErrorKind::InvalidInheritance),
@@ -1317,10 +1304,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for field_name in cls.fields() {
             if abstract_methods.contains(field_name) {
                 // Check if this field is a concrete (non-abstract) implementation
-                if let Some(field) = self.get_from_class(
-                    cls,
-                    &crate::binding::binding::KeyClassField(cls.index(), field_name.clone()),
-                ) {
+                if let Some(field) =
+                    self.get_from_class(cls, &KeyClassField(cls.index(), field_name.clone()))
+                {
                     if self.is_concrete_implementation(&field) {
                         abstract_methods.shift_remove(field_name);
                     }
@@ -1330,10 +1316,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Also check for any new abstract methods defined in this class
         for field_name in cls.fields() {
-            if let Some(field) = self.get_from_class(
-                cls,
-                &crate::binding::binding::KeyClassField(cls.index(), field_name.clone()),
-            ) {
+            if let Some(field) =
+                self.get_from_class(cls, &KeyClassField(cls.index(), field_name.clone()))
+            {
                 if self.is_abstract_field(&field, cls, field_name) {
                     abstract_methods.insert(field_name.clone());
                 }
@@ -1356,18 +1341,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     OverloadType::Forall(forall) => forall.body.metadata.flags.is_abstract_method,
                 })
             }
-            // If the resolved type is not a proper function type (e.g. Any),
-            // try to get the function metadata directly from the binding system
+            // If the type is not a function (e.g., Any), we need to check the method's metadata
+            // This can happen when the decorator was processed but the type wasn't fully resolved
             _ => {
-                // Only attempt this for classes from the current module
+                // Only check for classes in the current module
                 if cls.module_name() == self.module().name() {
-                    self.get_function_metadata_for_method(cls, field_name)
-                        .map_or(false, |metadata| metadata.flags.is_abstract_method)
+                    // Try to get the function definition directly from bindings
+                    self.check_abstract_via_bindings(cls, field_name)
                 } else {
                     false
                 }
             }
         }
+    }
+
+    /// Check if a method is abstract by looking at the function bindings
+    fn check_abstract_via_bindings(&self, cls: &Class, field_name: &Name) -> bool {
+        let class_def_idx = cls.index();
+        let bindings = self.bindings();
+
+        // Look for undecorated functions in this class
+        use crate::binding::binding::BindingClass;
+        use crate::binding::binding::KeyUndecoratedFunction;
+        for idx in bindings.keys::<KeyUndecoratedFunction>() {
+            let binding = bindings.get(idx);
+            if let Some(class_key) = binding.class_key {
+                let class_binding = bindings.get(class_key);
+                let class_idx = match class_binding {
+                    BindingClass::ClassDef(c) => c.def_index,
+                    BindingClass::FunctionalClassDef(idx, _, _) => *idx,
+                };
+                if class_idx == class_def_idx && binding.def.name.id == field_name.as_str() {
+                    let undecorated_func = self.get_idx(idx);
+                    return undecorated_func.metadata.flags.is_abstract_method;
+                }
+            }
+        }
+        false
     }
 
     /// Check if a field is a concrete (non-abstract) implementation
@@ -1386,91 +1396,5 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Non-function types are considered concrete implementations
             _ => true,
         }
-    }
-
-    /// Get function metadata for a class method by accessing the binding system directly
-    fn get_function_metadata_for_method(
-        &self,
-        cls: &Class,
-        field_name: &Name,
-    ) -> Option<pyrefly_types::callable::FuncMetadata> {
-        // Try to access the function through the decorated function system
-        // This follows the pattern used in other parts of the codebase
-
-        // First try to get the decorated function if this method was decorated
-        // We can access this through the class's function definitions
-        if let Some(decorated_func) = self.find_decorated_function_in_class(cls, field_name) {
-            return Some(decorated_func.metadata().clone());
-        }
-
-        // If not found as a decorated function, try to find it as an undecorated function
-        // This handles cases where the function might not have decorators but still has metadata
-        let class_def_idx = cls.index();
-        let bindings = self.bindings();
-
-        // Look through undecorated functions using the public API
-        use crate::binding::binding::BindingClass;
-        use crate::binding::binding::KeyUndecoratedFunction;
-        for idx in bindings.keys::<KeyUndecoratedFunction>() {
-            let binding = bindings.get(idx);
-            // Check if this function belongs to our class and has the right name
-            if let Some(class_key) = binding.class_key {
-                let class_binding = bindings.get(class_key);
-                // Check the class index based on the enum variant
-                let class_idx = match class_binding {
-                    BindingClass::ClassDef(c) => c.def_index,
-                    BindingClass::FunctionalClassDef(idx, _, _) => *idx,
-                };
-                if class_idx == class_def_idx && binding.def.name.id == field_name.as_str() {
-                    // Found the undecorated function, get its metadata directly
-                    let undecorated_func = self.get_idx(idx);
-                    return Some(undecorated_func.metadata.clone());
-                }
-            }
-        }
-
-        None
-    }
-
-    /// Find a decorated function in a class by name
-    fn find_decorated_function_in_class(
-        &self,
-        cls: &Class,
-        field_name: &Name,
-    ) -> Option<crate::alt::types::decorated_function::DecoratedFunction> {
-        // Try to find the decorated function through the class's bindings
-        // This follows the pattern of accessing bindings for class members
-
-        // Get the class definition index
-        let class_def_idx = cls.index();
-
-        // Try to find the function binding for this class field
-        // We need to look for decorated functions that belong to this class
-        let bindings = self.bindings();
-
-        // Iterate through decorated functions using the public API
-        use crate::binding::binding::BindingClass;
-        use crate::binding::binding::KeyDecoratedFunction;
-        for idx in bindings.keys::<KeyDecoratedFunction>() {
-            let binding = bindings.get(idx);
-            // Get the undecorated function to check its name and class
-            let undecorated = bindings.get(binding.undecorated_idx);
-
-            // Check if this function belongs to our class and has the right name
-            if let Some(class_key) = undecorated.class_key {
-                let class_binding = bindings.get(class_key);
-                // Check the class index based on the enum variant
-                let class_idx = match class_binding {
-                    BindingClass::ClassDef(c) => c.def_index,
-                    BindingClass::FunctionalClassDef(idx, _, _) => *idx,
-                };
-                if class_idx == class_def_idx && undecorated.def.name.id == field_name.as_str() {
-                    // Found the decorated function for this method
-                    return Some(self.get_decorated_function(idx));
-                }
-            }
-        }
-
-        None
     }
 }
