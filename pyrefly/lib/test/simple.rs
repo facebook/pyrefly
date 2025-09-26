@@ -1807,3 +1807,26 @@ Y = Annotated[ClassVar[int], 'wrong context']  # E: `ClassVar` is not allowed in
 Z = Annotated[0, 'not a type']  # E: Expected a type form, got instance of `Literal[0]`
     "#,
 );
+
+testcase!(
+    test_nonfinal_class_self_return_type,
+    r#"
+from typing import Self
+
+class NonFinalClass:
+    def test(self) -> Self:
+        return NonFinalClass()  # E: Returned type `NonFinalClass` is not assignable to declared return type `Self@NonFinalClass`
+    "#,
+);
+
+testcase!(
+    test_final_class_self_return_type,
+    r#"
+from typing import Self, final
+
+@final
+class FinalClass:
+    def test(self) -> Self:
+        return FinalClass() 
+    "#,
+);
