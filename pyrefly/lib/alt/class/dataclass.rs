@@ -223,13 +223,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         let mut init = map.get_bool(&DataclassFieldKeywords::INIT);
-        let default = [
+        let mut default = [
             &DataclassFieldKeywords::DEFAULT,
             &DataclassFieldKeywords::DEFAULT_FACTORY,
             &DataclassFieldKeywords::FACTORY,
         ]
         .iter()
         .any(|k| map.0.contains_key(*k));
+
+        if !default && !args.args.is_empty() {
+            let first_arg = &args.args[0];
+            if first_arg.is_none_literal_expr() {
+                default = true;
+            }
+        }
+
         let mut kw_only = map.get_bool(&DataclassFieldKeywords::KW_ONLY);
 
         let mut alias = if dataclass_metadata.class_validation_flags.validate_by_alias {

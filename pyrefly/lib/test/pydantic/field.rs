@@ -55,7 +55,6 @@ Model(x=5)
 );
 
 testcase!(
-    bug = "When a field is annotated as optional, it should not be required",
     test_field_optional,
     pydantic_env(),
     r#"
@@ -66,6 +65,6 @@ class Example(BaseModel):
     attribute_1: str
     optional_attribute: str | None = Field(None, description="An optional attribute")
 
-Example(id="123", attribute_1="value1") # E: Missing argument `optional_attribute` in function `Example.__init__` 
+Example(id="123", attribute_1="value1")
 "#,
 );
