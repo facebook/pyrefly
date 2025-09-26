@@ -69,8 +69,8 @@ class Medal(TextChoices):
 
 # Assertions for mixing multiple choices types with consistent base types - only `TextChoices`.
 x1 = (Medal, Gender)
-assert_type([member.label for choices in x1 for member in choices], list[_StrOrPromise]) # E: Type `type[Gender]` is not iterable  # E: Type `type[Medal]` is not iterable 
-assert_type([member.value for choices in x1 for member in choices], list[str]) # E: Type `type[Gender]` is not iterable  # E: Type `type[Medal]` is not iterable 
+assert_type([member.label for choices in x1 for member in choices], list[_StrOrPromise]) 
+assert_type([member.value for choices in x1 for member in choices], list[str]) 
 "#,
 );
 

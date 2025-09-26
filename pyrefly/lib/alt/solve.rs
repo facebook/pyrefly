@@ -653,6 +653,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Use the iterable protocol interfaces to determine the iterable type.
         // Special cases like Tuple should be intercepted first.
         let context = || ErrorContext::Iteration(self.for_display(iterable.clone()));
+
+        if let Type::ClassDef(cls) = iterable {
+            let metadata = self.get_metadata_for_class(cls);
+            if let Some(enum_metadata) = metadata.enum_metadata() {
+                return vec![Iterable::OfType(
+                    enum_metadata.class_iteration_yields.clone(),
+                )];
+            }
+        }
+
         match iterable {
             Type::ClassType(cls) if let Some(Tuple::Concrete(elts)) = self.as_tuple(cls) => {
                 vec![Iterable::FixedLen(elts.clone())]
