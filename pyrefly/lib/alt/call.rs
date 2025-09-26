@@ -642,7 +642,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None => (),
                         Some(ty) => self.check_dunder_bool_is_callable(&ty, range, errors),
                     }
-                };
+                }
                 self.construct_class(cls, args, keywords, range, errors, context, hint)
             }
             CallTarget::TypedDict(td) => {
