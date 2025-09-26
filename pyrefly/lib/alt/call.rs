@@ -605,27 +605,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             CallTarget::Class(cls) => {
                 let metadata = self.get_metadata_for_class(cls.class_object());
                 if metadata.is_protocol() {
-                if cls.has_qname("typing", "Any") {
-                    return self.error(
-                        errors,
-                        range,
-                        ErrorInfo::new(ErrorKind::BadInstantiation, context),
-                        format!("`{}` can not be instantiated", cls.name()),
-                    );
-                }
-                if self
-                    .get_metadata_for_class(cls.class_object())
-                    .is_protocol()
-                {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::new(ErrorKind::BadInstantiation, context),
-                        format!(
-                            "Cannot instantiate `{}` because it is a protocol",
-                            cls.name()
-                        ),
-                    );
+                    if cls.has_qname("typing", "Any") {
+                        return self.error(
+                            errors,
+                            range,
+                            ErrorInfo::new(ErrorKind::BadInstantiation, context),
+                            format!("`{}` can not be instantiated", cls.name()),
+                        );
+                    }
+                    if self
+                        .get_metadata_for_class(cls.class_object())
+                        .is_protocol()
+                    {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::new(ErrorKind::BadInstantiation, context),
+                            format!(
+                                "Cannot instantiate `{}` because it is a protocol",
+                                cls.name()
+                            ),
+                        );
+                    }
                 }
                 // Check for abstract class instantiation
                 if metadata.inherits_from_abc() && !metadata.abstract_methods().is_empty() {
