@@ -53,18 +53,6 @@ def f(x: str | None):
 );
 
 testcase!(
-    test_bool_special_exports_bug,
-    r#"
-from typing import assert_type, Literal
-def f(x: bool):
-    if bool(x):
-        assert_type(x, Literal[True])
-    else:
-        assert_type(x, Literal[False])
-    "#,
-);
-
-testcase!(
     test_eq,
     r#"
 from typing import assert_type
@@ -328,6 +316,22 @@ testcase!(
 from typing import assert_type
 def f(x: str | None):
     assert x is not None
+    assert_type(x, str)
+    "#,
+);
+
+testcase!(
+    test_prod_assert,
+    r#"
+from typing import assert_type
+def prod_assert(x: object, msg: str | None = None): ...
+
+def test_only(x: str | None) -> None:
+    prod_assert(x is not None)
+    assert_type(x, str)
+
+def test_and_message(x: str | None) -> None:
+    prod_assert(x is not None, "x is None")
     assert_type(x, str)
     "#,
 );

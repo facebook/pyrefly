@@ -119,6 +119,38 @@ class B(A):
 );
 
 testcase!(
+    test_override_generic_simple,
+    r#"
+class A:
+    def m[T](self, x: T) -> T: ...
+
+class B(A):
+    def m[T](self, x: T) -> T: ...   # OK
+
+class C(A):
+    def m(self, x: int) -> int: ...  # E: `C.m` overrides parent class `A` in an inconsistent manner
+    "#,
+);
+
+testcase!(
+    test_override_generic_bounds,
+    r#"
+class A: ...
+class B(A): ...
+class C(B): ...
+
+class Base:
+    def m[T: B](self, x: T) -> T: ...
+
+class Derived1(Base):
+    def m[T: A](self, x: T) -> T: ...  # OK, [T: A] accepts all types that [T: B] does
+
+class Derived2(Base):
+    def m[T: C](self, x: T) -> T: ...  # E: `Derived2.m` overrides parent class `Base` in an inconsistent manner
+    "#,
+);
+
+testcase!(
     test_no_base_override,
     r#"
 from typing import override
@@ -470,5 +502,17 @@ class Derived(Base):
 
     def invariant(self) -> list[Self]:
         return []
+    "#,
+);
+
+testcase!(
+    test_param_name_change,
+    r#"
+class A:
+    def f(self, x: int):
+        pass
+class B(A):
+    def f(self, x1: int):  # E: Got parameter name `x1`, expected `x`
+        pass
     "#,
 );

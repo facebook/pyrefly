@@ -311,13 +311,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         ty: Type,
         contains_subscript: bool,
-        contains_any: bool,
         range: TextRange,
         func_kind: &FunctionKind,
         errors: &ErrorCollector,
     ) {
         for ty in self.as_class_info(ty) {
             if let Type::ClassDef(cls) = &ty {
+                if cls.has_toplevel_qname("typing", "Any") {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        "Expected class object, got `Any`".to_owned(),
+                    );
+                }
                 let metadata = self.get_metadata_for_class(cls);
                 let func_display =
                     || format!("{}()", func_kind.as_func_id().format(self.module().name()));
@@ -376,16 +383,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         "Expected class object, got parameterized generic type: `{}`",
                         self.for_display(ty)
                     ),
-                );
-            } else if contains_any && matches!(&ty, Type::Type(box Type::Any(AnyStyle::Explicit))) {
-                // If the raw expression contains something that structurally looks like `A[T]` and
-                // part of the expression resolves to a parameterized class type, then we likely have a
-                // literal parameterized type, which is a runtime exception.
-                self.error(
-                    errors,
-                    range,
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                    "Expected class object, got `Any`".to_owned(),
                 );
             } else if self.unwrap_class_object_silently(&ty).is_none() {
                 self.error(
@@ -446,20 +443,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         let arg_class_type = self.expr_infer(arg_expr, errors);
         let mut contains_subscript = false;
-        let mut contains_any = false;
         arg_expr.visit(&mut |e| {
             if matches!(e, Expr::Subscript(_)) {
                 contains_subscript = true;
-            }
-            if matches!(e, Expr::Name(x) if x.id.as_str() == "Any") {
-                contains_any = true;
             }
         });
 
         self.check_type_is_class_object(
             arg_class_type,
             contains_subscript,
-            contains_any,
             arg_expr.range(),
             func_kind,
             errors,

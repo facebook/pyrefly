@@ -17,6 +17,7 @@ use pyrefly_python::dunder;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Params;
 use pyrefly_types::simplify::unions;
+use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
@@ -55,6 +56,7 @@ use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::solver::solver::SubsetError;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
 use crate::types::callable::FuncMetadata;
@@ -248,7 +250,7 @@ impl ClassFieldInitialization {
 /// know whether it is initialized in the class body in order to determine
 /// both visibility rules and whether method binding should be performed.
 #[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
-pub struct ClassField(ClassFieldInner);
+pub struct ClassField(ClassFieldInner, IsInherited);
 
 #[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
 enum ClassFieldInner {
@@ -264,8 +266,17 @@ enum ClassFieldInner {
         /// If this is a descriptor, data derived from `ty`.
         descriptor: Option<Descriptor>,
         is_function_without_return_annotation: bool,
-        name_might_exist_in_inherited: bool,
     },
+}
+
+/// For efficiency, keep track of whether we know from `calculate_class_field`
+/// that this is not an inherited field so that we can skip override consistency
+/// checks. This information is not needed to understand the class field, it is
+/// only used for efficiency.
+#[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
+enum IsInherited {
+    No,
+    Maybe,
 }
 
 impl Display for ClassField {
@@ -286,17 +297,19 @@ impl ClassField {
         read_only_reason: Option<ReadOnlyReason>,
         descriptor: Option<Descriptor>,
         is_function_without_return_annotation: bool,
-        name_might_exist_in_inherited: bool,
+        is_inherited: IsInherited,
     ) -> Self {
-        Self(ClassFieldInner::Simple {
-            ty,
-            annotation,
-            initialization,
-            read_only_reason,
-            descriptor,
-            is_function_without_return_annotation,
-            name_might_exist_in_inherited,
-        })
+        Self(
+            ClassFieldInner::Simple {
+                ty,
+                annotation,
+                initialization,
+                read_only_reason,
+                descriptor,
+                is_function_without_return_annotation,
+            },
+            is_inherited,
+        )
     }
 
     pub fn for_variance_inference(&self) -> Option<(&Type, Option<&Annotation>, bool)> {
@@ -308,27 +321,31 @@ impl ClassField {
     }
 
     pub fn new_synthesized(ty: Type) -> Self {
-        ClassField(ClassFieldInner::Simple {
-            ty,
-            annotation: None,
-            initialization: ClassFieldInitialization::ClassBody(None),
-            read_only_reason: None,
-            descriptor: None,
-            is_function_without_return_annotation: false,
-            name_might_exist_in_inherited: true,
-        })
+        ClassField(
+            ClassFieldInner::Simple {
+                ty,
+                annotation: None,
+                initialization: ClassFieldInitialization::ClassBody(None),
+                read_only_reason: None,
+                descriptor: None,
+                is_function_without_return_annotation: false,
+            },
+            IsInherited::Maybe,
+        )
     }
 
     pub fn recursive() -> Self {
-        Self(ClassFieldInner::Simple {
-            ty: Type::any_implicit(),
-            annotation: None,
-            initialization: ClassFieldInitialization::recursive(),
-            read_only_reason: None,
-            descriptor: None,
-            is_function_without_return_annotation: false,
-            name_might_exist_in_inherited: true,
-        })
+        Self(
+            ClassFieldInner::Simple {
+                ty: Type::any_implicit(),
+                annotation: None,
+                initialization: ClassFieldInitialization::recursive(),
+                read_only_reason: None,
+                descriptor: None,
+                is_function_without_return_annotation: false,
+            },
+            IsInherited::Maybe,
+        )
     }
 
     fn initialization(&self) -> ClassFieldInitialization {
@@ -346,7 +363,6 @@ impl ClassField {
                 read_only_reason,
                 descriptor,
                 is_function_without_return_annotation,
-                name_might_exist_in_inherited,
             } => {
                 let mut ty = ty.clone();
                 f(&mut ty);
@@ -355,15 +371,18 @@ impl ClassField {
                     x.cls.visit_mut(f);
                     x
                 });
-                Self(ClassFieldInner::Simple {
-                    ty,
-                    annotation: annotation.clone(),
-                    initialization: initialization.clone(),
-                    read_only_reason: read_only_reason.clone(),
-                    descriptor,
-                    is_function_without_return_annotation: *is_function_without_return_annotation,
-                    name_might_exist_in_inherited: *name_might_exist_in_inherited,
-                })
+                Self(
+                    ClassFieldInner::Simple {
+                        ty,
+                        annotation: annotation.clone(),
+                        initialization: initialization.clone(),
+                        read_only_reason: read_only_reason.clone(),
+                        descriptor,
+                        is_function_without_return_annotation:
+                            *is_function_without_return_annotation,
+                    },
+                    self.1.clone(),
+                )
             }
         }
     }
@@ -570,7 +589,7 @@ impl ClassField {
         }
     }
 
-    pub fn is_class_var(&self) -> bool {
+    fn is_class_var(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Simple { annotation, .. } => {
                 annotation.as_ref().is_some_and(|ann| ann.is_class_var())
@@ -594,27 +613,18 @@ impl ClassField {
         }
     }
 
-    pub fn is_override(&self) -> bool {
+    fn is_override(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Simple { ty, .. } => ty.is_override(),
         }
     }
 
     /// Check if this field is read-only for any reason.
-    pub fn is_read_only(&self) -> bool {
+    fn is_read_only(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Simple {
                 read_only_reason, ..
             } => read_only_reason.is_some(),
-        }
-    }
-
-    pub fn name_might_exist_in_inherited(&self) -> bool {
-        match &self.0 {
-            ClassFieldInner::Simple {
-                name_might_exist_in_inherited,
-                ..
-            } => *name_might_exist_in_inherited,
         }
     }
 
@@ -624,7 +634,7 @@ impl ClassField {
         }
     }
 
-    pub fn is_function_without_return_annotation(&self) -> bool {
+    fn is_function_without_return_annotation(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Simple {
                 is_function_without_return_annotation,
@@ -658,6 +668,7 @@ impl ClassField {
     }
 }
 
+#[derive(Debug)]
 enum InstanceKind {
     ClassType,
     TypedDict,
@@ -668,6 +679,7 @@ enum InstanceKind {
 }
 
 /// Wrapper to hold a specialized instance of a class , unifying ClassType and TypedDict.
+#[derive(Debug)]
 struct Instance<'a> {
     kind: InstanceKind,
     class: &'a Class,
@@ -791,7 +803,7 @@ fn bind_class_attribute(
     }
 }
 
-/// Return the type of making it bound, or if not,
+/// Return the type of making it bound, or if not, the unbound type.
 fn make_bound_method_helper(
     obj: Type,
     attr: Type,
@@ -799,20 +811,30 @@ fn make_bound_method_helper(
 ) -> Result<Type, Type> {
     // Don't bind functions originating from callback protocols, because the self param
     // has already been removed.
-    let should_bind = |metadata: &FuncMetadata| {
+    let should_bind2 = |metadata: &FuncMetadata| {
         !matches!(metadata.kind, FunctionKind::CallbackProtocol(_)) && should_bind(metadata)
     };
     let func = match attr {
         Type::Forall(box Forall {
             tparams,
             body: Forallable::Function(func),
-        }) if should_bind(&func.metadata) => BoundMethodType::Forall(Forall {
+        }) if should_bind2(&func.metadata) => BoundMethodType::Forall(Forall {
             tparams,
             body: func,
         }),
-        Type::Function(func) if should_bind(&func.metadata) => BoundMethodType::Function(*func),
-        Type::Overload(overload) if should_bind(&overload.metadata) => {
+        Type::Function(func) if should_bind2(&func.metadata) => BoundMethodType::Function(*func),
+        Type::Overload(overload) if should_bind2(&overload.metadata) => {
             BoundMethodType::Overload(overload)
+        }
+        Type::Union(ref ts) => {
+            let mut bound_methods = Vec::with_capacity(ts.len());
+            for t in ts {
+                match make_bound_method_helper(obj.clone(), t.clone(), should_bind) {
+                    Ok(x) => bound_methods.push(x),
+                    Err(_) => return Err(attr),
+                }
+            }
+            return Ok(unions(bound_methods));
         }
         _ => return Err(attr),
     };
@@ -884,7 +906,7 @@ pub struct WithDefiningClass<T> {
 
 impl<T> WithDefiningClass<T> {
     pub(in crate::alt::class) fn defined_on(&self, module: &str, cls: &str) -> bool {
-        self.defining_class.has_qname(module, cls)
+        self.defining_class.has_toplevel_qname(module, cls)
     }
 }
 
@@ -923,10 +945,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             value = member_targ;
         }
-        if !self
-            .solver()
-            .is_subset_eq(value, annotation, self.type_order())
-        {
+        if !self.is_subset_eq(value, annotation) {
             self.error(
                 errors, range, ErrorInfo::Kind(ErrorKind::BadAssignment),
                 format!(
@@ -935,6 +954,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.for_display(annotation.clone()),
                 ),
             );
+        }
+    }
+
+    fn handle_django_enum_member_value(&self, ty: Type) -> Type {
+        // At runtime, Django uses only the first element of the tuple as the enum value,
+        // whereas the second value is assigned to the label
+        // so we should mimic the runtime behavior by extracting the first element of the tuple as the value
+        match &ty {
+            Type::Tuple(Tuple::Concrete(elts)) if !elts.is_empty() => match &elts[0] {
+                Type::Literal(lit) => Type::ClassType(lit.general_class_type(self.stdlib).clone()),
+                other => other.clone(),
+            },
+            _ => ty.clone(),
         }
     }
 
@@ -1023,7 +1055,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Optimisation. If we can determine that the name definitely doesn't exist in the inheritance
         // then we can avoid a bunch of work with checking for override errors.
-        let mut name_might_exist_in_inherited = true;
+        let mut is_inherited = IsInherited::Maybe;
 
         let (value_ty, inherited_annotation) = match value {
             ExprOrBinding::Expr(e) => {
@@ -1033,7 +1065,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let (inherited_ty, annotation) =
                         self.get_inherited_type_and_annotation(class, name);
                     if inherited_ty.is_none() {
-                        name_might_exist_in_inherited = false;
+                        is_inherited = IsInherited::No;
                     }
                     (inherited_ty, annotation)
                 };
@@ -1078,12 +1110,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if metadata.is_pydantic_base_model()
             && let Some(annot) = &direct_annotation
             && let ClassFieldInitialization::ClassBody(Some(DataclassFieldKeywords {
-                gt, lt, ..
+                gt,
+                lt,
+                ge,
+                ..
             })) = &initialization
         {
             let field_ty = annot.get_type();
 
-            for (bound_val, label) in [(gt, "gt"), (lt, "lt")] {
+            for (bound_val, label) in [(gt, "gt"), (lt, "lt"), (ge, "ge")] {
                 let Some(val) = bound_val else { continue };
                 if !self.is_subset_eq(val, field_ty) {
                     self.error(
@@ -1312,10 +1347,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 self.check_enum_value_annotation(&ty, &enum_value_ty, name, range, errors);
             }
+            let enum_ty = if enum_.is_django {
+                self.handle_django_enum_member_value(ty)
+            } else {
+                ty.clone()
+            };
             Type::Literal(Lit::Enum(Box::new(LitEnum {
                 class: enum_.cls.clone(),
                 member: name.clone(),
-                ty: ty.clone(),
+                ty: enum_ty,
             })))
         } else {
             ty
@@ -1336,7 +1376,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             read_only_reason,
             descriptor,
             is_function_without_return_annotation,
-            name_might_exist_in_inherited,
+            is_inherited,
         );
         if let RawClassFieldInitialization::Method(MethodThatSetsAttr {
             method_name,
@@ -1441,7 +1481,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .find_map(|parent| {
                 let parent_field =
                     self.get_field_from_current_class_only(parent.class_object(), name)?;
-                let ClassField(ClassFieldInner::Simple { ty, annotation, .. }) = &*parent_field;
+                let ClassField(ClassFieldInner::Simple { ty, annotation, .. }, ..) = &*parent_field;
                 if found_field.is_none() {
                     found_field = Some(parent.targs().substitution().substitute_into(ty.clone()));
                 }
@@ -1664,7 +1704,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         converter_param: Option<Type>,
         errors: &ErrorCollector,
     ) -> Param {
-        let ClassField(ClassFieldInner::Simple { ty, descriptor, .. }) = field;
+        let ClassField(ClassFieldInner::Simple { ty, descriptor, .. }, ..) = field;
         let param_ty = if !strict {
             Type::any_explicit()
         } else if let Some(converter_param) = converter_param {
@@ -1717,7 +1757,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) {
         let is_override = class_field.is_override();
-        if !class_field.name_might_exist_in_inherited() && !is_override {
+        if matches!(class_field.1, IsInherited::No) && !is_override {
             return;
         }
 
@@ -1824,9 +1864,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let attr_check = self.is_class_attribute_subset(
                 got_attribute.as_ref().unwrap(),
                 &want_attribute,
-                &mut |got, want| self.is_subset_eq(got, want),
+                &mut |got, want| self.is_subset_eq_with_reason(got, want),
             );
-            if let Err(error) = attr_check {
+            let error = match attr_check {
+                Err(
+                    AttrSubsetError::Covariant {
+                        subset_error: SubsetError::PosParamName(child, parent),
+                        ..
+                    }
+                    | AttrSubsetError::Invariant {
+                        subset_error: SubsetError::PosParamName(child, parent),
+                        ..
+                    }
+                    | AttrSubsetError::Contravariant {
+                        subset_error: SubsetError::PosParamName(child, parent),
+                        ..
+                    },
+                ) => Some((
+                    ErrorKind::BadParamNameOverride,
+                    format!("Got parameter name `{child}`, expected `{parent}`"),
+                )),
+                Err(error) => Some((
+                    ErrorKind::BadOverride,
+                    error.to_error_msg(cls.name(), parent.name(), field_name),
+                )),
+                Ok(()) => None,
+            };
+            if let Some((kind, error)) = error {
                 let msg = vec1![
                     format!(
                         "Class member `{}.{}` overrides parent class `{}` in an inconsistent manner",
@@ -1834,9 +1898,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         field_name,
                         parent.name()
                     ),
-                    error.to_error_msg(cls.name(), parent.name(), field_name)
+                    error,
                 ];
-                errors.add(range, ErrorInfo::Kind(ErrorKind::BadOverride), msg);
+                errors.add(range, ErrorInfo::Kind(kind), msg);
             }
         }
         if is_override && !parent_attr_found && !parent_has_any {
@@ -2408,7 +2472,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         got: &ClassAttribute,
         want: &ClassAttribute,
-        is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
+        is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> Result<(), AttrSubsetError> {
         match (got, want) {
             (_, ClassAttribute::NoAccess(_)) => Ok(()),
@@ -2426,89 +2490,78 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // in some cases for unknown reasons they wind up being ReadWrite.
                 ClassAttribute::ReadWrite(got @ Type::BoundMethod(_)),
                 ClassAttribute::ReadWrite(want @ Type::BoundMethod(_)),
-            ) => {
-                if is_subset(got, want) {
-                    Ok(())
-                } else {
-                    Err(AttrSubsetError::Covariant {
-                        got: got.clone(),
-                        want: want.clone(),
-                        got_is_property: false,
-                        want_is_property: false,
-                    })
-                }
-            }
+            ) => is_subset(got, want).map_err(|subset_error| AttrSubsetError::Covariant {
+                got: got.clone(),
+                want: want.clone(),
+                got_is_property: false,
+                want_is_property: false,
+                subset_error,
+            }),
             (ClassAttribute::ReadWrite(got), ClassAttribute::ReadWrite(want)) => {
-                if is_subset(got, want) && is_subset(want, got) {
-                    Ok(())
-                } else {
+                let subset_error = is_subset(got, want)
+                    .map_or_else(Some, |_| is_subset(want, got).map_or_else(Some, |_| None));
+                if let Some(subset_error) = subset_error {
                     Err(AttrSubsetError::Invariant {
                         got: got.clone(),
                         want: want.clone(),
+                        subset_error,
                     })
+                } else {
+                    Ok(())
                 }
             }
             (
                 ClassAttribute::ReadWrite(got) | ClassAttribute::ReadOnly(got, ..),
                 ClassAttribute::ReadOnly(want, _),
-            ) => {
-                if is_subset(got, want) {
-                    Ok(())
-                } else {
-                    Err(AttrSubsetError::Covariant {
-                        got: got.clone(),
-                        want: want.clone(),
-                        got_is_property: false,
-                        want_is_property: false,
-                    })
-                }
-            }
+            ) => is_subset(got, want).map_err(|subset_error| AttrSubsetError::Covariant {
+                got: got.clone(),
+                want: want.clone(),
+                got_is_property: false,
+                want_is_property: false,
+                subset_error,
+            }),
             (ClassAttribute::ReadOnly(got, _), ClassAttribute::Property(want, _, _)) => {
-                if is_subset(
+                is_subset(
                     // Synthesize a getter method
                     &Type::callable_ellipsis(got.clone()),
                     want,
-                ) {
-                    Ok(())
-                } else {
-                    Err(AttrSubsetError::Covariant {
-                        got: got.clone(),
-                        want: want.clone(),
-                        got_is_property: false,
-                        want_is_property: true,
-                    })
-                }
+                )
+                .map_err(|subset_error| AttrSubsetError::Covariant {
+                    got: got.clone(),
+                    want: want.clone(),
+                    got_is_property: false,
+                    want_is_property: true,
+                    subset_error,
+                })
             }
             (ClassAttribute::ReadWrite(got), ClassAttribute::Property(want, want_setter, _)) => {
-                if !is_subset(
+                is_subset(
                     // Synthesize a getter method
                     &Type::callable_ellipsis(got.clone()),
                     want,
-                ) {
-                    return Err(AttrSubsetError::Covariant {
-                        got: got.clone(),
-                        want: want.clone(),
-                        got_is_property: false,
-                        want_is_property: true,
-                    });
-                }
+                )
+                .map_err(|subset_error| AttrSubsetError::Covariant {
+                    got: got.clone(),
+                    want: want.clone(),
+                    got_is_property: false,
+                    want_is_property: true,
+                    subset_error,
+                })?;
                 if let Some(want_setter) = want_setter {
                     // Synthesize a setter method
-                    if is_subset(
+                    is_subset(
                         want_setter,
                         &Type::callable(
                             vec![Param::PosOnly(None, got.clone(), Required::Required)],
                             Type::None,
                         ),
-                    ) {
-                        Ok(())
-                    } else {
-                        Err(AttrSubsetError::Contravariant {
-                            want: want_setter.clone(),
-                            got: got.clone(),
-                            got_is_property: true,
-                        })
-                    }
+                    )
+                    .map_err(|subset_error| AttrSubsetError::Contravariant {
+                        want: want_setter.clone(),
+                        got: got.clone(),
+                        got_is_property: true,
+                        subset_error,
+                    })
                 } else {
                     Ok(())
                 }
@@ -2517,29 +2570,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ClassAttribute::Property(got_getter, got_setter, _),
                 ClassAttribute::Property(want_getter, want_setter, _),
             ) => {
-                if !is_subset(got_getter, want_getter) {
-                    Err(AttrSubsetError::Covariant {
+                is_subset(got_getter, want_getter).map_err(|subset_error| {
+                    AttrSubsetError::Covariant {
                         got: got_getter.clone(),
                         want: want_getter.clone(),
                         got_is_property: true,
                         want_is_property: true,
-                    })
-                } else {
-                    match (got_setter, want_setter) {
-                        (Some(got_setter), Some(want_setter)) => {
-                            if is_subset(got_setter, want_setter) {
-                                Ok(())
-                            } else {
-                                Err(AttrSubsetError::Contravariant {
-                                    want: want_setter.clone(),
-                                    got: got_setter.clone(),
-                                    got_is_property: true,
-                                })
-                            }
-                        }
-                        (None, Some(_)) => Err(AttrSubsetError::ReadOnly),
-                        (_, None) => Ok(()),
+                        subset_error,
                     }
+                })?;
+                match (got_setter, want_setter) {
+                    (Some(got_setter), Some(want_setter)) => is_subset(got_setter, want_setter)
+                        .map_err(|subset_error| AttrSubsetError::Contravariant {
+                            want: want_setter.clone(),
+                            got: got_setter.clone(),
+                            got_is_property: true,
+                            subset_error,
+                        }),
+                    (None, Some(_)) => Err(AttrSubsetError::ReadOnly),
+                    (_, None) => Ok(()),
                 }
             }
             (
@@ -2548,16 +2597,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ) => {
                 let got_ty = got_cls.clone().to_type();
                 let want_ty = want_cls.clone().to_type();
-                if is_subset(&got_ty, &want_ty) {
-                    Ok(())
-                } else {
-                    Err(AttrSubsetError::Covariant {
-                        got: got_ty,
-                        want: want_ty,
-                        got_is_property: false,
-                        want_is_property: false,
-                    })
-                }
+                is_subset(&got_ty, &want_ty).map_err(|subset_error| AttrSubsetError::Covariant {
+                    got: got_ty,
+                    want: want_ty,
+                    got_is_property: false,
+                    want_is_property: false,
+                    subset_error,
+                })
             }
             (ClassAttribute::Descriptor(..), _) | (_, ClassAttribute::Descriptor(..)) => {
                 Err(AttrSubsetError::Descriptor)

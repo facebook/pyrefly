@@ -380,6 +380,15 @@ z: list[A] = y # E: `list[B]` is not assignable to `list[A]`
 );
 
 testcase!(
+    test_context_return_incompatible_bound,
+    r#"
+def f(x: int | str) -> None: ...
+def g[T: int](x: T) -> T: ...
+f(g(0)) # OK
+"#,
+);
+
+testcase!(
     bug = "Propagating the hint should still allow for a narrower inferred type",
     test_context_return_narrow,
     r#"
@@ -578,14 +587,13 @@ def f[T]() -> Callable[[T], T]:
 );
 
 testcase!(
-    bug = "This assignment should work",
     test_assign_lambda_to_protocol,
     r#"
 from typing import Protocol, reveal_type
 class Identity(Protocol):
     def __call__[T](self, x: T) -> T:
         return x
-x: Identity = lambda x: x  # E: `(x: Unknown) -> Unknown` is not assignable to `Identity`
+x: Identity = lambda x: x
     "#,
 );
 

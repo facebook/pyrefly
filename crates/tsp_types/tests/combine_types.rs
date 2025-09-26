@@ -168,7 +168,7 @@ fn test_combine_types_params_many_types() {
     for i in 0..10 {
         types.push(Type {
             alias_name: None,
-            handle: TypeHandle::String(format!("type_{}_handle", i)),
+            handle: TypeHandle::String(format!("type_{i}_handle")),
             category: if i % 2 == 0 {
                 TypeCategory::Class
             } else {
@@ -179,7 +179,7 @@ fn test_combine_types_params_many_types() {
                 leading_dots: 0,
                 name_parts: vec![format!("module_{}", i)],
             }),
-            name: format!("Type{}", i),
+            name: format!("Type{i}"),
             category_flags: 0,
             decl: None,
         });
@@ -193,7 +193,7 @@ fn test_combine_types_params_many_types() {
     // Verify many types handling
     assert_eq!(params_many.types.len(), 10);
     for (i, type_) in params_many.types.iter().enumerate() {
-        assert_eq!(type_.name, format!("Type{}", i));
+        assert_eq!(type_.name, format!("Type{i}"));
         assert_eq!(
             type_.category,
             if i % 2 == 0 {
@@ -258,7 +258,7 @@ fn test_combine_types_params_different_handle_types() {
 #[test]
 fn test_combine_types_params_different_categories() {
     // Test combining different type categories
-    let categories_and_names = vec![
+    let categories_and_names = [
         (TypeCategory::Class, "ClassType"),
         (TypeCategory::Function, "FunctionType"),
         (TypeCategory::Module, "ModuleType"),
@@ -271,7 +271,7 @@ fn test_combine_types_params_different_categories() {
         .enumerate()
         .map(|(i, (category, name))| Type {
             alias_name: None,
-            handle: TypeHandle::String(format!("handle_{}", i)),
+            handle: TypeHandle::String(format!("handle_{i}")),
             category: category.clone(),
             flags: TypeFlags::new(),
             module_name: Some(ModuleName {
@@ -399,26 +399,21 @@ fn test_combine_types_params_serialization() {
         .zip(deserialized_params.types.iter())
         .enumerate()
     {
-        assert_eq!(deser.name, orig.name, "Type {} name mismatch", i);
-        assert_eq!(
-            deser.category, orig.category,
-            "Type {} category mismatch",
-            i
-        );
+        assert_eq!(deser.name, orig.name, "Type {i} name mismatch");
+        assert_eq!(deser.category, orig.category, "Type {i} category mismatch");
         assert_eq!(
             deser.category_flags, orig.category_flags,
-            "Type {} category_flags mismatch",
-            i
+            "Type {i} category_flags mismatch"
         );
 
         match (&deser.handle, &orig.handle) {
             (TypeHandle::String(d), TypeHandle::String(o)) => {
-                assert_eq!(d, o, "Type {} string handle mismatch", i)
+                assert_eq!(d, o, "Type {i} string handle mismatch")
             }
             (TypeHandle::Int(d), TypeHandle::Int(o)) => {
-                assert_eq!(d, o, "Type {} int handle mismatch", i)
+                assert_eq!(d, o, "Type {i} int handle mismatch")
             }
-            _ => panic!("Type {} handle type mismatch", i),
+            _ => panic!("Type {i} handle type mismatch"),
         }
     }
 }

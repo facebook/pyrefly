@@ -22,7 +22,7 @@ export default function LandingPage(): React.ReactElement {
     return (
         <Layout
             id="new-landing-page"
-            title="Pyrefly: A Static Type Checker for Python"
+            title="Pyrefly: A Fast Python Type Checker and Language Server"
             description={siteConfig.description}
         >
             <LandingPageSection

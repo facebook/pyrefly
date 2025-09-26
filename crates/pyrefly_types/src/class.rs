@@ -22,6 +22,8 @@ use pyrefly_derive::VisitMut;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::nesting_context::NestingContext;
+use pyrefly_python::qname::QName;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Identifier;
@@ -30,7 +32,6 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 
 use crate::equality::TypeEq;
-use crate::qname::QName;
 use crate::types::Substitution;
 use crate::types::TArgs;
 use crate::types::TParams;
@@ -190,13 +191,14 @@ impl Class {
     pub fn new(
         def_index: ClassDefIndex,
         name: Identifier,
+        parent: NestingContext,
         module: Module,
         precomputed_tparams: Option<Arc<TParams>>,
         fields: SmallMap<Name, ClassFieldProperties>,
     ) -> Self {
         Self(Arc::new(ClassInner {
             def_index,
-            qname: QName::new(name, module),
+            qname: QName::new(name, parent, module),
             precomputed_tparams,
             fields,
         }))
@@ -264,12 +266,18 @@ impl Class {
         Some(self.0.fields.get(name)?.range)
     }
 
-    pub fn has_qname(&self, module: &str, name: &str) -> bool {
-        self.0.qname.module_name().as_str() == module && self.0.qname.id() == name
+    pub fn has_qname(&self, module: &str, parent: &NestingContext, name: &str) -> bool {
+        self.0.qname.module_name().as_str() == module
+            && self.0.qname.parent() == parent
+            && self.0.qname.id() == name
+    }
+
+    pub fn has_toplevel_qname(&self, module: &str, name: &str) -> bool {
+        self.has_qname(module, &NestingContext::toplevel(), name)
     }
 
     pub fn is_builtin(&self, name: &str) -> bool {
-        self.has_qname("builtins", name)
+        self.has_toplevel_qname("builtins", name)
     }
 
     /// Key to use for equality purposes. If we have the same module and index,
@@ -351,7 +359,7 @@ impl ClassType {
     }
 
     pub fn has_qname(&self, module: &str, name: &str) -> bool {
-        self.0.has_qname(module, name)
+        self.0.has_toplevel_qname(module, name)
     }
 
     pub fn is_builtin(&self, name: &str) -> bool {

@@ -206,3 +206,11 @@ def f(condition: bool):
     assert_type(g(A()), type[A] | A)
     "#,
 );
+
+testcase!(
+    test_any_constructor,
+    r#"
+from typing import Any
+Any()  # E: `Any` can not be instantiated
+    "#,
+);

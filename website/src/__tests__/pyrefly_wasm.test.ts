@@ -111,7 +111,8 @@ movie: Movie = {'name': 'Blade Runner',
 
     describe('gotoDefinition', () => {
         it('should return definition location for function call', () => {
-            // Position of "test" in "test(42)" 
+            pyreService.setActiveFile('main.py');
+            // Position of "test" in "test(42)"
             const definition = pyreService.gotoDefinition(18, 13);
 
             // Should return a location object
@@ -149,7 +150,7 @@ tes
         it('should return type information for expressions', () => {
             // Set active file to main.py
             pyreService.setActiveFile('main.py');
-            // Position of "test(42)" in reveal_type 
+            // Position of "test(42)" in reveal_type
             const hoverInfo = pyreService.queryType(18, 13);
 
             expect(hoverInfo).toBeDefined();
@@ -164,6 +165,7 @@ tes
 
     describe('inlayHint', () => {
         it('should return inlay hints', () => {
+            pyreService.setActiveFile('main.py');
             const hints = pyreService.inlayHint();
             expect(hints).toBeDefined();
             expect(hints.length).toBeGreaterThan(0);

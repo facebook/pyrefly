@@ -342,6 +342,10 @@ impl Stdlib {
         Self::apply(&self.dict, vec![key, value])
     }
 
+    pub fn dict_object(&self) -> &Class {
+        &Self::unwrap(&self.dict).0
+    }
+
     pub fn dict_items(&self, key: Type, value: Type) -> ClassType {
         Self::apply(&self.dict_items, vec![key, value])
     }

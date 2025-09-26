@@ -15,6 +15,7 @@ use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_python::qname::QName;
 use pyrefly_util::assert_words;
 use pyrefly_util::display::commas_iter;
 use pyrefly_util::uniques::Unique;
@@ -27,6 +28,7 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::callable::Callable;
+use crate::callable::FuncId;
 use crate::callable::FuncMetadata;
 use crate::callable::Function;
 use crate::callable::FunctionKind;
@@ -41,7 +43,6 @@ use crate::keywords::KwCall;
 use crate::literal::Lit;
 use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
-use crate::qname::QName;
 use crate::quantified::Quantified;
 use crate::quantified::QuantifiedKind;
 use crate::simplify::unions;
@@ -1029,10 +1030,19 @@ impl Type {
                 body: Forallable::Function(func),
             })
             | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Function(func),
+                func:
+                    BoundMethodType::Function(func)
+                    | BoundMethodType::Forall(Forall {
+                        tparams: _,
+                        body: func,
+                    }),
                 ..
             }) => check(&func.metadata),
-            Type::Overload(overload) => check(&overload.metadata),
+            Type::Overload(overload)
+            | Type::BoundMethod(box BoundMethod {
+                func: BoundMethodType::Overload(overload),
+                ..
+            }) => check(&overload.metadata),
             _ => T::default(),
         }
     }
@@ -1061,7 +1071,7 @@ impl Type {
         self.check_toplevel_func_metadata(&|meta| meta.flags.is_overload)
     }
 
-    pub fn is_deprecated(&self) -> bool {
+    pub fn is_deprecated_function(&self) -> bool {
         self.check_toplevel_func_metadata(&|meta| meta.flags.is_deprecated)
     }
 
@@ -1127,6 +1137,12 @@ impl Type {
             }
             _ => {}
         }
+    }
+
+    fn is_toplevel_callable(&self) -> bool {
+        let mut is_callable = false;
+        self.visit_toplevel_callable(&mut |_| is_callable = true);
+        is_callable
     }
 
     /// Transform this type if it is a callable. Note that we do *not* recurse into the type to
@@ -1210,12 +1226,23 @@ impl Type {
         sigs
     }
 
-    pub fn promote_literals(self, stdlib: &Stdlib) -> Type {
-        self.transform(&mut |ty| match &ty {
+    pub fn promote_literals(mut self, stdlib: &Stdlib) -> Type {
+        fn g(ty: &mut Type, f: &mut dyn FnMut(&mut Type)) {
+            // This isn't quite right: we should decide whether to promote a literal based on
+            // whether it is inferred or annotated. But we don't have an easy way to track that
+            // right now, and promoting literals in callable signatures is always wrong, so let's
+            // special-case callables for now.
+            if !ty.is_toplevel_callable() {
+                ty.recurse_mut(&mut |ty| g(ty, f));
+                f(ty);
+            }
+        }
+        g(&mut self, &mut |ty| match &ty {
             Type::Literal(lit) => *ty = lit.general_class_type(stdlib).clone().to_type(),
             Type::LiteralString => *ty = stdlib.str().clone().to_type(),
             _ => {}
-        })
+        });
+        self
     }
 
     // Attempt at a function that will convert @ to Any for now.
@@ -1420,6 +1447,16 @@ impl Type {
                 BoundMethodType::Forall(forall) => Some(forall.body.signature),
                 BoundMethodType::Overload(_) => None,
             },
+            _ => None,
+        }
+    }
+
+    /// Return the FuncId if this type corresponds to a function or method.
+    pub fn to_funcid(&self) -> Option<FuncId> {
+        match &self {
+            Type::Function(f) => Some(f.metadata.kind.as_func_id()),
+            Type::BoundMethod(m) => Some(m.func.metadata().kind.as_func_id()),
+            Type::Overload(o) => Some(o.metadata.kind.as_func_id()),
             _ => None,
         }
     }

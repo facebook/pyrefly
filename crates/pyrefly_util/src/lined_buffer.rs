@@ -44,6 +44,10 @@ impl LinedBuffer {
         &self.buffer
     }
 
+    pub fn line_index(&self) -> &LineIndex {
+        &self.lines
+    }
+
     pub fn lines(&self) -> Lines<'_> {
         self.buffer.lines()
     }

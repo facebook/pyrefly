@@ -7,6 +7,7 @@
 
 /// This file contains a new implementation of the lsp_interaction test suite. Soon it will replace the old one.
 use std::io;
+use std::iter::once;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -26,7 +27,6 @@ use lsp_types::Url;
 use lsp_types::notification::Exit;
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
-use pretty_assertions::assert_eq;
 use pyrefly_util::fs_anyhow::read_to_string;
 use serde_json::Value;
 
@@ -34,6 +34,16 @@ use crate::commands::lsp::IndexingMode;
 use crate::commands::lsp::LspArgs;
 use crate::commands::lsp::run_lsp;
 use crate::test::util::init_test;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationResult {
+    /// Skip this message and continue waiting
+    Skip,
+    /// Message succeeds validation
+    Pass,
+    /// Message fails validation
+    Fail,
+}
 #[derive(Default)]
 pub struct InitializeSettings {
     pub workspace_folders: Option<Vec<(String, Url)>>,
@@ -208,6 +218,37 @@ impl TestServer {
         }));
     }
 
+    pub fn inlay_hint(
+        &mut self,
+        file: &'static str,
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+    ) {
+        let path = self.get_root_or_panic().join(file);
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/inlayHint".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&path).unwrap().to_string()
+                },
+                "range": {
+                    "start": {
+                        "line": start_line,
+                        "character": start_char
+                    },
+                    "end": {
+                        "line": end_line,
+                        "character": end_char
+                    }
+                }
+            }),
+        }));
+    }
+
     pub fn send_configuration_response(&self, id: i32, result: serde_json::Value) {
         self.send_message(Message::Response(Response {
             id: RequestId::from(id),
@@ -263,6 +304,10 @@ impl TestServer {
         RequestId::from(*idx)
     }
 
+    pub fn current_request_id(&self) -> RequestId {
+        RequestId::from(*self.request_idx.lock().unwrap())
+    }
+
     fn get_root_or_panic(&self) -> PathBuf {
         self.root
             .clone()
@@ -284,49 +329,120 @@ impl TestClient {
     ) -> Self {
         Self {
             receiver,
-            timeout: Duration::from_secs(25),
+            timeout: Duration::from_secs(50),
             root: None,
             request_idx,
         }
     }
 
-    pub fn expect_message_helper<F>(&self, expected_message: Message, should_skip: F)
+    pub fn expect_message_helper<F>(&self, validator: F, description: &str)
     where
-        F: Fn(&Message) -> bool,
+        F: Fn(&Message) -> ValidationResult,
     {
         loop {
             match self.receiver.recv_timeout(self.timeout) {
                 Ok(msg) => {
                     eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
-
-                    if should_skip(&msg) {
-                        continue;
+                    match validator(&msg) {
+                        ValidationResult::Skip => continue,
+                        ValidationResult::Pass => return,
+                        ValidationResult::Fail => {
+                            panic!("Message validation failed: {description}. Message: {msg:?}");
+                        }
                     }
-
-                    let expected_str = serde_json::to_string(&expected_message).unwrap();
-                    let actual_str = serde_json::to_string(&msg).unwrap();
-
-                    assert_eq!(&expected_str, &actual_str, "Response mismatch");
-                    return;
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    panic!("Timeout waiting for response. Expected: {expected_message:?}");
+                    panic!("Timeout waiting for message: {description}");
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    panic!("Channel disconnected. Expected: {expected_message:?}");
+                    panic!("Channel disconnected while waiting for message: {description}");
                 }
             }
         }
     }
 
     pub fn expect_message(&self, expected_message: Message) {
-        self.expect_message_helper(expected_message, |_| false);
+        let expected_str = serde_json::to_string(&expected_message).unwrap();
+        self.expect_message_helper(
+            |msg| {
+                let actual_str = serde_json::to_string(msg).unwrap();
+                assert_eq!(&expected_str, &actual_str, "Response mismatch");
+                ValidationResult::Pass
+            },
+            &format!("Expected message: {expected_message:?}"),
+        );
+    }
+
+    pub fn expect_request(&self, expected_request: Request) {
+        let expected_str =
+            serde_json::to_string(&Message::Request(expected_request.clone())).unwrap();
+        self.expect_message_helper(
+            |msg| match msg {
+                Message::Notification(_) | Message::Response(_) => ValidationResult::Skip,
+                Message::Request(_) => {
+                    let actual_str = serde_json::to_string(msg).unwrap();
+                    assert_eq!(&expected_str, &actual_str, "Request mismatch");
+                    ValidationResult::Pass
+                }
+            },
+            &format!("Expected Request: {expected_request:?}"),
+        );
     }
 
     pub fn expect_response(&self, expected_response: Response) {
-        self.expect_message_helper(Message::Response(expected_response), |msg| {
-            matches!(msg, Message::Notification(_) | Message::Request(_))
-        });
+        let expected_str =
+            serde_json::to_string(&Message::Response(expected_response.clone())).unwrap();
+        self.expect_message_helper(
+            |msg| match msg {
+                Message::Notification(_) | Message::Request(_) => ValidationResult::Skip,
+                Message::Response(_) => {
+                    let actual_str = serde_json::to_string(msg).unwrap();
+                    assert_eq!(&expected_str, &actual_str, "Response mismatch");
+                    ValidationResult::Pass
+                }
+            },
+            &format!("Expected response: {expected_response:?}"),
+        );
+    }
+
+    /// Wait until we get a publishDiagnostics notification with the correct number of errors
+    pub fn expect_publish_diagnostics_error_count(&self, path: PathBuf, count: usize) {
+        self.expect_message_helper(
+            |msg| {
+                match msg {
+                    Message::Notification(Notification { method, params}) if method == "textDocument/publishDiagnostics" => {
+                        // Check if this notification is for the expected file
+                        if let Some(uri) = params.get("uri")
+                            && let Some(uri_str) = uri.as_str()
+                            && let (Ok(expected_url), Ok(actual_url)) = (Url::parse(Url::from_file_path(&path).unwrap().as_ref()), Url::parse(uri_str))
+                            && let (Ok(expected_path), Ok(actual_path)) = (expected_url.to_file_path(), actual_url.to_file_path()) {
+                                // Canonicalize both paths for comparison to handle symlinks and normalize case
+                                // This is very relevant for publish diagnostics, where the LS might send a notification for 
+                                // a file that does not exactly match the file_open message. 
+                                let expected_canonical = expected_path.canonicalize().unwrap_or(expected_path);
+                                let actual_canonical = actual_path.canonicalize().unwrap_or(actual_path);
+
+                                if expected_canonical == actual_canonical
+                                    && let Some(diagnostics) = params.get("diagnostics")
+                                    && let Some(diagnostics_array) = diagnostics.as_array() {
+                                        let actual_count = diagnostics_array.len();
+                                        if actual_count == count {
+                                            return ValidationResult::Pass;
+                                        } else {
+                                            // If the counts do not match, we continue waiting
+                                            return ValidationResult::Skip;
+                                        }
+                                    } else if expected_canonical == actual_canonical {
+                                        panic!("publishDiagnostics notification malformed: missing or invalid 'diagnostics' field");
+                                    }
+                            }
+                        ValidationResult::Skip
+                    }
+                    _ => ValidationResult::Skip
+                }
+            },
+            &format!("publishDiagnostics notification with {count} errors for file: {}", path.display()),
+        );
     }
 
     pub fn expect_definition_response_absolute(
@@ -377,34 +493,19 @@ impl TestClient {
     where
         F: Fn(&Response) -> bool,
     {
-        loop {
-            match self.receiver.recv_timeout(self.timeout) {
-                Ok(msg) => {
-                    eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
-
-                    match &msg {
-                        Message::Notification(_) | Message::Request(_) => {
-                            continue;
-                        }
-                        Message::Response(response) => {
-                            if validator(response) {
-                                return;
-                            } else {
-                                panic!(
-                                    "Response validation failed: {description}. Response: {response:?}"
-                                );
-                            }
-                        }
+        self.expect_message_helper(
+            |msg| match msg {
+                Message::Notification(_) | Message::Request(_) => ValidationResult::Skip,
+                Message::Response(response) => {
+                    if validator(response) {
+                        ValidationResult::Pass
+                    } else {
+                        ValidationResult::Fail
                     }
                 }
-                Err(RecvTimeoutError::Timeout) => {
-                    panic!("Timeout waiting for response. Expected: {description}");
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    panic!("Channel disconnected. Expected: {description}");
-                }
-            }
-        }
+            },
+            description,
+        );
     }
 
     pub fn expect_any_message(&self) {
@@ -421,22 +522,22 @@ impl TestClient {
         }
     }
 
-    pub fn expect_configuration_request(&self, id: i32, scope_uri: Option<&Url>) {
+    pub fn expect_configuration_request(&self, id: i32, scope_uris: Option<Vec<&Url>>) {
         use lsp_types::ConfigurationItem;
         use lsp_types::ConfigurationParams;
         use lsp_types::request::WorkspaceConfiguration;
 
-        let items = if let Some(uri) = scope_uri {
-            Vec::from([
-                ConfigurationItem {
+        let items = if let Some(uris) = scope_uris {
+            uris.into_iter()
+                .map(|uri| ConfigurationItem {
                     scope_uri: Some(uri.clone()),
                     section: Some("python".to_owned()),
-                },
-                ConfigurationItem {
+                })
+                .chain(once(ConfigurationItem {
                     scope_uri: None,
                     section: Some("python".to_owned()),
-                },
-            ])
+                }))
+                .collect::<Vec<_>>()
         } else {
             Vec::from([ConfigurationItem {
                 scope_uri: None,
@@ -444,13 +545,22 @@ impl TestClient {
             }])
         };
 
+        let expected_msg = Message::Request(Request {
+            id: RequestId::from(id),
+            method: WorkspaceConfiguration::METHOD.to_owned(),
+            params: serde_json::json!(ConfigurationParams { items }),
+        });
+        let expected_str = serde_json::to_string(&expected_msg).unwrap();
         self.expect_message_helper(
-            Message::Request(Request {
-                id: RequestId::from(id),
-                method: WorkspaceConfiguration::METHOD.to_owned(),
-                params: serde_json::json!(ConfigurationParams { items }),
-            }),
-            |msg| matches!(msg, Message::Notification(_)),
+            |msg| match msg {
+                Message::Notification(_) => ValidationResult::Skip,
+                _ => {
+                    let actual_str = serde_json::to_string(msg).unwrap();
+                    assert_eq!(&expected_str, &actual_str, "Configuration request mismatch");
+                    ValidationResult::Pass
+                }
+            },
+            &format!("Expected configuration request: {expected_msg:?}"),
         );
     }
 

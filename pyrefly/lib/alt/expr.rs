@@ -217,28 +217,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Check whether a type corresponds to a deprecated function or method, and if so, log a deprecation warning.
     pub fn check_for_deprecated_call(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
-        let deprecated_function = match ty {
-            Type::Function(f) if f.metadata.flags.is_deprecated => {
-                Some(f.metadata.kind.as_func_id().format(self.module().name()))
-            }
-            Type::BoundMethod(m) if m.func.metadata().flags.is_deprecated => Some(
-                m.func
-                    .metadata()
-                    .kind
-                    .as_func_id()
-                    .format(self.module().name()),
-            ),
-            Type::Overload(o) if o.metadata.flags.is_deprecated => {
-                Some(o.metadata.kind.as_func_id().format(self.module().name()))
-            }
-            _ => None,
-        };
+        if !ty.is_deprecated_function() {
+            return;
+        }
+        let deprecated_function = ty
+            .to_funcid()
+            .map(|func_id| func_id.format(self.module().name()));
         if let Some(deprecated_function) = deprecated_function {
             self.error(
                 errors,
                 range,
                 ErrorInfo::Kind(ErrorKind::Deprecated),
-                format!("`{}` is deprecated", deprecated_function),
+                format!("`{deprecated_function}` is deprecated"),
             );
         }
     }
@@ -532,7 +522,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if x.is_empty() {
                     let elem_ty = elt_hint.map_or_else(
                         || {
-                            if !self.infer_with_first_use() {
+                            if !self.solver().infer_with_first_use {
                                 Type::any_implicit()
                             } else {
                                 self.solver().fresh_contained(self.uniques).to_type()
@@ -552,7 +542,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if x.is_empty() {
                     let elem_ty = elem_hint.map_or_else(
                         || {
-                            if !self.infer_with_first_use() {
+                            if !self.solver().infer_with_first_use {
                                 Type::any_implicit()
                             } else {
                                 self.solver().fresh_contained(self.uniques).to_type()
@@ -878,7 +868,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if items.is_empty() {
             let key_ty = key_hint.map_or_else(
                 || {
-                    if !self.infer_with_first_use() {
+                    if !self.solver().infer_with_first_use {
                         Type::any_implicit()
                     } else {
                         self.solver().fresh_contained(self.uniques).to_type()
@@ -888,7 +878,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             let value_ty = value_hint.map_or_else(
                 || {
-                    if !self.infer_with_first_use() {
+                    if !self.solver().infer_with_first_use {
                         Type::any_implicit()
                     } else {
                         self.solver().fresh_contained(self.uniques).to_type()
@@ -1115,6 +1105,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     *ty = Type::type_form(Type::Tuple(Tuple::unbounded(Type::Any(
                         AnyStyle::Implicit,
                     ))));
+                } else if cls.has_toplevel_qname("typing", "Any") {
+                    *ty = Type::type_form(Type::any_explicit())
                 } else {
                     *ty = Type::type_form(self.promote(cls, range));
                 }
@@ -1658,7 +1650,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
-        if matches!(&decoratee, Type::ClassDef(cls) if cls.has_qname("typing", "TypeVar")) {
+        if matches!(&decoratee, Type::ClassDef(cls) if cls.has_toplevel_qname("typing", "TypeVar"))
+        {
             // Avoid recursion in TypeVar, which is decorated with `@final`, whose type signature
             // itself depends on a TypeVar.
             return decoratee;
@@ -1774,8 +1767,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // TODO: pyre_extensions.PyreReadOnly is a non-standard type system extension that marks read-only
                 // objects. We don't support it yet.
                 Type::ClassDef(cls)
-                    if cls.has_qname("pyre_extensions", "PyreReadOnly")
-                        || cls.has_qname("pyre_extensions", "ReadOnly") =>
+                    if cls.has_toplevel_qname("pyre_extensions", "PyreReadOnly")
+                        || cls.has_toplevel_qname("pyre_extensions", "ReadOnly") =>
                 {
                     match xs.len() {
                         1 => self.expr_infer(&xs[0], errors),

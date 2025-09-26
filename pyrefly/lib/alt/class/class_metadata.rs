@@ -233,6 +233,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let is_final = decorators.iter().any(|(decorator, _)| {
             decorator.ty().callee_kind() == Some(CalleeKind::Function(FunctionKind::Final))
         });
+        let is_deprecated = decorators.iter().any(|(decorator, _)| {
+             matches!(decorator.ty(), Type::ClassType(cls) if cls.has_qname("warnings", "deprecated"))
+        });
 
         let total_ordering_metadata = decorators.iter().find_map(|(decorator, decorator_range)| {
             decorator.ty().callee_kind().and_then(|kind| {
@@ -341,6 +344,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_final,
             inherits_from_abc,
             abstract_methods,
+            is_deprecated,
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
@@ -425,7 +429,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bases_with_metadata
             .iter()
             .find_map(|(base_class_object, metadata)| {
-                if base_class_object.has_qname(
+                if base_class_object.has_toplevel_qname(
                     ModuleName::type_checker_internals().as_str(),
                     "NamedTupleFallback",
                 ) {
@@ -435,6 +439,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     metadata.named_tuple_metadata().cloned()
                 }
+            })
+    }
+
+    fn extract_validate_flag(
+        &self,
+        keywords: &[(Name, Annotation)],
+        key: &Name,
+        default: bool,
+    ) -> bool {
+        keywords
+            .iter()
+            .find(|(name, _)| name == key)
+            .map_or(default, |(_, ann)| {
+                ann.get_type().as_bool().unwrap_or(default)
             })
     }
 
@@ -448,7 +466,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<PydanticMetadata> {
         let has_pydantic_base_model_base_class =
             bases_with_metadata.iter().any(|(base_class_object, _)| {
-                base_class_object.has_qname(ModuleName::pydantic().as_str(), "BaseModel")
+                base_class_object.has_toplevel_qname(ModuleName::pydantic().as_str(), "BaseModel")
             });
 
         let is_pydantic_base_model = has_pydantic_base_model_base_class
@@ -462,7 +480,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let has_pydantic_root_model_base_class =
             bases_with_metadata.iter().any(|(base_class_object, _)| {
-                base_class_object.has_qname(ModuleName::pydantic_root_model().as_str(), "RootModel")
+                base_class_object
+                    .has_toplevel_qname(ModuleName::pydantic_root_model().as_str(), "RootModel")
             });
 
         let has_root_model_kind = bases_with_metadata.iter().any(|(_, metadata)| {
@@ -487,21 +506,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Note: class keywords take precedence over ConfigDict keywords.
         // But another design choice is to error if there is a conflict. We can consider this design for v2.
-        // Extract validate_by_alias & validate_by_name
-        // TODO: Rename variable to validate_by_alias and refactor the code snippets below since they are quite similar.
-        let class_validate_by_alias = keywords
-            .iter()
-            .find(|(name, _)| name == &VALIDATE_BY_ALIAS)
-            .map_or(*validate_by_alias, |(_, ann)| {
-                ann.get_type().as_bool().unwrap_or(*validate_by_alias)
-            });
-
-        let validate_by_name = keywords
-            .iter()
-            .find(|(name, _)| name == &VALIDATE_BY_NAME)
-            .map_or(*validate_by_name, |(_, ann)| {
-                ann.get_type().as_bool().unwrap_or(*validate_by_name)
-            });
+        let validate_by_alias =
+            self.extract_validate_flag(keywords, &VALIDATE_BY_ALIAS, *validate_by_alias);
+        let validate_by_name =
+            self.extract_validate_flag(keywords, &VALIDATE_BY_NAME, *validate_by_name);
 
         // Here, "ignore" and "allow" translate to true, while "forbid" translates to false.
         // With no keyword, the default is "true" and I default to "false" on a wrong keyword.
@@ -561,7 +569,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         Some(PydanticMetadata {
             frozen: *frozen,
-            class_validate_by_alias,
+            validate_by_alias,
             validate_by_name,
             extra,
             pydantic_model_kind,
@@ -732,6 +740,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
         errors: &ErrorCollector,
     ) -> Option<EnumMetadata> {
+        let is_django = bases_with_metadata.iter().any(|(base, base_meta)| {
+            base.has_toplevel_qname(ModuleName::django_models_enums().as_str(), "Choices")
+                || base_meta
+                    .enum_metadata()
+                    .as_ref()
+                    .is_some_and(|meta| meta.is_django)
+        });
+
         if let Some(metaclass) = metaclass
             && self
                 .as_superclass(metaclass, self.stdlib.enum_meta().class_object())
@@ -759,6 +775,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &Type::ClassType(self.stdlib.enum_flag().clone()),
                     )
                 }),
+                is_django,
             })
         } else {
             None
@@ -871,7 +888,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             },
             |pyd| ClassValidationFlags {
                 validate_by_name: pyd.validate_by_name,
-                validate_by_alias: pyd.class_validate_by_alias,
+                validate_by_alias: pyd.validate_by_alias,
             },
         );
 
@@ -1185,10 +1202,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let metaclass_type = Type::ClassType(metaclass.clone());
         for (base_name, m) in base_metaclasses {
             let base_metaclass_type = Type::ClassType((*m).clone());
-            if !self
-                .solver()
-                .is_subset_eq(&metaclass_type, &base_metaclass_type, self.type_order())
-            {
+            if !self.is_subset_eq(&metaclass_type, &base_metaclass_type) {
                 self.error(errors,
                     cls.range(),
                     ErrorInfo::Kind(ErrorKind::InvalidInheritance),

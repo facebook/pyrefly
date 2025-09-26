@@ -8,6 +8,43 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+// Test case for various edge cases where a name isn't in the flow, and we might
+// or might not decide an attribute has been defined.
+testcase!(
+    test_semantics_for_when_class_body_defines_attributes,
+    r#"
+from typing import assert_type, Any
+def condition() -> bool: ...
+class A:
+    # Annotated with no value
+    b: int
+    # Annotated twice with no value
+    c: str
+    c: str
+    # Defined in conditional control flow, with and without annotation
+    if condition():
+        d = 42
+        e: int = 42
+    # Defined (with or without annotation) but only in terminating control flow
+    if condition():
+        f = 42
+        g: int = 42
+        exit()
+    h = 42
+    i: int = 42
+    del h
+    del i
+assert_type(A.b, int)
+assert_type(A.c, str)
+assert_type(A.d, int)
+assert_type(A.e, int)
+assert_type(A.f, Any)  # E: Class `A` has no class attribute `f`
+assert_type(A.g, Any)  # E: Class `A` has no class attribute `g`
+assert_type(A.h, int)
+assert_type(A.i, int)
+    "#,
+);
+
 testcase!(
     test_set_attribute,
     r#"
@@ -1605,7 +1642,15 @@ def get_type_t[T]() -> type[T]:
     return cast(type[T], 0)
 def foo[T](x: type[T]):
     # mypy reveals the same thing we do (the type of `type.__new__`), while pyright reveals `Unknown`.
-    reveal_type(get_type_t().__new__)  # E: Overload[(cls: type[type], o: object, /) -> type, (cls: type[TypeVar[Self]], name: str, bases: tuple[type, ...], namespace: dict[str, Any], /, **kwds: Any) -> TypeVar[Self]]
+    reveal_type(get_type_t().__new__)  # E: Overload[(cls: type[type], o: object, /) -> type, [Self](cls: type[Self], name: str, bases: tuple[type, ...], namespace: dict[str, Any], /, **kwds: Any) -> Self]
+    "#,
+);
+
+testcase!(
+    test_any_value_lookup,
+    r#"
+from typing import Any
+Any.foo.bar # E: Class `Any` has no class attribute `foo`
     "#,
 );
 

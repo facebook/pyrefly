@@ -62,7 +62,7 @@ describe('Home page', () => {
     function expectHeaderAndTitleIsCorrect(container: HTMLElement) {
         // Verify that title is set correctly
         expect(document.title).toBe(
-            'Pyrefly: A Static Type Checker for Python'
+            'Pyrefly: A Fast Python Type Checker and Language Server'
         );
 
         // Verify that fireflies are present
@@ -85,7 +85,7 @@ describe('Home page', () => {
         expect(subtitle).toBeInTheDocument();
         const subtitleText = subtitle?.textContent?.trim();
         expect(subtitleText).toBe(
-            'A fast Python type checker written in Rust'
+            'A fast type checker and language server for Python with powerful IDE features'
         );
     }
 });

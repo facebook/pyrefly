@@ -20,6 +20,16 @@ def g(a: list[str], b: list[int]) -> None:
 );
 
 testcase!(
+    test_first_use_reads_name_twice_narrowing,
+    r#"
+from typing import reveal_type
+def test(x: list[int]) -> tuple[list[int], int]:
+    y = x
+    return (y, 0 if 0 in reveal_type(y) else 1)  # E: revealed type: list[int]
+"#,
+);
+
+testcase!(
     test_empty_list_class,
     r#"
 from typing import assert_type, Any

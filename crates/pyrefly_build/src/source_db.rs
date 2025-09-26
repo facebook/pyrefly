@@ -5,7 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::ffi::OsStr;
 use std::fmt;
+use std::path::Path;
+use std::path::PathBuf;
 
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
@@ -14,6 +17,7 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
+use starlark_map::small_set::SmallSet;
 use static_interner::Intern;
 use static_interner::Interner;
 
@@ -47,9 +51,12 @@ impl fmt::Display for Target {
 }
 
 impl Target {
-    #[allow(unused)]
     pub fn from_string(x: String) -> Self {
         Target(TARGET_INTERNER.intern(x))
+    }
+
+    pub fn to_os_str(&self) -> &OsStr {
+        OsStr::new(self.0.as_str())
     }
 }
 
@@ -57,6 +64,18 @@ impl Target {
 /// should understand the relationship between targets and importable qualified
 /// paths to the files contained in the build system.
 pub trait SourceDatabase: Send + Sync + fmt::Debug {
+    /// Get the Handles for modules that should be checked. Used when targets are
+    /// specified with the sourcedb.
     fn modules_to_check(&self) -> Vec<Handle>;
-    fn lookup(&self, module: &ModuleName, origin: Option<&Handle>) -> Option<ModulePath>;
+    /// Find the given module in the sourcedb, given the module it's originating from.
+    fn lookup(&self, module: &ModuleName, origin: Option<&Path>) -> Option<ModulePath>;
+    /// Get the handle for the given module path, including its Python platform and version
+    /// settings.
+    fn handle_from_module_path(&self, module_path: ModulePath) -> Option<Handle>;
+    /// Requeries this sourcedb if the set of files provided differs from the files
+    /// previously queried for. This is a blocking operation.
+    /// Returns `Err` if the shellout to the build system failed
+    /// The resulting bool represents whether find caches
+    /// related to this sourcedb should be invalidated.
+    fn requery_source_db(&self, files: SmallSet<PathBuf>) -> anyhow::Result<bool>;
 }

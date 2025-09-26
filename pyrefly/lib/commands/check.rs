@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Display;
@@ -24,21 +23,25 @@ use anstream::stdout;
 use anyhow::Context as _;
 use clap::Parser;
 use clap::ValueEnum;
-use dupe::Dupe;
+use dupe::Dupe as _;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::args::ConfigOverrideArgs;
+use pyrefly_config::config::ConfigFile;
+use pyrefly_config::finder::ConfigError;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_python::sys_info::SysInfo;
+use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::display;
 use pyrefly_util::display::count;
 use pyrefly_util::display::number_thousands;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
-use pyrefly_util::globs::FilteredGlobs;
+use pyrefly_util::includes::Includes;
 use pyrefly_util::memory::MemoryUsageTrace;
 use pyrefly_util::watcher::Watcher;
+use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::info;
 
@@ -51,7 +54,6 @@ use crate::error::error::print_error_counts;
 use crate::error::legacy::LegacyErrors;
 use crate::error::summarise::print_error_summary;
 use crate::error::suppress;
-use crate::module::from_path::module_from_path;
 use crate::module::typeshed::stdlib_search_path;
 use crate::report;
 use crate::state::require::Require;
@@ -68,6 +70,7 @@ pub struct FullCheckArgs {
     pub files: FilesArgs,
 
     /// Watch for file changes and re-check them.
+    /// (Warning: This mode is highly experimental!)
     #[arg(long, conflicts_with = "check_all")]
     watch: bool,
 
@@ -87,7 +90,7 @@ impl FullCheckArgs {
 async fn run_check(
     args: CheckArgs,
     watch: bool,
-    files_to_check: FilteredGlobs,
+    files_to_check: Box<dyn Includes>,
     config_finder: ConfigFinder,
 ) -> anyhow::Result<CommandExitStatus> {
     if watch {
@@ -168,6 +171,7 @@ impl SnippetCheckArgs {
                 suppress_errors: false,
                 expectations: false,
                 remove_unused_ignores: false,
+                all: false,
             },
             config_override: self.config_override,
         };
@@ -239,10 +243,10 @@ struct OutputArgs {
     )]
     summary: Summary,
 
-    /// Omit the summary in the last line of the output.
-    /// Deprecated: will be removed in the next release. Use `--summary=none` instead.
+    /// When specified, strip this prefix from any paths in the output.
+    /// Pass "" to show absolute paths. When omitted, we will use the current working directory.
     #[arg(long)]
-    no_summary: bool,
+    relative_to: Option<String>,
 }
 
 #[derive(Clone, Debug, ValueEnum, Default, PartialEq, Eq)]
@@ -269,69 +273,94 @@ struct BehaviorArgs {
     /// Remove unused ignores from the input files.
     #[arg(long)]
     remove_unused_ignores: bool,
+    /// If we are removing unused ignores, should we remove all unsused ignores or only Pyre-fly specific `pyrefly: ignore`s?
+    #[arg(long, requires("remove_unused_ignores"))]
+    all: bool,
 }
 
 impl OutputFormat {
     fn write_error_text_to_file(
         path: &Path,
+        relative_to: &Path,
         errors: &[Error],
         verbose: bool,
     ) -> anyhow::Result<()> {
         let mut file = BufWriter::new(File::create(path)?);
         for e in errors {
-            e.write_line(&mut file, verbose)?;
+            e.write_line(&mut file, relative_to, verbose)?;
         }
         file.flush()?;
         Ok(())
     }
 
-    fn write_error_text_to_console(errors: &[Error], verbose: bool) -> anyhow::Result<()> {
+    fn write_error_text_to_console(
+        relative_to: &Path,
+        errors: &[Error],
+        verbose: bool,
+    ) -> anyhow::Result<()> {
         for error in errors {
-            error.print_colors(verbose);
+            error.print_colors(relative_to, verbose);
         }
         Ok(())
     }
 
-    fn write_error_json(writer: &mut impl Write, errors: &[Error]) -> anyhow::Result<()> {
-        let legacy_errors = LegacyErrors::from_errors(errors);
+    fn write_error_json(
+        writer: &mut impl Write,
+        relative_to: &Path,
+        errors: &[Error],
+    ) -> anyhow::Result<()> {
+        let legacy_errors = LegacyErrors::from_errors(relative_to, errors);
         serde_json::to_writer_pretty(writer, &legacy_errors)?;
         Ok(())
     }
 
-    fn buffered_write_error_json(writer: impl Write, errors: &[Error]) -> anyhow::Result<()> {
+    fn buffered_write_error_json(
+        writer: impl Write,
+        relative_to: &Path,
+        errors: &[Error],
+    ) -> anyhow::Result<()> {
         let mut writer = BufWriter::new(writer);
-        Self::write_error_json(&mut writer, errors)?;
+        Self::write_error_json(&mut writer, relative_to, errors)?;
         writer.flush()?;
         Ok(())
     }
 
-    fn write_error_json_to_file(path: &Path, errors: &[Error]) -> anyhow::Result<()> {
-        fn f(path: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    fn write_error_json_to_file(
+        path: &Path,
+        relative_to: &Path,
+        errors: &[Error],
+    ) -> anyhow::Result<()> {
+        fn f(path: &Path, relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
             let file = File::create(path)?;
-            OutputFormat::buffered_write_error_json(file, errors)
+            OutputFormat::buffered_write_error_json(file, relative_to, errors)
         }
-        f(path, errors)
+        f(path, relative_to, errors)
             .with_context(|| format!("while writing JSON errors to `{}`", path.display()))
     }
 
-    fn write_error_json_to_console(errors: &[Error]) -> anyhow::Result<()> {
-        Self::buffered_write_error_json(stdout(), errors)
+    fn write_error_json_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+        Self::buffered_write_error_json(stdout(), relative_to, errors)
     }
 
-    fn write_errors_to_file(&self, path: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    fn write_errors_to_file(
+        &self,
+        path: &Path,
+        relative_to: &Path,
+        errors: &[Error],
+    ) -> anyhow::Result<()> {
         match self {
-            Self::MinText => Self::write_error_text_to_file(path, errors, false),
-            Self::FullText => Self::write_error_text_to_file(path, errors, true),
-            Self::Json => Self::write_error_json_to_file(path, errors),
+            Self::MinText => Self::write_error_text_to_file(path, relative_to, errors, false),
+            Self::FullText => Self::write_error_text_to_file(path, relative_to, errors, true),
+            Self::Json => Self::write_error_json_to_file(path, relative_to, errors),
             Self::OmitErrors => Ok(()),
         }
     }
 
-    fn write_errors_to_console(&self, errors: &[Error]) -> anyhow::Result<()> {
+    fn write_errors_to_console(&self, relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
         match self {
-            Self::MinText => Self::write_error_text_to_console(errors, false),
-            Self::FullText => Self::write_error_text_to_console(errors, true),
-            Self::Json => Self::write_error_json_to_console(errors),
+            Self::MinText => Self::write_error_text_to_console(relative_to, errors, false),
+            Self::FullText => Self::write_error_text_to_console(relative_to, errors, true),
+            Self::Json => Self::write_error_json_to_console(relative_to, errors),
             Self::OmitErrors => Ok(()),
         }
     }
@@ -341,61 +370,65 @@ impl OutputFormat {
 pub struct Handles {
     /// A mapping from a file to all other information needed to create a `Handle`.
     /// The value type is basically everything else in `Handle` except for the file path.
-    path_data: HashMap<PathBuf, (ModuleName, SysInfo)>,
+    path_data: HashSet<ModulePath>,
 }
 
 impl Handles {
-    pub fn new(files: Vec<PathBuf>, config_finder: &ConfigFinder) -> Self {
+    pub fn new(files: Vec<PathBuf>) -> Self {
         let mut handles = Self {
-            path_data: HashMap::new(),
+            path_data: HashSet::new(),
         };
         for file in files {
-            handles.register_file(file, config_finder);
+            handles.path_data.insert(ModulePath::filesystem(file));
         }
         handles
     }
 
-    fn register_file(
-        &mut self,
-        path: PathBuf,
+    pub fn all(
+        &self,
         config_finder: &ConfigFinder,
-    ) -> &(ModuleName, SysInfo) {
-        let module_path = ModulePath::filesystem(path.clone());
-        let unknown = ModuleName::unknown();
-        let config = config_finder.python_file(unknown, &module_path);
+    ) -> (Vec<Handle>, SmallSet<ArcId<ConfigFile>>, Vec<ConfigError>) {
+        let mut configs = SmallMap::new();
+        for path in &self.path_data {
+            let unknown = ModuleName::unknown();
+            configs
+                .entry(config_finder.python_file(unknown, path))
+                .or_insert_with(SmallSet::new)
+                .insert(path.dupe());
+        }
 
-        let search_path = config.search_path();
-        let module_name = module_from_path(&path, search_path).unwrap_or(unknown);
-
-        self.path_data
-            .entry(path)
-            .or_insert((module_name, config.get_sys_info()))
-    }
-
-    pub fn all(&self) -> Vec<Handle> {
-        self.path_data
+        let mut errors = Vec::new();
+        let mut reloaded_configs = SmallSet::new();
+        for (config, files) in &configs {
+            match config.requery_source_db(files) {
+                Ok(reload) if reload => {
+                    reloaded_configs.insert(config.dupe());
+                }
+                Err(error) => {
+                    errors.push(ConfigError::error(error));
+                }
+                _ => (),
+            }
+        }
+        let result = configs
             .iter()
-            .map(|(path, (module_name, runtime_metadata))| {
-                Handle::new(
-                    module_name.dupe(),
-                    ModulePath::filesystem(path.to_path_buf()),
-                    runtime_metadata.dupe(),
-                )
-            })
-            .collect()
+            .flat_map(|(c, files)| files.iter().map(|p| c.handle_from_module_path(p.dupe())))
+            .collect();
+        (result, reloaded_configs, errors)
     }
 
     fn update<'a>(
         &mut self,
         created_files: impl Iterator<Item = &'a PathBuf>,
         removed_files: impl Iterator<Item = &'a PathBuf>,
-        config_finder: &ConfigFinder,
     ) {
         for file in created_files {
-            self.register_file(file.to_path_buf(), config_finder);
+            self.path_data
+                .insert(ModulePath::filesystem(file.to_path_buf()));
         }
         for file in removed_files {
-            self.path_data.remove(file);
+            self.path_data
+                .remove(&ModulePath::filesystem(file.to_path_buf()));
         }
     }
 }
@@ -486,7 +519,7 @@ impl Timings {
 impl CheckArgs {
     pub fn run_once(
         self,
-        files_to_check: FilteredGlobs,
+        files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
         let mut timings = Timings::new();
@@ -503,7 +536,7 @@ impl CheckArgs {
         }
 
         let holder = Forgetter::new(State::new(config_finder), true);
-        let handles = Handles::new(expanded_file_list, holder.as_ref().config_finder());
+        let handles = Handles::new(expanded_file_list);
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
             holder
@@ -511,10 +544,12 @@ impl CheckArgs {
                 .new_transaction(require_levels.default, None),
             true,
         );
+        let (loaded_handles, _, sourcedb_errors) = handles.all(holder.as_ref().config_finder());
         self.run_inner(
             timings,
             transaction.as_mut(),
-            &handles.all(),
+            &loaded_handles,
+            sourcedb_errors,
             require_levels.specified,
         )
     }
@@ -557,6 +592,7 @@ impl CheckArgs {
             Timings::new(),
             transaction.as_mut(),
             &[handle],
+            vec![],
             require_levels.specified,
         )
     }
@@ -564,22 +600,27 @@ impl CheckArgs {
     pub async fn run_watch(
         self,
         mut watcher: Watcher,
-        files_to_check: FilteredGlobs,
+        files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
     ) -> anyhow::Result<()> {
         // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:
         // - Config search is stable across incremental runs.
         let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
         let require_levels = self.get_required_levels();
-        let mut handles = Handles::new(expanded_file_list, &config_finder);
+        let mut handles = Handles::new(expanded_file_list);
         let state = State::new(config_finder);
         let mut transaction = state.new_committable_transaction(require_levels.default, None);
         loop {
             let timings = Timings::new();
+            let (loaded_handles, reloaded_configs, sourcedb_errors) =
+                handles.all(state.config_finder());
+            let mut_transaction = transaction.as_mut();
+            mut_transaction.invalidate_find_for_configs(reloaded_configs);
             let res = self.run_inner(
                 timings,
-                transaction.as_mut(),
-                &handles.all(),
+                mut_transaction,
+                &loaded_handles,
+                sourcedb_errors,
                 require_levels.specified,
             );
             state.commit_transaction(transaction);
@@ -598,7 +639,6 @@ impl CheckArgs {
             handles.update(
                 events.created.iter().filter(|p| files_to_check.covers(p)),
                 events.removed.iter().filter(|p| files_to_check.covers(p)),
-                state.config_finder(),
             );
         }
     }
@@ -630,6 +670,7 @@ impl CheckArgs {
         mut timings: Timings,
         transaction: &mut Transaction,
         handles: &[Handle],
+        mut sourcedb_errors: Vec<ConfigError>,
         require: Require,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
         let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
@@ -647,21 +688,29 @@ impl CheckArgs {
         timings.type_check = type_check_start.elapsed();
 
         let report_errors_start = Instant::now();
-        let config_errors = transaction.get_config_errors();
+        let mut config_errors = transaction.get_config_errors();
+        config_errors.append(&mut sourcedb_errors);
         let config_errors_count = config_errors.len();
         for error in config_errors {
             error.print();
         }
 
+        let relative_to = self.output.relative_to.as_ref().map_or_else(
+            || std::env::current_dir().ok().unwrap_or_default(),
+            |x| PathBuf::from_str(x.as_str()).unwrap(),
+        );
+
         let errors = loads.collect_errors();
         if let Some(path) = &self.output.output {
-            self.output
-                .output_format
-                .write_errors_to_file(path, &errors.shown)?;
+            self.output.output_format.write_errors_to_file(
+                path,
+                relative_to.as_path(),
+                &errors.shown,
+            )?;
         } else {
             self.output
                 .output_format
-                .write_errors_to_console(&errors.shown)?;
+                .write_errors_to_console(relative_to.as_path(), &errors.shown)?;
         }
         memory_trace.stop();
         if let Some(limit) = self.output.count_errors {
@@ -678,7 +727,7 @@ impl CheckArgs {
         }
         timings.report_errors = report_errors_start.elapsed();
 
-        if self.output.summary != Summary::None && !self.output.no_summary {
+        if self.output.summary != Summary::None {
             let ignored = errors.disabled.len() + errors.suppressed.len();
             if ignored == 0 {
                 info!("{}", count(shown_errors_count, "error"))
@@ -744,7 +793,7 @@ impl CheckArgs {
             suppress::suppress_errors(errors.shown.clone());
         }
         if self.behavior.remove_unused_ignores {
-            suppress::remove_unused_ignores(&loads);
+            suppress::remove_unused_ignores(&loads, self.behavior.all);
         }
         if self.behavior.expectations {
             loads.check_against_expectations()?;

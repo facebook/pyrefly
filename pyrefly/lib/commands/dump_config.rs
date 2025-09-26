@@ -5,6 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fmt::Display;
+use std::str::FromStr;
+
 use clap::Parser;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_python::module_path::ModulePath;
@@ -18,10 +21,59 @@ use crate::commands::util::CommandExitStatus;
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
 
+#[derive(Debug, Clone)]
+enum MaxFiles {
+    All,
+    Count(usize),
+}
+
+impl MaxFiles {
+    fn should_print(&self, iteration: usize) -> bool {
+        match self {
+            Self::All => true,
+            Self::Count(count) => iteration < *count,
+        }
+    }
+
+    fn remaining(&self, total: usize) -> usize {
+        match self {
+            Self::All => 0,
+            Self::Count(count) => total - *count,
+        }
+    }
+}
+
+impl FromStr for MaxFiles {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.to_lowercase() == "all" {
+            Ok(Self::All)
+        } else if let Ok(count) = usize::from_str(s) {
+            Ok(Self::Count(count))
+        } else {
+            Err("expected `all` or positive integer")
+        }
+    }
+}
+
+impl Display for MaxFiles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::All => write!(f, "all"),
+            Self::Count(count) => write!(f, "{count}"),
+        }
+    }
+}
+
 // We intentionally make DumpConfig take the same arguments as Check so that dumping the
 // config is as easy as changing the command name.
 #[derive(Debug, Clone, Parser)]
 pub struct DumpConfigArgs {
+    /// When running `dump-config`, the number of files covered by the found
+    /// config(s) to print. Pass "all" to output all files.
+    #[arg(long, default_value_t = MaxFiles::Count(10))]
+    max_files: MaxFiles,
     #[command(flatten)]
     args: FullCheckArgs,
 }
@@ -29,23 +81,28 @@ pub struct DumpConfigArgs {
 impl DumpConfigArgs {
     pub fn run(self) -> anyhow::Result<CommandExitStatus> {
         // Pass on just the subset of args we use, the rest are irrelevant
-        dump_config(self.args.files, self.args.args.config_override)
+        dump_config(
+            self.args.files,
+            self.args.args.config_override,
+            self.max_files,
+        )
     }
 }
 
 fn dump_config(
     files: FilesArgs,
     config_override: ConfigOverrideArgs,
+    max_files: MaxFiles,
 ) -> anyhow::Result<CommandExitStatus> {
     config_override.validate()?;
     let (files_to_check, config_finder) = files.resolve(&config_override)?;
 
     let mut configs_to_files: SmallMap<ArcId<ConfigFile>, Vec<ModulePath>> = SmallMap::new();
-    let handles = Handles::new(
-        config_finder.checkpoint(files_to_check.files())?,
-        &config_finder,
-    );
-    let mut handles = handles.all();
+    let handles = Handles::new(config_finder.checkpoint(files_to_check.files())?);
+    let (mut handles, _, sourcedb_errors) = handles.all(&config_finder);
+    for error in sourcedb_errors {
+        error.print();
+    }
     handles.sort_by(|a, b| a.path().cmp(b.path()));
     for handle in handles {
         let path = handle.path();
@@ -76,10 +133,10 @@ fn dump_config(
         println!("  Using interpreter: {}", config.interpreters);
         println!("  Covered files:");
         for (i, fi) in files.iter().enumerate() {
-            if i < 10 {
+            if max_files.should_print(i) {
                 println!("    {fi}");
             } else {
-                println!("    ...and {} more", files.len() - 10);
+                println!("    ...and {} more", max_files.remaining(files.len()));
                 break;
             }
         }

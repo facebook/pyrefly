@@ -31,7 +31,8 @@ use crate::types::types::Type;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_named_tuple_elements(&self, cls: &Class, errors: &ErrorCollector) -> SmallSet<Name> {
-        let mut elements = Vec::new();
+        let fields_count = cls.fields().len();
+        let mut elements = Vec::with_capacity(fields_count);
         for name in cls.fields() {
             if !cls.is_field_annotated(name) {
                 continue;

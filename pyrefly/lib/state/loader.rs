@@ -9,7 +9,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use dupe::Dupe;
-use pyrefly_build::handle::Handle;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModuleStyle;
@@ -96,9 +95,9 @@ impl FindError {
 #[derive(Debug)]
 pub struct LoaderFindCache {
     config: ArcId<ConfigFile>,
-    cache: LockedMap<ModuleName, Result<ModulePath, FindError>>,
+    cache: LockedMap<(ModuleName, Option<ModulePath>), Result<ModulePath, FindError>>,
     // If a python executable module (excludes .pyi) exists and differs from the imported python module, store it here
-    executable_cache: LockedMap<ModuleName, Option<ModulePath>>,
+    executable_cache: LockedMap<(ModuleName, Option<ModulePath>), Option<ModulePath>>,
 }
 
 impl LoaderFindCache {
@@ -113,9 +112,10 @@ impl LoaderFindCache {
     pub fn find_import_prefer_executable(
         &self,
         module: ModuleName,
-        origin: Option<&Handle>,
+        origin: Option<&ModulePath>,
     ) -> Result<ModulePath, FindError> {
-        match self.executable_cache.get(&module) {
+        let key = (module.dupe(), origin.cloned());
+        match self.executable_cache.get(&key) {
             Some(Some(module)) => Ok(module.dupe()),
             Some(None) => self.find_import(module, origin),
             None => {
@@ -126,11 +126,11 @@ impl LoaderFindCache {
                     Some(ModuleStyle::Executable),
                 ) {
                     Ok(import) => {
-                        self.executable_cache.insert(module, Some(import.dupe()));
+                        self.executable_cache.insert(key, Some(import.dupe()));
                         Ok(import)
                     }
                     Err(_) => {
-                        self.executable_cache.insert(module, None);
+                        self.executable_cache.insert(key, None);
                         self.find_import(module, origin)
                     }
                 }
@@ -141,10 +141,12 @@ impl LoaderFindCache {
     pub fn find_import(
         &self,
         module: ModuleName,
-        origin: Option<&Handle>,
+        origin: Option<&ModulePath>,
     ) -> Result<ModulePath, FindError> {
         self.cache
-            .ensure(&module, || find_import(&self.config, module, origin))
+            .ensure(&(module.dupe(), origin.cloned()), || {
+                find_import(&self.config, module, origin)
+            })
             .dupe()
     }
 }

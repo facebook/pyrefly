@@ -8,7 +8,7 @@
 //! Originally copied from <https://crates.io/crates/gazebo>.
 //! Provide `map` and `try_map` methods for slices.
 
-/// Optimised collect iterator into Vec, which might be a Result.
+/// Optimized collect iterator into Vec, which might be a Result.
 ///
 /// If we do a standard .collect() on the iterator it will never have a good size hint,
 /// as the lower bound will always be zero, so might reallocate several times.

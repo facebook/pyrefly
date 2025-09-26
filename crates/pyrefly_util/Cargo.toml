@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_util"
-version = "0.32.0"
+version = "0.34.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -43,7 +43,7 @@ yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
 [dev-dependencies]
 pyrefly_derive = { path = "../pyrefly_derive" }
 static_assertions = "1.1.0"
-tempfile = "3.15"
+tempfile = "3.22"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 watchman_client = "0.9.0"

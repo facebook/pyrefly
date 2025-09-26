@@ -23,6 +23,7 @@ use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::solver::solver::Subset;
+use crate::solver::solver::SubsetError;
 use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
@@ -44,9 +45,42 @@ enum TypedDictFieldId {
     ExtraItems,
 }
 
+fn ok_or(b: bool, e: SubsetError) -> Result<(), SubsetError> {
+    b.then_some(()).ok_or(e)
+}
+
+fn all<T>(
+    it: impl Iterator<Item = T>,
+    mut check: impl FnMut(T) -> Result<(), SubsetError>,
+) -> Result<(), SubsetError> {
+    for x in it {
+        check(x)?;
+    }
+    Ok(())
+}
+
+fn any<T>(
+    it: impl Iterator<Item = T>,
+    mut check: impl FnMut(T) -> Result<(), SubsetError>,
+) -> Result<(), SubsetError> {
+    let mut err = None;
+    for x in it {
+        match check(x) {
+            Ok(()) => return Ok(()),
+            Err(e) if err.is_none() => err = Some(e),
+            Err(_) => {}
+        }
+    }
+    Err(err.unwrap_or(SubsetError::Other))
+}
+
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     /// Can a function with l_args be called as a function with u_args?
-    fn is_subset_param_list(&mut self, l_args: &[Param], u_args: &[Param]) -> bool {
+    fn is_subset_param_list(
+        &mut self,
+        l_args: &[Param],
+        u_args: &[Param],
+    ) -> Result<(), SubsetError> {
         let mut l_args = l_args.iter();
         let mut u_args = u_args.iter();
         let mut l_arg = l_args.next();
@@ -59,7 +93,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             match (l_arg, u_arg) {
                 (None, None) => {
                     if u_param_matched_with_l_varargs.is_empty() {
-                        return true;
+                        return Ok(());
                     } else {
                         // We can't return early since we need to check that the matched params from `u`
                         // can be called by name.
@@ -70,31 +104,23 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     Some(Param::PosOnly(_, l, l_req) | Param::Pos(_, l, l_req)),
                     Some(Param::PosOnly(_, u, u_req)),
                 ) if (*u_req == Required::Required || matches!(l_req, Required::Optional(_))) => {
-                    if self.is_subset_eq(u, l) {
-                        l_arg = l_args.next();
-                        u_arg = u_args.next();
-                    } else {
-                        return false;
-                    }
+                    self.is_subset_eq(u, l)?;
+                    l_arg = l_args.next();
+                    u_arg = u_args.next();
                 }
                 (Some(Param::Pos(l_name, l, l_req)), Some(Param::Pos(u_name, u, u_req)))
-                    if l_name == u_name
-                        && (*u_req == Required::Required
-                            || matches!(l_req, Required::Optional(_))) =>
+                    if *u_req == Required::Required || matches!(l_req, Required::Optional(_)) =>
                 {
-                    if self.is_subset_eq(u, l) {
-                        l_arg = l_args.next();
-                        u_arg = u_args.next();
-                    } else {
-                        return false;
+                    if l_name != u_name {
+                        return Err(SubsetError::PosParamName(l_name.clone(), u_name.clone()));
                     }
+                    self.is_subset_eq(u, l)?;
+                    l_arg = l_args.next();
+                    u_arg = u_args.next();
                 }
                 (Some(Param::VarArg(_, Type::Unpack(l))), None) => {
-                    if self.is_subset_eq(&Type::tuple(Vec::new()), l) {
-                        l_arg = l_args.next();
-                    } else {
-                        return false;
-                    }
+                    self.is_subset_eq(&Type::tuple(Vec::new()), l)?;
+                    l_arg = l_args.next();
                 }
                 (
                     Some(
@@ -125,36 +151,29 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             u_types.push(u.clone());
                             u_arg = u_args.next();
                         } else if let Some(Param::VarArg(_, Type::Unpack(u))) = u_arg {
-                            if self.is_subset_eq(
+                            self.is_subset_eq(
                                 &Type::Tuple(Tuple::unpacked(u_types, (**u).clone(), Vec::new())),
                                 l,
-                            ) {
-                                l_arg = l_args.next();
-                                u_arg = u_args.next();
-                                break;
-                            } else {
-                                return false;
-                            }
+                            )?;
+                            l_arg = l_args.next();
+                            u_arg = u_args.next();
+                            break;
                         } else if let Some(Param::VarArg(_, u)) = u_arg {
-                            if self.is_subset_eq(
+                            self.is_subset_eq(
                                 &Type::Tuple(Tuple::unpacked(
                                     u_types,
                                     Type::Tuple(Tuple::unbounded(u.clone())),
                                     Vec::new(),
                                 )),
                                 l,
-                            ) {
-                                l_arg = l_args.next();
-                                u_arg = u_args.next();
-                                break;
-                            } else {
-                                return false;
-                            }
-                        } else if self.is_subset_eq(&Type::tuple(u_types), l) {
+                            )?;
                             l_arg = l_args.next();
+                            u_arg = u_args.next();
                             break;
                         } else {
-                            return false;
+                            self.is_subset_eq(&Type::tuple(u_types), l)?;
+                            l_arg = l_args.next();
+                            break;
                         }
                     }
                 }
@@ -168,99 +187,74 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             l_types.push(l.clone());
                             l_arg = l_args.next();
                         } else if let Some(Param::VarArg(_, Type::Unpack(l))) = l_arg {
-                            if self.is_subset_eq(
+                            self.is_subset_eq(
                                 u,
                                 &Type::Tuple(Tuple::unpacked(l_types, (**l).clone(), Vec::new())),
-                            ) {
-                                l_arg = l_args.next();
-                                u_arg = u_args.next();
-                                break;
-                            } else {
-                                return false;
-                            }
+                            )?;
+                            l_arg = l_args.next();
+                            u_arg = u_args.next();
+                            break;
                         } else if let Some(Param::VarArg(_, l)) = l_arg {
-                            if self.is_subset_eq(
+                            self.is_subset_eq(
                                 u,
                                 &Type::Tuple(Tuple::unpacked(
                                     l_types,
                                     Type::Tuple(Tuple::unbounded(l.clone())),
                                     Vec::new(),
                                 )),
-                            ) {
-                                l_arg = l_args.next();
-                                u_arg = u_args.next();
-                                break;
-                            } else {
-                                return false;
-                            }
-                        } else if self.is_subset_eq(u, &Type::tuple(l_types)) {
+                            )?;
+                            l_arg = l_args.next();
                             u_arg = u_args.next();
                             break;
                         } else {
-                            return false;
+                            self.is_subset_eq(u, &Type::tuple(l_types))?;
+                            u_arg = u_args.next();
+                            break;
                         }
                     }
                 }
                 (Some(Param::VarArg(_, l)), Some(Param::PosOnly(_, u, _))) => {
-                    if self.is_subset_eq(u, l) {
-                        u_arg = u_args.next();
-                    } else {
-                        return false;
-                    }
+                    self.is_subset_eq(u, l)?;
+                    u_arg = u_args.next();
                 }
                 (Some(Param::VarArg(_, l)), Some(Param::Pos(name, u, _))) => {
                     // Param::Pos can be passed positionally or by name, so if it matches *args
                     // we need to make sure it matches an optional kw-only argument or *kwargs
-                    if self.is_subset_eq(u, l) {
-                        u_param_matched_with_l_varargs.push((name, u));
-                        u_arg = u_args.next();
-                    } else {
-                        return false;
-                    }
+                    self.is_subset_eq(u, l)?;
+                    u_param_matched_with_l_varargs.push((name, u));
+                    u_arg = u_args.next();
                 }
                 (
                     Some(Param::VarArg(_, Type::Unpack(l))),
                     Some(Param::VarArg(_, Type::Unpack(u))),
                 ) => {
-                    if self.is_subset_eq(u, l) {
-                        l_arg = l_args.next();
-                        u_arg = u_args.next();
-                    } else {
-                        return false;
-                    }
+                    self.is_subset_eq(u, l)?;
+                    l_arg = l_args.next();
+                    u_arg = u_args.next();
                 }
                 (Some(Param::VarArg(_, Type::Any(_))), Some(Param::VarArg(_, Type::Unpack(_)))) => {
                     l_arg = l_args.next();
                     u_arg = u_args.next();
                 }
                 (Some(Param::VarArg(_, l)), Some(Param::VarArg(_, Type::Unpack(u)))) => {
-                    if self.is_subset_eq(u, &Type::Tuple(Tuple::unbounded(l.clone()))) {
-                        l_arg = l_args.next();
-                        u_arg = u_args.next();
-                    } else {
-                        return false;
-                    }
+                    self.is_subset_eq(u, &Type::Tuple(Tuple::unbounded(l.clone())))?;
+                    l_arg = l_args.next();
+                    u_arg = u_args.next();
                 }
                 (Some(Param::VarArg(_, Type::Unpack(l))), Some(Param::VarArg(_, u))) => {
-                    if self.is_subset_eq(&Type::Tuple(Tuple::unbounded(u.clone())), l) {
-                        l_arg = l_args.next();
-                        u_arg = u_args.next();
-                    } else {
-                        return false;
-                    }
+                    self.is_subset_eq(&Type::Tuple(Tuple::unbounded(u.clone())), l)?;
+                    l_arg = l_args.next();
+                    u_arg = u_args.next();
                 }
                 (Some(Param::VarArg(_, l)), Some(Param::VarArg(_, u))) => {
-                    if self.is_subset_eq(u, l) {
-                        l_arg = l_args.next();
-                        u_arg = u_args.next();
-                    } else {
-                        return false;
-                    }
+                    self.is_subset_eq(u, l)?;
+                    l_arg = l_args.next();
+                    u_arg = u_args.next();
                 }
                 (Some(_), Some(Param::KwOnly(_, _, _) | Param::Kwargs(_, _))) => {
                     break;
                 }
-                _ => return false,
+                _ => return Err(SubsetError::Other),
             }
         }
         // We can use a HashMap for `l_keywords` since the order does not matter
@@ -318,13 +312,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 l_kwargs
             }
             (Some(l), Some(u)) => {
-                if !self.is_subset_eq(&u, &l) {
-                    return false;
-                }
+                self.is_subset_eq(&u, &l)?;
                 Some(l)
             }
             (None, Some(_)) => {
-                return false;
+                return Err(SubsetError::Other);
             }
             (l_kwargs, _) => l_kwargs,
         };
@@ -334,44 +326,42 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             if let Some((l_ty, l_req)) = l_keywords.remove(name) {
                 // Matched kw-only param from `l` must be optional, since the argument will not be
                 // present if passed positionally.
-                if l_req || !self.is_subset_eq(u_ty, &l_ty) {
-                    return false;
+                if l_req {
+                    return Err(SubsetError::Other);
                 }
+                self.is_subset_eq(u_ty, &l_ty)?;
             } else if let Some(l_ty) = &l_kwargs {
-                if !self.is_subset_eq(u_ty, l_ty) {
-                    return false;
-                }
+                self.is_subset_eq(u_ty, l_ty)?;
             } else {
-                return false;
+                return Err(SubsetError::Other);
             }
         }
         // Handle keyword-only args
         for (name, (u_ty, u_req)) in u_keywords.iter() {
             if let Some((l_ty, l_req)) = l_keywords.remove(name) {
-                if (!*u_req && l_req) || !self.is_subset_eq(u_ty, &l_ty) {
-                    return false;
+                if !*u_req && l_req {
+                    return Err(SubsetError::Other);
                 }
+                self.is_subset_eq(u_ty, &l_ty)?;
             } else if let Some(l_ty) = &l_kwargs {
-                if !self.is_subset_eq(u_ty, l_ty) {
-                    return false;
-                }
+                self.is_subset_eq(u_ty, l_ty)?;
             } else {
-                return false;
+                return Err(SubsetError::Other);
             }
         }
         for (_, l_req) in l_keywords.values() {
             if *l_req {
-                return false;
+                return Err(SubsetError::Other);
             }
         }
-        true
+        Ok(())
     }
 
-    fn is_subset_protocol(&mut self, got: Type, protocol: ClassType) -> bool {
+    fn is_subset_protocol(&mut self, got: Type, protocol: ClassType) -> Result<(), SubsetError> {
         let recursive_check = (got.clone(), Type::ClassType(protocol.clone()));
         if !self.recursive_assumptions.insert(recursive_check) {
             // Assume recursive checks are true
-            return true;
+            return Ok(());
         }
         let protocol_members = self
             .type_order
@@ -388,87 +378,89 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 && let Some(want) = self.type_order.instance_as_dunder_call(&protocol)
             {
                 if let Type::BoundMethod(method) = &want
-                    && let Some(want_no_self) = self.type_order.bind_boundmethod(method)
+                    && let Some(want_no_self) =
+                        self.type_order.bind_boundmethod(method, &mut |got, want| {
+                            self.is_subset_eq(got, want).is_ok()
+                        })
                 {
-                    if !self.is_subset_eq(&got, &want_no_self) {
-                        return false;
-                    }
-                } else if !self.is_subset_eq(&got, &want) {
-                    return false;
+                    self.is_subset_eq(&got, &want_no_self)?;
+                } else {
+                    self.is_subset_eq(&got, &want)?;
                 }
-            } else if !self.type_order.is_protocol_subset_at_attr(
-                &got,
-                &protocol,
-                &name,
-                &mut |got, want| self.is_subset_eq(got, want),
-            ) {
-                return false;
+            } else {
+                self.type_order.is_protocol_subset_at_attr(
+                    &got,
+                    &protocol,
+                    &name,
+                    &mut |got, want| self.is_subset_eq(got, want),
+                )?;
             }
         }
-        true
+        Ok(())
     }
 
-    fn is_subset_tuple(&mut self, got: &Tuple, want: &Tuple) -> bool {
+    fn is_subset_tuple(&mut self, got: &Tuple, want: &Tuple) -> Result<(), SubsetError> {
         match (got, want) {
             (Tuple::Concrete(lelts), Tuple::Concrete(uelts)) => {
                 if lelts.len() == uelts.len() {
-                    lelts
-                        .iter()
-                        .zip(uelts)
-                        .all(|(l, u)| self.is_subset_eq(l, u))
+                    all(lelts.iter().zip(uelts), |(l, u)| self.is_subset_eq(l, u))
                 } else {
-                    false
+                    Err(SubsetError::Other)
                 }
             }
             (Tuple::Unbounded(box Type::Any(_)), _) | (_, Tuple::Unbounded(box Type::Any(_))) => {
-                true
+                Ok(())
             }
             (Tuple::Concrete(lelts), Tuple::Unbounded(u)) => {
-                lelts.iter().all(|l| self.is_subset_eq(l, u))
+                all(lelts.iter(), |l| self.is_subset_eq(l, u))
             }
             (Tuple::Unbounded(l), Tuple::Unbounded(u)) => self.is_subset_eq(l, u),
             (Tuple::Concrete(lelts), Tuple::Unpacked(box (u_prefix, u_middle, u_suffix))) => {
                 if lelts.len() < u_prefix.len() + u_suffix.len() {
-                    false
+                    Err(SubsetError::Other)
                 } else {
                     let mut l_middle = Vec::new();
-                    lelts.iter().enumerate().all(|(idx, l)| {
+                    all(lelts.iter().enumerate(), |(idx, l)| {
                         if idx < u_prefix.len() {
                             self.is_subset_eq(l, &u_prefix[idx])
                         } else if idx >= lelts.len() - u_suffix.len() {
                             self.is_subset_eq(l, &u_suffix[idx + u_suffix.len() - lelts.len()])
                         } else {
                             l_middle.push(l.clone());
-                            true
+                            Ok(())
                         }
-                    }) && self.is_subset_eq(&Type::Tuple(Tuple::Concrete(l_middle)), u_middle)
+                    })?;
+                    self.is_subset_eq(&Type::Tuple(Tuple::Concrete(l_middle)), u_middle)
                 }
             }
             (Tuple::Unbounded(_), Tuple::Unpacked(box (u_prefix, u_middle, u_suffix))) => {
-                u_prefix.is_empty()
-                    && u_suffix.is_empty()
-                    && self.is_subset_eq(&Type::Tuple(got.clone()), u_middle)
+                if u_prefix.is_empty() && u_suffix.is_empty() {
+                    self.is_subset_eq(&Type::Tuple(got.clone()), u_middle)
+                } else {
+                    Err(SubsetError::Other)
+                }
             }
             (Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)), Tuple::Unbounded(u)) => {
-                l_prefix.iter().all(|l| self.is_subset_eq(l, u))
-                    && l_suffix.iter().all(|l| self.is_subset_eq(l, u))
-                    && self.is_subset_eq(l_middle, &Type::Tuple(want.clone()))
+                all(l_prefix.iter(), |l| self.is_subset_eq(l, u))?;
+                all(l_suffix.iter(), |l| self.is_subset_eq(l, u))?;
+                self.is_subset_eq(l_middle, &Type::Tuple(want.clone()))
             }
             (Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)), Tuple::Concrete(uelts)) => {
                 if uelts.len() < l_prefix.len() + l_suffix.len() {
-                    false
+                    Err(SubsetError::Other)
                 } else {
                     let mut u_middle = Vec::new();
-                    uelts.iter().enumerate().all(|(idx, u)| {
+                    all(uelts.iter().enumerate(), |(idx, u)| {
                         if idx < l_prefix.len() {
                             self.is_subset_eq(&l_prefix[idx], u)
                         } else if idx >= uelts.len() - l_suffix.len() {
                             self.is_subset_eq(&l_suffix[idx + l_suffix.len() - uelts.len()], u)
                         } else {
                             u_middle.push(u.clone());
-                            true
+                            Ok(())
                         }
-                    }) && self.is_subset_eq(l_middle, &Type::Tuple(Tuple::Concrete(u_middle)))
+                    })?;
+                    self.is_subset_eq(l_middle, &Type::Tuple(Tuple::Concrete(u_middle)))
                 }
             }
             (
@@ -482,49 +474,48 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 let mut l_after = Vec::new();
                 let mut u_before = Vec::new();
                 let mut u_after = Vec::new();
-                if !(l_prefix
-                    .iter()
-                    .zip_longest(u_prefix.iter())
-                    .all(|pair| match pair {
+                all(
+                    l_prefix.iter().zip_longest(u_prefix.iter()),
+                    |pair| match pair {
                         EitherOrBoth::Both(l, u) => self.is_subset_eq(l, u),
                         EitherOrBoth::Left(l) => {
                             l_before.push(l.clone());
-                            true
+                            Ok(())
                         }
                         EitherOrBoth::Right(u) => {
                             u_before.push(u.clone());
-                            true
+                            Ok(())
                         }
-                    })
-                    && l_suffix
-                        .iter()
-                        .rev()
-                        .zip_longest(u_suffix.iter().rev())
-                        .all(|pair| match pair {
-                            EitherOrBoth::Both(l, u) => self.is_subset_eq(l, u),
-                            EitherOrBoth::Left(l) => {
-                                l_after.push(l.clone());
-                                true
-                            }
-                            EitherOrBoth::Right(u) => {
-                                u_after.push(u.clone());
-                                true
-                            }
-                        }))
-                {
-                    return false;
-                }
+                    },
+                )?;
+                all(
+                    l_suffix.iter().rev().zip_longest(u_suffix.iter().rev()),
+                    |pair| match pair {
+                        EitherOrBoth::Both(l, u) => self.is_subset_eq(l, u),
+                        EitherOrBoth::Left(l) => {
+                            l_after.push(l.clone());
+                            Ok(())
+                        }
+                        EitherOrBoth::Right(u) => {
+                            u_after.push(u.clone());
+                            Ok(())
+                        }
+                    },
+                )?;
                 l_after.reverse();
                 u_after.reverse();
+
                 self.is_subset_eq(
                     &Type::Tuple(Tuple::unpacked(l_before, l_middle.clone(), l_after)),
                     u_middle,
-                ) && self.is_subset_eq(
+                )?;
+                self.is_subset_eq(
                     l_middle,
                     &Type::Tuple(Tuple::unpacked(u_before, u_middle.clone(), u_after)),
-                )
+                )?;
+                Ok(())
             }
-            _ => false,
+            _ => Err(SubsetError::Other),
         }
     }
 
@@ -533,15 +524,13 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         got: &ParamList,
         want_ts: &[Type],
         want_pspec: &Type,
-    ) -> bool {
+    ) -> Result<(), SubsetError> {
         if got.len() < want_ts.len() {
-            return false;
+            return Err(SubsetError::Other);
         }
         let args = ParamList::new_types(want_ts.to_owned());
         let (pre, post) = got.items().split_at(args.len());
-        if !self.is_subset_param_list(pre, args.items()) {
-            return false;
-        }
+        self.is_subset_param_list(pre, args.items())?;
         self.is_subset_eq(
             &Type::ParamSpecValue(ParamList::new(post.to_vec())),
             want_pspec,
@@ -553,15 +542,13 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         got_ts: &[Type],
         got_pspec: &Type,
         want: &ParamList,
-    ) -> bool {
+    ) -> Result<(), SubsetError> {
         if want.len() < got_ts.len() {
-            return false;
+            return Err(SubsetError::Other);
         }
         let args = ParamList::new_types(got_ts.to_owned());
         let (pre, post) = want.items().split_at(args.len());
-        if !self.is_subset_param_list(args.items(), pre) {
-            return false;
-        }
+        self.is_subset_param_list(args.items(), pre)?;
         self.is_subset_eq(
             got_pspec,
             &Type::ParamSpecValue(ParamList::new(post.to_vec())),
@@ -574,14 +561,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         got_pspec: &Type,
         want_ts: &[Type],
         want_pspec: &Type,
-    ) -> bool {
+    ) -> Result<(), SubsetError> {
         match got_ts.len().cmp(&want_ts.len()) {
             Ordering::Greater => {
                 let (got_ts_pre, got_ts_post) = got_ts.split_at(want_ts.len());
                 for (l, u) in got_ts_pre.iter().zip(want_ts.iter()) {
-                    if !self.is_subset_eq(u, l) {
-                        return false;
-                    }
+                    self.is_subset_eq(u, l)?;
                 }
                 let got_ts_post = got_ts_post.to_vec().into_boxed_slice();
                 self.is_subset_eq(
@@ -592,9 +577,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             Ordering::Less => {
                 let (want_ts_pre, want_ts_post) = want_ts.split_at(got_ts.len());
                 for (l, u) in got_ts.iter().zip(want_ts_pre.iter()) {
-                    if !self.is_subset_eq(u, l) {
-                        return false;
-                    }
+                    self.is_subset_eq(u, l)?;
                 }
                 let want_ts_post = want_ts_post.to_vec().into_boxed_slice();
                 self.is_subset_eq(
@@ -604,9 +587,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             Ordering::Equal => {
                 for (l, u) in got_ts.iter().zip(want_ts.iter()) {
-                    if !self.is_subset_eq(u, l) {
-                        return false;
-                    }
+                    self.is_subset_eq(u, l)?;
                 }
                 self.is_subset_eq(want_pspec, got_pspec)
             }
@@ -638,26 +619,34 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         &mut self,
         got_v: &TypedDictField,
         want_v: &TypedDictField,
-    ) -> bool {
+    ) -> Result<(), SubsetError> {
         // For each key in `want`, `got` has the corresponding key
         // and the corresponding value type in `got` is consistent with the value type in `want`.
         // For each required key in `want`, the corresponding key is required in `got`.
         // For each non-required, non-readonly key in `want`, the corresponding key is not required in `got`.
-        (match (got_v.is_read_only(), want_v.is_read_only()) {
+        match (got_v.is_read_only(), want_v.is_read_only()) {
             // ReadOnly cannot be assigned to Non-ReadOnly
-            (true, false) => false,
+            (true, false) => return Err(SubsetError::Other),
             // Non-ReadOnly fields are invariant
-            (false, false) => self.is_equal(&got_v.ty, &want_v.ty),
+            (false, false) => self.is_equal(&got_v.ty, &want_v.ty)?,
             // ReadOnly `want` fields are covariant
-            (_, true) => self.is_subset_eq(&got_v.ty, &want_v.ty),
-        }) && (if want_v.required {
-            got_v.required
-        } else {
-            want_v.is_read_only() || !got_v.required
-        })
+            (_, true) => self.is_subset_eq(&got_v.ty, &want_v.ty)?,
+        }
+        ok_or(
+            if want_v.required {
+                got_v.required
+            } else {
+                want_v.is_read_only() || !got_v.required
+            },
+            SubsetError::Other,
+        )
     }
 
-    fn is_subset_typed_dict(&mut self, got: &TypedDict, want: &TypedDict) -> bool {
+    fn is_subset_typed_dict(
+        &mut self,
+        got: &TypedDict,
+        want: &TypedDict,
+    ) -> Result<(), SubsetError> {
         let (got_fields, want_fields) = {
             let mut got_fields = self.get_typed_dict_fields(got);
             let mut want_fields = self.get_typed_dict_fields(want);
@@ -680,23 +669,34 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             (got_fields, want_fields)
         };
-        want_fields.iter().all(|(k, want_v)| {
+        all(want_fields.iter(), |(k, want_v)| {
             got_fields
                 .get(k)
                 .or_else(|| got_fields.get(&TypedDictFieldId::ExtraItems))
-                .is_some_and(|got_v| self.is_subset_typed_dict_field(got_v, want_v))
-        }) && want_fields
+                .map_or(Err(SubsetError::Other), |got_v| {
+                    self.is_subset_typed_dict_field(got_v, want_v)
+                })
+        })?;
+        want_fields
             .get(&TypedDictFieldId::ExtraItems)
-            .is_none_or(|want_v| {
+            .map_or(Ok(()), |want_v| {
                 // Make sure all fields in `got` that aren't on `want` match the latter's `extra_items` type.
-                got_fields.iter().all(|(k, got_v)| {
-                    want_fields.contains_key(k) || self.is_subset_typed_dict_field(got_v, want_v)
+                all(got_fields.iter(), |(k, got_v)| {
+                    if want_fields.contains_key(k) {
+                        Ok(())
+                    } else {
+                        self.is_subset_typed_dict_field(got_v, want_v)
+                    }
                 })
             })
     }
 
     /// Check TypedDict[got] <: PartialTypedDict[want]
-    fn is_subset_partial_typed_dict(&mut self, got: &TypedDict, want: &TypedDict) -> bool {
+    fn is_subset_partial_typed_dict(
+        &mut self,
+        got: &TypedDict,
+        want: &TypedDict,
+    ) -> Result<(), SubsetError> {
         let got_fields = self.type_order.typed_dict_fields(got);
         let want_fields = self.type_order.typed_dict_fields(want);
         let got_extra_item = self
@@ -709,7 +709,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             .typed_dict_extra_items(want.class_object())
             .extra_item(self.type_order.stdlib())
             .ty;
-        want_fields.iter().all(|(k, want_v)| {
+        all(want_fields.iter(), |(k, want_v)| {
             let got_ty = got_fields.get(k).map_or(&got_extra_item, |got_v| &got_v.ty);
             if want_v.is_read_only() {
                 // ReadOnly can only be updated with Never (i.e., no update)
@@ -717,26 +717,27 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             } else {
                 self.is_subset_eq(got_ty, &want_v.ty)
             }
-        }) && self.is_subset_eq(&got_extra_item, &want_extra_item)
+        })?;
+        self.is_subset_eq(&got_extra_item, &want_extra_item)
     }
 
     /// Implementation of subset equality for Type, other than Var.
-    pub fn is_subset_eq_impl(&mut self, got: &Type, want: &Type) -> bool {
+    pub fn is_subset_eq_impl(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
         match (got, want) {
             (Type::Any(_), _) => {
                 // Special case in Python, because we want `x: int = Any` to be valid,
                 // as Any is more the lack of information, rather than the actual union it is modelled to be.
-                true
+                Ok(())
             }
-            (_, Type::Any(_)) => true,
-            (Type::Never(_), _) => true,
+            (_, Type::Any(_)) => Ok(()),
+            (Type::Never(_), _) => Ok(()),
             (_, Type::ClassType(want)) if want.is_builtin("object") => {
-                true // everything is an instance of `object`
+                Ok(()) // everything is an instance of `object`
             }
             (Type::Quantified(q), Type::Ellipsis) | (Type::Ellipsis, Type::Quantified(q))
                 if q.kind() == QuantifiedKind::ParamSpec =>
             {
-                true
+                Ok(())
             }
             // Given `A | B <: C | D` we must always split the LHS first, but a quantified might be hiding a LHS union in its bounds.
             // Given (Quantified(bounds = A | B), A | B), we need to examine the bound _before_ splitting up the RHS union.
@@ -744,37 +745,38 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             // Therefore try these quantified cases, but only pick them if they work.
             (Type::Quantified(q), u)
                 if let Restriction::Bound(bound) = q.restriction()
-                    && self.is_subset_eq(bound, u) =>
+                    && self.is_subset_eq(bound, u).is_ok() =>
             {
-                true
+                Ok(())
             }
             (Type::Quantified(q), u)
                 if let Restriction::Constraints(constraints) = q.restriction()
                     && constraints
                         .iter()
-                        .all(|constraint| self.is_subset_eq(constraint, u)) =>
+                        .all(|constraint| self.is_subset_eq(constraint, u).is_ok()) =>
             {
-                true
+                Ok(())
             }
             (t1, Type::Quantified(q)) => match q.restriction() {
                 // This only works for constraints and not bounds, because a TypeVar must resolve to exactly one of its constraints.
-                Restriction::Constraints(constraints) => constraints
-                    .iter()
-                    .all(|constraint| self.is_subset_eq(t1, constraint)),
-                _ => false,
+                Restriction::Constraints(constraints) => all(constraints.iter(), |constraint| {
+                    self.is_subset_eq(t1, constraint)
+                }),
+                _ => Err(SubsetError::Other),
             },
-            (Type::Union(ls), u) => ls.iter().all(|l| self.is_subset_eq(l, u)),
-            (l, Type::Intersect(us)) => us.iter().all(|u| self.is_subset_eq(l, u)),
-            (l, Type::Overload(overload)) => overload
-                .signatures
-                .iter()
-                .all(|u| self.is_subset_eq(l, &u.as_type())),
-            (l, Type::Union(us)) => us.iter().any(|u| self.is_subset_eq(l, u)),
-            (Type::Intersect(ls), u) => ls.iter().any(|l| self.is_subset_eq(l, u)),
+            (Type::Union(ls), u) => all(ls.iter(), |l| self.is_subset_eq(l, u)),
+            (l, Type::Intersect(us)) => all(us.iter(), |u| self.is_subset_eq(l, u)),
+            (l, Type::Overload(overload)) => all(overload.signatures.iter(), |u| {
+                self.is_subset_eq(l, &u.as_type())
+            }),
+            (l, Type::Union(us)) => any(us.iter(), |u| self.is_subset_eq(l, u)),
+            (Type::Intersect(ls), u) => any(ls.iter(), |l| self.is_subset_eq(l, u)),
             (Type::Quantified(q), u) if !q.restriction().is_restricted() => {
                 self.is_subset_eq(&self.type_order.stdlib().object().clone().to_type(), u)
             }
-            (Type::Module(_), Type::ClassType(cls)) if cls.has_qname("types", "ModuleType") => true,
+            (Type::Module(_), Type::ClassType(cls)) if cls.has_qname("types", "ModuleType") => {
+                Ok(())
+            }
             (
                 Type::Function(_)
                 | Type::Overload(_)
@@ -783,29 +785,39 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     ..
                 }),
                 Type::ClassType(cls),
-            ) if cls.has_qname("types", "FunctionType") => true,
+            ) if cls.has_qname("types", "FunctionType") => Ok(()),
             (Type::BoundMethod(_), Type::ClassType(cls))
                 if cls.has_qname("types", "MethodType") =>
             {
-                true
+                Ok(())
             }
-            (Type::Overload(overload), u) => overload
-                .signatures
-                .iter()
-                .any(|l| self.is_subset_eq(&l.as_type(), u)),
+            (Type::Overload(overload), u) => any(overload.signatures.iter(), |l| {
+                self.is_subset_eq(&l.as_type(), u)
+            }),
             (Type::BoundMethod(method), Type::Callable(_) | Type::Function(_))
-                if let Some(l_no_self) = self.type_order.bind_boundmethod(method) =>
+                if let Some(l_no_self) =
+                    self.type_order.bind_boundmethod(method, &mut |got, want| {
+                        self.is_subset_eq(got, want).is_ok()
+                    }) =>
             {
                 self.is_subset_eq(&l_no_self, want)
             }
             (Type::Callable(_) | Type::Function(_), Type::BoundMethod(method))
-                if let Some(u_no_self) = self.type_order.bind_boundmethod(method) =>
+                if let Some(u_no_self) =
+                    self.type_order.bind_boundmethod(method, &mut |got, want| {
+                        self.is_subset_eq(got, want).is_ok()
+                    }) =>
             {
                 self.is_subset_eq(got, &u_no_self)
             }
             (Type::BoundMethod(l), Type::BoundMethod(u))
-                if let Some(l_no_self) = self.type_order.bind_boundmethod(l)
-                    && let Some(u_no_self) = self.type_order.bind_boundmethod(u) =>
+                if let Some(l_no_self) = self
+                    .type_order
+                    .bind_boundmethod(l, &mut |got, want| self.is_subset_eq(got, want).is_ok())
+                    && let Some(u_no_self) =
+                        self.type_order.bind_boundmethod(u, &mut |got, want| {
+                            self.is_subset_eq(got, want).is_ok()
+                        }) =>
             {
                 self.is_subset_eq(&l_no_self, &u_no_self)
             }
@@ -821,28 +833,28 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     metadata: _,
                 }),
             ) => {
-                let args_subset = match (&l.params, &u.params) {
+                match (&l.params, &u.params) {
                     (Params::Ellipsis, Params::ParamSpec(_, pspec)) => {
-                        self.is_subset_eq(&Type::Ellipsis, pspec)
+                        self.is_subset_eq(&Type::Ellipsis, pspec)?
                     }
                     (Params::ParamSpec(_, pspec), Params::Ellipsis) => {
-                        self.is_subset_eq(pspec, &Type::Ellipsis)
+                        self.is_subset_eq(pspec, &Type::Ellipsis)?
                     }
-                    (Params::Ellipsis, _) | (_, Params::Ellipsis) => true,
+                    (Params::Ellipsis, _) | (_, Params::Ellipsis) => {}
                     (Params::List(l_args), Params::List(u_args)) => {
-                        self.is_subset_param_list(l_args.items(), u_args.items())
+                        self.is_subset_param_list(l_args.items(), u_args.items())?
                     }
                     (Params::List(ls), Params::ParamSpec(args, pspec)) => {
-                        self.is_paramlist_subset_of_paramspec(ls, args, pspec)
+                        self.is_paramlist_subset_of_paramspec(ls, args, pspec)?
                     }
                     (Params::ParamSpec(args, pspec), Params::List(ls)) => {
-                        self.is_paramspec_subset_of_paramlist(args, pspec, ls)
+                        self.is_paramspec_subset_of_paramlist(args, pspec, ls)?
                     }
                     (Params::ParamSpec(ls, p1), Params::ParamSpec(us, p2)) => {
-                        self.is_paramspec_subset_of_paramspec(ls, p1, us, p2)
+                        self.is_paramspec_subset_of_paramspec(ls, p1, us, p2)?
                     }
-                };
-                args_subset && self.is_subset_eq(&l.ret, &u.ret)
+                }
+                self.is_subset_eq(&l.ret, &u.ret)
             }
             (Type::TypedDict(got), Type::TypedDict(want)) => self.is_subset_typed_dict(got, want),
             (Type::TypedDict(got), Type::PartialTypedDict(want)) => {
@@ -852,7 +864,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 if cls == self.type_order.stdlib().typed_dict_fallback() =>
             {
                 // Allow substituting a TypedDict for Self when we call methods
-                true
+                Ok(())
             }
             (Type::TypedDict(td), _) => {
                 let stdlib = self.type_order.stdlib();
@@ -903,13 +915,13 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::ClassType(ty), _) | (_, Type::ClassType(ty))
                 if self.type_order.extends_any(ty.class_object()) =>
             {
-                true
+                Ok(())
             }
             (Type::ClassType(got), Type::ClassType(want))
                 if want.is_builtin("float")
                     && (got.is_builtin("int") || got.is_builtin("bool")) =>
             {
-                true
+                Ok(())
             }
             (Type::ClassType(got), Type::ClassType(want))
                 if want.is_builtin("complex")
@@ -917,14 +929,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         || got.is_builtin("float")
                         || got.is_builtin("bool")) =>
             {
-                true
+                Ok(())
             }
             (Type::ClassType(got), Type::ClassType(want)) => {
                 let got_is_protocol = self.type_order.is_protocol(got.class_object());
                 let want_is_protocol = self.type_order.is_protocol(want.class_object());
                 if got_is_protocol && !want_is_protocol {
                     // Protocols are never assignable to concrete types
-                    return false;
+                    return Err(SubsetError::Other);
                 }
                 match self.type_order.as_superclass(got, want.class_object()) {
                     Some(got) => self.check_targs(&got, want),
@@ -932,7 +944,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     None if want_is_protocol => {
                         self.is_subset_protocol(got.clone().to_type(), want.clone())
                     }
-                    _ => false,
+                    _ => Err(SubsetError::Other),
                 }
             }
             (_, Type::ClassType(want)) if self.type_order.is_protocol(want.class_object()) => {
@@ -956,42 +968,50 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     want,
                 )
             }
-            (Type::ClassDef(got), Type::ClassDef(want)) => {
-                self.type_order.has_superclass(got, want)
-            }
+            (Type::ClassDef(got), Type::ClassDef(want)) => ok_or(
+                self.type_order.has_superclass(got, want),
+                SubsetError::Other,
+            ),
             // Although the object created by a NewType call behaves like a class for type-checking
             // purposes, it isn't one at runtime, so don't allow it to match `type`.
-            (Type::ClassDef(got), Type::Type(_)) if self.type_order.is_new_type(got) => false,
+            (Type::ClassDef(got), Type::Type(_)) if self.type_order.is_new_type(got) => {
+                Err(SubsetError::Other)
+            }
             (Type::ClassDef(got), Type::ClassType(want))
                 if self.type_order.is_new_type(got) && want.is_builtin("type") =>
             {
-                false
+                Err(SubsetError::Other)
             }
             (Type::ClassDef(got), Type::Type(want)) => {
                 self.is_subset_eq(&self.type_order.promote_silently(got), want)
             }
-            (Type::Type(box Type::ClassType(got)), Type::ClassDef(want)) => {
-                self.type_order.has_superclass(got.class_object(), want)
-            }
+            (Type::Type(box Type::ClassType(got)), Type::ClassDef(want)) => ok_or(
+                self.type_order.has_superclass(got.class_object(), want),
+                SubsetError::Other,
+            ),
             (Type::ClassDef(got), Type::ClassType(want)) => {
-                self.type_order.has_metaclass(got, want)
+                ok_or(self.type_order.has_metaclass(got, want), SubsetError::Other)
             }
-            (Type::Type(box Type::ClassType(got)), Type::ClassType(want)) => {
-                self.type_order.has_metaclass(got.class_object(), want)
-            }
-            (Type::Type(box Type::Any(_)), Type::ClassDef(_)) => true,
+            (Type::Type(box Type::ClassType(got)), Type::ClassType(want)) => ok_or(
+                self.type_order.has_metaclass(got.class_object(), want),
+                SubsetError::Other,
+            ),
+            (Type::Type(box Type::Any(_)), Type::ClassDef(_)) => Ok(()),
             (Type::ClassType(cls), want @ Type::Tuple(_))
                 if let Some(got) = self.type_order.as_tuple_type(cls) =>
             {
                 self.is_subset_eq(&got, want)
             }
-            (Type::ClassType(got), Type::SelfType(want)) => self
-                .type_order
-                .has_superclass(got.class_object(), want.class_object()),
-            (Type::Type(box Type::ClassType(got)), Type::SelfType(want)) => {
-                self.type_order.has_metaclass(got.class_object(), want)
-            }
-            (Type::SelfType(_), Type::SelfType(_)) => true,
+            (Type::ClassType(got), Type::SelfType(want)) => ok_or(
+                self.type_order
+                    .has_superclass(got.class_object(), want.class_object()),
+                SubsetError::Other,
+            ),
+            (Type::Type(box Type::ClassType(got)), Type::SelfType(want)) => ok_or(
+                self.type_order.has_metaclass(got.class_object(), want),
+                SubsetError::Other,
+            ),
+            (Type::SelfType(_), Type::SelfType(_)) => Ok(()),
             (Type::SelfType(got), _) => self.is_subset_eq(&Type::ClassType(got.clone()), want),
             (Type::Tuple(l), Type::Tuple(u)) => self.is_subset_tuple(l, u),
             (Type::Tuple(Tuple::Concrete(left_elts)), _) => {
@@ -1030,20 +1050,24 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::Tuple(Tuple::Unpacked(box (prefix, middle, suffix))), _) => {
                 let elts = prefix.iter().chain(suffix).cloned().collect::<Vec<_>>();
                 let tuple_type = self.type_order.stdlib().tuple(unions(elts)).to_type();
-                self.is_subset_eq(&tuple_type, want) && self.is_subset_eq(middle, want)
+                self.is_subset_eq(&tuple_type, want)?;
+                self.is_subset_eq(middle, want)?;
+                Ok(())
             }
-            (Type::Literal(lit), Type::LiteralString) => lit.is_string(),
+            (Type::Literal(lit), Type::LiteralString) => ok_or(lit.is_string(), SubsetError::Other),
             (Type::Literal(lit), t @ Type::ClassType(_)) => self.is_subset_eq(
                 &lit.general_class_type(self.type_order.stdlib())
                     .clone()
                     .to_type(),
                 t,
             ),
-            (Type::Literal(l_lit), Type::Literal(u_lit)) => l_lit == u_lit,
+            (Type::Literal(l_lit), Type::Literal(u_lit)) => {
+                ok_or(l_lit == u_lit, SubsetError::Other)
+            }
             (_, Type::SelfType(cls))
                 if got.is_literal_string() && cls == self.type_order.stdlib().str() =>
             {
-                true
+                Ok(())
             }
             (Type::LiteralString, _) => {
                 self.is_subset_eq(&self.type_order.stdlib().str().clone().to_type(), want)
@@ -1064,16 +1088,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 let type_type = self.type_order.stdlib().builtins_type();
                 if class == type_type {
                     // Unparameterized `type` is equivalent to `type[Any]`
-                    true
+                    Ok(())
                 } else if let Some(got_as_type) = self
                     .type_order
                     .as_superclass(class, type_type.class_object())
                     && got_as_type.targs().is_empty()
                 {
                     // The class extends unparameterized `type`
-                    true
+                    Ok(())
                 } else {
-                    false
+                    Err(SubsetError::Other)
                 }
             }
             (Type::TypeGuard(l), Type::TypeGuard(u)) => {
@@ -1084,7 +1108,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 self.is_subset_eq(&self.type_order.stdlib().bool().clone().to_type(), want)
             }
             (Type::Ellipsis, Type::ParamSpecValue(_) | Type::Concatenate(_, _))
-            | (Type::ParamSpecValue(_) | Type::Concatenate(_, _), Type::Ellipsis) => true,
+            | (Type::ParamSpecValue(_) | Type::Concatenate(_, _), Type::Ellipsis) => Ok(()),
             (Type::ParamSpecValue(ls), Type::ParamSpecValue(us)) => {
                 self.is_subset_param_list(ls.items(), us.items())
             }
@@ -1112,17 +1136,27 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 self.is_subset_eq(got, &self.type_order.stdlib().none_type().clone().to_type())
             }
             (Type::Forall(forall), _) => {
-                let (_, got) = self.type_order.instantiate_fresh_forall((**forall).clone());
-                self.is_subset_eq(&got, want)
+                // Finalizing the quantified vars returns instantiation errors
+                let (vs, got) = self.type_order.instantiate_fresh_forall((**forall).clone());
+                let result = self.is_subset_eq(&got, want);
+                result.and(
+                    self.finish_quantified(vs)
+                        .map_err(SubsetError::TypeVarSpecialization),
+                )
             }
+            (_, Type::Forall(forall)) => self.is_subset_eq(got, &forall.body.clone().as_type()),
             (Type::TypeAlias(ta), _) => {
                 self.is_subset_eq(&ta.as_value(self.type_order.stdlib()), want)
             }
-            _ => false,
+            _ => Err(SubsetError::Other),
         }
     }
 
-    fn check_targs(&mut self, got_class: &ClassType, want_class: &ClassType) -> bool {
+    fn check_targs(
+        &mut self,
+        got_class: &ClassType,
+        want_class: &ClassType,
+    ) -> Result<(), SubsetError> {
         let got = got_class.targs();
         let want = want_class.targs();
         let params = want_class.tparams();
@@ -1145,20 +1179,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             .get_variance_from_class(got_class.class_object());
 
         for (got_arg, want_arg, param) in izip!(got, want, params.iter()) {
-            let result = if param.quantified.kind() == QuantifiedKind::TypeVarTuple {
-                self.is_equal(got_arg, want_arg)
+            if param.quantified.kind() == QuantifiedKind::TypeVarTuple {
+                self.is_equal(got_arg, want_arg)?;
             } else {
                 match variances.get(param.name()) {
-                    Variance::Covariant => self.is_subset_eq(got_arg, want_arg),
-                    Variance::Contravariant => self.is_subset_eq(want_arg, got_arg),
-                    Variance::Invariant => self.is_equal(got_arg, want_arg),
-                    Variance::Bivariant => true,
+                    Variance::Covariant => self.is_subset_eq(got_arg, want_arg)?,
+                    Variance::Contravariant => self.is_subset_eq(want_arg, got_arg)?,
+                    Variance::Invariant => self.is_equal(got_arg, want_arg)?,
+                    Variance::Bivariant => {}
                 }
-            };
-            if !result {
-                return false;
             }
         }
-        true
+        Ok(())
     }
 }

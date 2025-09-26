@@ -8,11 +8,11 @@
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_python::qname::QName;
 use ruff_python_ast::name::Name;
 
 use crate::annotation::Qualifier;
 use crate::class::Class;
-use crate::qname::QName;
 use crate::read_only::ReadOnlyReason;
 use crate::stdlib::Stdlib;
 use crate::types::Substitution;
@@ -95,7 +95,7 @@ pub enum ExtraItems {
 impl ExtraItems {
     pub fn extra(ty: Type, qualifiers: &[Qualifier]) -> Self {
         match &ty {
-            Type::Type(box Type::Never(_)) => Self::Closed,
+            Type::Type(inner) if inner.is_never() => Self::Closed,
             _ => Self::Extra(ExtraItem {
                 ty,
                 read_only: qualifiers.iter().any(|q| q == &Qualifier::ReadOnly),

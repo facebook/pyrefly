@@ -335,7 +335,7 @@ impl<'a> Transaction<'a> {
 
     pub fn get_all_errors(&self) -> Errors {
         if self.data.updated_modules.is_empty() {
-            // Optimised path
+            // Optimized path
             return Errors::new(
                 self.readable
                     .modules
@@ -481,7 +481,7 @@ impl<'a> Transaction<'a> {
     /// Return all handles for which there is data, in a non-deterministic order.
     pub fn handles(&self) -> Vec<Handle> {
         if self.data.updated_modules.is_empty() {
-            // Optimised path
+            // Optimized path
             self.readable.modules.keys().cloned().collect()
         } else {
             let mut res = self
@@ -566,7 +566,7 @@ impl<'a> Transaction<'a> {
             Some(path) => path.dupe(),
             None => self
                 .get_cached_loader(&self.get_module(handle).config.read())
-                .find_import(module, Some(handle))?,
+                .find_import(module, Some(handle.path()))?,
         };
         Ok(Handle::new(module, path, handle.sys_info().dupe()))
     }
@@ -582,7 +582,7 @@ impl<'a> Transaction<'a> {
             Some(path) => path.dupe(),
             None => self
                 .get_cached_loader(&self.get_module(handle).config.read())
-                .find_import_prefer_executable(module, Some(handle))?,
+                .find_import_prefer_executable(module, Some(handle.path()))?,
         };
         Ok(Handle::new(module, path, handle.sys_info().dupe()))
     }
@@ -650,7 +650,7 @@ impl<'a> Transaction<'a> {
         if exclusive.dirty.require {
             // We have increased the `Require` level, so redo everything to make sure
             // we capture everything.
-            // Could be optimised to do less work (e.g. if you had Retain::Error before don't need to reload)
+            // Could be optimized to do less work (e.g. if you had Retain::Error before don't need to reload)
             let mut write = exclusive.write();
             write.steps.load = None;
             rebuild(write, true);
@@ -695,7 +695,9 @@ impl<'a> Transaction<'a> {
             let loader = self.get_cached_loader(&module_data.config.read());
             let mut is_dirty = false;
             for dependency_handle in module_data.deps.read().values().flatten() {
-                match loader.find_import(dependency_handle.module(), Some(&module_data.handle)) {
+                match loader
+                    .find_import(dependency_handle.module(), Some(module_data.handle.path()))
+                {
                     Ok(path) if &path == dependency_handle.path() => {}
                     _ => {
                         is_dirty = true;
@@ -1268,7 +1270,8 @@ impl<'a> Transaction<'a> {
         self.invalidate(|_| true, |dirty| dirty.find = true);
     }
 
-    /// The data returned by the ConfigFinder might have changed.
+    /// The data returned by the ConfigFinder might have changed. Note: invalidate find is not also required to run. When
+    /// a config changes, this function guarantees the next transaction run will invalidate find accordingly.
     pub fn invalidate_config(&mut self) {
         // We clear the global config cache, rather than making a dedicated copy.
         // This is reasonable, because we will cache the result on ModuleData.
@@ -1294,6 +1297,47 @@ impl<'a> Transaction<'a> {
                     module_data.state.write(Step::Load).unwrap().dirty.find = true;
                     dirty_set.insert(module_data.dupe());
                 }
+            }
+        }
+    }
+
+    /// Called if the `find` portion of loading might have changed for specific configs,
+    /// without wanting to fully reload all configs (and pay the performance penalty of
+    /// requerying a build system).
+    /// E.g. a file was opened or closed, changing the set of 'open' build system targets,
+    /// and affecting how a go-to-definition or hover result would be produced.
+    pub fn invalidate_find_for_configs(&mut self, configs: SmallSet<ArcId<ConfigFile>>) {
+        // First do the work of clearing out the loaders for our config, but preserve all the other
+        // loaders.
+        let new_loaders = LockedMap::new();
+        self.data
+            .updated_loaders
+            .iter_unordered()
+            .chain(self.readable.loaders.iter())
+            .filter(|(c, _)| !configs.contains(*c))
+            .for_each(|(c, l)| {
+                new_loaders.insert(c.dupe(), l.dupe());
+            });
+        configs.iter().for_each(|config| {
+            new_loaders.insert(config.dupe(), Arc::new(LoaderFindCache::new(config.dupe())));
+        });
+        self.data.updated_loaders = new_loaders;
+
+        // Then mark all handles under that config as dirty.
+        let mut dirty_set = self.data.dirty.lock();
+        for module_data in self.data.updated_modules.values() {
+            if configs.contains(&*module_data.config.read()) {
+                module_data.state.write(Step::Load).unwrap().dirty.find = true;
+                dirty_set.insert(module_data.dupe());
+            }
+        }
+        for (handle, module_data) in self.readable.modules.iter() {
+            if self.data.updated_modules.get(handle).is_none()
+                && configs.contains(&module_data.config)
+            {
+                let module_data = self.get_module(handle);
+                module_data.state.write(Step::Load).unwrap().dirty.find = true;
+                dirty_set.insert(module_data.dupe());
             }
         }
     }
@@ -1414,7 +1458,7 @@ impl<'a> Transaction<'a> {
                 subscriber.finish_work(&m.handle, &alt.load.unwrap());
             }
         }
-        self.data.subscriber = None; // Finalise the progress bar before printing to stderr
+        self.data.subscriber = None; // Finalize the progress bar before printing to stderr
 
         fn line_key(x: &str) -> Option<(u64, &str)> {
             let (_, x) = x.rsplit_once(',')?;

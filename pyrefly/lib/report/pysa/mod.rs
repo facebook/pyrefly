@@ -5,8 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+pub mod call_graph;
+mod override_graph;
+
+use core::panic;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::fs::File;
 use std::io::BufWriter;
 use std::ops::Not;
@@ -16,6 +19,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
+use dashmap::DashMap;
+use dupe::Dupe;
 use itertools::Itertools;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
@@ -23,11 +28,13 @@ use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
-use pyrefly_python::symbol_kind::SymbolKind;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
 use pyrefly_types::class::Class;
+#[cfg(test)]
+use pyrefly_types::class::ClassType;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::Type;
 use pyrefly_util::fs_anyhow;
@@ -37,7 +44,6 @@ use pyrefly_util::visit::Visit;
 use rayon::prelude::*;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
-use ruff_python_ast::ExprContext;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
@@ -46,7 +52,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use serde::Serialize;
-use tracing::debug;
+use starlark_map::Hashed;
 use tracing::info;
 
 use crate::alt::answers::Answers;
@@ -54,39 +60,104 @@ use crate::alt::class::class_field::ClassField;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::BindingClass;
+use crate::binding::binding::BindingClassField;
+use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
-use crate::module::module_info::ModuleInfo;
 use crate::module::typeshed::typeshed;
-use crate::state::lsp::DefinitionMetadata;
+use crate::report::pysa::override_graph::OverrideGraph;
+use crate::report::pysa::override_graph::create_reversed_override_graph_for_module;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
-use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
 use crate::types::display::TypeDisplayContext;
 use crate::types::stdlib::Stdlib;
 
 /// Represents a unique identifier for a module
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
-struct ModuleId(u32);
+pub struct ModuleId(u32);
 
 /// Represents a unique identifier for a class, inside a module
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
-struct ClassId(u32);
+pub struct ClassId(u32);
 
 impl ClassId {
-    fn from_class(class: &Class) -> ClassId {
+    pub fn from_class(class: &Class) -> ClassId {
         ClassId(class.index().0)
+    }
+
+    #[cfg(test)]
+    pub fn from_int(id: u32) -> ClassId {
+        ClassId(id)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PysaLocation(pub DisplayRange);
+
+pub fn location_key(range: &DisplayRange) -> String {
+    format!(
+        "{}:{}-{}:{}",
+        range.start.line, range.start.column, range.end.line, range.end.column
+    )
+}
+
+impl std::fmt::Debug for PysaLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PysaLocation({})", location_key(&self.0))
+    }
+}
+
+impl Serialize for PysaLocation {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&location_key(&self.0))
+    }
+}
+
+/// Represents a unique identifier for a function, inside a module
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum FunctionId {
+    Function {
+        location: PysaLocation,
+    },
+    ModuleTopLevel,
+    #[expect(dead_code)]
+    ClassTopLevel {
+        class_id: ClassId,
+    },
+}
+
+impl FunctionId {
+    fn serialize_to_string(&self) -> String {
+        match self {
+            FunctionId::Function { location } => format!("F:{}", location_key(&location.0)),
+            FunctionId::ModuleTopLevel => "MTL".to_owned(),
+            FunctionId::ClassTopLevel { class_id } => format!("CTL:{}", class_id.0),
+        }
+    }
+}
+
+impl Serialize for FunctionId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.serialize_to_string())
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct PysaProjectModule {
     module_id: ModuleId,
-    module_name: String,            // e.g, `foo.bar`
+    module_name: ModuleName,        // e.g, `foo.bar`
     source_path: ModulePathDetails, // Path to the source code
     info_path: Option<PathBuf>,     // Path to the PysaModuleFile
     #[serde(skip_serializing_if = "<&bool>::not")]
@@ -106,16 +177,33 @@ struct PysaProjectFile {
     object_class_id: ClassId,
 }
 
-#[derive(Debug, Clone, Serialize)]
-enum ScopeParent {
-    Function { location: String },
-    Class { location: String },
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub enum ScopeParent {
+    Function { location: PysaLocation },
+    Class { location: PysaLocation },
     TopLevel,
 }
 
+// List of class names that a type refers to, after stripping Optional and Awaitable.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ClassNamesFromType {
+    class_names: Vec<ClassRef>,
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    stripped_coroutine: bool,
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    stripped_optional: bool,
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    stripped_readonly: bool,
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    unbound_type_variable: bool,
+    // Is there an element (after stripping) that isn't a class name?
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    is_exhaustive: bool,
+}
+
 /// Information needed from Pysa about a type.
-#[derive(Debug, Clone, Serialize)]
-struct PysaType {
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PysaType {
     // Pretty string representation of the type. Usually meant for the user.
     string: String,
 
@@ -129,13 +217,12 @@ struct PysaType {
     #[serde(skip_serializing_if = "<&bool>::not")]
     is_enum: bool,
 
-    // The list of classes that this type refers to, after stripping Optional and Awaitable.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    class_names: Vec<ClassRef>,
+    #[serde(skip_serializing_if = "ClassNamesFromType::skip_serializing")]
+    class_names: ClassNamesFromType,
 }
 
-#[derive(Debug, Clone, Serialize)]
-enum FunctionParameter {
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub enum FunctionParameter {
     PosOnly {
         #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
@@ -167,136 +254,315 @@ enum FunctionParameter {
     },
 }
 
-#[derive(Debug, Clone, Serialize)]
-enum FunctionParameters {
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub enum FunctionParameters {
     List(Vec<FunctionParameter>),
     Ellipsis,
     ParamSpec,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct FunctionSignature {
-    parameters: FunctionParameters,
-    return_annotation: PysaType,
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct FunctionSignature {
+    pub parameters: FunctionParameters,
+    pub return_annotation: PysaType,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct ClassRef {
-    module_id: ModuleId,
-    module_name: String, // For debugging purposes only. Reader should use the module id.
-    class_id: ClassId,
-    class_name: String, // For debugging purposes only. Reader should use the class id.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ClassRef {
+    pub module_id: ModuleId,
+    pub module_name: ModuleName, // For debugging purposes only. Reader should use the module id.
+    pub class_id: ClassId,
+    pub class_name: String, // For debugging purposes only. Reader should use the class id.
 }
 
 impl ClassRef {
-    fn from_class(class: &Class, module_ids: &ModuleIds) -> ClassRef {
+    pub fn from_class(class: &Class, module_ids: &ModuleIds) -> ClassRef {
         ClassRef {
             module_id: module_ids
                 .get(ModuleKey::from_module(class.module()))
                 .unwrap(),
-            module_name: class.module_name().to_string(),
+            module_name: class.module_name(),
             class_id: ClassId::from_class(class),
             class_name: class.qname().id().to_string(),
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct FunctionDefinition {
-    name: String,
-    parent: ScopeParent,
-    undecorated_signatures: Vec<FunctionSignature>,
+/// Only store memory-efficient information from `FunctionDefinition`
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct FunctionBaseDefinition {
+    pub name: String,
+    pub parent: ScopeParent,
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_overload: bool,
+    pub is_overload: bool,
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_staticmethod: bool,
+    pub is_staticmethod: bool,
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_classmethod: bool,
+    pub is_classmethod: bool,
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_property_getter: bool,
+    pub is_property_getter: bool,
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_property_setter: bool,
+    pub is_property_setter: bool,
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_stub: bool,
+    pub is_stub: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     /// If this is a method, record the class it is defined in.
-    defining_class: Option<ClassRef>,
+    pub defining_class: Option<ClassRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     /// If the method directly overrides a method in a parent class, we record that class.
     /// This is used for building overriding graphs.
-    overridden_base_class: Option<ClassRef>,
+    pub overridden_base_method: Option<DefinitionRef>,
+}
+
+impl FunctionBaseDefinition {
+    pub fn is_method(&self) -> bool {
+        self.defining_class.is_some()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct FunctionDefinition {
+    #[serde(flatten)]
+    pub base: FunctionBaseDefinition,
+    pub undecorated_signatures: Vec<FunctionSignature>,
+}
+
+impl FunctionDefinition {
+    #[cfg(test)]
+    pub fn with_is_staticmethod(mut self, is_staticmethod: bool) -> Self {
+        self.base.is_staticmethod = is_staticmethod;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_is_classmethod(mut self, is_classmethod: bool) -> Self {
+        self.base.is_classmethod = is_classmethod;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_is_stub(mut self, is_stub: bool) -> Self {
+        self.base.is_stub = is_stub;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_is_property_getter(mut self, is_property_getter: bool) -> Self {
+        self.base.is_property_getter = is_property_getter;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_is_property_setter(mut self, is_property_setter: bool) -> Self {
+        self.base.is_property_setter = is_property_setter;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_defining_class(mut self, defining_class: ClassRef) -> Self {
+        self.base.defining_class = Some(defining_class);
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct DefinitionRef {
+pub struct ModuleFunctionDefinitions<GenericFunctionDefinition>(
+    HashMap<FunctionId, GenericFunctionDefinition>,
+);
+
+impl<GenericFunctionDefinition> ModuleFunctionDefinitions<GenericFunctionDefinition> {
+    pub fn new() -> Self {
+        ModuleFunctionDefinitions(HashMap::new())
+    }
+
+    #[cfg(test)]
+    pub fn iter(&self) -> impl Iterator<Item = (&FunctionId, &GenericFunctionDefinition)> {
+        self.0.iter()
+    }
+}
+
+pub struct WholeProgramFunctionDefinitions<FunctionDefinition>(
+    DashMap<ModuleId, ModuleFunctionDefinitions<FunctionDefinition>>,
+);
+
+impl<GenericFunctionDefinition> WholeProgramFunctionDefinitions<GenericFunctionDefinition> {
+    pub fn new() -> WholeProgramFunctionDefinitions<GenericFunctionDefinition> {
+        WholeProgramFunctionDefinitions(DashMap::new())
+    }
+
+    pub fn get_and_map<T, F>(
+        &self,
+        module_id: ModuleId,
+        function_id: &FunctionId,
+        f: F,
+    ) -> Option<T>
+    where
+        F: FnOnce(&GenericFunctionDefinition) -> T,
+    {
+        // We cannot return a &GenericFunctionDefinition since the reference is only valid
+        // while we are holding a lock on the hash map.
+        // Instead, we allow to call a function f that will and copy the information we need.
+        self.0
+            .get(&module_id)
+            .and_then(|functions| functions.0.get(function_id).map(f))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
+pub struct DefinitionRef {
     module_id: ModuleId,
-    module_name: String, // For debugging purposes only. Reader should use the module id.
-    location: String,
-    identifier: String,
+    pub(crate) module_name: ModuleName, // For debugging purposes only. Reader should use the module id.
+    function_id: FunctionId,
+    pub(crate) identifier: String, // For debugging purposes only
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct ClassDefinition {
-    class_id: ClassId,
-    name: String,
-    bases: Vec<ClassRef>,
-    parent: ScopeParent,
+impl DefinitionRef {
+    fn from_decorated_function(function: &DecoratedFunction, context: &ModuleContext) -> Self {
+        let name = function.metadata().kind.as_func_id().func;
+        let display_range = context.module_info.display_range(function.id_range());
+        DefinitionRef {
+            module_id: context
+                .module_ids
+                .get(ModuleKey::from_module(&context.module_info))
+                .unwrap(),
+            module_name: context.module_info.name(),
+            function_id: FunctionId::Function {
+                location: PysaLocation(display_range),
+            },
+            identifier: name.to_string(),
+        }
+    }
+
+    fn from_find_definition_item_with_docstring(
+        item: &FindDefinitionItemWithDocstring,
+        function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
+        context: &ModuleContext,
+    ) -> Option<Self> {
+        // TODO: For overloads, return the last definition instead of the one from go-to-definitions.
+        let display_range = item.module.display_range(item.definition_range);
+        let function_id = FunctionId::Function {
+            location: PysaLocation(display_range),
+        };
+        let module_id = context
+            .module_ids
+            .get(ModuleKey::from_module(&item.module))
+            .unwrap();
+        function_base_definitions.get_and_map(module_id, &function_id, |function_base_definition| {
+            DefinitionRef {
+                module_id,
+                module_name: item.module.name(),
+                function_id: function_id.clone(),
+                identifier: function_base_definition.name.clone(),
+            }
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub enum PysaClassMro {
+    Resolved(Vec<ClassRef>),
+    Cyclic,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PysaClassField {
+    #[serde(rename = "type")]
+    pub type_: PysaType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explicit_annotation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<PysaLocation>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GlobalVariable {
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub type_: Option<PysaType>,
+    pub location: PysaLocation,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ClassDefinition {
+    pub class_id: ClassId,
+    pub name: String,
+    pub bases: Vec<ClassRef>,
+    pub mro: PysaClassMro,
+    pub parent: ScopeParent,
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_synthesized: bool, // True if this class was synthesized (e.g., from namedtuple), false if from actual `class X:` statement
-    fields: Vec<String>,
+    pub is_synthesized: bool, // True if this class was synthesized (e.g., from namedtuple), false if from actual `class X:` statement
+    pub fields: HashMap<String, PysaClassField>,
+}
+
+impl ClassDefinition {
+    #[cfg(test)]
+    pub fn with_bases(mut self, bases: Vec<ClassRef>) -> Self {
+        self.bases = bases;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_mro(mut self, mro: PysaClassMro) -> Self {
+        self.mro = mro;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_fields(mut self, fields: HashMap<String, PysaClassField>) -> Self {
+        self.fields = fields;
+        self
+    }
 }
 
 /// Format of a module file `my.module:id.json`
 /// Represents all the information Pysa needs about a given module.
 #[derive(Debug, Clone, Serialize)]
-struct PysaModuleFile {
+pub struct PysaModuleFile {
     format_version: u32,
     module_id: ModuleId,
-    module_name: String,
+    module_name: ModuleName,
     source_path: ModulePathDetails,
-    type_of_expression: HashMap<String, PysaType>,
-    goto_definitions_of_expression: HashMap<String, Vec<DefinitionRef>>,
-    function_definitions: HashMap<String, FunctionDefinition>,
-    class_definitions: HashMap<String, ClassDefinition>,
-    global_variables: HashSet<String>,
+    type_of_expression: HashMap<PysaLocation, PysaType>,
+    function_definitions: ModuleFunctionDefinitions<FunctionDefinition>,
+    class_definitions: HashMap<PysaLocation, ClassDefinition>,
+    global_variables: HashMap<String, GlobalVariable>,
+}
+
+impl PysaModuleFile {
+    #[cfg(test)]
+    pub fn global_variables(&self) -> &HashMap<String, GlobalVariable> {
+        &self.global_variables
+    }
 }
 
 /// Represents what makes a module unique
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-struct ModuleKey {
+pub struct ModuleKey {
     name: ModuleName,
     path: ModulePath,
 }
 
 impl ModuleKey {
-    fn from_handle(handle: &Handle) -> ModuleKey {
+    pub fn from_handle(handle: &Handle) -> ModuleKey {
         ModuleKey {
             name: handle.module(),
-            path: handle.path().clone(),
+            path: handle.path().dupe(),
         }
     }
 
-    fn from_module_info(module_info: &ModuleInfo) -> ModuleKey {
-        ModuleKey {
-            name: module_info.name(),
-            path: module_info.path().clone(),
-        }
-    }
-
-    fn from_module(module: &Module) -> ModuleKey {
+    pub fn from_module(module: &Module) -> ModuleKey {
         ModuleKey {
             name: module.name(),
-            path: module.path().clone(),
+            path: module.path().dupe(),
         }
     }
 }
 
-struct ModuleIds(HashMap<ModuleKey, ModuleId>);
+pub struct ModuleIds(HashMap<ModuleKey, ModuleId>);
 
 impl ModuleIds {
     /// Multiple python files can map to the same module name (e.g, `foo.bar`).
     /// This creates a unique and deterministic identifier for each handle.
-    fn new(handles: &[Handle]) -> ModuleIds {
+    pub fn new(handles: &[Handle]) -> ModuleIds {
         let mut modules = handles
             .iter()
             .map(ModuleKey::from_handle)
@@ -315,26 +581,41 @@ impl ModuleIds {
         ModuleIds(result)
     }
 
-    fn get(&self, key: ModuleKey) -> Option<ModuleId> {
+    pub fn get(&self, key: ModuleKey) -> Option<ModuleId> {
         self.0.get(&key).copied()
     }
 }
 
-fn location_key(range: &DisplayRange) -> String {
-    format!(
-        "{}:{}-{}:{}",
-        range.start.line, range.start.column, range.end.line, range.end.column
-    )
+pub struct ModuleContext<'a> {
+    pub handle: &'a Handle,
+    pub transaction: &'a Transaction<'a>,
+    pub bindings: Bindings,
+    pub answers: Arc<Answers>,
+    pub stdlib: Arc<Stdlib>,
+    pub ast: Arc<ModModule>,
+    pub module_info: Module,
+    pub module_id: ModuleId,
+    pub module_ids: &'a ModuleIds,
 }
 
-struct ModuleContext<'a> {
-    handle: &'a Handle,
-    transaction: &'a Transaction<'a>,
-    bindings: &'a Bindings,
-    answers: &'a Answers,
-    stdlib: &'a Stdlib,
-    module_info: &'a ModuleInfo,
-    module_ids: &'a ModuleIds,
+impl ModuleContext<'_> {
+    pub fn create<'a>(
+        handle: &'a Handle,
+        transaction: &'a Transaction<'a>,
+        module_ids: &'a ModuleIds,
+    ) -> Option<ModuleContext<'a>> {
+        Some(ModuleContext {
+            handle,
+            transaction,
+            bindings: transaction.get_bindings(handle)?,
+            answers: transaction.get_answers(handle)?,
+            stdlib: transaction.get_stdlib(handle),
+            ast: transaction.get_ast(handle)?,
+            module_info: transaction.get_module_info(handle)?,
+            module_id: module_ids.get(ModuleKey::from_handle(handle))?,
+            module_ids,
+        })
+    }
 }
 
 fn string_for_type(type_: &Type) -> String {
@@ -359,6 +640,72 @@ fn has_superclass(class: &Class, want: &Class, context: &ModuleContext) -> bool 
             solver.type_order().has_superclass(class, want)
         })
         .unwrap()
+}
+
+impl ClassNamesFromType {
+    pub fn from_class(class: &Class, context: &ModuleContext) -> ClassNamesFromType {
+        ClassNamesFromType {
+            class_names: vec![ClassRef::from_class(class, context.module_ids)],
+            stripped_coroutine: false,
+            stripped_optional: false,
+            stripped_readonly: false,
+            unbound_type_variable: false,
+            is_exhaustive: true,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn from_classes(class_names: Vec<ClassRef>, is_exhaustive: bool) -> ClassNamesFromType {
+        ClassNamesFromType {
+            class_names,
+            stripped_coroutine: false,
+            stripped_optional: false,
+            stripped_readonly: false,
+            unbound_type_variable: false,
+            is_exhaustive,
+        }
+    }
+
+    pub fn not_a_class() -> ClassNamesFromType {
+        ClassNamesFromType {
+            class_names: vec![],
+            stripped_coroutine: false,
+            stripped_optional: false,
+            stripped_readonly: false,
+            unbound_type_variable: false,
+            is_exhaustive: false,
+        }
+    }
+
+    fn skip_serializing(&self) -> bool {
+        self.class_names.is_empty()
+    }
+
+    pub fn with_strip_optional(mut self, stripped_optional: bool) -> ClassNamesFromType {
+        self.stripped_optional = stripped_optional;
+        self
+    }
+
+    pub fn with_strip_coroutine(mut self, stripped_coroutine: bool) -> ClassNamesFromType {
+        self.stripped_coroutine = stripped_coroutine;
+        self
+    }
+
+    fn join_with(mut self, other: ClassNamesFromType) -> ClassNamesFromType {
+        self.class_names.extend(other.class_names);
+        self.stripped_coroutine |= other.stripped_coroutine;
+        self.stripped_optional |= other.stripped_optional;
+        self.stripped_readonly |= other.stripped_readonly;
+        self.unbound_type_variable |= other.unbound_type_variable;
+        self.is_exhaustive &= other.is_exhaustive;
+        self
+    }
+
+    fn sort_and_dedup(mut self) -> ClassNamesFromType {
+        self.class_names.sort();
+        self.class_names.dedup();
+        self
+    }
 }
 
 fn strip_optional(type_: &Type) -> Option<&Type> {
@@ -414,31 +761,73 @@ fn is_scalar_type(get: &Type, want: &Class, context: &ModuleContext) -> bool {
     }
 }
 
-fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> Vec<Class> {
+fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromType {
     if let Some(inner) = strip_optional(type_) {
-        return get_classes_of_type(inner, context);
+        return get_classes_of_type(inner, context).with_strip_optional(true);
     }
     if let Some(inner) = strip_awaitable(type_, context) {
-        return get_classes_of_type(inner, context);
+        return get_classes_of_type(inner, context).with_strip_coroutine(true);
     }
     if let Some(inner) = strip_coroutine(type_, context) {
-        return get_classes_of_type(inner, context);
+        return get_classes_of_type(inner, context).with_strip_coroutine(true);
     }
+    // No need to strip ReadOnly[], it is already stripped by pyrefly.
     match type_ {
-        Type::ClassType(class_type) => vec![class_type.class_object().clone()],
-        Type::Union(elements) => elements
+        Type::ClassType(class_type) => {
+            ClassNamesFromType::from_class(class_type.class_object(), context)
+        }
+        Type::Tuple(_) => ClassNamesFromType::from_class(context.stdlib.tuple_object(), context),
+        Type::Union(elements) if !elements.is_empty() => elements
             .iter()
-            .flat_map(|inner| get_classes_of_type(inner, context))
-            .collect(),
+            .map(|inner| get_classes_of_type(inner, context))
+            .reduce(|acc, next| acc.join_with(next))
+            .unwrap()
+            .sort_and_dedup(),
         Type::TypeAlias(alias) => get_classes_of_type(&alias.as_type(), context),
-        _ => Vec::new(),
+        _ => ClassNamesFromType::not_a_class(),
     }
 }
 
 impl PysaType {
-    fn from_type(type_: &Type, context: &ModuleContext) -> PysaType {
+    #[cfg(test)]
+    pub fn new(string: String, class_names: ClassNamesFromType) -> PysaType {
+        PysaType {
+            string,
+            is_bool: false,
+            is_int: false,
+            is_float: false,
+            is_enum: false,
+            class_names,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_is_bool(mut self, is_bool: bool) -> PysaType {
+        self.is_bool = is_bool;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_is_int(mut self, is_int: bool) -> PysaType {
+        self.is_int = is_int;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_is_float(mut self, is_float: bool) -> PysaType {
+        self.is_float = is_float;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_is_enum(mut self, is_enum: bool) -> PysaType {
+        self.is_enum = is_enum;
+        self
+    }
+
+    pub fn from_type(type_: &Type, context: &ModuleContext) -> PysaType {
         // Promote `Literal[..]` into `str` or `int`.
-        let type_ = type_.clone().promote_literals(context.stdlib);
+        let type_ = type_.clone().promote_literals(&context.stdlib);
         let type_ = strip_self_type(type_);
 
         let string = string_for_type(&type_);
@@ -449,77 +838,52 @@ impl PysaType {
             is_int: is_scalar_type(&type_, context.stdlib.int().class_object(), context),
             is_float: is_scalar_type(&type_, context.stdlib.float().class_object(), context),
             is_enum: is_scalar_type(&type_, context.stdlib.enum_class().class_object(), context),
-            class_names: {
-                let mut classes = get_classes_of_type(&type_, context);
-                classes.sort();
-                classes.dedup();
-                classes
-                    .into_iter()
-                    .map(|class_type| ClassRef::from_class(&class_type, context.module_ids))
-                    .collect()
-            },
+            class_names: get_classes_of_type(&type_, context),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn from_class_type(class_type: &ClassType, context: &ModuleContext) -> PysaType {
+        PysaType::from_type(&Type::ClassType(class_type.clone()), context)
+    }
+
+    #[cfg(test)]
+    pub fn from_class(class: &Class, context: &ModuleContext) -> PysaType {
+        PysaType::from_type(
+            &Type::ClassType(ClassType::new(class.dupe(), Default::default())),
+            context,
+        )
+    }
+
+    #[cfg(test)]
+    pub fn any_implicit() -> PysaType {
+        PysaType {
+            string: "Unknown".to_owned(),
+            is_bool: false,
+            is_int: false,
+            is_float: false,
+            is_enum: false,
+            class_names: ClassNamesFromType::not_a_class(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn none() -> PysaType {
+        PysaType {
+            string: "None".to_owned(),
+            is_bool: false,
+            is_int: false,
+            is_float: false,
+            is_enum: false,
+            class_names: ClassNamesFromType::not_a_class(),
         }
     }
 }
 
 struct VisitorContext<'a> {
     module_context: &'a ModuleContext<'a>,
-    type_of_expression: &'a mut HashMap<String, PysaType>,
-    definitions_of_expression: &'a mut HashMap<String, Vec<DefinitionRef>>,
-    global_variables: &'a mut HashSet<String>,
-}
-
-fn add_expression_definitions(
-    range: &DisplayRange,
-    definitions: Vec<FindDefinitionItemWithDocstring>,
-    identifier: &str,
-    context: &mut VisitorContext,
-) {
-    let callees = definitions
-        .iter()
-        .filter(|definition| {
-            matches!(
-                definition.metadata,
-                DefinitionMetadata::Variable(Some(SymbolKind::Function | SymbolKind::Class))
-                    | DefinitionMetadata::Attribute(_)
-            )
-        })
-        .filter_map(|definition| {
-            let module_info = &definition.module;
-            let display_range = module_info.display_range(definition.definition_range);
-            match context
-                .module_context
-                .module_ids
-                .get(ModuleKey::from_module_info(module_info))
-            {
-                Some(module_id) => Some(DefinitionRef {
-                    module_id,
-                    module_name: module_info.name().to_string(),
-                    location: location_key(&display_range),
-                    identifier: identifier.to_owned(),
-                }),
-                None => {
-                    debug!(
-                        "Module {} was not type checked, ignoring.",
-                        module_info.name()
-                    );
-                    None
-                }
-            }
-        })
-        .collect::<Vec<_>>();
-
-    if callees.is_empty() {
-        return;
-    }
-
-    assert!(
-        context
-            .definitions_of_expression
-            .insert(location_key(range), callees)
-            .is_none(),
-        "Found expressions with the same location"
-    );
+    type_of_expression: &'a mut HashMap<PysaLocation, PysaType>,
+    global_variables: &'a mut HashMap<String, GlobalVariable>,
 }
 
 fn export_function_parameter(param: &Param, context: &ModuleContext) -> FunctionParameter {
@@ -582,57 +946,13 @@ fn visit_expression(e: &Expr, context: &mut VisitorContext) {
             context
                 .type_of_expression
                 .insert(
-                    location_key(&display_range),
+                    PysaLocation(display_range),
                     PysaType::from_type(&type_, context.module_context)
                 )
                 .is_none(),
             "Found expressions with the same location"
         );
     }
-
-    // For some AST nodes, try to find the definitions.
-    match e {
-        Expr::Name(name)
-            if matches!(
-                name.ctx,
-                ExprContext::Load | ExprContext::Del | ExprContext::Invalid
-            ) =>
-        {
-            let identifier = Ast::expr_name_identifier(name.clone());
-            let display_range = context.module_context.module_info.display_range(range);
-
-            let definitions = context
-                .module_context
-                .transaction
-                .find_definition_for_name_use(
-                    context.module_context.handle,
-                    &identifier,
-                    &FindPreference::default(),
-                )
-                .map_or(vec![], |d| vec![d]);
-
-            add_expression_definitions(&display_range, definitions, name.id.as_str(), context);
-        }
-        Expr::Attribute(attribute) => {
-            let display_range = context.module_context.module_info.display_range(range);
-            let definitions = context
-                .module_context
-                .transaction
-                .find_definition_for_attribute(
-                    context.module_context.handle,
-                    attribute.value.range(),
-                    &attribute.attr,
-                    &FindPreference::default(),
-                );
-            add_expression_definitions(
-                &display_range,
-                definitions,
-                attribute.attr.as_str(),
-                context,
-            );
-        }
-        _ => {}
-    };
 
     e.recurse(&mut |e| visit_expression(e, context));
 }
@@ -643,7 +963,32 @@ fn visit_assign_target(target: &Expr, is_top_level: bool, context: &mut VisitorC
     }
 
     Ast::expr_lvalue(target, &mut |global: &ExprName| {
-        context.global_variables.insert(global.id.to_string());
+        let type_ = context
+            .module_context
+            .bindings
+            .key_to_idx_hashed_opt(Hashed::new(&Key::Definition(ShortIdentifier::expr_name(
+                global,
+            ))))
+            .and_then(|idx| context.module_context.answers.get_idx(idx));
+        if let Some(type_) = type_.as_ref()
+            && type_.ty().is_type_variable()
+        {
+            // Don't export type variable globals.
+            return;
+        }
+        let location = PysaLocation(
+            context
+                .module_context
+                .module_info
+                .display_range(global.range()),
+        );
+        context
+            .global_variables
+            .entry(global.id.to_string())
+            .or_insert(GlobalVariable {
+                type_: type_.map(|type_| PysaType::from_type(type_.ty(), context.module_context)),
+                location,
+            });
     });
 }
 
@@ -825,10 +1170,10 @@ fn get_scope_parent(ast: &ModModule, module_info: &Module, range: TextRange) -> 
             AnyNodeRef::StmtClassDef(class_def) if class_def.name.range() == range => None,
             AnyNodeRef::StmtFunctionDef(fun_def) if fun_def.name.range() == range => None,
             AnyNodeRef::StmtClassDef(class_def) => Some(ScopeParent::Class {
-                location: location_key(&module_info.display_range(class_def.name.range())),
+                location: PysaLocation(module_info.display_range(class_def.name.range())),
             }),
             AnyNodeRef::StmtFunctionDef(fun_def) => Some(ScopeParent::Function {
-                location: location_key(&module_info.display_range(fun_def.name.range())),
+                location: PysaLocation(module_info.display_range(fun_def.name.range())),
             }),
             _ => None,
         })
@@ -846,13 +1191,13 @@ fn get_all_functions(
 
 // Return the function type, considering decorators and overloads.
 fn get_function_type(function: &DecoratedFunction, context: &ModuleContext) -> Type {
-    let definition_binding = Key::Definition(function.undecorated.identifier.clone());
+    let definition_binding = Key::Definition(function.undecorated.identifier);
     let idx = context.bindings.key_to_idx(&definition_binding);
     context.answers.get_idx(idx).unwrap().arc_clone_ty()
 }
 
 fn get_undecorated_return_type(function: &DecoratedFunction, context: &ModuleContext) -> Type {
-    let return_binding = Key::ReturnType(function.undecorated.identifier.clone());
+    let return_binding = Key::ReturnType(function.undecorated.identifier);
     let idx = context.bindings.key_to_idx(&return_binding);
     context.answers.get_idx(idx).unwrap().arc_clone_ty()
 }
@@ -865,77 +1210,76 @@ fn should_export_function(function: &DecoratedFunction, context: &ModuleContext)
     !has_successor || !function.is_overload()
 }
 
-fn get_super_class_member(
-    class: &Class,
-    field: &Name,
-    context: &ModuleContext,
-) -> Option<ClassRef> {
-    context
-        .transaction
-        .ad_hoc_solve(context.handle, |solver| {
-            solver.get_super_class_member(class, None, field)
-        })
-        .unwrap()
-        .map(|member| ClassRef::from_class(&member.defining_class, context.module_ids))
+pub struct ModuleReversedOverrideGraph(HashMap<DefinitionRef, DefinitionRef>);
+
+impl ModuleReversedOverrideGraph {}
+
+pub struct WholeProgramReversedOverrideGraph(DashMap<DefinitionRef, DefinitionRef>);
+
+impl WholeProgramReversedOverrideGraph {
+    pub fn new() -> WholeProgramReversedOverrideGraph {
+        WholeProgramReversedOverrideGraph(DashMap::new())
+    }
 }
 
-fn export_all_functions(
-    ast: &ModModule,
+fn get_undecorated_signatures(
+    function: DecoratedFunction,
     context: &ModuleContext,
-) -> HashMap<String, FunctionDefinition> {
-    let mut function_definitions = HashMap::new();
+) -> Vec<FunctionSignature> {
+    // We need the list of raw parameters, ignoring decorators.
+    // For overloads, we need the list of all overloads, not just the current one.
+    // To get it, we check if `get_function_type` returns `Type::Overload`.
+    let decorated_type = get_function_type(&function, context);
+    match decorated_type {
+        Type::Overload(Overload { signatures, .. }) => signatures
+            .iter()
+            .map(|overload_type| match overload_type {
+                pyrefly_types::types::OverloadType::Function(f) => f,
+                pyrefly_types::types::OverloadType::Forall(pyrefly_types::types::Forall {
+                    body,
+                    ..
+                }) => body,
+            })
+            .map(|function| export_function_signature(&function.signature, context))
+            .collect::<Vec<_>>(),
+        _ => vec![FunctionSignature {
+            parameters: FunctionParameters::List(
+                function
+                    .undecorated
+                    .params
+                    .iter()
+                    .map(|param| export_function_parameter(param, context))
+                    .collect(),
+            ),
+            return_annotation: PysaType::from_type(
+                &get_undecorated_return_type(&function, context),
+                context,
+            ),
+        }],
+    }
+}
 
-    for function in get_all_functions(context.bindings, context.answers) {
+pub fn export_all_functions(
+    reversed_override_graph: &WholeProgramReversedOverrideGraph,
+    context: &ModuleContext,
+) -> ModuleFunctionDefinitions<FunctionBaseDefinition> {
+    let mut function_base_definitions = ModuleFunctionDefinitions::new();
+
+    for function in get_all_functions(&context.bindings, &context.answers) {
         if !should_export_function(&function, context) {
             continue;
         }
 
-        // We need the list of raw parameters, ignoring decorators.
-        // For overloads, we need the list of all overloads, not just the current one.
-        // To get it, we check if `get_function_type` returns `Type::Overload`.
-        let decorated_type = get_function_type(&function, context);
-        let undecorated_signatures = match decorated_type {
-            Type::Overload(Overload { signatures, .. }) => signatures
-                .iter()
-                .map(|overload_type| match overload_type {
-                    pyrefly_types::types::OverloadType::Function(f) => f,
-                    pyrefly_types::types::OverloadType::Forall(pyrefly_types::types::Forall {
-                        body,
-                        ..
-                    }) => body,
-                })
-                .map(|function| export_function_signature(&function.signature, context))
-                .collect::<Vec<_>>(),
-            _ => vec![FunctionSignature {
-                parameters: FunctionParameters::List(
-                    function
-                        .undecorated
-                        .params
-                        .iter()
-                        .map(|param| export_function_parameter(param, context))
-                        .collect(),
-                ),
-                return_annotation: PysaType::from_type(
-                    &get_undecorated_return_type(&function, context),
-                    context,
-                ),
-            }],
-        };
-
-        let display_range = context.module_info.display_range(function.id_range());
-        let name = function.metadata().kind.as_func_id().func;
-        let parent = get_scope_parent(ast, context.module_info, function.id_range());
-        let overridden_base_class = function
-            .defining_cls()
-            .and_then(|class| get_super_class_member(class, &name, context));
+        let current_function = DefinitionRef::from_decorated_function(&function, context);
+        let parent = get_scope_parent(&context.ast, &context.module_info, function.id_range());
         assert!(
-            function_definitions
+            function_base_definitions
+                .0
                 .insert(
-                    location_key(&display_range),
-                    FunctionDefinition {
-                        name: name.to_string(),
+                    current_function.function_id.clone(),
+                    FunctionBaseDefinition {
+                        name: current_function.identifier.clone(),
                         parent,
-                        undecorated_signatures,
                         is_overload: function.metadata().flags.is_overload,
                         is_staticmethod: function.metadata().flags.is_staticmethod,
                         is_classmethod: function.metadata().flags.is_classmethod,
@@ -949,7 +1293,10 @@ fn export_all_functions(
                         defining_class: function
                             .defining_cls()
                             .map(|class| ClassRef::from_class(class, context.module_ids)),
-                        overridden_base_class,
+                        overridden_base_method: reversed_override_graph
+                            .0
+                            .get(&current_function)
+                            .map(|r| r.clone()),
                     }
                 )
                 .is_none(),
@@ -957,13 +1304,13 @@ fn export_all_functions(
         );
     }
 
-    function_definitions
+    function_base_definitions
 }
 
 fn get_all_classes(bindings: &Bindings, answers: &Answers) -> impl Iterator<Item = Class> {
     bindings
         .keys::<KeyClass>()
-        .map(|idx| answers.get_idx(idx).unwrap().0.clone().unwrap())
+        .map(|idx| answers.get_idx(idx).unwrap().0.dupe().unwrap())
 }
 
 fn get_class_field(
@@ -979,10 +1326,102 @@ fn get_class_field(
         .unwrap()
 }
 
-fn export_all_classes(
-    ast: &ModModule,
-    context: &ModuleContext,
-) -> HashMap<String, ClassDefinition> {
+fn get_class_field_declaration<'a>(
+    class: &'a Class,
+    field: &'a Name,
+    context: &'a ModuleContext,
+) -> Option<&'a BindingClassField> {
+    let key_class_field = KeyClassField(class.index(), field.clone());
+    // We use `key_to_idx_hashed_opt` below because the key might not be valid (could be a synthesized field).
+    context
+        .bindings
+        .key_to_idx_hashed_opt(Hashed::new(&key_class_field))
+        .map(|idx| context.bindings.get(idx))
+}
+
+fn get_class_mro(class: &Class, bindings: &Bindings, answers: &Answers) -> Arc<ClassMro> {
+    answers
+        .get_idx(bindings.key_to_idx(&KeyClassMro(class.index())))
+        .unwrap()
+}
+
+fn export_class_fields(class: &Class, context: &ModuleContext) -> HashMap<String, PysaClassField> {
+    class
+        .fields()
+        .filter_map(|name| get_class_field(class, name, context).map(|field| (name, field)))
+        .filter_map(|(name, field)| {
+            let field_binding = get_class_field_declaration(class, name, context);
+
+            let explicit_annotation = match field_binding {
+                Some(BindingClassField {
+                    definition: ClassFieldDefinition::DeclaredByAnnotation { annotation },
+                    ..
+                }) => Some(*annotation),
+                Some(BindingClassField {
+                    definition: ClassFieldDefinition::AssignedInBody { annotation, .. },
+                    ..
+                }) => *annotation,
+                Some(BindingClassField {
+                    definition: ClassFieldDefinition::DefinedInMethod { annotation, .. },
+                    ..
+                }) => *annotation,
+                _ => None,
+            }
+            .map(|idx| context.bindings.idx_to_key(idx))
+            .and_then(|key_annotation| match key_annotation {
+                // We want to export the annotation as it is in the source code.
+                // We cannot use the answer for `key_annotation` (which wraps a `Type`),
+                // because it contains a normalized type where some elements have
+                // been stripped out (most notably, `typing.Annotated`).
+                KeyAnnotation::Annotation(identifier) => {
+                    // `Ast::locate_node` returns all covering AST nodes, from innermost to outermost.
+                    // The innermost will be the Name node, so we need the second node.
+                    match Ast::locate_node(&context.ast, identifier.range().start()).get(1) {
+                        Some(AnyNodeRef::StmtAnnAssign(assign)) => Some(
+                            context
+                                .module_info
+                                .code_at(assign.annotation.range())
+                                .to_owned(),
+                        ),
+                        _ => None,
+                    }
+                }
+                KeyAnnotation::AttrAnnotation(range) => {
+                    Some(context.module_info.code_at(*range).to_owned())
+                }
+                _ => None,
+            });
+
+            match field_binding {
+                Some(BindingClassField {
+                    definition: ClassFieldDefinition::MethodLike { .. },
+                    ..
+                }) => {
+                    // Exclude fields that are functions definitons, because they are already exported in `function_definitions`.
+                    None
+                }
+                Some(BindingClassField { range, .. }) => Some((
+                    name.to_string(),
+                    PysaClassField {
+                        type_: PysaType::from_type(&field.ty(), context),
+                        explicit_annotation,
+                        location: Some(PysaLocation(context.module_info.display_range(*range))),
+                    },
+                )),
+                _ => Some((
+                    name.to_string(),
+                    PysaClassField {
+                        type_: PysaType::from_type(&field.ty(), context),
+                        explicit_annotation,
+                        location: None,
+                    },
+                )),
+            }
+        })
+        .collect()
+}
+
+pub fn export_all_classes(context: &ModuleContext) -> HashMap<PysaLocation, ClassDefinition> {
     let mut class_definitions = HashMap::new();
 
     for class_idx in context.bindings.keys::<KeyClass>() {
@@ -991,58 +1430,53 @@ fn export_all_classes(
             .get_idx(class_idx)
             .unwrap()
             .0
-            .clone()
+            .dupe()
             .unwrap();
         let display_range = context.module_info.display_range(class.qname().range());
         let class_index = class.index();
-        let parent = get_scope_parent(ast, context.module_info, class.qname().range());
+        let parent = get_scope_parent(&context.ast, &context.module_info, class.qname().range());
         let metadata = context
             .answers
             .get_idx(context.bindings.key_to_idx(&KeyClassMetadata(class_index)))
             .unwrap();
 
         let is_synthesized = match context.bindings.get(class_idx) {
-            BindingClass::FunctionalClassDef(_, _, _) => true,
+            BindingClass::FunctionalClassDef(_, _, _, _) => true,
             BindingClass::ClassDef(_) => false,
         };
 
-        let fields = class
-            .fields()
-            .filter_map(|field| {
-                match get_class_field(&class, field, context) {
-                    // We want to exclude fields that are function definitions,
-                    // since those are exported in `definitions_of_expression`.
-                    // There is no easy way to know if a field matches a `def ..`
-                    // statement, so just use the type and explicit annotation
-                    // as a heuristic for now.
-                    Some(class_field)
-                        if class_field.ty().is_function_type()
-                            && !class_field.has_explicit_annotation() =>
-                    {
-                        None // This is a method.
-                    }
-                    Some(_) => Some(field.to_string()),
-                    _ => None,
-                }
-            })
-            .collect();
+        let fields = export_class_fields(&class, context);
+
+        let bases = metadata
+            .base_class_objects()
+            .iter()
+            .map(|base_class| ClassRef::from_class(base_class, context.module_ids))
+            .collect::<Vec<_>>();
+
+        let mro = match &*get_class_mro(&class, &context.bindings, &context.answers) {
+            ClassMro::Resolved(mro) => PysaClassMro::Resolved(
+                mro.iter()
+                    .map(|class_type| {
+                        ClassRef::from_class(class_type.class_object(), context.module_ids)
+                    })
+                    .collect(),
+            ),
+            ClassMro::Cyclic => PysaClassMro::Cyclic,
+        };
 
         let class_definition = ClassDefinition {
             class_id: ClassId::from_class(&class),
             name: class.qname().id().to_string(),
             parent,
-            bases: metadata
-                .base_class_objects()
-                .iter()
-                .map(|base_class| ClassRef::from_class(base_class, context.module_ids))
-                .collect::<Vec<_>>(),
+            bases,
+            mro,
             is_synthesized,
             fields,
         };
 
         assert!(
             class_definitions
-                .insert(location_key(&display_range), class_definition)
+                .insert(PysaLocation(display_range), class_definition)
                 .is_none(),
             "Found class definitions with the same location"
         );
@@ -1053,10 +1487,7 @@ fn export_all_classes(
 
 fn is_unittest_module(bindings: &Bindings, answers: &Answers) -> bool {
     get_all_classes(bindings, answers).any(|class| {
-        match &*answers
-            .get_idx(bindings.key_to_idx(&KeyClassMro(class.index())))
-            .unwrap()
-        {
+        match &*get_class_mro(&class, bindings, answers) {
             ClassMro::Resolved(mro) => mro
                 .iter()
                 .any(|base| base.has_qname("unittest.case", "TestCase")),
@@ -1101,67 +1532,118 @@ fn is_pytest_module(bindings: &Bindings, answers: &Answers, ast: &ModModule) -> 
 /// We currently use the following heuristics:
 /// - If a class inherits from `unittest.TestCase`, we assume this is a test file.
 /// - If `pytest` is imported and at least one function starts with `test_`, we assume this is a test file.
-fn is_test_module(handle: &Handle, transaction: &Transaction) -> bool {
-    let bindings = &transaction.get_bindings(handle).unwrap();
-    let answers = &*transaction.get_answers(handle).unwrap();
-    let ast = &*transaction.get_ast(handle).unwrap();
-
-    is_unittest_module(bindings, answers) || is_pytest_module(bindings, answers, ast)
+pub fn is_test_module(context: &ModuleContext) -> bool {
+    is_unittest_module(&context.bindings, &context.answers)
+        || is_pytest_module(&context.bindings, &context.answers, &context.ast)
 }
 
-fn get_module_file(
-    handle: &Handle,
-    module_id: ModuleId,
-    transaction: &Transaction,
-    module_ids: &ModuleIds,
+pub fn add_undecorated_signatures(
+    function_base_definitions: &ModuleFunctionDefinitions<FunctionBaseDefinition>,
+    context: &ModuleContext,
+) -> ModuleFunctionDefinitions<FunctionDefinition> {
+    let mut function_definitions = HashMap::new();
+    for function in get_all_functions(&context.bindings, &context.answers) {
+        let current_function = DefinitionRef::from_decorated_function(&function, context);
+        if let Some(function_base_definition) = function_base_definitions
+            .0
+            .get(&current_function.function_id)
+        {
+            assert!(
+                function_definitions
+                    .insert(
+                        current_function.function_id.clone(),
+                        FunctionDefinition {
+                            base: function_base_definition.to_owned(),
+                            undecorated_signatures: get_undecorated_signatures(function, context),
+                        },
+                    )
+                    .is_none(),
+                "Found undecorated signatures for the same function"
+            );
+        }
+    }
+    ModuleFunctionDefinitions(function_definitions)
+}
+
+pub fn get_module_file(
+    context: &ModuleContext,
+    function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
 ) -> PysaModuleFile {
-    let module_info = &transaction.get_module_info(handle).unwrap();
-
-    let ast = &*transaction.get_ast(handle).unwrap();
-    let bindings = &transaction.get_bindings(handle).unwrap();
-    let answers = &*transaction.get_answers(handle).unwrap();
-    let stdlib = &*transaction.get_stdlib(handle);
-
     let mut type_of_expression = HashMap::new();
-    let mut definitions_of_expression = HashMap::new();
-    let mut global_variables = HashSet::new();
-    let context = ModuleContext {
-        handle,
-        transaction,
-        bindings,
-        answers,
-        stdlib,
-        module_info,
-        module_ids,
-    };
+    let mut global_variables = HashMap::new();
 
-    for stmt in &ast.body {
+    for stmt in &context.ast.body {
         visit_statement(
             stmt,
             /* is_top_level */ true,
             &mut VisitorContext {
-                module_context: &context,
+                module_context: context,
                 type_of_expression: &mut type_of_expression,
-                definitions_of_expression: &mut definitions_of_expression,
                 global_variables: &mut global_variables,
             },
         );
     }
 
-    let function_definitions = export_all_functions(ast, &context);
-    let class_definitions = export_all_classes(ast, &context);
+    let function_base_definitions_for_module =
+        function_base_definitions.0.get(&context.module_id).unwrap();
+    let function_definitions =
+        add_undecorated_signatures(&function_base_definitions_for_module, context);
+    let class_definitions = export_all_classes(context);
 
     PysaModuleFile {
         format_version: 1,
-        module_id,
-        module_name: module_info.name().to_string(),
-        source_path: module_info.path().details().clone(),
+        module_id: context.module_id,
+        module_name: context.module_info.name(),
+        source_path: context.module_info.path().details().clone(),
         type_of_expression,
-        goto_definitions_of_expression: definitions_of_expression,
         function_definitions,
         class_definitions,
         global_variables,
     }
+}
+
+pub fn collect_function_base_definitions(
+    handles: &Vec<Handle>,
+    transaction: &Transaction,
+    module_ids: &ModuleIds,
+    reversed_override_graph: &WholeProgramReversedOverrideGraph,
+) -> WholeProgramFunctionDefinitions<FunctionBaseDefinition> {
+    let base_definitions: WholeProgramFunctionDefinitions<FunctionBaseDefinition> =
+        WholeProgramFunctionDefinitions::new();
+
+    ThreadPool::new().install(|| {
+        handles.par_iter().for_each(|handle| {
+            let module_id = module_ids.get(ModuleKey::from_handle(handle)).unwrap();
+            let base_definitions_for_module = export_all_functions(
+                reversed_override_graph,
+                &ModuleContext::create(handle, transaction, module_ids).unwrap(),
+            );
+            base_definitions
+                .0
+                .insert(module_id, base_definitions_for_module);
+        });
+    });
+
+    base_definitions
+}
+
+pub fn build_reversed_override_graph(
+    handles: &Vec<Handle>,
+    transaction: &Transaction,
+    module_ids: &ModuleIds,
+) -> WholeProgramReversedOverrideGraph {
+    let reversed_override_graph = WholeProgramReversedOverrideGraph::new();
+
+    ThreadPool::new().install(|| {
+        handles.par_iter().for_each(|handle| {
+            let context = ModuleContext::create(handle, transaction, module_ids).unwrap();
+            for (key, value) in create_reversed_override_graph_for_module(&context).0 {
+                reversed_override_graph.0.insert(key, value);
+            }
+        });
+    });
+
+    reversed_override_graph
 }
 
 pub fn write_results(results_directory: &Path, transaction: &Transaction) -> anyhow::Result<()> {
@@ -1207,7 +1689,7 @@ pub fn write_results(results_directory: &Path, transaction: &Transaction) -> any
                     module_id,
                     PysaProjectModule {
                         module_id,
-                        module_name: handle.module().to_string(),
+                        module_name: handle.module(),
                         source_path: handle.path().details().clone(),
                         info_path: info_path.clone(),
                         is_test: false,
@@ -1226,6 +1708,16 @@ pub fn write_results(results_directory: &Path, transaction: &Transaction) -> any
 
     let project_modules = Arc::new(Mutex::new(project_modules));
 
+    let reversed_override_graph = build_reversed_override_graph(&handles, transaction, &module_ids);
+    let function_base_definitions = collect_function_base_definitions(
+        &handles,
+        transaction,
+        &module_ids,
+        &reversed_override_graph,
+    );
+
+    let _override_graph = OverrideGraph::from_reversed(&reversed_override_graph);
+
     // Retrieve and dump information about each module, in parallel.
     ThreadPool::new().install(|| -> anyhow::Result<()> {
         module_info_tasks.into_par_iter().try_for_each(
@@ -1233,12 +1725,13 @@ pub fn write_results(results_directory: &Path, transaction: &Transaction) -> any
                 let writer = BufWriter::new(File::create(
                     results_directory.join("modules").join(info_path),
                 )?);
+                let context = ModuleContext::create(handle, transaction, &module_ids).unwrap();
                 serde_json::to_writer(
                     writer,
-                    &get_module_file(handle, module_id, transaction, &module_ids),
+                    &get_module_file(&context, &function_base_definitions),
                 )?;
 
-                if is_test_module(handle, transaction) {
+                if is_test_module(&context) {
                     project_modules
                         .lock()
                         .unwrap()

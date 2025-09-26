@@ -66,6 +66,11 @@ const docsSidebar = [
     },
     {
         type: 'doc' as const,
+        id: 'pydantic',
+        label: 'Pydantic Support',
+    },
+    {
+        type: 'doc' as const,
         id: 'autotype',
         label: 'Automating Type Annotations',
     },

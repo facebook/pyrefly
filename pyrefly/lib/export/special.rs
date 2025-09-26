@@ -38,7 +38,8 @@ pub enum SpecialExport {
     OsExit,
     Len,
     Bool,
-    Type,
+    BuiltinsType,
+    TypingType,
     NoTypeCheck,
     Overload,
     AbstractMethod,
@@ -49,6 +50,13 @@ pub enum SpecialExport {
     PydanticField,
     HasAttr,
     GetAttr,
+    Callable,
+    BuiltinsDict,
+    TypingDict,
+    BuiltinsList,
+    TypingList,
+    BuiltinsTuple,
+    TypingTuple,
 }
 
 impl SpecialExport {
@@ -80,7 +88,8 @@ impl SpecialExport {
             "_exit" => Some(Self::OsExit),
             "len" => Some(Self::Len),
             "bool" => Some(Self::Bool),
-            "type" => Some(Self::Type),
+            "type" => Some(Self::BuiltinsType),
+            "Type" => Some(Self::TypingType),
             "no_type_check" => Some(Self::NoTypeCheck),
             "overload" => Some(Self::Overload),
             "abstractmethod" => Some(Self::AbstractMethod),
@@ -89,6 +98,13 @@ impl SpecialExport {
             "hasattr" => Some(Self::HasAttr),
             "getattr" => Some(Self::GetAttr),
             "TypeAliasType" => Some(Self::TypeAliasType),
+            "Callable" => Some(Self::Callable),
+            "dict" => Some(Self::BuiltinsDict),
+            "Dict" => Some(Self::TypingDict),
+            "list" => Some(Self::BuiltinsList),
+            "List" => Some(Self::TypingList),
+            "tuple" => Some(Self::BuiltinsTuple),
+            "Tuple" => Some(Self::TypingTuple),
             _ => None,
         }
     }
@@ -113,7 +129,11 @@ impl SpecialExport {
             | Self::SelfType
             | Self::Cast
             | Self::Generic
-            | Self::Protocol => {
+            | Self::Protocol
+            | Self::TypingType
+            | Self::TypingDict
+            | Self::TypingList
+            | Self::TypingTuple => {
                 matches!(m.as_str(), "typing" | "typing_extensions")
             }
             Self::CollectionsNamedTuple => matches!(m.as_str(), "collections"),
@@ -122,15 +142,22 @@ impl SpecialExport {
             | Self::Len
             | Self::Quit
             | Self::Bool
-            | Self::Type
+            | Self::BuiltinsType
             | Self::HasAttr
-            | Self::GetAttr => {
+            | Self::GetAttr
+            | Self::BuiltinsDict
+            | Self::BuiltinsList
+            | Self::BuiltinsTuple => {
                 matches!(m.as_str(), "builtins")
             }
             Self::Exit => matches!(m.as_str(), "sys" | "builtins"),
             Self::OsExit => matches!(m.as_str(), "os"),
             Self::AbstractMethod => matches!(m.as_str(), "abc"),
             Self::PydanticConfigDict | Self::PydanticField => matches!(m.as_str(), "pydantic"),
+            Self::Callable => matches!(
+                m.as_str(),
+                "typing" | "typing_extensions" | "collections.abc"
+            ),
         }
     }
 }

@@ -34,7 +34,7 @@ use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::InlayHintConfig;
 
-/// Information about the Python environment p
+/// Information about the Python environment provided by this workspace.
 #[derive(Debug, Clone)]
 pub struct PythonInfo {
     /// The path to the interpreter used to query this `PythonInfo`'s [`PythonEnvironment`].
@@ -156,15 +156,29 @@ pub enum DiagnosticMode {
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LspAnalysisConfig {
-    #[expect(unused)]
+    #[allow(dead_code)]
     pub diagnostic_mode: Option<DiagnosticMode>,
     pub import_format: Option<ImportFormat>,
     pub inlay_hints: Option<InlayHintConfig>,
 }
 
+fn deserialize_analysis<'de, D>(deserializer: D) -> Result<Option<LspAnalysisConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match Option::<LspAnalysisConfig>::deserialize(deserializer) {
+        Ok(value) => Ok(value),
+        Err(e) => {
+            eprintln!("Could not decode analysis config: {e}");
+            Ok(None)
+        }
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LspConfig {
+    #[serde(default, deserialize_with = "deserialize_analysis")]
     analysis: Option<LspAnalysisConfig>,
     python_path: Option<String>,
     pyrefly: Option<PyreflyClientConfig>,
@@ -200,7 +214,8 @@ impl Workspaces {
         let workspace = workspaces
             .iter()
             .filter(|(key, _)| uri.starts_with(key))
-            .max_by(|(key1, _), (key2, _)| key2.ancestors().count().cmp(&key1.ancestors().count()))
+            // select the LONGEST match (most specific workspace folder)
+            .max_by(|(key1, _), (key2, _)| key1.ancestors().count().cmp(&key2.ancestors().count()))
             .map(|(_, workspace)| workspace);
         f(workspace.unwrap_or(&default_workspace))
     }
@@ -231,11 +246,8 @@ impl Workspaces {
 
             // we print the errors here instead of returning them since
             // it gives the most immediate feedback for config loading errors
-            let config_errors = config.configure();
-            if !config_errors.is_empty() {
-                for error in config.configure() {
-                    error.print();
-                }
+            for error in config.configure() {
+                error.print();
             }
             let config = ArcId::new(config);
 
@@ -399,5 +411,150 @@ impl Workspaces {
                 self.default.write().search_path = Some(search_paths);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn test_get_with_selects_longest_match() {
+        let workspace_root = PathBuf::from("/projects");
+        let workspace_nested = PathBuf::from("/projects/my_project");
+
+        let folders = vec![workspace_root.clone(), workspace_nested.clone()];
+
+        let workspaces = Workspaces::new(Workspace::new(), &folders);
+        {
+            let mut workspaces_map = workspaces.workspaces.write();
+            // Set root workspace to have a search_path
+            workspaces_map.get_mut(&workspace_root).unwrap().search_path =
+                Some(vec![PathBuf::from("/projects/search_root")]);
+            // Set nested workspace to have a different search_path
+            workspaces_map
+                .get_mut(&workspace_nested)
+                .unwrap()
+                .search_path = Some(vec![PathBuf::from("/projects/my_project/search_nested")]);
+        }
+
+        let result = workspaces
+            .get_with(PathBuf::from("/projects/my_project/nested_file.py"), |w| {
+                w.search_path.clone()
+            });
+        assert_eq!(
+            result,
+            Some(vec![PathBuf::from("/projects/my_project/search_nested")]),
+            "Nested file should match nested workspace (longest match), not root"
+        );
+
+        let result = workspaces.get_with(PathBuf::from("/projects/file.py"), |w| {
+            w.search_path.clone()
+        });
+        assert_eq!(
+            result,
+            Some(vec![PathBuf::from("/projects/search_root")]),
+            "Root file should match root workspace"
+        );
+
+        let result = workspaces.get_with(PathBuf::from("/other/path/file.py"), |w| {
+            w.search_path.clone()
+        });
+        assert_eq!(
+            result, None,
+            "File outside workspaces should use default workspace"
+        );
+    }
+
+    #[test]
+    fn test_get_with_filters_prefixes() {
+        let workspace_a = PathBuf::from("/workspace");
+        let workspace_b = PathBuf::from("/workspace_other");
+
+        let folders = vec![workspace_a.clone(), workspace_b.clone()];
+        let workspaces = Workspaces::new(Workspace::new(), &folders);
+
+        {
+            let mut workspaces_map = workspaces.workspaces.write();
+            workspaces_map.get_mut(&workspace_a).unwrap().search_path =
+                Some(vec![PathBuf::from("/workspace/search_a")]);
+            workspaces_map.get_mut(&workspace_b).unwrap().search_path =
+                Some(vec![PathBuf::from("/workspace_other/search_b")]);
+        }
+
+        let file_a = PathBuf::from("/workspace/file.py");
+        let result = workspaces.get_with(file_a, |w| w.search_path.clone());
+        assert_eq!(
+            result,
+            Some(vec![PathBuf::from("/workspace/search_a")]),
+            "File in /workspace should match /workspace workspace"
+        );
+
+        let file_b = PathBuf::from("/workspace_other/file.py");
+        let result = workspaces.get_with(file_b, |w| w.search_path.clone());
+        assert_eq!(
+            result,
+            Some(vec![PathBuf::from("/workspace_other/search_b")]),
+            "File in /workspace_other should match /workspace_other workspace"
+        );
+    }
+
+    #[test]
+    fn test_broken_analysis_config_still_creates_lsp_config() {
+        let broken_config = json!({
+            "pythonPath": "/usr/bin/python3",
+            "analysis": {
+                "invalidField": true,
+                "diagnosticMode": "invalidMode",
+                "importFormat": "invalidFormat"
+            },
+            "pyrefly": {
+                "disableLanguageServices": false,
+                "extraPaths": ["/some/path"]
+            }
+        });
+
+        let lsp_config: Result<LspConfig, _> = serde_json::from_value(broken_config);
+
+        assert!(lsp_config.is_ok());
+        let config = lsp_config.unwrap();
+        assert!(config.analysis.is_none());
+        assert_eq!(config.python_path, Some("/usr/bin/python3".to_owned()));
+        assert!(config.pyrefly.is_some());
+        let pyrefly = config.pyrefly.unwrap();
+        assert_eq!(pyrefly.disable_language_services, Some(false));
+        assert_eq!(pyrefly.extra_paths, Some(vec![PathBuf::from("/some/path")]));
+    }
+
+    #[test]
+    fn test_valid_analysis_config_creates_lsp_config_with_analysis() {
+        let valid_config = json!({
+            "pythonPath": "/usr/bin/python3",
+            "analysis": {
+                "diagnosticMode": "workspace",
+                "importFormat": "absolute"
+            },
+            "pyrefly": {
+                "disableLanguageServices": false
+            }
+        });
+
+        let lsp_config: Result<LspConfig, _> = serde_json::from_value(valid_config);
+        assert!(lsp_config.is_ok());
+        let config = lsp_config.unwrap();
+        assert!(config.analysis.is_some());
+        let analysis = config.analysis.unwrap();
+        assert!(matches!(
+            analysis.diagnostic_mode,
+            Some(DiagnosticMode::Workspace)
+        ));
+        assert!(matches!(
+            analysis.import_format,
+            Some(ImportFormat::Absolute)
+        ));
+        assert_eq!(config.python_path, Some("/usr/bin/python3".to_owned()));
+        assert!(config.pyrefly.is_some());
     }
 }

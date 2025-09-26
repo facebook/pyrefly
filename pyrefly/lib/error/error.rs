@@ -5,11 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::borrow::Cow;
 use std::cmp;
 use std::fmt::Debug;
 use std::io;
 use std::io::Write;
+use std::path::Path;
 
 use itertools::Itertools;
 use lsp_types::Diagnostic;
@@ -53,7 +53,12 @@ impl Ranged for Error {
 }
 
 impl Error {
-    pub fn write_line(&self, mut f: impl Write, verbose: bool) -> io::Result<()> {
+    pub fn write_line(
+        &self,
+        mut f: impl Write,
+        project_root: &Path,
+        verbose: bool,
+    ) -> io::Result<()> {
         if verbose && self.severity.is_enabled() {
             writeln!(
                 f,
@@ -62,7 +67,7 @@ impl Error {
                 self.msg_header,
                 self.error_kind.to_name(),
             )?;
-            let origin = self.lossy_origin();
+            let origin = self.display_path(project_root).to_string_lossy();
             let snippet = self.get_source_snippet(&origin);
             let renderer = Renderer::plain();
             writeln!(f, "{}", renderer.render(snippet))?;
@@ -74,7 +79,7 @@ impl Error {
                 f,
                 "{} {}:{}: {} [{}]",
                 self.severity.label(),
-                self.path(),
+                self.display_path(project_root).to_string_lossy(),
                 self.display_range,
                 self.msg_header,
                 self.error_kind.to_name(),
@@ -83,7 +88,7 @@ impl Error {
         Ok(())
     }
 
-    pub fn print_colors(&self, verbose: bool) {
+    pub fn print_colors(&self, project_root: &Path, verbose: bool) {
         if verbose && self.severity.is_enabled() {
             anstream::println!(
                 "{} {} {}",
@@ -91,7 +96,7 @@ impl Error {
                 Paint::new(&*self.msg_header),
                 Paint::dim(format!("[{}]", self.error_kind().to_name()).as_str()),
             );
-            let origin = self.lossy_origin();
+            let origin = self.display_path(project_root).to_string_lossy();
             let snippet = self.get_source_snippet(&origin);
             let renderer = Renderer::styled();
             anstream::println!("{}", renderer.render(snippet));
@@ -102,7 +107,7 @@ impl Error {
             anstream::println!(
                 "{} {}:{}: {} {}",
                 self.severity.painted(),
-                Paint::blue(&self.path().as_path().display()),
+                Paint::blue(&self.display_path(project_root).display()),
                 Paint::dim(self.display_range()),
                 Paint::new(&*self.msg_header),
                 Paint::dim(format!("[{}]", self.error_kind().to_name()).as_str()),
@@ -110,8 +115,9 @@ impl Error {
         }
     }
 
-    fn lossy_origin(&self) -> Cow<'_, str> {
-        self.path().as_path().to_string_lossy()
+    fn display_path(&self, project_root: &Path) -> &Path {
+        let path = self.path().as_path();
+        path.strip_prefix(project_root).unwrap_or(path)
     }
 
     fn get_source_snippet<'a>(&'a self, origin: &'a str) -> Message<'a> {
@@ -186,9 +192,9 @@ impl Error {
 }
 
 #[cfg(test)]
-pub fn print_errors(errors: &[Error]) {
+pub fn print_errors(project_root: &Path, errors: &[Error]) {
     for err in errors {
-        err.print_colors(true);
+        err.print_colors(project_root, true);
     }
 }
 
@@ -303,13 +309,14 @@ mod tests {
             vec1!["bad return".to_owned()],
             ErrorKind::BadReturn,
         );
+        let root = PathBuf::new();
         let mut normal = Vec::new();
         error
-            .write_line(&mut Cursor::new(&mut normal), false)
+            .write_line(&mut Cursor::new(&mut normal), root.as_path(), false)
             .unwrap();
         let mut verbose = Vec::new();
         error
-            .write_line(&mut Cursor::new(&mut verbose), true)
+            .write_line(&mut Cursor::new(&mut verbose), root.as_path(), true)
             .unwrap();
 
         assert_eq!(
@@ -331,7 +338,6 @@ mod tests {
     #[test]
     fn test_error_too_long() {
         let contents = format!("Start\n{}\nEnd", "X\n".repeat(1000));
-
         let module_info = Module::new(
             ModuleName::from_str("test"),
             ModulePath::filesystem(PathBuf::from("test.py")),
@@ -344,8 +350,9 @@ mod tests {
             ErrorKind::BadReturn,
         );
         let mut output = Vec::new();
+        let root = PathBuf::new();
         error
-            .write_line(&mut Cursor::new(&mut output), true)
+            .write_line(&mut Cursor::new(&mut output), root.as_path(), true)
             .unwrap();
 
         assert_eq!(

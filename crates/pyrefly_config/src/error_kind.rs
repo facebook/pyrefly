@@ -112,6 +112,9 @@ pub enum ErrorKind {
     BadKeywordArgument,
     /// A subclass field or method incorrectly overrides a field/method of a parent class.
     BadOverride,
+    /// A subclass method incorrectly changes the name of a positional parameter while overriding
+    /// a method of a parent class.
+    BadParamNameOverride,
     /// Attempting to return a value that does not match the function's return type.
     /// Can also arise when returning values from generators.
     BadReturn,
@@ -137,6 +140,8 @@ pub enum ErrorKind {
     /// An error related to the import machinery.
     /// e.g. failed to import a module.
     ImportError,
+    /// An inconsistency between the signature of a function overload and the implementation.
+    InconsistentOverload,
     /// Attempting to access a container with an incorrect index.
     /// This only occurs when Pyrefly can statically verify that the index is incorrect.
     IndexError,

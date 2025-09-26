@@ -18,15 +18,15 @@ exports[`Sandbox Component render sandbox correctly 1`] = `
       </div>
       <div>
         <button
-          title="Add new file"
-        >
-          +
-        </button>
-        <button
           disabled=""
           title="Cannot delete sandbox.py"
         >
           ×
+        </button>
+        <button
+          title="Add new file"
+        >
+          +
         </button>
       </div>
     </div>

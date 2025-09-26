@@ -8,6 +8,7 @@
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fmt;
+use std::fmt::Debug;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::path::Component;
@@ -35,6 +36,7 @@ use tracing::debug;
 
 use crate::absolutize::Absolutize as _;
 use crate::fs_anyhow;
+use crate::includes::Includes;
 use crate::prelude::SliceExt;
 use crate::prelude::VecExt;
 use crate::upward_search::UpwardSearch;
@@ -57,7 +59,7 @@ static IGNORE_FILES_SEARCH: LazyLock<Vec<UpwardSearch<Arc<(PathBuf, PathBuf)>>>>
             .collect::<Vec<_>>()
     });
 
-#[derive(Debug, Clone, Eq, Default)]
+#[derive(Clone, Eq, Default)]
 
 /// A glob pattern for matching files.
 ///
@@ -237,6 +239,12 @@ impl Glob {
         // we attempted to do this automatically, and the pattern we're constructing should be valid
         // (i.e. the previous pattern we constructed should have failed before we get to here).
         glob::Pattern::new(&pattern_str).is_ok_and(|pattern| pattern.matches_path(file))
+    }
+}
+
+impl Debug for Glob {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0.as_str())
     }
 }
 
@@ -653,21 +661,23 @@ impl FilteredGlobs {
             filter: GlobFilter::new(excludes, ignorefile_search_start),
         }
     }
+}
 
+impl Includes for FilteredGlobs {
     /// Given a glob pattern, return the directories that can contain files that match the pattern.
-    pub fn roots(&self) -> Vec<PathBuf> {
+    fn roots(&self) -> Vec<PathBuf> {
         self.includes.roots()
     }
 
-    pub fn files(&self) -> anyhow::Result<Vec<PathBuf>> {
+    fn files(&self) -> anyhow::Result<Vec<PathBuf>> {
         self.includes.filtered_files(&self.filter, None)
     }
 
-    pub fn covers(&self, path: &Path) -> bool {
+    fn covers(&self, path: &Path) -> bool {
         self.includes.covers(path) && !self.filter.is_excluded(path)
     }
 
-    pub fn errors(&mut self) -> Vec<anyhow::Error> {
+    fn errors(&mut self) -> Vec<anyhow::Error> {
         self.filter.errors()
     }
 }

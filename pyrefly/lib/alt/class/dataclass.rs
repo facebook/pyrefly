@@ -28,6 +28,7 @@ use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::types::class_metadata::ClassValidationFlags;
 use crate::alt::types::class_metadata::DataclassMetadata;
+use crate::binding::pydantic::GE;
 use crate::binding::pydantic::GT;
 use crate::binding::pydantic::LT;
 use crate::binding::pydantic::ROOT;
@@ -241,6 +242,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let gt = map.0.get(&GT).cloned();
         let lt = map.0.get(&LT).cloned();
+        let ge = map.0.get(&GE).cloned();
 
         let strict: Option<bool> = map.0.get(&STRICT).and_then(|v| v.as_bool());
 
@@ -270,6 +272,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             alias,
             lt,
             gt,
+            ge,
             strict,
             converter_param,
         }
@@ -376,12 +379,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn get_converter_param(&self, converter: &Type) -> Type {
         let converter = {
             if let Type::ClassDef(cls) = converter
-                && let Type::ClassType(instance) = self.instantiate_fresh_class(cls)
+                && let Type::ClassType(instance) = self.promote_silently(cls)
             {
                 let callable = self.constructor_to_callable(&instance);
                 &self.distribute_over_union(&callable, |ty| {
                     if let Type::BoundMethod(m) = ty {
-                        self.bind_boundmethod(m).unwrap_or_else(|| ty.clone())
+                        self.bind_boundmethod(m, &mut |a, b| self.is_subset_eq(a, b))
+                            .unwrap_or_else(|| ty.clone())
                     } else {
                         ty.clone()
                     }

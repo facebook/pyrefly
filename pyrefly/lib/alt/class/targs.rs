@@ -23,6 +23,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::solver::solver::QuantifiedHandle;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
@@ -37,7 +38,6 @@ use crate::types::types::TArgs;
 use crate::types::types::TParam;
 use crate::types::types::TParams;
 use crate::types::types::Type;
-use crate::types::types::Var;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Silently promotes a Class to a ClassType, using default type arguments. It is up to the
@@ -224,7 +224,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .1
     }
 
-    pub fn instantiate_fresh_forall(&self, forall: Forall<Forallable>) -> (Vec<Var>, Type) {
+    pub fn instantiate_fresh_forall(&self, forall: Forall<Forallable>) -> (QuantifiedHandle, Type) {
         self.solver()
             .fresh_quantified(&forall.tparams, forall.body.as_type(), self.uniques)
     }
@@ -233,7 +233,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         tparams: &TParams,
         func: Function,
-    ) -> (Vec<Var>, Function) {
+    ) -> (QuantifiedHandle, Function) {
         let (qs, t) =
             self.solver()
                 .fresh_quantified(tparams, Type::Function(Box::new(func)), self.uniques);
@@ -248,7 +248,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         tparams: &TParams,
         c: Callable,
-    ) -> (Vec<Var>, Callable) {
+    ) -> (QuantifiedHandle, Callable) {
         let (qs, t) =
             self.solver()
                 .fresh_quantified(tparams, Type::Callable(Box::new(c)), self.uniques);

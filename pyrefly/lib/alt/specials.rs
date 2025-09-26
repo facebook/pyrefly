@@ -485,7 +485,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     arguments.len()
                 ),
             ),
-            SpecialForm::Annotated if arguments.len() > 1 => self.expr_infer(&arguments[0], errors),
+            SpecialForm::Annotated if arguments.len() > 1 => Type::type_form(self.expr_untype(
+                &arguments[0],
+                TypeFormContext::TypeArgument,
+                errors,
+            )),
             // Keep this in sync with `SpecialForm::can_be_subscripted``
             SpecialForm::SelfType
             | SpecialForm::LiteralString

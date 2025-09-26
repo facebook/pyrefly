@@ -54,6 +54,7 @@ pub struct ClassMetadata {
     is_final: bool,
     inherits_from_abc: bool,
     abstract_methods: Vec<Name>,
+    is_deprecated: bool,
     total_ordering_metadata: Option<TotalOrderingMetadata>,
     /// If this class is decorated with `typing.dataclass_transform(...)`, the keyword arguments
     /// that were passed to the `dataclass_transform` call.
@@ -90,6 +91,7 @@ impl ClassMetadata {
         is_final: bool,
         inherits_from_abc: bool,
         abstract_methods: Vec<Name>,
+        is_deprecated: bool,
         total_ordering_metadata: Option<TotalOrderingMetadata>,
         dataclass_transform_metadata: Option<DataclassTransformKeywords>,
         pydantic_model_kind: Option<PydanticModelKind>,
@@ -109,6 +111,7 @@ impl ClassMetadata {
             is_final,
             inherits_from_abc,
             abstract_methods,
+            is_deprecated,
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
@@ -131,6 +134,7 @@ impl ClassMetadata {
             is_final: false,
             inherits_from_abc: false,
             abstract_methods: Vec::new(),
+            is_deprecated: false,
             total_ordering_metadata: None,
             dataclass_transform_metadata: None,
             pydantic_model_kind: None,
@@ -168,6 +172,9 @@ impl ClassMetadata {
 
     pub fn abstract_methods(&self) -> &[Name] {
         &self.abstract_methods
+      
+    pub fn is_deprecated(&self) -> bool {
+        self.is_deprecated
     }
 
     pub fn has_generic_base_class(&self) -> bool {
@@ -351,6 +358,8 @@ pub struct EnumMetadata {
     pub is_flag: bool,
     /// Is there any `_value_` field present.
     pub has_value: bool,
+    /// Whether this is a special Django enum.
+    pub is_django: bool,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]

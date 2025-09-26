@@ -12,7 +12,7 @@ use pyrefly_derive::VisitMut;
 pub struct PydanticMetadata {
     pub frozen: bool,
     pub validate_by_name: bool,
-    pub class_validate_by_alias: bool,
+    pub validate_by_alias: bool,
     pub extra: bool,
     pub pydantic_model_kind: PydanticModelKind,
 }

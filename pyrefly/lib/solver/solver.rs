@@ -12,6 +12,7 @@ use std::mem;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::types::TArgs;
 use pyrefly_util::gas::Gas;
+use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::recurser::Recurser;
@@ -22,6 +23,7 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use vec1::Vec1;
 use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
@@ -50,12 +52,12 @@ const VAR_LEAK: &str = "Internal error: a variable has leaked from one module to
 
 const INITIAL_GAS: Gas = Gas::new(25);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 enum Variable {
     /// A variable in a container with an unspecified element type, e.g. `[]: list[V]`
     Contained,
     /// A variable due to generic instantiation, `def f[T](x: T): T` with `f(1)`
-    Quantified(Quantified),
+    Quantified(Box<Quantified>),
     /// A variable caused by recursion, e.g. `x = f(); def f(): return x`.
     /// The second value is the default value of the Var, if one exists.
     Recursive(Option<Type>),
@@ -75,16 +77,14 @@ impl Display for Variable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Variable::Contained => write!(f, "Contained"),
-            Variable::Quantified(Quantified {
-                kind: k,
-                default: Some(t),
-                ..
-            }) => write!(f, "Quantified({k}, default={t})"),
-            Variable::Quantified(Quantified {
-                kind: k,
-                default: None,
-                ..
-            }) => write!(f, "Quantified({k})"),
+            Variable::Quantified(q) => {
+                let k = q.kind;
+                if let Some(t) = &q.default {
+                    write!(f, "Quantified({k}, default={t})")
+                } else {
+                    write!(f, "Quantified({k})")
+                }
+            }
             Variable::Recursive(Some(t)) => write!(f, "Recursive(default={t})"),
             Variable::Recursive(None) => write!(f, "Recursive"),
             Variable::Parameter => write!(f, "Parameter"),
@@ -99,10 +99,7 @@ impl Variable {
     /// E.g. `x = 1; while True: x = x` should be `Literal[1]` while
     /// `[1]` should be `List[int]`.
     fn promote<Ans: LookupAnswer>(&self, ty: Type, type_order: TypeOrder<Ans>) -> Type {
-        if matches!(
-            self,
-            Variable::Contained | Variable::Parameter | Variable::Quantified(_)
-        ) {
+        if matches!(self, Variable::Contained | Variable::Quantified(_)) {
             ty.promote_literals(type_order.stdlib())
         } else {
             ty
@@ -110,14 +107,46 @@ impl Variable {
     }
 }
 
+#[must_use = "Quantified vars must be finalized. Pass to finish_quantified."]
+pub struct QuantifiedHandle(Vec<Var>);
+
+impl QuantifiedHandle {
+    pub fn empty() -> Self {
+        Self(Vec::new())
+    }
+}
+
+#[derive(Debug, Default)]
+struct Variables(SmallMap<Var, Variable>);
+
+impl Variables {
+    fn get(&self, x: Var) -> &Variable {
+        self.0.get(&x).expect(VAR_LEAK)
+    }
+
+    fn get_mut(&mut self, x: Var) -> &mut Variable {
+        self.0.get_mut(&x).expect(VAR_LEAK)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&Var, &Variable)> {
+        self.0.iter()
+    }
+
+    fn insert(&mut self, x: Var, v: Variable) {
+        self.0.insert(x, v);
+    }
+}
+
 #[derive(Debug)]
 pub struct Solver {
-    variables: RwLock<SmallMap<Var, Variable>>,
+    variables: Mutex<Variables>,
+    instantiation_errors: RwLock<SmallMap<Var, TypeVarSpecializationError>>,
+    pub infer_with_first_use: bool,
 }
 
 impl Display for Solver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (x, y) in self.variables.read().iter() {
+        for (x, y) in self.variables.lock().iter() {
             writeln!(f, "{x} = {y}")?;
         }
         Ok(())
@@ -130,9 +159,11 @@ const TYPE_LIMIT: usize = 20;
 
 impl Solver {
     /// Create a new solver.
-    pub fn new() -> Self {
+    pub fn new(infer_with_first_use: bool) -> Self {
         Self {
             variables: Default::default(),
+            instantiation_errors: Default::default(),
+            infer_with_first_use,
         }
     }
 
@@ -140,24 +171,22 @@ impl Solver {
     ///
     /// TODO: deduplicate Variable-to-gradual-type logic with `force_var`.
     pub fn pin_placeholder_type(&self, var: Var) {
-        let mut variables = self.variables.write();
-        if let Some(variable) = variables.get_mut(&var) {
-            match variable {
-                Variable::Recursive(..) | Variable::Answer(..) => {
-                    // Nothing to do if we have an answer already, and we want to skip recursive Vars
-                    // which do not represent placeholder types.
-                }
-                Variable::Quantified(q) => {
-                    *variable = Variable::Answer(q.as_gradual_type());
-                }
-                Variable::Contained | Variable::Unwrap | Variable::Parameter => {
-                    *variable = Variable::Answer(Type::any_implicit());
-                }
+        let mut variables = self.variables.lock();
+        let variable = variables.get_mut(var);
+        match variable {
+            Variable::Recursive(..) | Variable::Answer(..) => {
+                // Nothing to do if we have an answer already, and we want to skip recursive Vars
+                // which do not represent placeholder types.
             }
-        } else {
-            // TODO(stroxler): I'm pretty sure this is unreachable?
-            // If it *were* reachable, this would be the right thing to do but maybe we should panic instead.
-            variables.insert(var, Variable::Answer(Type::any_implicit()));
+            Variable::Quantified(q) => {
+                *variable = Variable::Answer(q.as_gradual_type());
+            }
+            Variable::Contained | Variable::Unwrap => {
+                *variable = Variable::Answer(Type::any_implicit());
+            }
+            Variable::Parameter => {
+                unreachable!("Unexpected Variable::Parameter")
+            }
         }
     }
 
@@ -187,13 +216,10 @@ impl Solver {
             *t = Type::any_implicit();
         } else if let Type::Var(x) = t {
             if let Some(_guard) = recurser.recurse(*x) {
-                if let Some(Variable::Answer(w)) = {
-                    // Important we bind this lock in an inner scope, so it is dropped before
-                    // we call expand_with_limit again.
-                    let lock = self.variables.read();
-                    lock.get(x).cloned()
-                } {
-                    *t = w;
+                let lock = self.variables.lock();
+                if let Variable::Answer(w) = lock.get(*x) {
+                    *t = w.clone();
+                    drop(lock);
                     self.expand_with_limit(t, limit - 1, recurser);
                 }
             } else {
@@ -213,8 +239,8 @@ impl Solver {
             Var::ZERO,
             "Cannot force Var::ZERO, which is a dummy value"
         );
-        let mut lock = self.variables.write();
-        let e = lock.get_mut(&v).expect(VAR_LEAK);
+        let mut lock = self.variables.lock();
+        let e = lock.get_mut(v);
         match e {
             Variable::Answer(t) => t.clone(),
             _ => {
@@ -332,26 +358,45 @@ impl Solver {
     /// e.g. `[]` with an unknown type of element.
     pub fn fresh_contained(&self, uniques: &UniqueFactory) -> Var {
         let v = Var::new(uniques);
-        self.variables.write().insert(v, Variable::Contained);
+        self.variables.lock().insert(v, Variable::Contained);
         v
     }
 
     /// Generate a fresh variable for out-of-band logic that allows two bindings to communicate
-    /// about a type without it being explicitly in a binding result. Used for parameters:
-    /// - function bindings pass information coming from context (like is this a class) and
-    ///   from parameter annotations to the parameter bindings out-of-band
-    /// - a lambda expression that appears in a contextual position passes down
-    ///   the context information to the parameter binding out-of-band.
+    /// about a type without it being explicitly in a binding result. Used for function parameters,
+    /// where the var is created during the bindings phase, then solved during answers, where we
+    /// can determine whether the first argument should be Self or type[Self] based on decorators.
+    ///
+    /// Parameter vars must be solved before they appear in a constraint, by calling solve_parameter.
+    /// If a parameter var appears in a constraint, we will panic.
     pub fn fresh_parameter(&self, uniques: &UniqueFactory) -> Var {
         let v = Var::new(uniques);
-        self.variables.write().insert(v, Variable::Parameter);
+        self.variables.lock().insert(v, Variable::Parameter);
         v
     }
 
+    /// Solve a parameter var (created using fresh_parameter) to a concrete type. This must happen
+    /// before the var can appear in a constraint, or else we will panic.
+    pub fn solve_parameter(&self, v: Var, t: Type) {
+        let mut lock = self.variables.lock();
+        let v = lock.get_mut(v);
+        match v {
+            Variable::Answer(_) => {}
+            Variable::Parameter => {
+                *v = Variable::Answer(t);
+            }
+            _ => {
+                panic!("Expected a parameter, got {}", v);
+            }
+        }
+    }
+
     // Generate a fresh variable used to decompose a type, e.g. getting T from Awaitable[T]
+    // Also used for lambda parameters, where the var is created during bindings, but solved during
+    // the answers phase by contextually typing against an annotation.
     pub fn fresh_unwrap(&self, uniques: &UniqueFactory) -> Var {
         let v = Var::new(uniques);
-        self.variables.write().insert(v, Variable::Unwrap);
+        self.variables.lock().insert(v, Variable::Unwrap);
         v
     }
 
@@ -361,19 +406,19 @@ impl Solver {
         params: &TParams,
         t: Type,
         uniques: &UniqueFactory,
-    ) -> (Vec<Var>, Type) {
+    ) -> (QuantifiedHandle, Type) {
         if params.is_empty() {
-            return (Vec::new(), t);
+            return (QuantifiedHandle::empty(), t);
         }
 
-        let vs: Vec<Var> = params.iter().map(|_| Var::new(uniques)).collect();
+        let vs: Vec<_> = params.iter().map(|_| Var::new(uniques)).collect();
         let ts = vs.map(|v| v.to_type());
         let t = t.subst(&params.iter().map(|p| &p.quantified).zip(&ts).collect());
-        let mut lock = self.variables.write();
+        let mut lock = self.variables.lock();
         for (v, param) in vs.iter().zip(params.iter()) {
-            lock.insert(*v, Variable::Quantified(param.quantified.clone()));
+            lock.insert(*v, Variable::Quantified(Box::new(param.quantified.clone())));
         }
-        (vs, t)
+        (QuantifiedHandle(vs), t)
     }
 
     /// Partially instantiate a generic function using the first argument.
@@ -385,14 +430,14 @@ impl Solver {
     ///
     /// Returns a callable with the first parameter removed, substituted with
     /// instantiations provided by applying the first argument.
-    pub fn instantiate_callable_self<Ans: LookupAnswer>(
+    pub fn instantiate_callable_self(
         &self,
         tparams: &TParams,
         self_obj: &Type,
         self_param: &Type,
         mut callable: Callable,
         uniques: &UniqueFactory,
-        type_order: TypeOrder<Ans>,
+        is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
     ) -> Callable {
         // Collect tparams that appear in the first parameter.
         let mut qs = Vec::new();
@@ -414,15 +459,15 @@ impl Solver {
         callable.visit_mut(&mut |t| t.subst_mut(&mp));
         drop(mp);
 
-        let mut lock = self.variables.write();
+        let mut lock = self.variables.lock();
         for (v, q) in vs.iter().zip(qs.into_iter()) {
-            lock.insert(*v, Variable::Quantified(q));
+            lock.insert(*v, Variable::Quantified(Box::new(q)));
         }
         drop(lock);
 
         // Solve for the vars created above. If this errors, then the definition
         // is invalid, and we should have raised an error at the definition site.
-        self.is_subset_eq(self_obj, &self_param, type_order);
+        is_subset(self_obj, &self_param);
 
         // Either we have solutions, or we fall back to Any. We don't use finish_quantified
         // because we don't want Variable::Contained.
@@ -433,22 +478,45 @@ impl Solver {
         callable
     }
 
+    pub fn has_instantiation_errors(&self, vs: &QuantifiedHandle) -> bool {
+        let lock = self.instantiation_errors.read();
+        vs.0.iter().any(|v| lock.contains_key(v))
+    }
+
     /// Called after a quantified function has been called. Given `def f[T](x: int): list[T]`,
     /// after the generic has completed.
-    /// If `replace_quantified_with_contained` is true, the variable `T` will be have like an
+    /// If `infer_with_first_use` is true, the variable `T` will be have like an
     /// empty container and get pinned by the first subsequent usage.
-    /// If `replace_quantified_with_contained` is false, the variable `T` will be replaced with `Any`
-    pub fn finish_quantified(&self, vs: &[Var], replace_quantified_with_contained: bool) {
-        let mut lock = self.variables.write();
-        for v in vs {
-            let e = lock.get_mut(v).expect(VAR_LEAK);
-            if matches!(*e, Variable::Quantified(_)) {
-                if replace_quantified_with_contained {
-                    *e = Variable::Contained;
-                } else {
-                    *e = Variable::Answer(Type::any_implicit())
+    /// If `infer_with_first_use` is false, the variable `T` will be replaced with `Any`
+    pub fn finish_quantified(
+        &self,
+        vs: QuantifiedHandle,
+    ) -> Result<(), Vec1<TypeVarSpecializationError>> {
+        let mut lock = self.variables.lock();
+        let mut err = Vec::new();
+        for v in vs.0 {
+            let e = lock.get_mut(v);
+            match e {
+                Variable::Answer(_) => {
+                    // We pin the quantified var to a type when it first appears in a subset constraint,
+                    // and at that point we check the instantiation with the bound.
+                    if let Some(e) = self.instantiation_errors.read().get(&v) {
+                        err.push(e.clone());
+                    }
                 }
+                Variable::Quantified(_) => {
+                    if self.infer_with_first_use {
+                        *e = Variable::Contained;
+                    } else {
+                        *e = Variable::Answer(Type::any_implicit())
+                    }
+                }
+                _ => {}
             }
+        }
+        match Vec1::try_from_vec(err) {
+            Ok(err) => Err(err),
+            Err(_) => Ok(()),
         }
     }
 
@@ -456,14 +524,14 @@ impl Solver {
     /// with fresh vars. We can avoid substitution because tparams can not appear in the bounds of
     /// another tparam. tparams can appear in the default, but those are not in quantified form yet.
     pub fn freshen_class_targs(&self, targs: &mut TArgs, uniques: &UniqueFactory) {
-        let mut lock = self.variables.write();
+        let mut lock = self.variables.lock();
         targs.iter_paired_mut().for_each(|(param, t)| {
             if let Type::Quantified(q) = t
                 && **q == param.quantified
             {
                 let v = Var::new(uniques);
                 *t = v.to_type();
-                lock.insert(v, Variable::Quantified(param.quantified.clone()));
+                lock.insert(v, Variable::Quantified(Box::new(param.quantified.clone())));
             }
         })
     }
@@ -474,11 +542,11 @@ impl Solver {
     pub fn generalize_class_targs(&self, targs: &mut TArgs) {
         // Expanding targs might require the variables lock, so do that first.
         targs.as_mut().iter_mut().for_each(|t| self.expand_mut(t));
-        let lock = self.variables.read();
+        let lock = self.variables.lock();
         targs.iter_paired_mut().for_each(|(param, t)| {
             if let Type::Var(v) = t
-                && let Some(Variable::Quantified(q)) = lock.get(v)
-                && *q == param.quantified
+                && let Variable::Quantified(q) = lock.get(*v)
+                && **q == param.quantified
             {
                 *t = param.quantified.clone().to_type();
             }
@@ -525,7 +593,7 @@ impl Solver {
                     Some(t)
                 } else {
                     let v = Var::new(uniques);
-                    self.variables.write().insert(v, Variable::Contained);
+                    self.variables.lock().insert(v, Variable::Contained);
                     Some(v.to_type())
                 }
             } else {
@@ -549,7 +617,7 @@ impl Solver {
     pub fn fresh_recursive(&self, uniques: &UniqueFactory, default: Option<Type>) -> Var {
         let v = Var::new(uniques);
         self.variables
-            .write()
+            .lock()
             .insert(v, Variable::Recursive(default));
         v
     }
@@ -599,7 +667,7 @@ impl Solver {
         }
         for b in &branches[1..] {
             // Do the is_subset_eq only to force free variables
-            self.is_subset_eq_impl(&branches[0], b, type_order, true);
+            let _ = self.is_subset_eq_impl(&branches[0], b, type_order, true);
         }
 
         // We want to union modules differently, by merging their module sets
@@ -639,15 +707,10 @@ impl Solver {
         errors: &ErrorCollector,
         loc: TextRange,
     ) {
-        fn expand(
-            t: Type,
-            variables: &SmallMap<Var, Variable>,
-            recurser: &Recurser<Var>,
-            res: &mut Vec<Type>,
-        ) {
+        fn expand(t: Type, variables: &Variables, recurser: &Recurser<Var>, res: &mut Vec<Type>) {
             match t {
-                Type::Var(v) if let Some(_guard) = recurser.recurse(v) => match variables.get(&v) {
-                    Some(Variable::Answer(t)) => {
+                Type::Var(v) if let Some(_guard) = recurser.recurse(v) => match variables.get(v) {
+                    Variable::Answer(t) => {
                         expand(t.clone(), variables, recurser, res);
                     }
                     _ => res.push(v.to_type()),
@@ -661,15 +724,15 @@ impl Solver {
             }
         }
 
-        let mut lock = self.variables.write();
-        match lock.get(&v) {
-            Some(Variable::Answer(forced)) => {
+        let mut lock = self.variables.lock();
+        match lock.get(v) {
+            Variable::Answer(forced) => {
                 let forced = forced.clone();
                 drop(lock);
                 // We got forced into choosing a type to satisfy a subset constraint, so check we are OK with that.
                 // Since we have already used `forced`, and will continue to do so, important that what we expect
                 // is more restrictive (so the `forced` is an over-approximation).
-                if !self.is_subset_eq(&t, &forced, type_order) {
+                if self.is_subset_eq(&t, &forced, type_order).is_err() {
                     // Poor error message, but overall, this is a terrible experience for users.
                     self.error(&t, &forced, errors, loc, &|| {
                         TypeCheckContext::of_kind(TypeCheckKind::CycleBreaking)
@@ -696,17 +759,17 @@ impl Solver {
         got: &Type,
         want: &Type,
         type_order: TypeOrder<Ans>,
-    ) -> bool {
+    ) -> Result<(), SubsetError> {
         self.is_subset_eq_impl(got, want, type_order, false)
     }
 
-    pub fn is_subset_eq_impl<Ans: LookupAnswer>(
+    fn is_subset_eq_impl<Ans: LookupAnswer>(
         &self,
         got: &Type,
         want: &Type,
         type_order: TypeOrder<Ans>,
         union: bool,
-    ) -> bool {
+    ) -> Result<(), SubsetError> {
         let mut subset = self.subset(type_order, union);
         subset.is_subset_eq(got, want)
     }
@@ -716,7 +779,7 @@ impl Solver {
         got: &Type,
         want: &Type,
         type_order: TypeOrder<Ans>,
-    ) -> bool {
+    ) -> Result<(), SubsetError> {
         let mut subset = self.subset(type_order, false);
         subset.is_equal(got, want)
     }
@@ -736,6 +799,27 @@ impl Solver {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct TypeVarSpecializationError {
+    pub name: Name,
+    pub got: Type,
+    pub want: Type,
+    #[allow(dead_code)]
+    pub error: SubsetError,
+}
+
+/// If a got <: want check fails, the failure reason
+#[derive(Debug, Clone)]
+pub enum SubsetError {
+    /// The name of a positional parameter differs between `got` and `want`.
+    PosParamName(Name, Name),
+    /// Instantiations for quantified vars are incompatible with bounds
+    #[allow(dead_code)]
+    TypeVarSpecialization(Vec1<TypeVarSpecializationError>),
+    // TODO(rechen): replace this with specific reasons
+    Other,
+}
+
 /// A helper to implement subset ergonomically.
 /// Should only be used within `crate::subset`, which implements part of it.
 pub struct Subset<'a, Ans: LookupAnswer> {
@@ -750,14 +834,15 @@ pub struct Subset<'a, Ans: LookupAnswer> {
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
-    pub fn is_equal(&mut self, got: &Type, want: &Type) -> bool {
-        self.is_subset_eq(got, want) && self.is_subset_eq(want, got)
+    pub fn is_equal(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
+        self.is_subset_eq(got, want)?;
+        self.is_subset_eq(want, got)
     }
 
-    pub fn is_subset_eq(&mut self, got: &Type, want: &Type) -> bool {
+    pub fn is_subset_eq(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
         if self.gas.stop() {
             // We really have no idea. Just give up for now.
-            return false;
+            return Err(SubsetError::Other);
         }
         let res = self.is_subset_eq_var(got, want);
         self.gas.restore();
@@ -765,20 +850,19 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     }
 
     /// Implementation of Var subset cases, calling onward to solve non-Var cases.
-    fn is_subset_eq_var(&mut self, got: &Type, want: &Type) -> bool {
+    fn is_subset_eq_var(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
         // This function does two things: it checks that got <: want, and it solves free variables assuming that
         // got <: want. Most callers want both behaviors. The exception is that in a union, we call is_subset_eq
         // for the sole purpose of solving contained and parameter variables, throwing away the check result.
-        let should_force =
-            |v: &Variable| !self.union || matches!(v, Variable::Contained | Variable::Parameter);
+        let should_force = |v: &Variable| !self.union || matches!(v, Variable::Contained);
         match (got, want) {
-            _ if got == want => true,
+            _ if got == want => Ok(()),
             (Type::Var(v1), Type::Var(v2)) => {
-                let mut variables = self.solver.variables.write();
-                match (
-                    variables.get(v1).expect(VAR_LEAK),
-                    variables.get(v2).expect(VAR_LEAK),
-                ) {
+                let mut variables = self.solver.variables.lock();
+                match (variables.get(*v1), variables.get(*v2)) {
+                    (Variable::Parameter, _) | (_, Variable::Parameter) => {
+                        unreachable!("Unexpected Variable::Parameter in constraint")
+                    }
                     (Variable::Answer(t1), Variable::Answer(t2)) => {
                         let t1 = t1.clone();
                         let t2 = t2.clone();
@@ -800,29 +884,53 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     {
                         // Tie the variables together. Doesn't matter which way round we do it.
                         variables.insert(*v1, Variable::Answer(Type::Var(*v2)));
-                        true
+                        Ok(())
                     }
-                    (_, _) => false,
+                    (_, _) => Err(SubsetError::Other),
                 }
             }
             (Type::Var(v1), t2) => {
-                let mut variables = self.solver.variables.write();
-                match variables.get(v1).expect(VAR_LEAK) {
+                let mut variables = self.solver.variables.lock();
+                match variables.get(*v1) {
+                    Variable::Parameter => {
+                        unreachable!("Unexpected Variable::Parameter in constraint");
+                    }
                     Variable::Answer(t1) => {
                         let t1 = t1.clone();
                         drop(variables);
                         self.is_subset_eq(&t1, t2)
                     }
                     var_type if should_force(var_type) => {
-                        variables.insert(*v1, Variable::Answer(t2.clone()));
-                        true
+                        if let Variable::Quantified(q) = var_type {
+                            let name = q.name.clone();
+                            let bound = q.restriction().as_type(self.type_order.stdlib());
+                            variables.insert(*v1, Variable::Answer(t2.clone()));
+                            drop(variables);
+                            if let Err(e) = self.is_subset_eq(t2, &bound) {
+                                self.solver.instantiation_errors.write().insert(
+                                    *v1,
+                                    TypeVarSpecializationError {
+                                        name,
+                                        got: t2.clone(),
+                                        want: bound,
+                                        error: e,
+                                    },
+                                );
+                            }
+                        } else {
+                            variables.insert(*v1, Variable::Answer(t2.clone()));
+                        }
+                        Ok(())
                     }
-                    _ => false,
+                    _ => Err(SubsetError::Other),
                 }
             }
             (t1, Type::Var(v2)) => {
-                let mut variables = self.solver.variables.write();
-                match variables.get(v2).expect(VAR_LEAK) {
+                let mut variables = self.solver.variables.lock();
+                match variables.get(*v2) {
+                    Variable::Parameter => {
+                        unreachable!("Unexpected Variable::Parameter in constraint");
+                    }
                     Variable::Answer(t2) => {
                         let t2 = t2.clone();
                         drop(variables);
@@ -831,14 +939,52 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     var_type if should_force(var_type) => {
                         // Note that we promote the type when the var is on the RHS, but not when it's on the
                         // LHS, so that we infer more general types but leave user-specified types alone.
-                        let t1 = var_type.promote(t1.clone(), self.type_order);
-                        variables.insert(*v2, Variable::Answer(t1));
-                        true
+                        let t1_p = var_type.promote(t1.clone(), self.type_order);
+                        if let Variable::Quantified(q) = var_type {
+                            let name = q.name.clone();
+                            let bound = q.restriction().as_type(self.type_order.stdlib());
+                            variables.insert(*v2, Variable::Answer(t1_p.clone()));
+                            drop(variables);
+                            if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
+                                // If the promoted type fails, try again with the original type, in case the bound itself is literal.
+                                // This could be more optimized, but errors are rare, so this code path should not be hot.
+                                self.solver
+                                    .variables
+                                    .lock()
+                                    .insert(*v2, Variable::Answer(t1.clone()));
+                                if self.is_subset_eq(t1, &bound).is_err() {
+                                    // If the original type is also an error, use the promoted type.
+                                    self.solver
+                                        .variables
+                                        .lock()
+                                        .insert(*v2, Variable::Answer(t1_p.clone()));
+                                    self.solver.instantiation_errors.write().insert(
+                                        *v2,
+                                        TypeVarSpecializationError {
+                                            name,
+                                            got: t1_p.clone(),
+                                            want: bound,
+                                            error: err_p,
+                                        },
+                                    );
+                                }
+                            }
+                        } else {
+                            variables.insert(*v2, Variable::Answer(t1_p));
+                        }
+                        Ok(())
                     }
-                    _ => false,
+                    _ => Err(SubsetError::Other),
                 }
             }
             _ => self.is_subset_eq_impl(got, want),
         }
+    }
+
+    pub fn finish_quantified(
+        &self,
+        vs: QuantifiedHandle,
+    ) -> Result<(), Vec1<TypeVarSpecializationError>> {
+        self.solver.finish_quantified(vs)
     }
 }

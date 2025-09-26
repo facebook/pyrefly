@@ -914,6 +914,23 @@ g(f)
 );
 
 testcase!(
+    test_generic_bounds_to_callable,
+    r#"
+from typing import Callable
+
+class A: ...
+class B(A): ...
+class C(B): ...
+
+def f[T: B](x: T) -> T: ...
+
+c1: Callable[[A], A] = f # E: `[T](x: T) -> T` is not assignable to `(A) -> A`
+c2: Callable[[B], B] = f # OK
+c3: Callable[[C], C] = f # OK
+    "#,
+);
+
+testcase!(
     test_return_generic_callable,
     r#"
 from typing import assert_type, Callable
@@ -979,5 +996,35 @@ g = f()
 if g:
     assert_type(g(0), int)
     assert_type(g(""), str)
+    "#,
+);
+
+testcase!(
+    test_pass_literals_through_identity,
+    r#"
+from typing import Callable, Literal, reveal_type
+def f(x: Literal[1]) -> Literal[1]:
+    return x
+def g[T](x: T) -> T:
+    return x
+h = g(f)
+reveal_type(h)  # E: revealed type: (x: Literal[1]) -> Literal[1]
+    "#,
+);
+
+testcase!(
+    test_boundmethod_union,
+    r#"
+from typing import assert_type
+def _(flag: bool):
+    class C:
+        if flag:
+            def __getitem__(self, key: int) -> str:
+                return str(key)
+        else:
+            def __getitem__(self, key: int) -> bytes:
+                return bytes()
+    c = C()
+    assert_type(c[0], bytes | str)
     "#,
 );

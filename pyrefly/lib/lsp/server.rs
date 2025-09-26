@@ -152,6 +152,7 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::globs::Globs;
+use pyrefly_util::includes::Includes as _;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
@@ -161,6 +162,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
@@ -177,6 +179,7 @@ use crate::lsp::module_helpers::make_open_handle;
 use crate::lsp::module_helpers::module_info_to_uri;
 use crate::lsp::module_helpers::to_lsp_location;
 use crate::lsp::module_helpers::to_real_path;
+use crate::lsp::queue::HeavyTaskQueue;
 use crate::lsp::queue::LspEvent;
 use crate::lsp::queue::LspQueue;
 use crate::lsp::transaction_manager::TransactionManager;
@@ -217,6 +220,9 @@ impl TypeErrorDisplayStatus {
 pub trait TspInterface {
     /// Send a response back to the LSP client
     fn send_response(&self, response: Response);
+
+    /// Get access to the state for creating transactions
+    fn state(&self) -> &Arc<State>;
 
     /// Process an LSP event and return the next step
     fn process_event<'a>(
@@ -262,6 +268,8 @@ impl ServerConnection {
 pub struct Server {
     connection: ServerConnection,
     lsp_queue: LspQueue,
+    recheck_queue: HeavyTaskQueue,
+    find_reference_queue: HeavyTaskQueue,
     initialize_params: InitializeParams,
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
@@ -460,6 +468,14 @@ pub fn lsp_loop(
     std::thread::spawn(move || {
         dispatch_lsp_events(&connection_for_dispatcher, lsp_queue2);
     });
+    let recheck_queue = server.recheck_queue.dupe();
+    std::thread::spawn(move || {
+        recheck_queue.run_until_stopped();
+    });
+    let find_reference_queue = server.find_reference_queue.dupe();
+    std::thread::spawn(move || {
+        find_reference_queue.run_until_stopped();
+    });
     let mut ide_transaction_manager = TransactionManager::default();
     let mut canceled_requests = HashSet::new();
     while let Ok((subsequent_mutation, event)) = lsp_queue.recv() {
@@ -474,6 +490,8 @@ pub fn lsp_loop(
         }
     }
     eprintln!("waiting for connection to close");
+    server.recheck_queue.stop();
+    server.find_reference_queue.stop();
     drop(server); // close connection
     Ok(())
 }
@@ -527,6 +545,9 @@ impl Server {
                 }
                 canceled_requests.insert(id);
             }
+            LspEvent::InvalidateConfigFind(invalidated_configs) => {
+                self.invalidate_find_for_configs(invalidated_configs);
+            }
             LspEvent::DidOpenTextDocument(params) => {
                 self.did_open(ide_transaction_manager, subsequent_mutation, params)?;
             }
@@ -546,18 +567,14 @@ impl Server {
                 self.workspace_folders_changed(params);
             }
             LspEvent::DidChangeConfiguration(params) => {
-                self.did_change_configuration(ide_transaction_manager, params);
+                self.did_change_configuration(params);
             }
             LspEvent::LspResponse(x) => {
                 if let Some(request) = self.outgoing_requests.lock().remove(&x.id) {
                     if let Some((request, response)) =
                         as_request_response_pair::<WorkspaceConfiguration>(&request, &x)
                     {
-                        self.workspace_configuration_response(
-                            ide_transaction_manager,
-                            &request,
-                            &response,
-                        );
+                        self.workspace_configuration_response(&request, &response);
                     }
                 } else {
                     eprintln!("Response for unknown request: {x:?}");
@@ -877,6 +894,8 @@ impl Server {
         let s = Self {
             connection: ServerConnection(connection),
             lsp_queue,
+            recheck_queue: HeavyTaskQueue::new(),
+            find_reference_queue: HeavyTaskQueue::new(),
             initialize_params,
             indexing_mode,
             workspace_indexing_limit,
@@ -914,6 +933,7 @@ impl Server {
         self.outgoing_requests.lock().insert(id, request);
     }
 
+    /// Run the transaction with the in-memory content of open files. Returns the handles of open files when the transaction is done.
     fn validate_in_memory_for_transaction(
         state: &State,
         open_files: &RwLock<HashMap<PathBuf, Arc<String>>>,
@@ -971,18 +991,29 @@ impl Server {
         {
             Some(DisplayTypeErrors::ForceOn) => TypeErrorDisplayStatus::EnabledInIdeConfig,
             Some(DisplayTypeErrors::ForceOff) => TypeErrorDisplayStatus::DisabledInIdeConfig,
-            Some(DisplayTypeErrors::Default) | None => {
-                if matches!(config.source, ConfigSource::Synthetic) {
-                    TypeErrorDisplayStatus::DisabledDueToMissingConfigFile
-                } else if config.disable_type_errors_in_ide(path) {
-                    TypeErrorDisplayStatus::DisabledInConfigFile
-                } else {
-                    TypeErrorDisplayStatus::EnabledInConfigFile
+            Some(DisplayTypeErrors::Default) | None => match &config.source {
+                // In this case, we don't have a config file.
+                ConfigSource::Synthetic => TypeErrorDisplayStatus::DisabledDueToMissingConfigFile,
+                // In this case, we have a config file like mypy.ini, but we don't parse it.
+                // We only use it as a sensible project root, and create a default config anyways.
+                // Therefore, we should treat it as if we don't have any config.
+                ConfigSource::Marker(_) => TypeErrorDisplayStatus::DisabledDueToMissingConfigFile,
+                // We actually have a pyrefly.toml, so we can decide based on the config.
+                ConfigSource::File(_) => {
+                    if config.disable_type_errors_in_ide(path) {
+                        TypeErrorDisplayStatus::DisabledInConfigFile
+                    } else {
+                        TypeErrorDisplayStatus::EnabledInConfigFile
+                    }
                 }
-            }
+            },
         }
     }
 
+    /// Validate open files and send errors to the LSP. In the case of an ongoing recheck
+    /// (i.e., another transaction is already being committed or the state is locked for writing),
+    /// we still update diagnostics using a non-committable transaction, which may have slightly stale
+    /// data compared to the main state
     fn validate_in_memory<'a>(&'a self, ide_transaction_manager: &mut TransactionManager<'a>) {
         let mut possibly_committable_transaction =
             ide_transaction_manager.get_possibly_committable_transaction(&self.state);
@@ -1020,10 +1051,54 @@ impl Server {
                 // recheck, we still want to update the diagnostics. In this case, we compute them
                 // from the transactions that won't be committed. It will still contain all the
                 // up-to-date in-memory content, but can have stale main `State` content.
+                // Note: if this changes, update this function's docstring.
                 publish(&transaction);
                 ide_transaction_manager.save(transaction);
             }
         }
+
+        let lsp_queue = self.lsp_queue.dupe();
+        let state = self.state.dupe();
+        let recheck_queue = self.recheck_queue.dupe();
+        Self::queue_source_db_rebuild_and_recheck(&state, recheck_queue, lsp_queue, &handles);
+    }
+
+    fn queue_source_db_rebuild_and_recheck(
+        state: &State,
+        recheck_queue: HeavyTaskQueue,
+        lsp_queue: LspQueue,
+        handles: &[Handle],
+    ) {
+        let mut configs_to_paths: SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>> =
+            SmallMap::new();
+        let config_finder = state.config_finder();
+        for handle in handles {
+            let config = config_finder.python_file(handle.module(), handle.path());
+            configs_to_paths
+                .entry(config)
+                .or_default()
+                .insert(handle.path().dupe());
+        }
+        recheck_queue.queue_task(Box::new(move || {
+            let invalidated_configs: SmallSet<ArcId<ConfigFile>> = configs_to_paths
+                .into_iter()
+                .filter(|(c, files)| match c.requery_source_db(files) {
+                    Ok(reloaded) => reloaded,
+                    Err(error) => {
+                        eprintln!("Error reloading source database for config: {error}");
+                        false
+                    }
+                })
+                .map(|(c, _)| c)
+                .collect();
+            if !invalidated_configs.is_empty() {
+                let _ = lsp_queue.send(LspEvent::InvalidateConfigFind(invalidated_configs));
+            }
+        }));
+    }
+
+    fn invalidate_find_for_configs(&self, invalidated_configs: SmallSet<ArcId<ConfigFile>>) {
+        self.invalidate(|t| t.invalidate_find_for_configs(invalidated_configs));
     }
 
     fn populate_project_files_if_necessary(
@@ -1037,9 +1112,9 @@ impl Server {
                     if self.indexed_configs.lock().insert(config.dupe()) {
                         let state = self.state.dupe();
                         let lsp_queue = self.lsp_queue.dupe();
-                        std::thread::spawn(move || {
+                        self.recheck_queue.queue_task(Box::new(move || {
                             Self::populate_all_project_files_in_config(config, state, lsp_queue);
-                        });
+                        }));
                     }
                 }
                 IndexingMode::LazyBlocking => {
@@ -1074,14 +1149,14 @@ impl Server {
                 drop(indexed_workspaces);
                 let state = self.state.dupe();
                 let lsp_queue = self.lsp_queue.dupe();
-                std::thread::spawn(move || {
+                self.recheck_queue.queue_task(Box::new(move || {
                     Self::populate_all_workspaces_files(
                         roots_to_populate_files,
                         state,
                         workspace_indexing_limit,
                         lsp_queue,
                     );
-                });
+                }));
             }
             IndexingMode::LazyBlocking => {
                 indexed_workspaces.extend(roots_to_populate_files.iter().cloned());
@@ -1098,13 +1173,17 @@ impl Server {
 
     /// Perform an invalidation of elements on `State` and commit them.
     /// Runs asynchronously. Returns immediately and may wait a while for a committable transaction.
-    fn invalidate(&self, f: impl FnOnce(&mut Transaction) + Send + 'static) {
+    fn invalidate(&self, f: impl FnOnce(&mut Transaction) + Send + Sync + 'static) {
         let state = self.state.dupe();
         let lsp_queue = self.lsp_queue.dupe();
         let cancellation_handles = self.cancellation_handles.dupe();
-        std::thread::spawn(move || {
+        let open_files = self.open_files.dupe();
+        self.recheck_queue.queue_task(Box::new(move || {
             let mut transaction = state.new_committable_transaction(Require::Indexing, None);
             f(transaction.as_mut());
+
+            Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
+
             // Commit will be blocked until there are no ongoing reads.
             // If we have some long running read jobs that can be cancelled, we should cancel them
             // to unblock committing transactions.
@@ -1117,7 +1196,7 @@ impl Server {
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
             let _ = lsp_queue.send(LspEvent::RecheckFinished);
-        });
+        }));
     }
 
     /// Certain IDE features (e.g. find-references) require us to know the dependency graph of the
@@ -1279,16 +1358,20 @@ impl Server {
         self.connection
             .publish_diagnostics_for_uri(params.text_document.uri, Vec::new(), None);
         let state = self.state.dupe();
+        let lsp_queue = self.lsp_queue.dupe();
         let open_files = self.open_files.dupe();
-        std::thread::spawn(move || {
+        let recheck_queue = self.recheck_queue.dupe();
+        self.recheck_queue.queue_task(Box::new(move || {
             // Clear out the memory associated with this file.
             // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
             // Having the extra file hanging around doesn't harm anything, but does use extra memory.
             let mut transaction = state.new_committable_transaction(Require::Indexing, None);
             transaction.as_mut().set_memory(vec![(uri, None)]);
-            Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
+            let handles =
+                Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
             state.commit_transaction(transaction);
-        });
+            Self::queue_source_db_rebuild_and_recheck(&state, recheck_queue, lsp_queue, &handles);
+        }));
     }
 
     fn workspace_folders_changed(&self, params: DidChangeWorkspaceFoldersParams) {
@@ -1297,11 +1380,7 @@ impl Server {
         self.request_settings_for_all_workspaces();
     }
 
-    fn did_change_configuration<'a>(
-        &'a self,
-        ide_transaction_manager: &mut TransactionManager<'a>,
-        params: DidChangeConfigurationParams,
-    ) {
+    fn did_change_configuration<'a>(&'a self, params: DidChangeConfigurationParams) {
         if let Some(workspace) = &self.initialize_params.capabilities.workspace
             && workspace.configuration == Some(true)
         {
@@ -1316,16 +1395,12 @@ impl Server {
         }
 
         if modified {
-            // Once the config finishes changing, we'll recheck
-            self.invalidate_config();
-            // If disable_type_errors has changed, we want that to take effect immediately.
-            self.validate_in_memory(ide_transaction_manager);
+            self.invalidate_config_and_validate_in_memory();
         }
     }
 
     fn workspace_configuration_response<'a>(
         &'a self,
-        ide_transaction_manager: &mut TransactionManager<'a>,
         request: &ConfigurationParams,
         response: &[Value],
     ) {
@@ -1340,9 +1415,7 @@ impl Server {
             }
         }
         if modified {
-            self.invalidate_config();
-            // If disable_type_errors has changed, we want that to take effect immediately.
-            self.validate_in_memory(ide_transaction_manager);
+            self.invalidate_config_and_validate_in_memory();
         }
     }
 
@@ -1522,7 +1595,7 @@ impl Server {
         ide_transaction_manager: &mut TransactionManager<'a>,
         uri: &Url,
         position: Position,
-        map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + 'static,
+        map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
     ) {
         let Some(handle) = self.make_handle_if_enabled(uri) else {
             return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
@@ -1560,7 +1633,7 @@ impl Server {
         let cancellation_handles = self.cancellation_handles.dupe();
 
         let connection = self.connection.dupe();
-        std::thread::spawn(move || {
+        self.find_reference_queue.queue_task(Box::new(move || {
             let mut transaction = state.cancellable_transaction();
             cancellation_handles
                 .lock()
@@ -1597,7 +1670,7 @@ impl Server {
                     )))
                 }
             }
-        });
+        }));
     }
 
     fn references<'a>(
@@ -1955,14 +2028,42 @@ impl Server {
         }
     }
 
-    fn invalidate_config(&self) {
-        self.invalidate(|t| t.invalidate_config());
+    /// Asynchronously invalidate configuration and then validate in-memory files
+    /// This ensures validate_in_memory() only runs after config invalidation completes
+    fn invalidate_config_and_validate_in_memory(&self) {
+        let state = self.state.dupe();
+        let lsp_queue = self.lsp_queue.dupe();
+        let cancellation_handles = self.cancellation_handles.dupe();
+        let open_files = self.open_files.dupe();
+        self.recheck_queue.queue_task(Box::new(move || {
+            let mut transaction = state.new_committable_transaction(Require::Indexing, None);
+            transaction.as_mut().invalidate_config();
+
+            Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
+
+            // Commit will be blocked until there are no ongoing reads.
+            // If we have some long running read jobs that can be cancelled, we should cancel them
+            // to unblock committing transactions.
+            for (_, cancellation_handle) in cancellation_handles.lock().drain() {
+                cancellation_handle.cancel();
+            }
+            // we have to run, not just commit to process updates
+            state.run_with_committing_transaction(transaction, &[], Require::Everything);
+            // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
+            // the main event loop of the server. As a result, the server can do a revalidation of
+            // all the in-memory files based on the fresh main State as soon as possible.
+            let _ = lsp_queue.send(LspEvent::RecheckFinished);
+        }));
     }
 }
 
 impl TspInterface for Server {
     fn send_response(&self, response: Response) {
         self.send_response(response)
+    }
+
+    fn state(&self) -> &Arc<State> {
+        &self.state
     }
 
     fn process_event<'a>(

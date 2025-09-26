@@ -27,7 +27,30 @@
 #![feature(if_let_guard)]
 #![feature(let_chains)]
 
+use std::path::PathBuf;
+
+use dupe::Dupe;
+use serde::Deserialize;
+use serde::Serialize;
+
 pub mod buck;
 pub mod handle;
 pub mod map_db;
 pub mod source_db;
+
+#[derive(Debug, Clone, Dupe, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuildSystem {
+    Buck,
+}
+
+impl BuildSystem {
+    pub fn get_source_db(
+        &self,
+        config_root: PathBuf,
+    ) -> Box<dyn source_db::SourceDatabase + 'static> {
+        match &self {
+            Self::Buck => Box::new(buck::bxl::BuckSourceDatabase::new(config_root)),
+        }
+    }
+}

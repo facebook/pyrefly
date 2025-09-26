@@ -8,15 +8,21 @@
 use std::iter;
 
 use dupe::Dupe;
+use pyrefly_python::ast::Ast;
+use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
+use pyrefly_python::module::Module;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::literal::LitEnum;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Var;
+use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::ModModule;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
+use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
@@ -33,7 +39,10 @@ use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::export::exports::Export;
+use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
+use crate::solver::solver::SubsetError;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
@@ -86,12 +95,14 @@ pub enum AttrSubsetError {
         want: Type,
         got_is_property: bool,
         want_is_property: bool,
+        subset_error: SubsetError,
     },
     // `got` and `want` are not subtypes of each other
     // applies to read-write attributes
     Invariant {
         got: Type,
         want: Type,
+        subset_error: SubsetError,
     },
     // `want` is not a subtype of `got`
     // applies to property setters
@@ -99,6 +110,7 @@ pub enum AttrSubsetError {
         got: Type,
         want: Type,
         got_is_property: bool,
+        subset_error: SubsetError,
     },
 }
 
@@ -138,6 +150,7 @@ impl AttrSubsetError {
                 want,
                 got_is_property,
                 want_is_property,
+                subset_error: _,
             } => {
                 let got_desc = if got_is_property {
                     "Property getter for "
@@ -155,7 +168,11 @@ impl AttrSubsetError {
                     want.deterministic_printing()
                 )
             }
-            AttrSubsetError::Invariant { got, want } => {
+            AttrSubsetError::Invariant {
+                got,
+                want,
+                subset_error: _,
+            } => {
                 format!(
                     "`{child_class}.{attr_name}` has type `{}`, which is not consistent with `{}` in `{parent_class}.{attr_name}` (the type of read-write attributes cannot be changed)",
                     got.deterministic_printing(),
@@ -166,6 +183,7 @@ impl AttrSubsetError {
                 got,
                 want,
                 got_is_property,
+                subset_error: _,
             } => {
                 let desc = if got_is_property {
                     "The property setter for "
@@ -937,8 +955,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         got: &Type,
         protocol: &ClassType,
         name: &Name,
-        is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
-    ) -> bool {
+        is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
+    ) -> Result<(), SubsetError> {
         if let Some(got_attrs) = self
             .as_attribute_base(got.clone())
             .map(|got_base| self.lookup_attr_from_base(got_base, name))
@@ -953,15 +971,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if (!got_attrs.is_empty())
                 && let Some(want) = self.get_protocol_attribute(protocol, got.clone(), name)
             {
-                got_attrs.iter().all(|(got_attr, _)| {
-                    self.is_attribute_subset(got_attr, &want, &mut |got, want| is_subset(got, want))
-                        .is_ok()
-                })
+                for (got_attr, _) in got_attrs.iter() {
+                    self.is_attribute_subset(got_attr, &want, &mut |got, want| {
+                        is_subset(got, want)
+                    })
+                    .map_err(|_| SubsetError::Other)?;
+                }
+                Ok(())
             } else {
-                false
+                Err(SubsetError::Other)
             }
         } else {
-            false
+            Err(SubsetError::Other)
         }
     }
 
@@ -969,7 +990,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         got: &Attribute,
         want: &ClassAttribute,
-        is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
+        is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> Result<(), AttrSubsetError> {
         match got {
             Attribute::ClassAttribute(got_class_attr) => {
@@ -1713,10 +1734,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             "__bool__",
         );
 
-        // test::narrow::test_walrus_value is an example of a valid union type that
-        // as_call_target() does not handle.
         if let Some(ty) = cond_bool_ty
-            && !matches!(ty, Type::Union(_) | Type::Never(_))
+            && !ty.is_never()
             && self.as_call_target(ty.clone()).is_none()
         {
             self.error(
@@ -1724,7 +1743,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 range,
                 ErrorInfo::Kind(ErrorKind::InvalidArgument),
                 format!(
-                    "`{}.__bool__` has type `{}`, which is not callable",
+                    "The `__bool__` attribute of `{}` has type `{}`, which is not callable",
                     self.for_display(condition_type.clone()),
                     self.for_display(ty.clone()),
                 ),
@@ -1735,18 +1754,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
 #[derive(Debug)]
 pub enum AttrDefinition {
-    FullyResolved(TextRangeWithModule),
-    PartiallyResolvedImportedModuleAttribute { module_name: ModuleName },
+    FullyResolved {
+        definition_range: TextRangeWithModule,
+        docstring_range: Option<TextRange>,
+    },
+    PartiallyResolvedImportedModuleAttribute {
+        module_name: ModuleName,
+    },
 }
 
 #[derive(Debug)]
 pub struct AttrInfo {
     pub name: Name,
     pub ty: Option<Type>,
+    pub is_deprecated: bool,
     pub definition: Option<AttrDefinition>,
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn compute_docstring_range_for_definition(
+        &self,
+        ast: &ModModule,
+        text_range_with_module: &TextRangeWithModule,
+    ) -> Option<TextRange> {
+        let covering_nodes = Ast::locate_node(ast, text_range_with_module.range.start());
+
+        for node in covering_nodes.iter() {
+            match node {
+                AnyNodeRef::StmtFunctionDef(stmt) => {
+                    return Docstring::range_from_stmts(&stmt.body);
+                }
+                AnyNodeRef::StmtClassDef(stmt) => {
+                    return Docstring::range_from_stmts(&stmt.body);
+                }
+                _ => continue,
+            }
+        }
+        None
+    }
+
     fn completions_mro<T>(
         &self,
         mro: T,
@@ -1756,31 +1802,51 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         T: Iterator<Item = &'a Class>,
     {
         let mut seen = SmallSet::new();
+        let mut ast_cache: SmallMap<Module, ModModule> = SmallMap::new();
+
         for c in mro {
+            let ast = ast_cache
+                .entry(c.module().dupe())
+                .or_insert_with(|| Ast::parse(c.module().contents()).0);
+
             match expected_attribute_name {
                 None => {
                     for fld in c.fields() {
                         if seen.insert(fld)
                             && let Some(range) = c.field_decl_range(fld)
                         {
+                            let text_range_with_module =
+                                TextRangeWithModule::new(c.module().dupe(), range);
+                            let docstring_range = self.compute_docstring_range_for_definition(
+                                ast,
+                                &text_range_with_module,
+                            );
                             res.push(AttrInfo {
                                 name: fld.clone(),
                                 ty: None,
-                                definition: Some(AttrDefinition::FullyResolved(
-                                    TextRangeWithModule::new(c.module().dupe(), range),
-                                )),
+                                is_deprecated: false,
+                                definition: Some(AttrDefinition::FullyResolved {
+                                    definition_range: text_range_with_module,
+                                    docstring_range,
+                                }),
                             });
                         }
                     }
                 }
                 Some(expected_attribute_name) => {
                     if let Some(range) = c.field_decl_range(expected_attribute_name) {
+                        let text_range_with_module =
+                            TextRangeWithModule::new(c.module().dupe(), range);
+                        let docstring_range = self
+                            .compute_docstring_range_for_definition(ast, &text_range_with_module);
                         res.push(AttrInfo {
                             name: expected_attribute_name.clone(),
                             ty: None,
-                            definition: Some(AttrDefinition::FullyResolved(
-                                TextRangeWithModule::new(c.module().dupe(), range),
-                            )),
+                            is_deprecated: false,
+                            definition: Some(AttrDefinition::FullyResolved {
+                                definition_range: text_range_with_module,
+                                docstring_range,
+                            }),
                         });
                     }
                 }
@@ -1836,25 +1902,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(exports) = self.get_module_exports(module_name) {
             match expected_attribute_name {
                 None => {
-                    res.extend(exports.exports(self.exports).iter().map(|(x, _)| AttrInfo {
-                        name: x.clone(),
-                        ty: None,
-                        definition: Some(
-                            AttrDefinition::PartiallyResolvedImportedModuleAttribute {
-                                module_name,
-                            },
-                        ),
-                    }));
+                    res.extend(
+                        exports
+                            .exports(self.exports)
+                            .iter()
+                            .map(|(x, export_location)| AttrInfo {
+                                name: x.clone(),
+                                ty: None,
+                                is_deprecated: matches!(
+                                    export_location,
+                                    ExportLocation::ThisModule(Export {
+                                        is_deprecated: true,
+                                        ..
+                                    })
+                                ),
+                                definition: Some(
+                                    AttrDefinition::PartiallyResolvedImportedModuleAttribute {
+                                        module_name,
+                                    },
+                                ),
+                            }),
+                    );
                 }
                 Some(expected_attribute_name) => {
-                    if exports
-                        .exports(self.exports)
-                        .get(expected_attribute_name)
-                        .is_some()
+                    if let Some(export_location) =
+                        exports.exports(self.exports).get(expected_attribute_name)
                     {
                         res.push(AttrInfo {
                             name: expected_attribute_name.clone(),
                             ty: None,
+                            is_deprecated: matches!(
+                                export_location,
+                                ExportLocation::ThisModule(Export {
+                                    is_deprecated: true,
+                                    ..
+                                })
+                            ),
                             definition: Some(
                                 AttrDefinition::PartiallyResolvedImportedModuleAttribute {
                                     module_name,
@@ -1923,14 +2006,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if include_types {
             for info in res {
                 if let Some(definition) = &info.definition
-                    && matches!(definition, AttrDefinition::FullyResolved(..))
+                    && matches!(definition, AttrDefinition::FullyResolved { .. })
                 {
                     let found_attrs = self
                         .lookup_attr_from_attribute_base(base.clone(), &info.name)
                         .found;
+                    let mut is_deprecated = false;
                     let found_types: Vec<_> = found_attrs
                         .into_iter()
                         .filter_map(|(attr, _)| {
+                            match &attr {
+                                Attribute::ClassAttribute(ClassAttribute::ReadWrite(ty))
+                                | Attribute::ClassAttribute(ClassAttribute::ReadOnly(ty, _))
+                                | Attribute::Simple(ty)
+                                | Attribute::ClassAttribute(ClassAttribute::Property(ty, _, _))
+                                    if ty.is_deprecated_function() =>
+                                {
+                                    is_deprecated = true;
+                                }
+                                _ => {}
+                            }
                             let result = self
                                 .resolve_get_access(
                                     attr,
@@ -1951,6 +2046,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if !found_types.is_empty() {
                         info.ty = Some(self.unions(found_types));
                     }
+                    info.is_deprecated = is_deprecated;
                 }
             }
         }

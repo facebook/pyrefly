@@ -7,7 +7,6 @@
 
 //! Tests for TSP GetDiagnosticsParams type construction and serialization
 
-use serde_json;
 use tsp_types::GetDiagnosticsParams;
 
 #[test]

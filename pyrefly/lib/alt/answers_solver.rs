@@ -759,11 +759,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// Check if the infer_with_first_use config option is enabled.
-    pub fn infer_with_first_use(&self) -> bool {
-        self.current.infer_with_first_use()
-    }
-
     pub fn distribute_over_union(&self, ty: &Type, mut f: impl FnMut(&Type) -> Type) -> Type {
         let mut res = Vec::new();
         self.map_over_union(ty, |ty| {

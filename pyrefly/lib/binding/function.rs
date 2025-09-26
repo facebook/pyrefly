@@ -7,8 +7,10 @@
 
 use std::mem;
 
+use dupe::Dupe as _;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
+use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::prelude::VecExt;
@@ -47,12 +49,11 @@ use crate::binding::binding::ReturnImplicit;
 use crate::binding::binding::ReturnType;
 use crate::binding::binding::ReturnTypeKind;
 use crate::binding::bindings::BindingsBuilder;
-use crate::binding::bindings::LegacyTParamBuilder;
+use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
 use crate::binding::scope::Scope;
-use crate::binding::scope::Scopes;
 use crate::binding::scope::YieldsAndReturns;
 use crate::config::base::UntypedDefBehavior;
 use crate::export::special::SpecialExport;
@@ -214,7 +215,7 @@ impl<'a> BindingsBuilder<'a> {
         mut x: Expr,
         func_name: &Identifier,
         class_key: Option<Idx<KeyClass>>,
-        tparams_builder: &mut Option<LegacyTParamBuilder>,
+        tparams_builder: &mut Option<LegacyTParamCollector>,
     ) -> (TextRange, Idx<KeyAnnotation>) {
         self.ensure_type(&mut x, tparams_builder);
         (
@@ -245,7 +246,7 @@ impl<'a> BindingsBuilder<'a> {
             .as_mut()
             .map(|tparams| self.type_params(tparams));
 
-        let mut legacy = Some(LegacyTParamBuilder::new(tparams.is_some()));
+        let mut legacy = Some(LegacyTParamCollector::new(tparams.is_some()));
 
         // We need to bind all the parameters expressions _after_ the type params, but before the parameter names,
         // which might shadow some types.
@@ -259,9 +260,9 @@ impl<'a> BindingsBuilder<'a> {
         let return_ann_with_range = mem::take(&mut x.returns)
             .map(|e| self.to_return_annotation_with_range(*e, func_name, class_key, &mut legacy));
 
-        let legacy_tparam_builder = legacy.unwrap();
-        legacy_tparam_builder.add_name_definitions(self);
-        let legacy_tparams = legacy_tparam_builder.lookup_keys();
+        let legacy_tparam_collector = legacy.unwrap();
+        self.add_name_definitions(&legacy_tparam_collector);
+        let legacy_tparams = legacy_tparam_collector.lookup_keys();
         (return_ann_with_range, legacy_tparams)
     }
 
@@ -275,6 +276,7 @@ impl<'a> BindingsBuilder<'a> {
         body: Vec<Stmt>,
         range: TextRange,
         func_name: &Identifier,
+        parent: &NestingContext,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
         is_async: bool,
@@ -283,7 +285,10 @@ impl<'a> BindingsBuilder<'a> {
             .push_function_scope(range, func_name, class_key.is_some(), is_async);
         self.parameters(parameters, undecorated_idx, class_key);
         self.init_static_scope(&body, false);
-        self.stmts(body);
+        self.stmts(
+            body,
+            &NestingContext::function(ShortIdentifier::new(func_name), parent.dupe()),
+        );
         self.scopes.pop_function_scope()
     }
 
@@ -460,6 +465,7 @@ impl<'a> BindingsBuilder<'a> {
         is_async: bool,
         return_ann_with_range: Option<(TextRange, Idx<KeyAnnotation>)>,
         func_name: &Identifier,
+        parent: &NestingContext,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
     ) -> (FunctionStubOrImpl, Option<SelfAssignments>) {
@@ -495,6 +501,7 @@ impl<'a> BindingsBuilder<'a> {
                         body,
                         range,
                         func_name,
+                        parent,
                         undecorated_idx,
                         class_key,
                         is_async,
@@ -518,6 +525,7 @@ impl<'a> BindingsBuilder<'a> {
                         body,
                         range,
                         func_name,
+                        parent,
                         undecorated_idx,
                         class_key,
                         is_async,
@@ -541,6 +549,7 @@ impl<'a> BindingsBuilder<'a> {
                         body,
                         range,
                         func_name,
+                        parent,
                         undecorated_idx,
                         class_key,
                         is_async,
@@ -563,7 +572,7 @@ impl<'a> BindingsBuilder<'a> {
         (stub_or_impl, self_assignments)
     }
 
-    pub fn function_def(&mut self, mut x: StmtFunctionDef) {
+    pub fn function_def(&mut self, mut x: StmtFunctionDef, parent: &NestingContext) {
         let func_name = x.name.clone();
         let mut def_idx =
             self.declare_current_idx(Key::Definition(ShortIdentifier::new(&func_name)));
@@ -574,11 +583,10 @@ impl<'a> BindingsBuilder<'a> {
         // Get preceding function definition, if any. Used for building an overload type.
         let (function_idx, pred_idx) = self.create_function_index(&func_name);
 
-        let (class_key, metadata_key) =
-            match Scopes::get_class_and_metadata_keys(self.scopes.current()) {
-                Some((class_key, metadata_key)) => (Some(class_key), Some(metadata_key)),
-                _ => (None, None),
-            };
+        let (class_key, metadata_key) = match self.scopes.current_class_and_metadata_keys() {
+            Some((class_key, metadata_key)) => (Some(class_key), Some(metadata_key)),
+            _ => (None, None),
+        };
 
         self.scopes.push(Scope::annotation(x.range));
         let (return_ann_with_range, legacy_tparams) =
@@ -595,6 +603,7 @@ impl<'a> BindingsBuilder<'a> {
             x.is_async,
             return_ann_with_range,
             &func_name,
+            parent,
             undecorated_idx,
             class_key,
         );
@@ -688,7 +697,13 @@ fn function_last_expressions<'a>(
                 }
             }
             Stmt::Try(x) => {
-                if !x.finalbody.is_empty() {
+                // If final body is not empty, _and_ contains a return statement,
+                // process it.
+                if !x.finalbody.is_empty()
+                    && x.finalbody
+                        .iter()
+                        .any(|stmt| matches!(stmt, Stmt::Return(_)))
+                {
                     f(sys_info, &x.finalbody, res)?;
                 } else {
                     if x.orelse.is_empty() {

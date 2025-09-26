@@ -104,7 +104,6 @@ pub struct Answers {
     table: AnswerTable,
     index: Option<Arc<Mutex<Index>>>,
     trace: Option<Mutex<Traces>>,
-    infer_with_first_use: bool,
 }
 
 pub type AnswerEntry<K> = IndexMap<K, Calculation<Arc<<K as Keyed>::Answer>, Var>>;
@@ -327,7 +326,7 @@ impl Solutions {
 }
 
 pub trait LookupAnswer: Sized {
-    /// Look up the value. If present, the `path` is a hint which can optimise certain cases.
+    /// Look up the value. If present, the `path` is a hint which can optimize certain cases.
     ///
     /// Return None if the file is undergoing concurrent modification.
     fn get<K: Solve<Self> + Exported>(
@@ -349,7 +348,6 @@ impl Answers {
         solver: Solver,
         enable_index: bool,
         enable_trace: bool,
-        infer_with_first_use: bool,
     ) -> Self {
         fn presize<K: Keyed>(items: &mut AnswerEntry<K>, bindings: &Bindings)
         where
@@ -379,16 +377,11 @@ impl Answers {
             table,
             index,
             trace,
-            infer_with_first_use,
         }
     }
 
     pub fn table(&self) -> &AnswerTable {
         &self.table
-    }
-
-    pub fn infer_with_first_use(&self) -> bool {
-        self.infer_with_first_use
     }
 
     #[expect(dead_code)]
@@ -684,11 +677,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             for AttrInfo {
                 name: _,
                 ty: _,
+                is_deprecated: _,
                 definition,
             } in self.completions(base.clone(), Some(attribute_name), false)
             {
                 match definition {
-                    Some(AttrDefinition::FullyResolved(TextRangeWithModule { module, range })) => {
+                    Some(AttrDefinition::FullyResolved {
+                        definition_range: TextRangeWithModule { module, range },
+                        docstring_range: _,
+                    }) => {
                         if module.path() != self.bindings().module().path() {
                             index
                                 .lock()

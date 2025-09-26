@@ -549,16 +549,6 @@
   "aliases_recursive.py": [
     {
       "code": -2,
-      "column": 36,
-      "concise_description": "Expected a type form, got instance of `Literal['RecursiveTuple']`",
-      "description": "Expected a type form, got instance of `Literal['RecursiveTuple']`",
-      "line": 30,
-      "name": "not-a-type",
-      "stop_column": 52,
-      "stop_line": 30
-    },
-    {
-      "code": -2,
       "column": 45,
       "concise_description": "Expected a type form, got instance of `Literal['RecursiveMapping']`",
       "description": "Expected a type form, got instance of `Literal['RecursiveMapping']`",
@@ -566,86 +556,6 @@
       "name": "not-a-type",
       "stop_column": 63,
       "stop_line": 42
-    },
-    {
-      "code": -2,
-      "column": 26,
-      "concise_description": "Expected a type form, got instance of `_SpecialForm`",
-      "description": "Expected a type form, got instance of `_SpecialForm`",
-      "line": 58,
-      "name": "not-a-type",
-      "stop_column": 54,
-      "stop_line": 58
-    },
-    {
-      "code": -2,
-      "column": 25,
-      "concise_description": "`type[list[Unknown]]` is not subscriptable",
-      "description": "`type[list[Unknown]]` is not subscriptable",
-      "line": 59,
-      "name": "unsupported-operation",
-      "stop_column": 47,
-      "stop_line": 59
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "`type[list[Unknown]]` is not subscriptable",
-      "description": "`type[list[Unknown]]` is not subscriptable",
-      "line": 62,
-      "name": "unsupported-operation",
-      "stop_column": 27,
-      "stop_line": 62
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "`type[list[Unknown]]` is not subscriptable",
-      "description": "`type[list[Unknown]]` is not subscriptable",
-      "line": 63,
-      "name": "unsupported-operation",
-      "stop_column": 27,
-      "stop_line": 63
-    },
-    {
-      "code": -2,
-      "column": 26,
-      "concise_description": "Expected a type form, got instance of `_SpecialForm`",
-      "description": "Expected a type form, got instance of `_SpecialForm`",
-      "line": 65,
-      "name": "not-a-type",
-      "stop_column": 63,
-      "stop_line": 65
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "`type[list[Unknown]]` is not subscriptable",
-      "description": "`type[list[Unknown]]` is not subscriptable",
-      "line": 67,
-      "name": "unsupported-operation",
-      "stop_column": 32,
-      "stop_line": 67
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "`type[list[Unknown]]` is not subscriptable",
-      "description": "`type[list[Unknown]]` is not subscriptable",
-      "line": 68,
-      "name": "unsupported-operation",
-      "stop_column": 34,
-      "stop_line": 68
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "`type[list[Unknown]]` is not subscriptable",
-      "description": "`type[list[Unknown]]` is not subscriptable",
-      "line": 69,
-      "name": "unsupported-operation",
-      "stop_column": 32,
-      "stop_line": 69
     }
   ],
   "aliases_type_statement.py": [
@@ -5635,16 +5545,6 @@
       "name": "invalid-type-var",
       "stop_column": 36,
       "stop_line": 26
-    },
-    {
-      "code": -2,
-      "column": 45,
-      "concise_description": "Type parameter K is not included in the type parameter list",
-      "description": "Type parameter K is not included in the type parameter list",
-      "line": 26,
-      "name": "invalid-type-var",
-      "stop_column": 46,
-      "stop_line": 26
     }
   ],
   "generics_syntax_declarations.py": [
@@ -5981,26 +5881,6 @@
       "name": "not-a-type",
       "stop_column": 18,
       "stop_line": 44
-    },
-    {
-      "code": -2,
-      "column": 20,
-      "concise_description": "Found `S`, but it was not the global scope",
-      "description": "Found `S`, but it was not the global scope",
-      "line": 66,
-      "name": "unknown-name",
-      "stop_column": 21,
-      "stop_line": 66
-    },
-    {
-      "code": -2,
-      "column": 24,
-      "concise_description": "assert_type(Any, int) failed",
-      "description": "assert_type(Any, int) failed",
-      "line": 67,
-      "name": "assert-type",
-      "stop_column": 32,
-      "stop_line": 67
     }
   ],
   "generics_type_erasure.py": [
@@ -6501,6 +6381,16 @@
     },
     {
       "code": -2,
+      "column": 7,
+      "concise_description": "Type `int` is not assignable to upper bound `Sized` of type variable `ST`",
+      "description": "Type `int` is not assignable to upper bound `Sized` of type variable `ST`",
+      "line": 51,
+      "name": "bad-specialization",
+      "stop_column": 13,
+      "stop_line": 51
+    },
+    {
+      "code": -2,
       "column": 38,
       "concise_description": "TypeVar cannot have both constraints and bound",
       "description": "TypeVar cannot have both constraints and bound",
@@ -6921,23 +6811,13 @@
     },
     {
       "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(str, Literal['hello']) failed",
-      "description": "assert_type(str, Literal['hello']) failed",
-      "line": 111,
-      "name": "assert-type",
-      "stop_column": 37,
-      "stop_line": 111
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(str, LiteralString) failed",
-      "description": "assert_type(str, LiteralString) failed",
-      "line": 116,
-      "name": "assert-type",
-      "stop_column": 35,
-      "stop_line": 116
+      "column": 21,
+      "concise_description": "Type `str` is not assignable to upper bound `LiteralString` of type variable `TLiteral`",
+      "description": "Type `str` is not assignable to upper bound `LiteralString` of type variable `TLiteral`",
+      "line": 120,
+      "name": "bad-specialization",
+      "stop_column": 24,
+      "stop_line": 120
     },
     {
       "code": -2,
@@ -7695,7 +7575,7 @@
       "concise_description": "Overload return type `str` is not assignable to implementation return type `int`",
       "description": "Overload return type `str` is not assignable to implementation return type `int`",
       "line": 25,
-      "name": "invalid-overload",
+      "name": "inconsistent-overload",
       "stop_column": 16,
       "stop_line": 25
     },
@@ -7705,7 +7585,7 @@
       "concise_description": "Implementation signature `(x: int) -> int | str` does not accept all arguments that overload signature `(x: str) -> str` accepts",
       "description": "Implementation signature `(x: int) -> int | str` does not accept all arguments that overload signature `(x: str) -> str` accepts",
       "line": 41,
-      "name": "invalid-overload",
+      "name": "inconsistent-overload",
       "stop_column": 19,
       "stop_line": 41
     }
@@ -7777,7 +7657,7 @@
       "concise_description": "Implementation signature `(cls: type[Self@C], *args: int | str) -> int | str` does not accept all arguments that overload signature `(self: Self@C, x: str, /) -> str` accepts",
       "description": "Implementation signature `(cls: type[Self@C], *args: int | str) -> int | str` does not accept all arguments that overload signature `(self: Self@C, x: str, /) -> str` accepts",
       "line": 90,
-      "name": "invalid-overload",
+      "name": "inconsistent-overload",
       "stop_column": 14,
       "stop_line": 90
     },
@@ -8334,16 +8214,6 @@
     {
       "code": -2,
       "column": 25,
-      "concise_description": "`ConcreteHasProperty1` is not assignable to `HasPropertyProto`",
-      "description": "`ConcreteHasProperty1` is not assignable to `HasPropertyProto`",
-      "line": 144,
-      "name": "bad-assignment",
-      "stop_column": 47,
-      "stop_line": 144
-    },
-    {
-      "code": -2,
-      "column": 25,
       "concise_description": "`ConcreteHasProperty2` is not assignable to `HasPropertyProto`",
       "description": "`ConcreteHasProperty2` is not assignable to `HasPropertyProto`",
       "line": 145,
@@ -8499,28 +8369,7 @@
       "stop_line": 61
     }
   ],
-  "protocols_self.py": [
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "`One` is not assignable to variable `c` with type `Copyable`",
-      "description": "`One` is not assignable to variable `c` with type `Copyable`",
-      "line": 32,
-      "name": "bad-assignment",
-      "stop_column": 10,
-      "stop_line": 32
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "`Other` is not assignable to variable `c` with type `Copyable`",
-      "description": "`Other` is not assignable to variable `c` with type `Copyable`",
-      "line": 33,
-      "name": "bad-assignment",
-      "stop_column": 12,
-      "stop_line": 33
-    }
-  ],
+  "protocols_self.py": [],
   "protocols_subtyping.py": [
     {
       "code": -2,
@@ -9127,8 +8976,8 @@
     {
       "code": -2,
       "column": 7,
-      "concise_description": "Argument `type` is not assignable to parameter `val1` with type `None` in function `func1`",
-      "description": "Argument `type` is not assignable to parameter `val1` with type `None` in function `func1`",
+      "concise_description": "Argument `type[NoneType]` is not assignable to parameter `val1` with type `None` in function `func1`",
+      "description": "Argument `type[NoneType]` is not assignable to parameter `val1` with type `None` in function `func1`",
       "line": 21,
       "name": "bad-argument-type",
       "stop_column": 17,

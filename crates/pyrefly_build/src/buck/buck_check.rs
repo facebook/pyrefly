@@ -18,6 +18,7 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::fs_anyhow;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use vec1::Vec1;
 
@@ -30,11 +31,26 @@ struct ManifestItem {
     absolute_path: PathBuf,
 }
 
+fn strip_stubs_suffix(path: &Path) -> PathBuf {
+    path.components()
+        .map(|component| {
+            if let Some(component_str) = component.as_os_str().to_str()
+                && let Some(stripped) = component_str.strip_suffix("-stubs")
+            {
+                Path::new(stripped)
+            } else {
+                Path::new(component.as_os_str())
+            }
+        })
+        .collect()
+}
+
 fn read_manifest_file_data(data: &[u8]) -> anyhow::Result<Vec<ManifestItem>> {
     let raw_items: Vec<Vec<String>> = serde_json::from_slice(data)?;
     let mut results = Vec::new();
     for raw_item in raw_items {
-        match ModuleName::from_relative_path(Path::new(raw_item[0].as_str())) {
+        let module_relative_path = Path::new(raw_item[0].as_str());
+        match ModuleName::from_relative_path(&strip_stubs_suffix(module_relative_path)) {
             Ok(module_name) => {
                 // absolutize should be fine here to get absolute path, since Pyrefly
                 // will be run from Buck root.
@@ -123,11 +139,25 @@ impl SourceDatabase for BuckCheckSourceDatabase {
             .collect()
     }
 
-    fn lookup(&self, module: &ModuleName, _: Option<&Handle>) -> Option<ModulePath> {
+    fn lookup(&self, module: &ModuleName, _: Option<&Path>) -> Option<ModulePath> {
         self.sources
             .get(module)
             .or_else(|| self.dependencies.get(module))
             .map(|p| ModulePath::filesystem(p.first().clone()))
+    }
+
+    fn handle_from_module_path(&self, module_path: ModulePath) -> Option<Handle> {
+        let find = |i: &SmallMap<ModuleName, Vec1<PathBuf>>| {
+            i.iter()
+                .find(|s| s.1.iter().any(|p| p == module_path.as_path()))
+                .map(|s| s.0.dupe())
+        };
+        let name = find(&self.sources).or_else(|| find(&self.dependencies))?;
+        Some(Handle::new(name, module_path, self.sys_info.dupe()))
+    }
+
+    fn requery_source_db(&self, _: SmallSet<PathBuf>) -> anyhow::Result<bool> {
+        Ok(false)
     }
 }
 
@@ -204,6 +234,19 @@ mod tests {
             vec![ManifestItem {
                 module_name: ModuleName::from_str("foo.bar"),
                 absolute_path: PathBuf::from_str("root/foo/bar.py").unwrap().absolutize()
+            }]
+        );
+        assert_eq!(
+            read_manifest_file_data(
+                r#"[["foo-stubs/bar/__init__.pyi", "root/foo-stubs/bar/__init__.pyi", "derp"]]"#
+                    .as_bytes()
+            )
+            .unwrap(),
+            vec![ManifestItem {
+                module_name: ModuleName::from_str("foo.bar"),
+                absolute_path: PathBuf::from_str("root/foo-stubs/bar/__init__.pyi")
+                    .unwrap()
+                    .absolutize()
             }]
         );
         assert_eq!(

@@ -104,6 +104,7 @@ pub struct TestEnv {
     infer_with_first_use: bool,
     site_package_path: Vec<PathBuf>,
     implicitly_defined_attribute_error: bool,
+    default_require_level: Require,
 }
 
 impl TestEnv {
@@ -117,6 +118,7 @@ impl TestEnv {
             infer_with_first_use: true,
             site_package_path: Vec::new(),
             implicitly_defined_attribute_error: false,
+            default_require_level: Require::Exports,
         }
     }
 
@@ -146,6 +148,11 @@ impl TestEnv {
 
     pub fn enable_implicitly_defined_attribute_error(mut self) -> Self {
         self.implicitly_defined_attribute_error = true;
+        self
+    }
+
+    pub fn with_default_require_level(mut self, level: Require) -> Self {
+        self.default_require_level = level;
         self
     }
 
@@ -218,7 +225,7 @@ impl TestEnv {
         for (name, path, _) in self.modules.iter() {
             sourcedb.insert(*name, path.dupe());
         }
-        config.source_db = Some(ArcId::new(Box::new(sourcedb)));
+        config.source_db = Some(Arc::new(Box::new(sourcedb)));
         config.interpreters.skip_interpreter_query = true;
         config.configure();
         ArcId::new(config)
@@ -241,13 +248,17 @@ impl TestEnv {
             .collect::<Vec<_>>();
         let state = State::new(self.config_finder());
         let subscriber = TestSubscriber::new();
-        let mut transaction =
-            state.new_committable_transaction(Require::Exports, Some(Box::new(subscriber.dupe())));
+        let mut transaction = state.new_committable_transaction(
+            self.default_require_level,
+            Some(Box::new(subscriber.dupe())),
+        );
         transaction.as_mut().set_memory(self.get_memory());
         transaction.as_mut().run(&handles, Require::Everything);
         state.commit_transaction(transaction);
         subscriber.finish();
+        let project_root = PathBuf::new();
         print_errors(
+            project_root.as_path(),
             &state
                 .transaction()
                 .get_errors(handles.iter())
@@ -447,7 +458,7 @@ pub fn init_test() {
     init_thread_pool(ThreadCount::NumThreads(NonZeroUsize::new(3).unwrap()));
 }
 
-/// Shared state with all the builtins already initialised (by a dummy module).
+/// Shared state with all the builtins already initialized (by a dummy module).
 static SHARED_STATE: LazyLock<State> =
     LazyLock::new(|| TestEnv::one("_shared_state", "").to_state().0);
 
@@ -466,9 +477,9 @@ pub fn testcase_for_macro(
     }
     let contents = format!("{}{}", "\n".repeat(start_line), contents);
     env.add_with_path("main", file, &contents);
-    // If any given test regularly takes > 10s, that's probably a bug.
+    // If any given test regularly takes > 20s, that's probably a bug.
     // Currently all are less than 3s in debug, even when running in parallel.
-    let limit = 15;
+    let limit = 20;
     let check = |errors: Errors| {
         errors.check_against_expectations()?;
         errors.check_var_leak()?;
@@ -490,7 +501,8 @@ pub fn testcase_for_macro(
             )]);
             t.run(&[h.dupe()], Require::Everything);
             let errors = t.get_errors([&h]);
-            print_errors(&errors.collect_errors().shown);
+            let project_root = PathBuf::new();
+            print_errors(project_root.as_path(), &errors.collect_errors().shown);
             check(errors)?;
         } else {
             let (state, handle) = env.clone().to_state();

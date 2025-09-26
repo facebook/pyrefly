@@ -64,7 +64,6 @@ iter_iter(iter([1, 2, 3]))
 );
 
 testcase!(
-    bug = "Instantiation is not validated against bound, see https://github.com/facebook/pyrefly/issues/111",
     test_generic_bounds,
     r#"
 class A: ...
@@ -76,7 +75,7 @@ def test[T: B](x: T) -> None:
     b: B = x  # OK
     c: C = x  # E: `T` is not assignable to `C`
 
-test(A())  # Not OK
+test(A())  # E: Type `A` is not assignable to upper bound `B` of type variable `T`
 test(B())
 test(C())
  "#,
@@ -99,7 +98,6 @@ class Bar(Foo[A]):  # E: Type `A` is not assignable to upper bound `B` of type v
 );
 
 testcase!(
-    bug = "Instantiation is not validated against constraints, see https://github.com/facebook/pyrefly/issues/111",
     test_generic_constraints,
     r#"
 class A: ...
@@ -113,7 +111,7 @@ def test[T: (B, C)](x: T) -> None:
     c: C = x  # E: `T` is not assignable to `C`
     d: B | C = x  # OK
 
-test(A())  # Not OK
+test(A())  # E: Type `A` is not assignable to upper bound `B | C` of type variable `T`
 test(B())
 test(C())
 test(D())
@@ -485,5 +483,21 @@ testcase!(
 from typing import TypeVar
 
 T = TypeVar("T", int)  # E: Expected at least 2 constraints in TypeVar `T`, got 1
+    "#,
+);
+
+testcase!(
+    bug = "We always promote when instantiating, but we should not promote if the bound is literal",
+    test_typevar_literal_bound,
+    r#"
+from typing import Literal, LiteralString, assert_type
+def f[T: Literal["foo"]](x: T) -> T: ...
+def g[T: LiteralString](x: T) -> T: ...
+
+assert_type(f("foo"), Literal["foo"])
+assert_type(f("bar"), str) # E: Type `str` is not assignable to upper bound `Literal['foo']`
+
+assert_type(g("foo"), Literal["foo"])
+assert_type(g("bar"), Literal["bar"])
     "#,
 );

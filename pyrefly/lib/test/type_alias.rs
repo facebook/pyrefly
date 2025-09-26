@@ -84,6 +84,30 @@ def f(x: X[int]):
 );
 
 testcase!(
+    test_any_alias_implicit,
+    r#"
+from typing import Any, TypeAlias, assert_type
+T = Any
+def f(x: T):
+    assert_type(x, Any)
+f(0)
+f(None)
+"#,
+);
+
+testcase!(
+    test_any_alias_explicit,
+    r#"
+from typing import Any, TypeAlias, assert_type
+T: TypeAlias = Any
+def f(x: T):
+    assert_type(x, Any)
+f(0)
+f(None)
+"#,
+);
+
+testcase!(
     test_generic_alias_explicit,
     r#"
 from typing import TypeAlias, TypeVar, assert_type
@@ -350,7 +374,7 @@ def g(x2: X2, x3: X3):
 );
 
 testcase!(
-    test_recursive_alias,
+    test_recursive_alias_explicit,
     r#"
 from typing import TypeAlias, assert_type
 
@@ -360,6 +384,16 @@ x: Alias = 1
 y: Alias = [1]
 z: Alias = [[1, 2]]
 "#,
+);
+
+testcase!(
+    test_recursive_alias_implicit,
+    r#"
+X = int | list["X"]
+x: X = 1
+x: X = [1]
+x: X = [[1, 2]]
+    "#,
 );
 
 testcase!(
@@ -701,5 +735,26 @@ Z = int
 class C1(X): pass  # E: Cannot use scoped type alias `X` as a base class
 class C2(Y): pass  # Should work - legacy explicit type alias
 class C3(Z): pass  # Should work - legacy implicit type alias
+    "#,
+);
+
+testcase!(
+    test_string_annotations,
+    r#"
+from typing import Annotated, Callable, Dict, List, Tuple, Type
+from collections.abc import Callable as Callable2
+X1 = Annotated["A", "foo"]
+X2 = Callable[..., "A"]
+X3 = Callable2[..., "A"]
+X4 = Dict[str, "A"]
+X5 = dict[str, "A"]
+X6 = List["A"]
+X7 = list["A"]
+X8 = Tuple["A", ...]
+X9 = tuple["A", ...]
+XA = type["A"]
+XB = Type["A"]
+class A:
+    pass
     "#,
 );

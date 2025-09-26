@@ -111,6 +111,7 @@ pub fn binding_memory(transaction: &Transaction) -> String {
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_python::nesting_context::NestingContext;
     use pyrefly_python::short_identifier::ShortIdentifier;
     use ruff_python_ast::Identifier;
     use ruff_text_size::TextRange;
@@ -144,6 +145,7 @@ mod tests {
         let v = BindingClass::FunctionalClassDef(
             ClassDefIndex(0),
             Identifier::new("my_class", TextRange::default()),
+            NestingContext::toplevel(),
             SmallMap::new(),
         );
         assert_eq!(

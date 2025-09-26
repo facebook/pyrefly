@@ -104,7 +104,7 @@ async function generateLlmsTxt({ content, routes, outDir }, context) {
 
 const config: Config = {
     title: 'Pyrefly',
-    tagline: 'A Static Type Checker for Python',
+    tagline: 'A fast Python type checker and language server',
     url: 'https://pyrefly.org',
     baseUrl: baseUrl,
     onBrokenLinks: 'throw',
@@ -131,6 +131,35 @@ const config: Config = {
             type: "image/svg",
             sizes: "32x32",
             media: "(prefers-color-scheme: dark)",
+          },
+        },
+        // Open Graph meta tags for social media previews
+        {
+          tagName: "meta",
+          attributes: {
+            property: "og:image",
+            content: baseUrl + "img/Pyrefly-Preview-Symbol.png",
+          },
+        },
+        {
+          tagName: "meta",
+          attributes: {
+            property: "og:image:width",
+            content: "1200",
+          },
+        },
+        {
+          tagName: "meta",
+          attributes: {
+            property: "og:image:height",
+            content: "630",
+          },
+        },
+        {
+          tagName: "meta",
+          attributes: {
+            property: "og:image:type",
+            content: "image/png",
           },
         },
       ],

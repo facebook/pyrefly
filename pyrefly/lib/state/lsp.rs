@@ -13,6 +13,7 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
+use lsp_types::CompletionItemTag;
 use lsp_types::DocumentSymbol;
 use lsp_types::ParameterInformation;
 use lsp_types::ParameterLabel;
@@ -87,8 +88,8 @@ fn default_true() -> bool {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum OnOffPartial {
-    On,
+pub enum AllOffPartial {
+    All,
     #[default]
     Off,
     Partial,
@@ -99,7 +100,7 @@ pub enum OnOffPartial {
 pub struct InlayHintConfig {
     #[serde(default)]
     #[expect(unused)]
-    pub call_argument_names: OnOffPartial,
+    pub call_argument_names: AllOffPartial,
     #[serde(default = "default_true")]
     pub function_return_types: bool,
     #[serde(default)]
@@ -112,7 +113,7 @@ pub struct InlayHintConfig {
 impl Default for InlayHintConfig {
     fn default() -> Self {
         Self {
-            call_argument_names: OnOffPartial::Off,
+            call_argument_names: AllOffPartial::Off,
             function_return_types: true,
             pytest_parameters: false,
             variable_types: true,
@@ -485,15 +486,6 @@ impl<'a> Transaction<'a> {
     fn get_chosen_overload_trace(&self, handle: &Handle, range: TextRange) -> Option<Type> {
         let ans = self.get_answers(handle)?;
         ans.get_chosen_overload_trace(range)
-    }
-
-    fn empty_line_at(&self, handle: &Handle, position: TextSize) -> bool {
-        if let Some(mod_module) = self.get_ast(handle)
-            && Ast::locate_node(&mod_module, position).is_empty()
-        {
-            return true;
-        }
-        false
     }
 
     fn identifier_at(&self, handle: &Handle, position: TextSize) -> Option<IdentifierWithContext> {
@@ -1017,6 +1009,7 @@ impl<'a> Transaction<'a> {
                         symbol_kind: Some(SymbolKind::Module),
                         docstring_range,
                         is_deprecated: false,
+                        special_export: None,
                     },
                 ))
             }
@@ -1031,10 +1024,10 @@ impl<'a> Transaction<'a> {
         preference: &FindPreference,
     ) -> Option<(TextRangeWithModule, Option<TextRange>)> {
         match definition {
-            AttrDefinition::FullyResolved(text_range_with_module_info) => {
-                // TODO(kylei): attribute docstrings
-                Some((text_range_with_module_info, None))
-            }
+            AttrDefinition::FullyResolved {
+                definition_range: text_range_with_module_info,
+                docstring_range,
+            } => Some((text_range_with_module_info, docstring_range)),
             AttrDefinition::PartiallyResolvedImportedModuleAttribute { module_name } => {
                 let (handle, export) =
                     self.resolve_named_import(handle, module_name, attr_name.clone(), preference)?;
@@ -1667,6 +1660,7 @@ impl<'a> Transaction<'a> {
                     for AttrInfo {
                         name,
                         ty: _,
+                        is_deprecated: _,
                         definition: attribute_definition,
                     } in solver.completions(base_type, Some(expected_name), false)
                     {
@@ -1860,6 +1854,11 @@ impl<'a> Transaction<'a> {
                             Some(k.to_lsp_completion_item_kind())
                         }),
                     additional_text_edits,
+                    tags: if export.is_deprecated {
+                        Some(vec![CompletionItemTag::DEPRECATED])
+                    } else {
+                        None
+                    },
                     ..Default::default()
                 });
             }
@@ -1894,16 +1893,33 @@ impl<'a> Transaction<'a> {
                     continue;
                 }
                 let binding = bindings.get(idx);
-                let detail = self.get_type(handle, key).map(|t| t.to_string());
+                let kind = binding
+                    .symbol_kind()
+                    .map_or(CompletionItemKind::VARIABLE, |k| {
+                        k.to_lsp_completion_item_kind()
+                    });
+                let ty = self.get_type(handle, key);
+                let is_deprecated = ty.as_ref().is_some_and(|t| {
+                    if let Type::ClassDef(cls) = t {
+                        self.ad_hoc_solve(handle, |solver| {
+                            solver.get_metadata_for_class(cls).is_deprecated()
+                        })
+                        .unwrap_or(false)
+                    } else {
+                        t.is_deprecated_function()
+                    }
+                });
+                let detail = ty.map(|t| t.to_string());
                 has_added_any = true;
                 completions.push(CompletionItem {
                     label: label.to_owned(),
                     detail,
-                    kind: binding
-                        .symbol_kind()
-                        .map_or(Some(CompletionItemKind::VARIABLE), |k| {
-                            Some(k.to_lsp_completion_item_kind())
-                        }),
+                    kind: Some(kind),
+                    tags: if is_deprecated {
+                        Some(vec![CompletionItemTag::DEPRECATED])
+                    } else {
+                        None
+                    },
                     ..Default::default()
                 })
             }
@@ -1921,6 +1937,43 @@ impl<'a> Transaction<'a> {
                     ..Default::default()
                 })
             });
+    }
+
+    fn add_literal_completions(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        completions: &mut Vec<CompletionItem>,
+    ) {
+        if let Some((callables, chosen_overload_index, arg_index)) =
+            self.get_callables_from_call(handle, position)
+            && let Some(callable) = callables.get(chosen_overload_index)
+            && let Some(params) =
+                Self::normalize_singleton_function_type_into_params(callable.clone())
+            && let Some(param) = params.get(arg_index)
+        {
+            Self::add_literal_completions_from_type(param.as_type(), completions);
+        }
+    }
+
+    fn add_literal_completions_from_type(param_type: &Type, completions: &mut Vec<CompletionItem>) {
+        match param_type {
+            Type::Literal(lit) => {
+                completions.push(CompletionItem {
+                    // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
+                    label: lit.to_string_escaped(true),
+                    kind: Some(CompletionItemKind::VALUE),
+                    detail: Some(format!("{param_type}")),
+                    ..Default::default()
+                });
+            }
+            Type::Union(types) => {
+                for union_type in types {
+                    Self::add_literal_completions_from_type(union_type, completions);
+                }
+            }
+            _ => {}
+        }
     }
 
     pub fn completion(
@@ -1966,7 +2019,6 @@ impl<'a> Transaction<'a> {
                 identifier,
                 context: IdentifierContext::ImportedName { module_name, .. },
             }) => {
-                // TODO: Handle relative import (via ModuleName::new_maybe_relative)
                 if let Ok(handle) = self.import_handle(handle, module_name, None) {
                     // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
                     // If the user might be typing the `import` keyword, add that as an autocomplete option.
@@ -1978,16 +2030,26 @@ impl<'a> Transaction<'a> {
                         })
                     }
                     let exports = self.get_exports(&handle);
-                    for name in exports.keys() {
+                    for (name, export) in exports.iter() {
+                        let is_deprecated = match export {
+                            ExportLocation::ThisModule(export) => export.is_deprecated,
+                            ExportLocation::OtherModule(_, _) => false,
+                        };
                         result.push(CompletionItem {
                             label: name.to_string(),
                             // todo(kylei): completion kind for exports
                             kind: Some(CompletionItemKind::VARIABLE),
+                            tags: if is_deprecated {
+                                Some(vec![CompletionItemTag::DEPRECATED])
+                            } else {
+                                None
+                            },
                             ..Default::default()
                         })
                     }
                 }
             }
+            // TODO: Handle relative import (via ModuleName::new_maybe_relative)
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::ImportedModule { .. },
@@ -2023,10 +2085,17 @@ impl<'a> Transaction<'a> {
                                     Some(Type::Function(_)) => Some(CompletionItemKind::FUNCTION),
                                     _ => Some(CompletionItemKind::FIELD),
                                 };
+                                let ty = &x.ty;
+                                let detail = ty.clone().map(|t| t.as_hover_string());
                                 result.push(CompletionItem {
                                     label: x.name.as_str().to_owned(),
-                                    detail: x.ty.clone().map(|t| t.as_hover_string()),
+                                    detail,
                                     kind,
+                                    tags: if x.is_deprecated {
+                                        Some(vec![CompletionItemTag::DEPRECATED])
+                                    } else {
+                                        None
+                                    },
                                     ..Default::default()
                                 });
                             });
@@ -2052,11 +2121,22 @@ impl<'a> Transaction<'a> {
                 self.add_builtins_autoimport_completions(handle, Some(&identifier), &mut result);
             }
             None => {
-                self.add_kwargs_completions(handle, position, &mut result);
-                if self.empty_line_at(handle, position) {
-                    self.add_keyword_completions(handle, &mut result);
-                    self.add_local_variable_completions(handle, None, position, &mut result);
-                    self.add_builtins_autoimport_completions(handle, None, &mut result);
+                // todo(kylei): optimization, avoid duplicate ast walks
+                if let Some(mod_module) = self.get_ast(handle) {
+                    let nodes = Ast::locate_node(&mod_module, position);
+                    if nodes.is_empty() {
+                        self.add_keyword_completions(handle, &mut result);
+                        self.add_local_variable_completions(handle, None, position, &mut result);
+                        self.add_builtins_autoimport_completions(handle, None, &mut result);
+                    }
+                    self.add_literal_completions(handle, position, &mut result);
+                    // in foo(x=<>, y=2<>), the first containing node is AnyNodeRef::Arguments(_)
+                    // in foo(<>), the first containing node is AnyNodeRef::ExprCall
+                    if let Some(first) = nodes.first()
+                        && matches!(first, AnyNodeRef::ExprCall(_) | AnyNodeRef::Arguments(_))
+                    {
+                        self.add_kwargs_completions(handle, position, &mut result);
+                    }
                 }
             }
         }
@@ -2249,7 +2329,7 @@ impl<'a> Transaction<'a> {
             match bindings.idx_to_key(idx) {
                 // Return Annotation
                 key @ Key::ReturnType(id) if return_types => {
-                    match bindings.get(bindings.key_to_idx(&Key::Definition(id.clone()))) {
+                    match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
                         Binding::Function(x, _pred, _class_meta) => {
                             if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
                                 && let Some(ty) = self.get_type(handle, key)
@@ -2336,7 +2416,7 @@ impl<'a> Transaction<'a> {
             match bindings.idx_to_key(idx) {
                 key @ Key::ReturnType(id) => {
                     if inlay_hint_config.function_return_types {
-                        match bindings.get(bindings.key_to_idx(&Key::Definition(id.clone()))) {
+                        match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
                             Binding::Function(x, _pred, _class_meta) => {
                                 if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
                                     && let Some(mut ty) = self.get_type(handle, key)

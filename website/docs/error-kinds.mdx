@@ -1,10 +1,10 @@
 ---
-title: Error Kinds
+title: Pyrefly Error Kinds
 
 description: Pyrefly error categories and suppression codes
 ---
 
-# Error Kinds
+# Pyrefly Error Kinds
 
 An _error kind_ categorizes an error by the part of the typing specification
 that an error is related to. Every error has exactly one kind.
@@ -234,6 +234,29 @@ That means everywhere that we call `Base.f` can safely call `Sub.f`.
 
 The opposite case, where `Base.f` takes `float` and `Sub.f` takes `int`, is an error because `Sub.f` cannot accept every `float` value.
 
+Note that bad overrides caused by inconsistent parameter names are separately reported as [bad-param-name-override](#bad-param-name-override).
+
+## bad-param-name-override
+
+Arises when a subclass overrides a method of its base class while changing the name of a positional parameter.
+This is a type of [bad override](#bad-override) but has a separate error kind so that it can be selectively disabled if desired.
+Changing the name of a parameter breaks callers that pass in an argument by name:
+
+```python
+class Base:
+  def f(self, a: int) -> None:
+    pass
+
+class Sub(Base):
+  def f(self, b: int) -> None:
+    pass
+
+def f(base: Base):
+  base.f(a=0)
+
+f(Sub())  # oops!
+```
+
 ## bad-return
 
 Arises when a function does not return a value that is compatible with the function's return type annotation.
@@ -358,6 +381,23 @@ An error related to the import mechanism, such as when a module cannot be found.
 The error message will include which paths were searched, such as the site package paths.
 You may be missing a dependency, or you may need to inform Pyrefly where the module lives. See [Configuration](configuration.mdx) for further information.
 
+## inconsistent-overload
+
+The signature of a function overload is inconsistent with the implementation.
+See the [typing specification](https://typing.python.org/en/latest/spec/overload.html#implementation-consistency)
+for details on the consistency checks Pyrefly performs.
+
+Example:
+```python
+from typing import overload
+@overload
+def f(x: int) -> int: ...
+@overload
+def f(x: str) -> str: ...  # error, overload accepts `str` but implementation only accepts `int`
+def f(x: int) -> int | str:
+    return x
+```
+
 ## index-error
 
 Attempting to access a container with an incorrect index.
@@ -472,7 +512,6 @@ def just_one(x: int) -> None:
 def just_one(x: str) -> None:
   ...
 ```
-
 
 ## invalid-param-spec
 

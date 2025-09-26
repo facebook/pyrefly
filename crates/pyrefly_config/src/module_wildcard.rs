@@ -30,6 +30,13 @@ pub(crate) struct ModuleWildcard {
     origin: String,
 }
 
+#[derive(PartialEq)]
+pub enum Match {
+    NoMatch,
+    Positive,
+    Negative,
+}
+
 impl ModuleWildcard {
     pub(crate) fn new(value: &str) -> anyhow::Result<Self> {
         Ok(Self {
@@ -38,12 +45,23 @@ impl ModuleWildcard {
         })
     }
 
-    pub(crate) fn matches(&self, module_path: ModuleName) -> bool {
-        self.pattern.is_match(module_path.as_str())
+    pub(crate) fn matches(&self, module_path: ModuleName) -> Match {
+        let is_match = self.pattern.is_match(module_path.as_str());
+        if is_match && self.is_negation() {
+            return Match::Negative;
+        }
+        if is_match && !self.is_negation() {
+            return Match::Positive;
+        }
+        Match::NoMatch
     }
 
     pub(crate) fn as_str(&self) -> &str {
         self.pattern.as_str()
+    }
+
+    pub fn is_negation(&self) -> bool {
+        self.origin.starts_with('!')
     }
 }
 
@@ -99,6 +117,8 @@ impl Serialize for ModuleWildcard {
 /// Rewrites a module glob pattern into a regex. Uses the same logic
 /// as mypy to reduce issues when converting module path globs.
 fn rewrite_pattern_as_regex(original: &str) -> anyhow::Result<Regex> {
+    let original = original.strip_prefix("!").unwrap_or(original);
+
     let mut pattern = "^".to_owned();
     let mut split = original.split('.');
 

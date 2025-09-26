@@ -269,22 +269,6 @@ assert_type(f(), str)
 );
 
 testcase!(
-    test_class_rebind_attribute,
-    r#"
-from typing import assert_type
-def f(x: str) -> int:
-    return 42
-
-attribute = "test"
-
-class C:
-    attribute = f(attribute)
-
-assert_type(C().attribute, int)
-"#,
-);
-
-testcase!(
     test_class_attribute_lookup,
     r#"
 from typing import assert_type
@@ -817,7 +801,8 @@ def foo(x: int):
 testcase!(
     test_builtins_type_constructor,
     r#"
-from typing import assert_type
+from typing import assert_type, LiteralString, Literal, TypedDict
+from types import NoneType
 class Foo:
     @classmethod
     def method(cls, x: str) -> int:
@@ -826,6 +811,17 @@ class Foo:
         assert_type(type(self).method("tst"), int)
 x = Foo()
 assert_type(type(x), type[Foo])
+x2: LiteralString = "test"
+assert_type(type(x2), type[str])
+x3 = (1, 2)
+assert_type(type(x3), type[tuple])
+x4 = None
+assert_type(type(x4), type[NoneType])
+x5: Literal[""] = ""
+assert_type(type(x5), type[str])
+class TD(TypedDict): ...
+x6: TD = {}
+assert_type(type(x6), type[dict])
 "#,
 );
 
@@ -1355,22 +1351,22 @@ class NotBoolable:
     __bool__: int = 3
 
 # bool()
-y = bool(NotBoolable())  # E: `NotBoolable.__bool__` has type `int`, which is not callable
+y = bool(NotBoolable())  # E: has type `int`, which is not callable
 
 # if expressions
-x = 0 if NotBoolable() else 1  # E: `NotBoolable.__bool__` has type `int`, which is not callable  # E: Expected `__bool__` to be a callable, got `int`
+x = 0 if NotBoolable() else 1  # E: has type `int`, which is not callable  # E: Expected `__bool__` to be a callable, got `int`
 
 # if statements
-if NotBoolable(): ...  # E: `NotBoolable.__bool__` has type `int`, which is not callable
+if NotBoolable(): ...  # E: has type `int`, which is not callable
 
 # while statements
-while NotBoolable(): ...  # E: `NotBoolable.__bool__` has type `int`, which is not callable
+while NotBoolable(): ...  # E: has type `int`, which is not callable
 
 # expression evaluating to NotBoolable
 def f() -> NotBoolable:
   return NotBoolable()
 
-if (f() if True else None): ...  # E: `NotBoolable.__bool__` has type `int`, which is not callable
+if (f() if True else None): ...  # E: has type `int`, which is not callable
 "#,
 );
 
@@ -1410,12 +1406,16 @@ class D:
 def j(x: B | C):
     if x: ...
 
-# Invalid, but we don't check
+# Invalid
 def k(x: B | D):
-    if x: ...
+    if x: ...  # E: has type `BoundMethod[B, (self: B) -> bool] | int`, which is not callable
 
 def l(x: int | None):
     if x: ...
+
+def m(x: D | None):
+    if x: ...  # E: has type `BoundMethod[NoneType, (self: NoneType) -> Literal[False]] | int`, which is not callable
+
 "#,
 );
 
@@ -1449,19 +1449,6 @@ testcase!(
 from typing import Any, Callable
 def g(f: Callable[[Any], int], inputs: Any) -> None:
     sum(map(f, inputs))
-    "#,
-);
-
-testcase!(
-    test_legacy_typevar_revealed_type,
-    r#"
-from typing import reveal_type, TypeVar
-
-T = TypeVar("T")
-TypeForm = type[T]
-
-reveal_type(T)  # E: TypeVar[T]
-reveal_type(TypeForm)  # E: revealed type: type[type[T]]
     "#,
 );
 
@@ -1785,5 +1772,26 @@ testcase!(
     TestEnv::one_with_path("foo", "foo.pyi", "def f(x: bool = ...): pass"),
     r#"
 import foo
+    "#,
+);
+
+testcase!(
+    test_functional_type_creation,
+    r#"
+from typing import assert_type
+X = type("X", (object,), {"foo": "bar"})
+assert_type(X, type)
+    "#,
+);
+
+testcase!(
+    test_typing_annotated_validation,
+    r#"
+from typing import Annotated, ClassVar
+X = Annotated[int, 'ok']
+class A:
+    x: Annotated[ClassVar[int], 'also ok']
+Y = Annotated[ClassVar[int], 'wrong context']  # E: `ClassVar` is not allowed in this context
+Z = Annotated[0, 'not a type']  # E: Expected a type form, got instance of `Literal[0]`
     "#,
 );
