@@ -1280,7 +1280,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         _cls: &Class,
         bases_with_metadata: &Vec<(Class, Arc<ClassMetadata>)>,
     ) -> bool {
-        // Check if any base is abc.ABC or inherits from it (simplified per Danny's feedback)
         bases_with_metadata.iter().any(|(base, metadata)| {
             base.has_toplevel_qname("abc", "ABC") || metadata.inherits_from_abc()
         })
