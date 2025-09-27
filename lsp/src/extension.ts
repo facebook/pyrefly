@@ -25,6 +25,7 @@ import {PythonExtension} from '@vscode/python-extension';
 
 let client: LanguageClient;
 let statusBarItem: vscode.StatusBarItem;
+let outputChannel: vscode.OutputChannel;
 
 /// Get a setting at the path, or throw an error if it's not set.
 function requireSetting<T>(path: string): T {
@@ -150,6 +151,11 @@ async function overridePythonPath(
 }
 
 export async function activate(context: ExtensionContext) {
+  // Initialize the output channel if it doesn't exist
+  if (!outputChannel) {
+    outputChannel = vscode.window.createOutputChannel('Pyrefly language server');
+  }
+
   const path: string = requireSetting('pyrefly.lspPath');
   const args: [string] = requireSetting('pyrefly.lspArguments');
 
@@ -174,6 +180,7 @@ export async function activate(context: ExtensionContext) {
     initializationOptions: rawInitialisationOptions,
     // Register the server for Starlark documents
     documentSelector: [{scheme: 'file', language: 'python'}],
+    outputChannel: outputChannel,
     middleware: {
       workspace: {
         configuration: async (
@@ -232,6 +239,8 @@ export async function activate(context: ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('pyrefly.restartClient', async () => {
       await client.stop();
+      // Clear the output channel but don't dispose it
+      outputChannel.clear();
       client = new LanguageClient(
         'pyrefly',
         'Pyrefly language server',
@@ -289,6 +298,10 @@ async function triggerMsPythonRefreshLanguageServers() {
 export function deactivate(): Thenable<void> | undefined {
   if (!client) {
     return undefined;
+  }
+  // Dispose the output channel when the extension is deactivated
+  if (outputChannel) {
+    outputChannel.dispose();
   }
   return client.stop();
 }
