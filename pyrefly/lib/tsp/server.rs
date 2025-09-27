@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use dupe::Dupe;
 use lsp_server::Connection;
@@ -29,11 +30,16 @@ use crate::lsp::transaction_manager::TransactionManager;
 /// TSP server that delegates to LSP server infrastructure while handling only TSP requests
 pub struct TspServer {
     pub inner: Box<dyn TspInterface>,
+    /// Current snapshot version, updated on RecheckFinished events
+    pub(crate) current_snapshot: Arc<Mutex<i32>>,
 }
 
 impl TspServer {
     pub fn new(lsp_server: Box<dyn TspInterface>) -> Self {
-        Self { inner: lsp_server }
+        Self {
+            inner: lsp_server,
+            current_snapshot: Arc::new(Mutex::new(0)), // Initialize with epoch 0
+        }
     }
 
     pub fn process_event<'a>(
@@ -43,6 +49,21 @@ impl TspServer {
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent> {
+        // Handle TSP-specific logic for RecheckFinished to track snapshot updates
+        if let LspEvent::RecheckFinished = event {
+            // Update our snapshot when global state changes
+            let transaction =
+                ide_transaction_manager.non_committable_transaction(self.inner.state());
+            let new_snapshot = transaction.current_epoch().as_u32() as i32;
+            if let Ok(mut current) = self.current_snapshot.lock()
+                && *current != new_snapshot
+            {
+                *current = new_snapshot;
+                eprintln!("TSP: Updated snapshot to {new_snapshot}");
+            }
+            // Continue to let the inner server handle RecheckFinished as well
+        }
+
         // For TSP requests, handle them specially
         if let LspEvent::LspRequest(ref request) = event {
             if self.handle_tsp_request(ide_transaction_manager, request)? {
@@ -92,6 +113,12 @@ impl TspServer {
                     Ok(self.get_supported_protocol_version(&transaction)),
                 ));
                 ide_transaction_manager.save(transaction);
+                Ok(true)
+            }
+            TSPRequests::GetSnapshotRequest { .. } => {
+                // Get snapshot doesn't need a transaction since it just returns the cached value
+                self.inner
+                    .send_response(new_response(request.id.clone(), Ok(self.get_snapshot())));
                 Ok(true)
             }
             _ => {
