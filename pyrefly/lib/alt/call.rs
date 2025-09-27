@@ -611,10 +611,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         format!("`{}` can not be instantiated", cls.name()),
                     );
                 }
-                if self
-                    .get_metadata_for_class(cls.class_object())
-                    .is_protocol()
-                {
+                let metadata = self.get_metadata_for_class(cls.class_object());
+                if metadata.is_protocol() {
                     self.error(
                         errors,
                         range,
@@ -623,6 +621,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             "Cannot instantiate `{}` because it is a protocol",
                             cls.name()
                         ),
+                    );
+                }
+                // Check for abstract class instantiation
+                if metadata.inherits_from_abc() && !metadata.abstract_methods().is_empty() {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::new(ErrorKind::BadInstantiation, context),
+                        format!("Cannot instantiate abstract class `{}`", cls.name()),
                     );
                 }
                 if cls.has_qname("builtins", "bool") {

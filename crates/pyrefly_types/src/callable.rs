@@ -247,6 +247,8 @@ pub struct FuncFlags {
     pub has_enum_member_decoration: bool,
     pub is_override: bool,
     pub has_final_decoration: bool,
+    /// A function decorated with `@abc.abstractmethod`
+    pub is_abstract_method: bool,
     /// A function decorated with `typing.dataclass_transform(...)`, turning it into a
     /// `dataclasses.dataclass`-like decorator. Stores the keyword values passed to the
     /// `dataclass_transform` call. See
