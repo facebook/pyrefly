@@ -100,7 +100,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.intersect_with_fallback(left, right, Type::never)
     }
 
-    fn intersects(&self, ts: &[Type]) -> Type {
+    /// Calculate the intersection of a number of types
+    pub fn intersects(&self, ts: &[Type]) -> Type {
         match ts {
             [] => Type::ClassType(self.stdlib.object().clone()),
             [ty] => ty.clone(),

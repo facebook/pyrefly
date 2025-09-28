@@ -438,7 +438,7 @@ pub struct TotalOrderingMetadata {
 /// If a class is present in multiple places of the inheritance tree (and is
 /// linearizable using C3 linearization), it is possible it appears with
 /// different type arguments. The type arguments computed here will always be
-/// those coming from the instance that was selected during lineariation.
+/// those coming from the instance that was selected during linearization.
 #[derive(Clone, Debug, VisitMut, TypeEq, PartialEq, Eq)]
 pub enum ClassMro {
     Resolved(Vec<ClassType>),
