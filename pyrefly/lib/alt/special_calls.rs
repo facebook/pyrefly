@@ -70,16 +70,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let a = normalize_type(a, expr_a);
             let b = normalize_type(b, expr_b);
             if a != b {
-                self.error(
-                    errors,
-                    range,
-                    ErrorInfo::Kind(ErrorKind::AssertType),
-                    format!(
-                        "assert_type({}, {}) failed",
-                        self.for_display(a.clone()),
-                        self.for_display(b)
-                    ),
-                );
+                // Relax comparison by promoting literals on the actual side before comparing.
+                // This allows Literal[...] to match their base types (e.g., Literal[42] == int),
+                // while preserving strictness for expected literal types.
+                let a_promoted = a.clone().promote_literals(self.stdlib);
+                if a_promoted != b {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::AssertType),
+                        format!(
+                            "assert_type({}, {}) failed",
+                            self.for_display(a.clone()),
+                            self.for_display(b)
+                        ),
+                    );
+                }
             }
             a
         } else {

@@ -34,6 +34,7 @@ use crate::types::callable::FunctionKind;
 use crate::types::class::ClassType;
 use crate::types::facet::FacetChain;
 use crate::types::facet::FacetKind;
+use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
 use crate::types::type_info::TypeInfo;
@@ -632,6 +633,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else if matches!(t, Type::ClassType(cls) if cls.is_builtin("bool")) {
                         Type::Literal(Lit::Bool(boolval))
                     } else {
+                        // For non-bool types, preserve the original type; don't collapse falsy to empty literals here.
                         t.clone()
                     }
                 })

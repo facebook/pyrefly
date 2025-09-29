@@ -431,6 +431,48 @@ impl SysInfo {
                 }
                 _ => None,
             },
+            // Special-case truthiness for known builtins and simple calls we can evaluate statically.
+            Expr::Call(ExprCall {
+                func, arguments, ..
+            }) if arguments.keywords.is_empty() => {
+                // Resolve the called name if it's a bare builtin (e.g., list()) or builtins.list()
+                let called_name = match &**func {
+                    Expr::Name(n) => Some(n.id.as_str()),
+                    Expr::Attribute(ExprAttribute { value, attr, .. }) => match &**value {
+                        Expr::Name(module) if module.id.as_str() == "builtins" => {
+                            Some(attr.as_str())
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                match called_name {
+                    // bool(x) -> exact boolean of x's truthiness when argument is statically known
+                    Some("bool") if arguments.args.len() == 1 => {
+                        let v = self.evaluate(&arguments.args[0])?;
+                        Some(Value::Bool(v.to_bool()))
+                    }
+                    // Zero-arg constructors with known empty/zero truthiness
+                    Some(name) if arguments.args.is_empty() => match name {
+                        // Empty containers => falsy
+                        "list" | "dict" | "set" | "bytes" | "bytearray" => {
+                            Some(Value::Truthiness(false))
+                        }
+                        // Empty tuple => falsy (we can represent concretely)
+                        "tuple" => Some(Value::Tuple(vec![])),
+                        // Empty string => falsy (represent concretely)
+                        "str" => Some(Value::String(String::new())),
+                        // Zero => falsy (represent concretely)
+                        "int" => Some(Value::Int(0)),
+                        // float() and complex() default to 0/0j => falsy
+                        "float" | "complex" => Some(Value::Truthiness(false)),
+                        // object() is always truthy
+                        "object" => Some(Value::Truthiness(true)),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
