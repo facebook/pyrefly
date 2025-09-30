@@ -2350,7 +2350,7 @@ impl<'a> Transaction<'a> {
                 key @ Key::Definition(_) if containers => {
                     if let Some(ty) = self.get_type(handle, key) {
                         let e = match bindings.get(idx) {
-                            Binding::NameAssign(_, None, e) => match &**e {
+                            Binding::NameAssign(_, None, e, _) => match &**e {
                                 Expr::List(ExprList { elts, .. }) => {
                                     if elts.is_empty() {
                                         Some(&**e)
@@ -2443,7 +2443,7 @@ impl<'a> Transaction<'a> {
                         && let Some(ty) = self.get_type(handle, key) =>
                 {
                     let e = match bindings.get(idx) {
-                        Binding::NameAssign(_, None, e) => Some(&**e),
+                        Binding::NameAssign(_, None, e, _) => Some(&**e),
                         Binding::Expr(None, e) => Some(e),
                         _ => None,
                     };

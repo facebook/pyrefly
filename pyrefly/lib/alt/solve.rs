@@ -6,6 +6,7 @@
  */
 
 use std::iter;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -73,6 +74,7 @@ use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyExport;
+use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LinkedKey;
@@ -92,6 +94,7 @@ use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::style::ErrorStyle;
+use crate::graph::index::Idx;
 use crate::solver::solver::SubsetError;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
@@ -1009,6 +1012,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///
     /// When present, we visit those types first to determine the `TParams` for this alias, and any
     /// type variables when we subsequently visit the aliased type are considered out of scope.
+    ///
+    /// `legacy_tparams` refers to the type parameters collected in the bindings phase. It is only populated if we know for sure
+    /// that this is actually a type alias, like when a variable assignment is annotated with `TypeAlias`
     fn as_type_alias(
         &self,
         name: &Name,
@@ -1016,6 +1022,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ty: Type,
         expr: &Expr,
         typealiastype_tparams: Option<Vec<Expr>>,
+        legacy_tparams: &Option<Box<[Idx<KeyLegacyTypeParam>]>>,
         errors: &ErrorCollector,
     ) -> Type {
         let range = expr.range();
@@ -1055,13 +1062,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             tparams_for_type_alias_type = Some(tparams.len());
         }
-        self.tvars_to_tparams_for_type_alias(
-            &mut ty,
-            &mut seen_type_vars,
-            &mut seen_type_var_tuples,
-            &mut seen_param_specs,
-            &mut tparams,
-        );
+        if let Some(legacy_tparams) = legacy_tparams {
+            tparams = legacy_tparams
+                .iter()
+                .filter_map(|key| self.get_idx(*key).deref().parameter().cloned())
+                .collect();
+        } else {
+            self.tvars_to_tparams_for_type_alias(
+                &mut ty,
+                &mut seen_type_vars,
+                &mut seen_type_var_tuples,
+                &mut seen_param_specs,
+                &mut tparams,
+            );
+        }
         if let Some(n) = tparams_for_type_alias_type {
             for extra_tparam in tparams.iter().skip(n) {
                 errors.add(
@@ -2472,7 +2486,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.attr_infer(&binding, &attr.id, attr.range, errors, None)
                     .into_ty()
             }
-            Binding::NameAssign(name, annot_key, expr) => {
+            Binding::NameAssign(name, annot_key, expr, legacy_tparams) => {
                 let (has_type_alias_qualifier, ty) = match annot_key.as_ref() {
                     // First infer the type as a normal value
                     Some((style, k)) => {
@@ -2520,6 +2534,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ty,
                         expr,
                         None,
+                        legacy_tparams,
                         errors,
                     ),
                     None if Self::may_be_implicit_type_alias(&ty)
@@ -2531,6 +2546,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ty,
                             expr,
                             None,
+                            legacy_tparams,
                             errors,
                         )
                     }
@@ -3057,7 +3073,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Binding::ScopedTypeAlias(name, params, expr) => {
                 let ty = self.expr_infer(expr, errors);
-                let ta = self.as_type_alias(name, TypeAliasStyle::Scoped, ty, expr, None, errors);
+                let ta =
+                    self.as_type_alias(name, TypeAliasStyle::Scoped, ty, expr, None, &None, errors);
                 match ta {
                     Type::Forall(..) => self.error(
                         errors,
@@ -3090,6 +3107,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ty,
                     &expr,
                     Some(type_param_exprs),
+                    &None,
                     errors,
                 );
                 if let Some(k) = ann

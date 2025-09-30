@@ -4980,8 +4980,8 @@
     {
       "code": -2,
       "column": 18,
-      "concise_description": "`ParamSpec[P]` is not allowed in this context",
-      "description": "`ParamSpec[P]` is not allowed in this context",
+      "concise_description": "`ParamSpec` is not allowed in this context",
+      "description": "`ParamSpec` is not allowed in this context",
       "line": 15,
       "name": "invalid-annotation",
       "stop_column": 19,
