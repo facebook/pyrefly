@@ -1,9 +1,9 @@
 {
   "total": 138,
-  "pass": 94,
-  "fail": 44,
-  "pass_rate": 0.68,
-  "differences": 182,
+  "pass": 95,
+  "fail": 43,
+  "pass_rate": 0.69,
+  "differences": 181,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -92,6 +92,7 @@
     "typeddicts_class_syntax.py",
     "typeddicts_extra_items.py",
     "typeddicts_final.py",
+    "typeddicts_inheritance.py",
     "typeddicts_operations.py",
     "typeddicts_readonly.py",
     "typeddicts_readonly_consistency.py",
@@ -142,7 +143,6 @@
     "qualifiers_final_annotation.py": 12,
     "specialtypes_never.py": 1,
     "specialtypes_type.py": 8,
-    "typeddicts_inheritance.py": 1,
     "typeddicts_readonly_inheritance.py": 4,
     "typeddicts_required.py": 1
   },

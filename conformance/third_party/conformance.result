@@ -345,9 +345,7 @@
   "typeddicts_class_syntax.py": [],
   "typeddicts_extra_items.py": [],
   "typeddicts_final.py": [],
-  "typeddicts_inheritance.py": [
-    "Line 65: Expected 1 errors"
-  ],
+  "typeddicts_inheritance.py": [],
   "typeddicts_operations.py": [],
   "typeddicts_readonly.py": [],
   "typeddicts_readonly_consistency.py": [],

@@ -9981,6 +9981,16 @@
       "name": "bad-override",
       "stop_column": 5,
       "stop_line": 55
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Inconsistent types for field `x` inherited from multiple base classes: `int` from `X2`, `str` from `Y2`",
+      "description": "Inconsistent types for field `x` inherited from multiple base classes: `int` from `X2`, `str` from `Y2`",
+      "line": 65,
+      "name": "inconsistent-overload",
+      "stop_column": 11,
+      "stop_line": 65
     }
   ],
   "typeddicts_operations.py": [
