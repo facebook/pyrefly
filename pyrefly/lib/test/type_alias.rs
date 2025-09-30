@@ -729,7 +729,7 @@ from typing import TypeAlias
 
 # Test that scoped type aliases cannot be used as base classes
 type X = int
-Y: TypeAlias = int  
+Y: TypeAlias = int
 Z = int
 
 class C1(X): pass  # E: Cannot use scoped type alias `X` as a base class
@@ -756,5 +756,56 @@ XA = type["A"]
 XB = Type["A"]
 class A:
     pass
+    "#,
+);
+
+testcase!(
+    bug = "there shouldn't be an error here",
+    test_generic_typealias_of_typealiastype,
+    r#"
+from typing import TypeAlias, TypeAliasType, TypeVar
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2", bound=str | bytes)
+
+Spam1 = TypeAliasType("Spam1", T2 | type[T1], type_params=(T1, T2))
+Spam2: TypeAlias = Spam1[T1, T2]
+
+x1: Spam1[int, str] = int
+x2: Spam2[int, str] = int # E: Type `int` is not assignable to upper bound `bytes | str` of type variable `T2` # E: `type[int]` is not assignable to `int | type[str]`
+    "#,
+);
+
+testcase!(
+    bug = "there shouldn't be an error here",
+    test_generic_typealias_of_scopedtypealias,
+    r#"
+from typing import TypeAlias, TypeAliasType, TypeVar
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2", bound=str | bytes)
+
+type Spam1[T1, T2] = T2 | type[T1]
+Spam2: TypeAlias = Spam1[T1, T2]
+
+x1: Spam1[int, str] = int
+x2: Spam2[int, str] = int # E: `TypeAlias[Spam2, type[T2 | type[T1]]]` is not subscriptable
+    "#,
+);
+
+testcase!(
+    bug = "there shouldn't be an error here",
+    test_generic_typealias_of_explicit_typealias,
+    r#"
+from typing import TypeAlias, TypeAliasType, TypeVar
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2", bound=str | bytes)
+
+Spam1: TypeAlias = type[T1] | T2
+Spam2: TypeAlias = Spam1[T1, T2] # E: Type `object` is not assignable to upper bound `bytes | str` of type variable `T2`
+
+x1: Spam1[int, str] = int  # E: Type `int` is not assignable to upper bound `bytes | str` of type variable `T2`  # E: `type[int]` is not assignable to `int | type[str]`
+x2: Spam2[int, str] = int  # E: `type[int]` is not assignable to `int | type[str]`
     "#,
 );
