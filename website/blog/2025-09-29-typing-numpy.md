@@ -7,7 +7,7 @@ tags: [typechecking, news]
 hide_table_of_contents: false
 ---
 
-[NumPy](https://numpy.org/) is one of the most downloaded packages in the Python ecosystem. Therefore, any incremental improvement can have a large impact on the data science ecosystem. In particular, improvements related to static typing can improve developer experience and help downstream libraries write safer code. We'll tell the story about how we helped bring its type-completeness score to nearly 90% from an initial 33%.
+Because [NumPy](https://numpy.org/) is one of the most downloaded packages in the Python ecosystem, any incremental improvement can have a large impact on the data science ecosystem. In particular, improvements related to static typing can improve developer experience and help downstream libraries write safer code. We'll tell the story about how we helped bring its type-completeness score to nearly 90% from an initial 33%.
 
 **TL;DR**:
 
@@ -18,7 +18,7 @@ hide_table_of_contents: false
 
 ## Wait, what's type completeness?
 
-Modern IDEs use type annotations to help developers by showing them helpful suggestions about which methods may be available on their variables, as well as to facilitate syntax highlighting. [Pyright](https://github.com/microsoft/pyright) is a popular type-checker which, as well as checking for correctness and consistency, can also measure what percentage of a library's public API has type annotations. We call the percentage of fully-typed symbols exported by a library the _type-completeness score_.
+Modern IDEs use type annotations to help developers by showing them helpful suggestions and highlighting syntax. [Pyright](https://github.com/microsoft/pyright) is a popular type-checker which, as well as checking for correctness and consistency, can also measure what percentage of a library's public API has type annotations. We call the percentage of fully-typed symbols exported by a library the _type-completeness score_.
 
 For example, a module which exports functions `foo` and `bar`:
 
