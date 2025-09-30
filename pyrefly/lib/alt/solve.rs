@@ -1004,7 +1004,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// `type_params` refers specifically to the elements of the tuple literal passed to the `TypeAliasType` constructor
+    /// `typealiastype_tparams` refers specifically to the elements of the tuple literal passed to the `TypeAliasType` constructor
     /// For all other kinds of type aliases, it should be `None`.
     ///
     /// When present, we visit those types first to determine the `TParams` for this alias, and any
@@ -1015,7 +1015,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         style: TypeAliasStyle,
         ty: Type,
         expr: &Expr,
-        type_params: Option<Vec<Expr>>,
+        typealiastype_tparams: Option<Vec<Expr>>,
         errors: &ErrorCollector,
     ) -> Type {
         let range = expr.range();
@@ -1044,7 +1044,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut seen_param_specs = SmallMap::new();
         let mut tparams = Vec::new();
         let mut tparams_for_type_alias_type = None;
-        if let Some(type_params) = &type_params {
+        if let Some(type_params) = &typealiastype_tparams {
             self.tvars_to_tparams_for_type_alias_type(
                 type_params,
                 &mut seen_type_vars,
