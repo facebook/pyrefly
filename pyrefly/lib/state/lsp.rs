@@ -88,8 +88,8 @@ fn default_true() -> bool {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum OnOffPartial {
-    On,
+pub enum AllOffPartial {
+    All,
     #[default]
     Off,
     Partial,
@@ -100,7 +100,7 @@ pub enum OnOffPartial {
 pub struct InlayHintConfig {
     #[serde(default)]
     #[expect(unused)]
-    pub call_argument_names: OnOffPartial,
+    pub call_argument_names: AllOffPartial,
     #[serde(default = "default_true")]
     pub function_return_types: bool,
     #[serde(default)]
@@ -113,7 +113,7 @@ pub struct InlayHintConfig {
 impl Default for InlayHintConfig {
     fn default() -> Self {
         Self {
-            call_argument_names: OnOffPartial::Off,
+            call_argument_names: AllOffPartial::Off,
             function_return_types: true,
             pytest_parameters: false,
             variable_types: true,
@@ -1009,6 +1009,7 @@ impl<'a> Transaction<'a> {
                         symbol_kind: Some(SymbolKind::Module),
                         docstring_range,
                         is_deprecated: false,
+                        special_export: None,
                     },
                 ))
             }
@@ -1659,6 +1660,7 @@ impl<'a> Transaction<'a> {
                     for AttrInfo {
                         name,
                         ty: _,
+                        is_deprecated: _,
                         definition: attribute_definition,
                     } in solver.completions(base_type, Some(expected_name), false)
                     {
@@ -1897,8 +1899,16 @@ impl<'a> Transaction<'a> {
                         k.to_lsp_completion_item_kind()
                     });
                 let ty = self.get_type(handle, key);
-                let is_deprecated = matches!(kind, CompletionItemKind::FUNCTION)
-                    && ty.as_ref().is_some_and(|t| t.is_deprecated());
+                let is_deprecated = ty.as_ref().is_some_and(|t| {
+                    if let Type::ClassDef(cls) = t {
+                        self.ad_hoc_solve(handle, |solver| {
+                            solver.get_metadata_for_class(cls).is_deprecated()
+                        })
+                        .unwrap_or(false)
+                    } else {
+                        t.is_deprecated_function()
+                    }
+                });
                 let detail = ty.map(|t| t.to_string());
                 has_added_any = true;
                 completions.push(CompletionItem {
@@ -1950,9 +1960,10 @@ impl<'a> Transaction<'a> {
         match param_type {
             Type::Literal(lit) => {
                 completions.push(CompletionItem {
-                    label: lit.to_string(),
+                    // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
+                    label: lit.to_string_escaped(true),
                     kind: Some(CompletionItemKind::VALUE),
-                    detail: Some(format!("{}", param_type)),
+                    detail: Some(format!("{param_type}")),
                     ..Default::default()
                 });
             }
@@ -2008,7 +2019,6 @@ impl<'a> Transaction<'a> {
                 identifier,
                 context: IdentifierContext::ImportedName { module_name, .. },
             }) => {
-                // TODO: Handle relative import (via ModuleName::new_maybe_relative)
                 if let Ok(handle) = self.import_handle(handle, module_name, None) {
                     // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
                     // If the user might be typing the `import` keyword, add that as an autocomplete option.
@@ -2039,6 +2049,7 @@ impl<'a> Transaction<'a> {
                     }
                 }
             }
+            // TODO: Handle relative import (via ModuleName::new_maybe_relative)
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::ImportedModule { .. },
@@ -2075,14 +2086,12 @@ impl<'a> Transaction<'a> {
                                     _ => Some(CompletionItemKind::FIELD),
                                 };
                                 let ty = &x.ty;
-                                let is_deprecated =
-                                    ty.as_ref().is_some_and(|ty| ty.is_deprecated());
                                 let detail = ty.clone().map(|t| t.as_hover_string());
                                 result.push(CompletionItem {
                                     label: x.name.as_str().to_owned(),
                                     detail,
                                     kind,
-                                    tags: if is_deprecated {
+                                    tags: if x.is_deprecated {
                                         Some(vec![CompletionItemTag::DEPRECATED])
                                     } else {
                                         None
@@ -2320,7 +2329,7 @@ impl<'a> Transaction<'a> {
             match bindings.idx_to_key(idx) {
                 // Return Annotation
                 key @ Key::ReturnType(id) if return_types => {
-                    match bindings.get(bindings.key_to_idx(&Key::Definition(id.clone()))) {
+                    match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
                         Binding::Function(x, _pred, _class_meta) => {
                             if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
                                 && let Some(ty) = self.get_type(handle, key)
@@ -2407,7 +2416,7 @@ impl<'a> Transaction<'a> {
             match bindings.idx_to_key(idx) {
                 key @ Key::ReturnType(id) => {
                     if inlay_hint_config.function_return_types {
-                        match bindings.get(bindings.key_to_idx(&Key::Definition(id.clone()))) {
+                        match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
                             Binding::Function(x, _pred, _class_meta) => {
                                 if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
                                     && let Some(mut ty) = self.get_type(handle, key)

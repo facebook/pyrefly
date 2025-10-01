@@ -114,9 +114,8 @@ Completion Results:
     );
 }
 
-// TODO: Mark deprecated properties as deprecated
 #[test]
-fn dot_complete_with_deprecated() {
+fn dot_complete_with_deprecated_method() {
     let code = r#"
 from warnings import deprecated
 class Foo:
@@ -138,9 +137,33 @@ foo.
 11 | foo. 
          ^
 Completion Results:
-- (Field) also_not_ok: int
-- (Method) [DEPRECATED] not_ok: (self: Foo) -> None
+- (Field) [DEPRECATED] also_not_ok: int
+- (Method) [DEPRECATED] not_ok: def not_ok(self: Foo) -> None
 - (Field) x: int
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn complete_deprecated_class() {
+    let code = r#"
+from warnings import deprecated
+@deprecated("this class is deprecated")
+class MyDeprecatedClass: pass
+MyDe 
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+5 | MyDe 
+        ^
+Completion Results:
+- (Class) [DEPRECATED] MyDeprecatedClass: type[MyDeprecatedClass]
 "#
         .trim(),
         report.trim(),
@@ -169,9 +192,9 @@ foo.
 10 | foo.
          ^
 Completion Results:
-- (Method) class_method: (cls: type[Foo]) -> None
-- (Method) method: (self: Foo) -> None
-- (Function) static_method: () -> None
+- (Method) class_method: def class_method(cls: type[Foo]) -> None
+- (Method) method: def method(self: Foo) -> None
+- (Function) static_method: def static_method() -> None
 - (Field) x: int
 "#
         .trim(),
@@ -284,7 +307,7 @@ Completion Results:
 }
 
 #[test]
-fn variable_complete_with_deprecation() {
+fn variable_complete_with_deprecated_function() {
     let code = r#"
 from warnings import deprecated
 @deprecated("this is not ok")
@@ -983,6 +1006,62 @@ Completion Results:
 }
 
 #[test]
+fn completion_literal_with_escape_chars() {
+    let code = r#"
+from typing import Literal
+def foo(x: Literal['\a', '\b', '\f', '\n', '\r', '\t', '\v', '\\', '"', "'"]): ...
+foo(
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+4 | foo(
+        ^
+Completion Results:
+- (Value) '"': Literal['"']
+- (Value) '\'': Literal['\'']
+- (Value) '\\': Literal['\\']
+- (Value) '\a': Literal['\a']
+- (Value) '\b': Literal['\b']
+- (Value) '\f': Literal['\f']
+- (Value) '\n': Literal['\n']
+- (Value) '\r': Literal['\r']
+- (Value) '\t': Literal['\t']
+- (Value) '\v': Literal['\v']
+- (Variable) x=: Literal['\a', '\b', '\t', '\n', '\v', '\f', '\r', '"', '\'', '\\']
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_with_escape_chars_inside() {
+    let code = r#"
+from typing import Literal
+def foo(x: Literal["a\nb"]): ...
+foo("
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+4 | foo("
+         ^
+Completion Results:
+- (Value) 'a\nb': Literal['a\nb']
+- (Variable) x=: Literal['a\nb']"#
+            .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn completion_literal_union() {
     let code = r#"
 from typing import Literal, Union
@@ -1131,33 +1210,6 @@ Completion Results:
 - (Value) 1: Literal[1]
 "#
         .trim(),
-        report.trim(),
-    );
-}
-
-// todo(kylei): escape escape characters
-#[test]
-fn completion_literal_with_escape_characters() {
-    let code = r#"
-from typing import Literal
-def foo(x: Literal["a\nb"]): ...
-foo("
-#    ^
-"#;
-    let report =
-        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
-    assert_eq!(
-        r#"
-# main.py
-4 | foo("
-         ^
-Completion Results:
-- (Value) 'a
-b': Literal['a
-b']
-- (Variable) x=: Literal['a
-b']"#
-            .trim(),
         report.trim(),
     );
 }
@@ -1325,7 +1377,7 @@ def foo(x: B) -> None:
 9 |     x.
           ^
 Completion Results:
-- (Method) foo: (self: B) -> int
+- (Method) foo: def foo(self: B) -> int
 "#
         .trim(),
         report.trim(),

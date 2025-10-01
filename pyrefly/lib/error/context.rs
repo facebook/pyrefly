@@ -211,8 +211,8 @@ impl TypeCheckKind {
             Self::YieldFrom => ErrorKind::InvalidYield,
             Self::UnexpectedBareYield => ErrorKind::InvalidYield,
             Self::PostInit => ErrorKind::BadFunctionDefinition,
-            Self::OverloadReturn => ErrorKind::InvalidOverload,
-            Self::OverloadInput(..) => ErrorKind::InvalidOverload,
+            Self::OverloadReturn => ErrorKind::InconsistentOverload,
+            Self::OverloadInput(..) => ErrorKind::InconsistentOverload,
             Self::TypeVarSpecialization(..) => ErrorKind::BadSpecialization,
         }
     }

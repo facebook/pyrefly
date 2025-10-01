@@ -34,10 +34,13 @@ describe('pyrefly_wasm', () => {
 def format_number(x: int) -> str:
     return str(x)
 `;
-        pyreService.updateSandboxFiles({
-            'main.py': DEFAULT_SANDBOX_PROGRAM,
-            'utils.py': utilsContent.trim()
-        });
+        pyreService.updateSandboxFiles(
+            {
+                'main.py': DEFAULT_SANDBOX_PROGRAM,
+                'utils.py': utilsContent.trim(),
+            },
+            true
+        );
     });
 
     describe('getErrors', () => {
@@ -46,7 +49,8 @@ def format_number(x: int) -> str:
 x: int = ""
 import
 `;
-            pyreService.updateSingleFile('main.py',
+            pyreService.updateSingleFile(
+                'main.py',
                 DEFAULT_SANDBOX_PROGRAM + programWithError
             );
             const errors = pyreService.getErrors();
@@ -82,7 +86,8 @@ import
 
         it('complex python program, error with typedDict', () => {
             // Update source with a complete program
-            pyreService.updateSingleFile('main.py',
+            pyreService.updateSingleFile(
+                'main.py',
                 `
 from typing import TypedDict
 
@@ -111,7 +116,8 @@ movie: Movie = {'name': 'Blade Runner',
 
     describe('gotoDefinition', () => {
         it('should return definition location for function call', () => {
-            // Position of "test" in "test(42)" 
+            pyreService.setActiveFile('main.py');
+            // Position of "test" in "test(42)"
             const definition = pyreService.gotoDefinition(18, 13);
 
             // Should return a location object
@@ -130,7 +136,8 @@ movie: Movie = {'name': 'Blade Runner',
             const typingForAutocomplete = `
 tes
 `;
-            pyreService.updateSingleFile('main.py',
+            pyreService.updateSingleFile(
+                'main.py',
                 DEFAULT_SANDBOX_PROGRAM + typingForAutocomplete
             );
 
@@ -138,7 +145,7 @@ tes
             expect(completions.length).toBeGreaterThan(0);
 
             // Check that 'test' function appears in completions
-            const testCompletion = completions.find(c => c.label === 'test');
+            const testCompletion = completions.find((c) => c.label === 'test');
             expect(testCompletion).toBeDefined();
             expect(testCompletion.detail).toContain('(x: int) -> str');
             expect(testCompletion.kind).toBe(3); // Function kind
@@ -149,7 +156,7 @@ tes
         it('should return type information for expressions', () => {
             // Set active file to main.py
             pyreService.setActiveFile('main.py');
-            // Position of "test(42)" in reveal_type 
+            // Position of "test(42)" in reveal_type
             const hoverInfo = pyreService.queryType(18, 13);
 
             expect(hoverInfo).toBeDefined();
@@ -164,6 +171,7 @@ tes
 
     describe('inlayHint', () => {
         it('should return inlay hints', () => {
+            pyreService.setActiveFile('main.py');
             const hints = pyreService.inlayHint();
             expect(hints).toBeDefined();
             expect(hints.length).toBeGreaterThan(0);

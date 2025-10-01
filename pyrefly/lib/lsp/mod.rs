@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+mod build_system;
 pub mod features;
 pub mod lsp;
 pub mod module_helpers;

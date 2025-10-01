@@ -85,6 +85,7 @@ impl BundledTypeshed {
                 (ErrorKind::BadOverride, Severity::Ignore),
                 (ErrorKind::BadParamNameOverride, Severity::Ignore),
             ])));
+            config_file.root.disable_type_errors_in_ide = Some(true);
             config_file.configure();
             ArcId::new(config_file)
         });

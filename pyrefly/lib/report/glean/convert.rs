@@ -12,6 +12,7 @@ use std::env::current_dir;
 use std::slice;
 use std::sync::Arc;
 
+use dupe::Dupe;
 use num_traits::ToPrimitive;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
@@ -319,13 +320,13 @@ impl GleanState<'_> {
 
     fn record_name(&mut self, name: String, position: Option<TextSize>) -> python::Name {
         let arc_name = Arc::new(name.clone());
-        if self.names.insert(Arc::clone(&arc_name)) {
+        if self.names.insert(arc_name.dupe()) {
             self.facts.name_to_sname.push(python::NameToSName::new(
                 python::Name::new(name.clone()),
                 create_sname(&name),
             ));
         }
-        position.map(|x| self.locations_fqnames.insert(x, Arc::clone(&arc_name)));
+        position.map(|x| self.locations_fqnames.insert(x, arc_name.dupe()));
 
         python::Name::new(name)
     }
@@ -666,7 +667,7 @@ impl GleanState<'_> {
             self.make_fq_name_for_declaration(&param.name, &context.container, ScopeType::Local);
         decl_infos.push(self.variable_info(
             fqname,
-            param.range(),
+            param.name.range(),
             type_info.clone(),
             None,
             context,

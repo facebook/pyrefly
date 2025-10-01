@@ -18,6 +18,7 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::fs_anyhow;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use vec1::Vec1;
 
@@ -143,6 +144,24 @@ impl SourceDatabase for BuckCheckSourceDatabase {
             .get(module)
             .or_else(|| self.dependencies.get(module))
             .map(|p| ModulePath::filesystem(p.first().clone()))
+    }
+
+    fn handle_from_module_path(&self, module_path: ModulePath) -> Option<Handle> {
+        let find = |i: &SmallMap<ModuleName, Vec1<PathBuf>>| {
+            i.iter()
+                .find(|s| s.1.iter().any(|p| p == module_path.as_path()))
+                .map(|s| s.0.dupe())
+        };
+        let name = find(&self.sources).or_else(|| find(&self.dependencies))?;
+        Some(Handle::new(name, module_path, self.sys_info.dupe()))
+    }
+
+    fn requery_source_db(&self, _: SmallSet<PathBuf>) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+
+    fn get_critical_files(&self) -> SmallSet<PathBuf> {
+        SmallSet::new()
     }
 }
 

@@ -8,6 +8,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::Context as _;
 use clap::Parser;
@@ -65,7 +66,7 @@ fn compute_errors(sys_info: SysInfo, sourcedb: Box<impl SourceDatabase + 'static
     config.python_environment.python_platform = Some(sys_info.platform().clone());
     config.python_environment.python_version = Some(sys_info.version());
     config.python_environment.site_package_path = Some(Vec::new());
-    config.source_db = Some(ArcId::new(sourcedb));
+    config.source_db = Some(Arc::new(sourcedb));
     config.interpreters.skip_interpreter_query = true;
     config.disable_search_path_heuristics = true;
     config.configure();

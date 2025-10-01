@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -47,8 +48,9 @@ fn test_did_change_configuration() {
     interaction.shutdown();
 }
 
-// TODO: fix and re-enable. The test is currently flaky.
-#[ignore]
+// Only run this test on unix since windows has no way to mock a .exe without compiling something
+// (we call python with python.exe)
+#[cfg(unix)]
 #[test]
 fn test_pythonpath_change() {
     let test_files_root = get_test_files_root();
@@ -76,12 +78,9 @@ fi
     let interpreter_suffix = if cfg!(windows) { ".exe" } else { "" };
     let python_path = custom_interpreter_path.join(format!("bin/python{interpreter_suffix}"));
     write(&python_path, python_script).unwrap();
-    #[cfg(unix)]
-    {
-        let mut perms = fs::metadata(&python_path).unwrap().permissions();
-        perms.set_mode(0o755); // rwxr-xr-x
-        fs::set_permissions(&python_path, perms).unwrap();
-    }
+    let mut perms = fs::metadata(&python_path).unwrap().permissions();
+    perms.set_mode(0o755); // rwxr-xr-x
+    fs::set_permissions(&python_path, perms).unwrap();
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
@@ -95,9 +94,7 @@ fi
     interaction.server.did_open("custom_interpreter/src/foo.py");
     // Prior to the config taking effect, there should be 1 diagnostic showing an import error
     interaction.client.expect_publish_diagnostics_error_count(
-        Url::from_file_path(test_files_root.path().join("custom_interpreter/src/foo.py"))
-            .unwrap()
-            .to_string(),
+        test_files_root.path().join("custom_interpreter/src/foo.py"),
         1,
     );
     interaction
@@ -113,11 +110,11 @@ fi
     );
 
     interaction.server.did_change_configuration();
-    interaction.client.expect_message(Message::Request(Request {
+    interaction.client.expect_request(Request {
         id: RequestId::from(2),
         method: "workspace/configuration".to_owned(),
         params: serde_json::json!({"items":[{"section":"python"}]}),
-    }));
+    });
     interaction.server.send_configuration_response(
         2,
         serde_json::json!([
@@ -126,18 +123,9 @@ fi
             }
         ]),
     );
-    interaction.client.expect_publish_diagnostics_error_count(
-        Url::from_file_path(test_files_root.path().join("custom_interpreter/src/foo.py"))
-            .unwrap()
-            .to_string(),
-        1,
-    );
-
     // After the new config takes effect, publish diagnostics should have 0 errors
     interaction.client.expect_publish_diagnostics_error_count(
-        Url::from_file_path(test_files_root.path().join("custom_interpreter/src/foo.py"))
-            .unwrap()
-            .to_string(),
+        test_files_root.path().join("custom_interpreter/src/foo.py"),
         0,
     );
     // The definition can now be found in site-packages

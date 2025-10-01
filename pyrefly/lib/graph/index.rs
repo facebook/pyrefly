@@ -28,7 +28,7 @@ impl<K> Default for Index<K> {
 
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Idx<K> {
-    // We use a NonZero to have an optimised representation for Option<Idx>.
+    // We use a NonZero to have an optimized representation for Option<Idx>.
     // We treat it as 0-based, and inc/dec as we store.
     idx: NonZeroU32,
     phantom: PhantomData<K>,

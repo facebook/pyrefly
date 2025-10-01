@@ -98,7 +98,7 @@ $ mkdir $TMPDIR/compiled && touch $TMPDIR/compiled/a.pyc && \
 > touch $TMPDIR/compiled/b.pyc && touch $TMPDIR/c.pyc && touch $TMPDIR/d.pyc && \
 > echo "from compiled import a; import compiled.b; import c; from . import d; reveal_type((a, compiled.b, c, d))" > $TMPDIR/compiled_import.py && \
 > $PYREFLY check $TMPDIR/compiled_import.py
-*ERROR Could not find name `reveal_type`* (glob)
+*ERROR `reveal_type` must be imported from `typing` for runtime usage* (glob)
 * (glob+)
 *INFO revealed type: tuple[Any, Module[compiled.b], Module[c], Any]* (glob)
 * (glob+)

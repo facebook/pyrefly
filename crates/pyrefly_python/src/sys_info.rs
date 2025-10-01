@@ -31,6 +31,7 @@ use ruff_python_ast::UnaryOp;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de;
+use serde::de::MapAccess;
 use serde::de::Visitor;
 
 use crate::ast::Ast;
@@ -223,6 +224,62 @@ impl SysInfo {
 
     pub fn platform(&self) -> &PythonPlatform {
         &self.0.key().platform
+    }
+}
+
+impl<'de> Deserialize<'de> for SysInfo {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field {
+            PythonVersion,
+            PythonPlatform,
+        }
+
+        struct InfoVisitor;
+
+        impl<'de> Visitor<'de> for InfoVisitor {
+            type Value = SysInfo;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("Python version and Python Platform")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<Self::Value, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut platform = None;
+                let mut version = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::PythonVersion => {
+                            if version.is_some() {
+                                return Err(de::Error::duplicate_field("python_version"));
+                            }
+                            version = Some(map.next_value()?);
+                        }
+                        Field::PythonPlatform => {
+                            if platform.is_some() {
+                                return Err(de::Error::duplicate_field("python_platform"));
+                            }
+                            platform = Some(map.next_value()?);
+                        }
+                    }
+                }
+                let version = version.ok_or_else(|| de::Error::missing_field("python_version"))?;
+                let platform =
+                    platform.ok_or_else(|| de::Error::missing_field("python_platform"))?;
+                Ok(SysInfo::new(version, platform))
+            }
+        }
+
+        const FIELDS: &[&str] = &["python_platform", "python_version"];
+        deserializer.deserialize_struct("SysInfo", FIELDS, InfoVisitor)
     }
 }
 
@@ -488,5 +545,65 @@ mod tests {
         assert_compare(CmpOp::Lt, &[1], &[2, 3]);
         assert_compare(CmpOp::Lt, &[1, 2], &[1, 2, 3]);
         assert_compare(CmpOp::Gt, &[1, 3], &[1, 2, 3]);
+    }
+
+    #[test]
+    fn test_deserialize_sys_info() {
+        assert_eq!(
+            serde_json::from_str::<SysInfo>(
+                r#"{"python_version": "3.10.1", "python_platform": "linux"}"#
+            )
+            .unwrap(),
+            SysInfo::new(PythonVersion::new(3, 10, 1), PythonPlatform::linux()),
+        );
+        assert_eq!(
+            serde_json::from_str::<SysInfo>(
+                r#"{"python_platform": "darwin", "python_version": "3.10.1"}"#
+            )
+            .unwrap(),
+            SysInfo::new(PythonVersion::new(3, 10, 1), PythonPlatform::mac()),
+        );
+        assert!(serde_json::from_str::<SysInfo>(r#"{"python_version": "3.10.1"}"#).is_err());
+        assert!(
+            serde_json::from_str::<SysInfo>(r#"{"python_platform": "linux", "python_platform": "linux", "python_version": "3.10.1"}"#).is_err()
+        );
+
+        #[derive(Deserialize, PartialEq, Eq, Debug)]
+        struct WithInfo {
+            a: String,
+            #[serde(flatten)]
+            info: SysInfo,
+        }
+
+        assert_eq!(
+            serde_json::from_str::<WithInfo>(
+                r#"{"a": "b", "python_platform": "linux", "python_version": "3.10.1"}"#
+            )
+            .unwrap(),
+            WithInfo {
+                a: "b".to_owned(),
+                info: SysInfo::new(PythonVersion::new(3, 10, 1), PythonPlatform::linux())
+            },
+        );
+        assert_eq!(
+            serde_json::from_str::<WithInfo>(
+                r#"{"python_platform": "linux", "python_version": "3.10.1", "a": "b"}"#
+            )
+            .unwrap(),
+            WithInfo {
+                a: "b".to_owned(),
+                info: SysInfo::new(PythonVersion::new(3, 10, 1), PythonPlatform::linux())
+            },
+        );
+        assert_eq!(
+            serde_json::from_str::<WithInfo>(
+                r#"{"python_platform": "linux", "a": "b", "python_version": "3.10.1"}"#
+            )
+            .unwrap(),
+            WithInfo {
+                a: "b".to_owned(),
+                info: SysInfo::new(PythonVersion::new(3, 10, 1), PythonPlatform::linux())
+            },
+        );
     }
 }

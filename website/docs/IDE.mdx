@@ -14,6 +14,13 @@ To see what features are supported by the IDE extension, see the [Supported Feat
 1. Install the Pyrefly extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly) or [Open VSX](https://open-vsx.org/extension/meta/pyrefly).
 2. Open any Python file and the extension will activate automatically.
 
+:::tip
+Not seeing inlay hints in VS Code? Try setting `editor.inlayHints.enabled` to `true` in your VS Code settings.
+:::
+
+:::tip
+Want type error squiggles to show up in VS Code? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your VS Code settings, or create a `pyrefly.toml` file in your project root.
+:::
 
 ## Customization
 By default, Pyrefly should work in the IDE with no configuration necessary. But to ensure your project is set up properly, see [configurations](../configuration).
@@ -255,3 +262,7 @@ language-servers = ["pyrefly"]
 ### Sublime
 
 See the documentation [here](https://lsp.sublimetext.io/language_servers/#pyrefly).
+
+### Jupyter Lab
+
+Pyrefly may be used in Jupyter Lab through the [jupyterlab-lsp](https://jupyterlab-lsp.readthedocs.io/en/latest/Installation.html) extension.

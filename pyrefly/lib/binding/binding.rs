@@ -15,6 +15,7 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_util::assert_bytes;
@@ -57,7 +58,7 @@ use crate::binding::base_class::BaseClass;
 use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::bindings::Bindings;
 use crate::binding::narrow::NarrowOp;
-use crate::binding::pydantic::PydanticMetadataBinding;
+use crate::binding::pydantic::PydanticConfigDict;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::types::annotation::Annotation;
@@ -65,7 +66,7 @@ use crate::types::class::Class;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
 use crate::types::equality::TypeEq;
-use crate::types::globals::Global;
+use crate::types::globals::ImplicitGlobal;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::stdlib::Stdlib;
 use crate::types::tuple::Tuple;
@@ -94,14 +95,14 @@ assert_words!(KeyUndecoratedFunction, 1);
 assert_words!(Binding, 11);
 assert_words!(BindingExpect, 11);
 assert_words!(BindingAnnotation, 15);
-assert_words!(BindingClass, 22);
+assert_words!(BindingClass, 23);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 8);
 assert_bytes!(BindingClassMro, 4);
 assert_words!(BindingClassField, 21);
 assert_bytes!(BindingClassSynthesizedFields, 4);
-assert_bytes!(BindingLegacyTypeParam, 4);
+assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_bytes!(BindingDecoratedFunction, 20);
@@ -316,23 +317,20 @@ pub enum Key {
     /// Used for `import foo.x` (the `foo` might not be literally present with `.` modules),
     /// and `from foo import *` (the names are injected from the exports)
     Import(Name, TextRange),
-    /// I am a module-level global variable like `__file__` or `__doc__`.
-    Global(Name),
+    /// I am an implicit module-level global variable like `__file__` or `__doc__`.
+    ImplicitGlobal(Name),
     /// I am defined in this module at this location.
     Definition(ShortIdentifier),
     /// I am a mutable capture (`global` or `nonlocal`) declared at this location.
     MutableCapture(ShortIdentifier),
-    /// I am a name assignment that is also a first use of some other name assign.
-    ///
-    /// My raw definition contains unpinned placeholder types from both myself
-    /// and upstream definitions, this binding will have all upstream
-    /// placeholders (but not those originating from me) pinned.
-    UpstreamPinnedDefinition(ShortIdentifier),
     /// I am the pinned version of a definition corresponding to a name assignment.
     ///
-    /// Used in cases where the raw definition might introduce placeholder `Var` types
-    /// that need to be hidden from all lookups except the first usage to avoid nondeterminism.
-    PinnedDefinition(ShortIdentifier),
+    /// See [Binding::CompletedPartialType] for more details.
+    CompletedPartialType(ShortIdentifier),
+    /// I am a wrapper around a assignment that is also a first use of some other name assign.
+    ///
+    /// See [Binding::PartialTypeWithUpstreamCompleted] for more details.
+    PartialTypeWithUpstreamsCompleted(ShortIdentifier),
     /// I am a name with possible attribute/subscript narrowing coming from an assignment at this location.
     FacetAssign(ShortIdentifier),
     /// The type at a specific return point.
@@ -374,17 +372,29 @@ pub enum Key {
     YieldLink(TextRange),
     /// A use of `typing.Self` in an expression. Used to redirect to the appropriate type (which is aware of the current class).
     SelfTypeLiteral(TextRange),
+    /// I am the type of a name that may involve a legacy type param (this may involve attribute narrows
+    /// of a module in the case of imported names like `foo.T`).
+    ///
+    /// The resulting type may not actually involve a legacy type param, since it may turn out I am
+    /// some other kind of type.
+    PossibleLegacyTParam(TextRange),
+    /// A `del` statement. It is a `Binding` associated with a the type `Any` because `del` defines a name in scope,
+    /// so we need to provide a `Key` for any reads of that name in the edge case where there is no other definition
+    ///
+    /// This `Key` is *only* ever used if the variable has only a `del` but is not otherwise defined (which is
+    /// always a type error, since you cannot delete an uninitialized variable).
+    Delete(TextRange),
 }
 
 impl Ranged for Key {
     fn range(&self) -> TextRange {
         match self {
             Self::Import(_, r) => *r,
-            Self::Global(_) => TextRange::default(),
+            Self::ImplicitGlobal(_) => TextRange::default(),
             Self::Definition(x) => x.range(),
             Self::MutableCapture(x) => x.range(),
-            Self::UpstreamPinnedDefinition(x) => x.range(),
-            Self::PinnedDefinition(x) => x.range(),
+            Self::PartialTypeWithUpstreamsCompleted(x) => x.range(),
+            Self::CompletedPartialType(x) => x.range(),
             Self::FacetAssign(x) => x.range(),
             Self::ReturnExplicit(r) => *r,
             Self::ReturnImplicit(x) => x.range(),
@@ -400,7 +410,9 @@ impl Ranged for Key {
             Self::Unpack(r) => *r,
             Self::UsageLink(r) => *r,
             Self::YieldLink(r) => *r,
+            Self::Delete(r) => *r,
             Self::SelfTypeLiteral(r) => *r,
+            Self::PossibleLegacyTParam(r) => *r,
             Self::PatternNarrow(r) => *r,
         }
     }
@@ -412,13 +424,13 @@ impl DisplayWith<ModuleInfo> for Key {
 
         match self {
             Self::Import(n, r) => write!(f, "Key::Import({n} {})", ctx.display(r)),
-            Self::Global(n) => write!(f, "Key::Global({n})"),
+            Self::ImplicitGlobal(n) => write!(f, "Key::Global({n})"),
             Self::Definition(x) => write!(f, "Key::Definition({})", short(x)),
-            Self::MutableCapture(x) => write!(f, "Key::Declaration({})", short(x)),
-            Self::UpstreamPinnedDefinition(x) => {
-                write!(f, "Key::UpstreamPinnedDefinition({})", short(x))
+            Self::MutableCapture(x) => write!(f, "Key::MutableCapture({})", short(x)),
+            Self::CompletedPartialType(x) => write!(f, "Key::CompletedPartialType({})", short(x)),
+            Self::PartialTypeWithUpstreamsCompleted(x) => {
+                write!(f, "Key::PartialTypeWithUpstreamsCompleted({})", short(x))
             }
-            Self::PinnedDefinition(x) => write!(f, "Key::PinnedDefinition({})", short(x)),
             Self::FacetAssign(x) => write!(f, "Key::FacetAssign({})", short(x)),
             Self::BoundName(x) => write!(f, "Key::BoundName({})", short(x)),
             Self::Anon(r) => write!(f, "Key::Anon({})", ctx.display(r)),
@@ -441,7 +453,11 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::Unpack(r) => write!(f, "Key::Unpack({})", ctx.display(r)),
             Self::UsageLink(r) => write!(f, "Key::UsageLink({})", ctx.display(r)),
             Self::YieldLink(r) => write!(f, "Key::YieldLink({})", ctx.display(r)),
+            Self::Delete(r) => write!(f, "Key::Delete({})", ctx.display(r)),
             Self::SelfTypeLiteral(r) => write!(f, "Key::SelfTypeLiteral({})", ctx.display(r)),
+            Self::PossibleLegacyTParam(r) => {
+                write!(f, "Key::PossibleLegacyTParam({})", ctx.display(r))
+            }
             Self::PatternNarrow(r) => write!(f, "Key::PatternNarrow({})", ctx.display(r)),
         }
     }
@@ -501,8 +517,6 @@ pub enum BindingExpect {
         existing: Idx<KeyAnnotation>,
         name: Name,
     },
-    /// `del` statement
-    Delete(Expr),
     /// Expression used in a boolean context (`bool()`, `if`, or `while`)
     Bool(Expr),
 }
@@ -519,9 +533,6 @@ impl DisplayWith<Bindings> for BindingExpect {
             }
             Self::Bool(x) => {
                 write!(f, "Bool({})", m.display(x))
-            }
-            Self::Delete(x) => {
-                write!(f, "Delete({})", m.display(x))
             }
             Self::UnpackedLength(x, range, expect) => {
                 let expectation = match expect {
@@ -980,6 +991,7 @@ pub struct ClassBinding {
     /// A class definition, but with the body stripped out.
     pub def: StmtClassDef,
     pub def_index: ClassDefIndex,
+    pub parent: NestingContext,
     /// The fields are all the names declared on the class that we were able to detect
     /// from an AST traversal, which includes:
     /// - any name defined in the class body (e.g. by assignment or a def statement)
@@ -1177,7 +1189,7 @@ pub enum Binding {
     /// An explicit type.
     Type(Type),
     /// A global variable.
-    Global(Global),
+    Global(ImplicitGlobal),
     /// A type parameter.
     TypeParameter(Box<TypeParameter>),
     /// The type of a function. The fields are:
@@ -1211,13 +1223,10 @@ pub enum Binding {
     /// with the previous import to this binding (in which case merge the modules).
     Module(ModuleName, Vec<Name>, Option<Idx<Key>>),
     /// A name that might be a legacy type parameter. Solving this gives the Quantified type if so.
-    /// The TextRange is optional and should be set at most once per identifier
-    /// to avoid duplicate type errors (this is not type safe, because we might
-    /// produce multiple `CheckLegacyTypeParam` bindings for the same
-    /// identifier).
-    /// It controls whether to produce an error saying there are scoped type parameters for this
-    /// function / class, and therefore the use of legacy type parameters is invalid.
-    CheckLegacyTypeParam(Idx<KeyLegacyTypeParam>, Option<TextRange>),
+    /// The TextRange is optional and controls whether to produce an error
+    /// saying there are scoped type parameters for this function / class, and
+    /// therefore the use of legacy type parameters is invalid.
+    PossibleLegacyTParam(Idx<KeyLegacyTypeParam>, Option<TextRange>),
     /// An assignment to a name.
     NameAssign(
         Name,
@@ -1252,24 +1261,60 @@ pub enum Binding {
     AssignToSubscript(ExprSubscript, Box<ExprOrBinding>),
     /// A placeholder binding, used to force the solving of some other `K::Value` (for
     /// example, forcing a `BindingExpect` to be solved) in the context of first-usage-based
-    /// type inference.
+    /// inference of partial types.
     UsageLink(LinkedKey),
     /// Inside of a class body, we check whether an expression resolves to the `SelfType` special
     /// export. If so, we create a `SelfTypeLiteral` key/binding pair so that the AnswersSolver can
     /// later synthesize the correct `Type::SelfType` (this binding is needed
     /// because we need access to the current class to do so).
     SelfTypeLiteral(Idx<KeyClass>, TextRange),
-    /// Binding used to pin placeholder types from `NameAssign` bindings. The first
-    /// entry should always correspond to a `Key::Definition` from a name assignment
-    /// and the second entry tells us if and where this definition is first used.
-    Pin(Idx<Key>, FirstUse),
+    /// Binding used to pin placeholder types from `NameAssign` bindings, which
+    /// can produce partial types that have `Var`s representing still-unknown
+    /// type parameters not determine by the initial assignment (e.g. empty
+    /// containers).
+    ///
+    /// The first entry should always correspond to a `Key::Definition` from a
+    /// name assignment and the second entry tells us if and where this
+    /// definition is first used.
+    ///
+    /// For example, in
+    /// ```python
+    /// x = []
+    /// x.append(1)
+    /// y = []
+    /// print(y)
+    /// z = []
+    /// ```
+    /// all three of the raw `NameAssign`s will result in a partial type `list[@_]`,
+    /// and downstream:
+    /// - the `Pin` for `x` will depend on the `Binding::Expr` for `x.append(1)`, which
+    ///   will force the type to `list[int]`.
+    /// - the `Pin` for `y` will depend on the `Binding::Expr` for `print(y)`, which
+    ///   will not force anything. Then the `Pin` itself will pin placeholders,
+    ///   resulting in `list[Any]`
+    /// - the `Pin` for `z` will have an empty `FirstUse`, so as with `y` it will
+    ///   simply force the placeholder and produce list[`Any`]
+    CompletedPartialType(Idx<Key>, FirstUse),
     /// Binding used to pin any *upstream* placeholder types for a NameAssign that is also
-    /// a first use. First uses depend on this binding, so that upstream `Var`s cannot
-    /// leak into them but `Var`s originating from this assignment can.
+    /// a first use. Any first use of the name defined here depend on this binding rather
+    /// than directly on the `NameAssign` so that upstream `Var`s cannot leak into the
+    /// partial type into them but `Var`s originating from this assignment can.
     ///
     /// The Idx is the upstream raw `NameAssign`, and the slice has `Idx`s that point at
     /// all the `Pin`s for which that raw `NameAssign` was the first use.
-    PinUpstream(Idx<Key>, Box<[Idx<Key>]>),
+    ///
+    /// For example:
+    /// ```python
+    /// x = []
+    /// y = [], x
+    /// ```
+    /// the raw `NameAssign` for `y` will produce `tuple[list[@0], list[@1]]`,
+    /// but the `PartialTypeWithUpstreamsCompleted` for `y` will use the "completed"
+    /// partial type of `x` (which it achieves by forcing the `Binding::Pin` for
+    /// `x` before expanding types) and result in `tuple[list[@_], Any]`.
+    PartialTypeWithUpstreamsCompleted(Idx<Key>, Box<[Idx<Key>]>),
+    /// `del` statement
+    Delete(Expr),
 }
 
 impl DisplayWith<Bindings> for Binding {
@@ -1351,11 +1396,11 @@ impl DisplayWith<Bindings> for Binding {
             Self::AugAssign(a, s) => write!(f, "AugAssign({}, {})", ann(a), m.display(s)),
             Self::Type(t) => write!(f, "Type({t})"),
             Self::Global(g) => write!(f, "Global({})", g.name()),
-            Self::TypeParameter(box TypeParameter { unique, kind, .. }) => {
-                write!(f, "TypeParameter({unique}, {kind}, ..)")
+            Self::TypeParameter(tp) => {
+                write!(f, "TypeParameter({}, {}, ..)", tp.unique, tp.kind)
             }
-            Self::CheckLegacyTypeParam(k, _) => {
-                write!(f, "CheckLegacyTypeParam({})", ctx.display(*k))
+            Self::PossibleLegacyTParam(k, _) => {
+                write!(f, "PossibleLegacyTParam({})", ctx.display(*k))
             }
             Self::AnnotatedType(k1, k2) => {
                 write!(
@@ -1501,8 +1546,8 @@ impl DisplayWith<Bindings> for Binding {
                     m.display(r)
                 )
             }
-            Self::Pin(k, first_use) => {
-                write!(f, "Pin({}, ", ctx.display(*k),)?;
+            Self::CompletedPartialType(k, first_use) => {
+                write!(f, "CompletedPartialType({}, ", ctx.display(*k),)?;
                 match first_use {
                     FirstUse::Undetermined => write!(f, "Undetermined")?,
                     FirstUse::DoesNotPin => write!(f, "DoesNotPin")?,
@@ -1510,14 +1555,15 @@ impl DisplayWith<Bindings> for Binding {
                 }
                 write!(f, ")")
             }
-            Self::PinUpstream(k, first_used_by) => {
+            Self::PartialTypeWithUpstreamsCompleted(k, first_used_by) => {
                 write!(
                     f,
-                    "PinUpstream({}, [{}])",
+                    "PartialTypeWithUpstreamsCompleted({}, [{}])",
                     ctx.display(*k),
                     commas_iter(|| first_used_by.iter().map(|x| ctx.display(*x)))
                 )
             }
+            Self::Delete(x) => write!(f, "Delete({})", m.display(x)),
         }
     }
 }
@@ -1531,7 +1577,7 @@ impl Binding {
             | Binding::ParamSpec(_, _, _)
             | Binding::TypeVarTuple(_, _, _)
             | Binding::TypeParameter(_)
-            | Binding::CheckLegacyTypeParam(_, _) => Some(SymbolKind::TypeParameter),
+            | Binding::PossibleLegacyTParam(_, _) => Some(SymbolKind::TypeParameter),
             Binding::Global(_) => Some(SymbolKind::Variable),
             Binding::Function(_, _, _) => Some(SymbolKind::Function),
             Binding::Import(_, _, _) => {
@@ -1582,8 +1628,9 @@ impl Binding {
             | Binding::UsageLink(_)
             | Binding::SelfTypeLiteral(..)
             | Binding::AssignToSubscript(_, _)
-            | Binding::Pin(..)
-            | Binding::PinUpstream(..) => None,
+            | Binding::CompletedPartialType(..)
+            | Binding::PartialTypeWithUpstreamsCompleted(..)
+            | Binding::Delete(_) => None,
         }
     }
 }
@@ -1597,8 +1644,10 @@ impl DisplayWith<Bindings> for BindingExport {
     }
 }
 
+/// Does an AnnAssign defining an Annotation have a value? Used to validate
+/// some qualifiers like `Final` that require an initial value.
 #[derive(Debug, Clone, Copy, VisitMut, TypeEq, PartialEq, Eq)]
-pub enum Initialized {
+pub enum AnnAssignHasValue {
     Yes,
     No,
 }
@@ -1662,7 +1711,7 @@ pub enum AnnotationTarget {
     Return(Name),
     /// An annotated assignment. For attribute assignments, the name is the attribute name ("attr" in "x.attr")
     /// Does the annotated assignment have an initial value?
-    Assign(Name, Initialized),
+    Assign(Name, AnnAssignHasValue),
     /// A member of a class
     ClassMember(Name),
 }
@@ -1727,6 +1776,7 @@ pub enum BindingClass {
     FunctionalClassDef(
         ClassDefIndex,
         Identifier,
+        NestingContext,
         SmallMap<Name, ClassFieldProperties>,
     ),
 }
@@ -1735,7 +1785,7 @@ impl DisplayWith<Bindings> for BindingClass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &Bindings) -> fmt::Result {
         match self {
             Self::ClassDef(c) => write!(f, "ClassDef({})", c.def.name),
-            Self::FunctionalClassDef(_, id, _) => write!(f, "FunctionalClassDef({id})"),
+            Self::FunctionalClassDef(_, id, _, _) => write!(f, "FunctionalClassDef({id})"),
         }
     }
 }
@@ -1937,7 +1987,7 @@ pub struct BindingClassMetadata {
     pub decorators: Box<[(Idx<Key>, TextRange)]>,
     /// Is this a new type? True only for synthesized classes created from a `NewType` call.
     pub is_new_type: bool,
-    pub pydantic_metadata: PydanticMetadataBinding,
+    pub pydantic_config_dict: PydanticConfigDict,
 }
 
 impl DisplayWith<Bindings> for BindingClassMetadata {
@@ -1964,11 +2014,33 @@ impl DisplayWith<Bindings> for BindingClassMro {
 }
 
 #[derive(Clone, Debug)]
-pub struct BindingLegacyTypeParam(pub Idx<Key>);
+/// A legacy type parameter (`T = typing.TypeVar("T")`).
+pub enum BindingLegacyTypeParam {
+    /// The key points directly to an expression that may be a legacy type parameter.
+    ParamKeyed(Idx<Key>),
+    /// The key points to a module with an attribute that may be a legacy type parameter.
+    ModuleKeyed(Idx<Key>, Box<Name>),
+}
 
 impl DisplayWith<Bindings> for BindingLegacyTypeParam {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        write!(f, "BindingLegacyTypeParam({})", ctx.display(self.0))
+        write!(
+            f,
+            "BindingLegacyTypeParam({})",
+            match self {
+                Self::ParamKeyed(k) => format!("{}", ctx.display(*k)),
+                Self::ModuleKeyed(k, attr) => format!("{}.{attr}", ctx.display(*k)),
+            }
+        )
+    }
+}
+
+impl BindingLegacyTypeParam {
+    pub fn idx(&self) -> Idx<Key> {
+        match self {
+            Self::ParamKeyed(idx) => *idx,
+            Self::ModuleKeyed(idx, _) => *idx,
+        }
     }
 }
 

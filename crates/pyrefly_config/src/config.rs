@@ -10,25 +10,34 @@ use std::fmt;
 use std::fmt::Display;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use derivative::Derivative;
+use dupe::Dupe as _;
 use itertools::Itertools;
+use pyrefly_build::BuildSystem;
+use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::SourceDatabase;
+use pyrefly_python::COMPILED_FILE_SUFFIXES;
+use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::absolutize::Absolutize as _;
-use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::Glob;
 use pyrefly_util::globs::Globs;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::watch_pattern::WatchPattern;
 use serde::Deserialize;
 use serde::Serialize;
+use starlark_map::small_set::SmallSet;
 use tracing::debug;
 
 use crate::base::ConfigBase;
@@ -175,8 +184,9 @@ impl ImportLookupPathPart<'_> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Derivative)]
 #[serde(rename_all = "kebab-case")]
+#[derivative(PartialEq, Eq)]
 pub struct ConfigFile {
     #[serde(skip)]
     pub source: ConfigSource,
@@ -284,11 +294,16 @@ pub struct ConfigFile {
     )]
     pub use_ignore_files: bool,
 
+    /// Should this config use a build system? If so, which one?
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_system: Option<BuildSystem>,
+
     /// Database understanding the mapping between source files and import paths,
     /// especially within the context of a build system. This is used for getting handles
     /// for a path and doing module finding.
     #[serde(skip, default)]
-    pub source_db: Option<ArcId<Box<dyn SourceDatabase>>>,
+    #[derivative(PartialEq = "ignore")]
+    pub source_db: Option<Arc<Box<dyn SourceDatabase>>>,
 
     /// Skips the check to ensure any `-stubs` `site_package_path` entries have an
     /// installed non-stubs package.
@@ -322,6 +337,7 @@ impl Default for ConfigFile {
             python_environment: Default::default(),
             root: Default::default(),
             sub_configs: Default::default(),
+            build_system: Default::default(),
             source_db: Default::default(),
             use_ignore_files: true,
             ignore_missing_source: true,
@@ -485,16 +501,15 @@ impl ConfigFile {
              // be set in `ConfigFile::configure()`.
              self.root.replace_imports_with_any.as_deref().unwrap());
         // Need to filter out any files that would be a not case.
-        let mut found_match = None;
-        for w in wildcards {
+        let found_match = wildcards.iter().find_map(|w| {
             if w.matches(module) == Match::Negative {
-                found_match = Some(false);
-                break;
+                Some(false)
             } else if w.matches(module) == Match::Positive {
-                found_match = Some(true);
-                break;
+                Some(true)
+            } else {
+                None
             }
-        }
+        });
         found_match == Some(true)
     }
 
@@ -507,9 +522,16 @@ impl ConfigFile {
              // we can use unwrap here, because the value in the root config must
              // be set in `ConfigFile::configure()`.
              self.root.ignore_missing_imports.as_deref().unwrap());
-        wildcards
-            .iter()
-            .any(|p| p.matches(module) == Match::Positive)
+        let found_match = wildcards.iter().find_map(|w| {
+            if w.matches(module) == Match::Negative {
+                Some(false)
+            } else if w.matches(module) == Match::Positive {
+                Some(true)
+            } else {
+                None
+            }
+        });
+        found_match == Some(true)
     }
 
     pub fn untyped_def_behavior(&self, path: &Path) -> UntypedDefBehavior {
@@ -573,6 +595,55 @@ impl ConfigFile {
         })
     }
 
+    pub fn handle_from_module_path(&self, module_path: ModulePath) -> Handle {
+        match &self
+            .source_db
+            .as_ref()
+            .and_then(|db| db.handle_from_module_path(module_path.dupe()))
+        {
+            Some(handle) => handle.dupe(),
+            None => {
+                let name = ModuleName::from_path(module_path.as_path(), self.search_path())
+                    .unwrap_or_else(ModuleName::unknown);
+                Handle::new(name, module_path, self.get_sys_info())
+            }
+        }
+    }
+
+    /// Get glob patterns that should be watched by a file watcher.
+    /// We return a tuple of root (non-pattern part of the path) and a pattern.
+    /// If pattern is None, then the root should contain the whole path to watch.
+    pub fn get_paths_to_watch(&self) -> Vec<WatchPattern<'_>> {
+        let mut result = Vec::new();
+        if let Some(source_db) = &self.source_db {
+            for buildfile in source_db.get_critical_files() {
+                result.push(WatchPattern::file(buildfile));
+            }
+        }
+        let config_root = self.source.root();
+        if let Some(config_root) = config_root {
+            Self::CONFIG_FILE_NAMES.iter().for_each(|config| {
+                result.push(WatchPattern::root(config_root, format!("**/{config}")));
+            });
+        }
+        self.search_path()
+            .chain(self.site_package_path())
+            .cartesian_product(PYTHON_EXTENSIONS.iter().chain(COMPILED_FILE_SUFFIXES))
+            .for_each(|(s, suffix)| {
+                result.push(WatchPattern::root(s, format!("**/*.{suffix}")));
+            });
+        result
+    }
+
+    pub fn requery_source_db(&self, files: &SmallSet<ModulePath>) -> anyhow::Result<bool> {
+        let Some(source_db) = &self.source_db else {
+            return Ok(false);
+        };
+
+        let files = files.iter().map(|p| p.as_path().to_path_buf()).collect();
+        source_db.requery_source_db(files)
+    }
+
     /// Configures values that must be updated *after* overwriting with CLI flag values,
     /// which should probably be everything except for `PathBuf` or `Globs` types.
     pub fn configure(&mut self) -> Vec<ConfigError> {
@@ -623,6 +694,19 @@ impl ConfigFile {
 
         if self.root.permissive_ignores.is_none() {
             self.root.permissive_ignores = Some(false);
+        }
+
+        if let Some(build_system) = &self.build_system {
+            match &self.source {
+                ConfigSource::File(path) => {
+                    let mut root = path.to_path_buf();
+                    root.pop();
+                    self.source_db = Some(Arc::new(build_system.get_source_db(root)));
+                }
+                _ => configure_errors.push(anyhow::anyhow!(
+                    "Invalid config state: `build-system` is set on project without config."
+                )),
+            }
         }
 
         fn validate<'a>(
@@ -876,6 +960,7 @@ mod tests {
                 search_path_from_file: vec![PathBuf::from("../..")],
                 disable_search_path_heuristics: false,
                 import_root: None,
+                build_system: Default::default(),
                 use_ignore_files: true,
                 fallback_search_path: Vec::new(),
                 python_environment: PythonEnvironment {
@@ -1144,6 +1229,7 @@ mod tests {
             },
             root: Default::default(),
             source_db: Default::default(),
+            build_system: Default::default(),
             sub_configs: vec![SubConfig {
                 matches: Glob::new("sub/project/**".to_owned()).unwrap(),
                 settings: Default::default(),
@@ -1197,6 +1283,7 @@ mod tests {
             fallback_search_path: Vec::new(),
             python_environment,
             root: Default::default(),
+            build_system: Default::default(),
             source_db: Default::default(),
             sub_configs: vec![SubConfig {
                 matches: sub_config_matches,

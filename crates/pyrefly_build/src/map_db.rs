@@ -8,12 +8,14 @@
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::path::Path;
+use std::path::PathBuf;
 
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::SysInfo;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::handle::Handle;
@@ -63,5 +65,25 @@ impl SourceDatabase for MapDatabase {
 
     fn lookup(&self, module: &ModuleName, _: Option<&Path>) -> Option<ModulePath> {
         self.0.get(module).map(|paths| paths.last().dupe())
+    }
+
+    fn handle_from_module_path(&self, module_path: ModulePath) -> Option<Handle> {
+        let (name, _) = self
+            .0
+            .iter()
+            .find(|(_, paths)| paths.iter().any(|p| p == &module_path))?;
+        Some(Handle::new(name.dupe(), module_path, self.1.dupe()))
+    }
+
+    fn requery_source_db(&self, _: SmallSet<PathBuf>) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+
+    fn get_critical_files(&self) -> SmallSet<PathBuf> {
+        self.0
+            .values()
+            .flatten()
+            .map(|p| p.as_path().to_path_buf())
+            .collect()
     }
 }

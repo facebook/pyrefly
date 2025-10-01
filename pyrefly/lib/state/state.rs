@@ -47,7 +47,6 @@ use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::locked_map::LockedMap;
 use pyrefly_util::no_hash::BuildNoHash;
-use pyrefly_util::recurser::Recurser;
 use pyrefly_util::small_set1::SmallSet1;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
@@ -98,6 +97,7 @@ use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::module::finder::find_import_prefixes;
 use crate::module::typeshed::BundledTypeshed;
+use crate::solver::solver::VarRecurser;
 use crate::state::dirty::Dirty;
 use crate::state::epoch::Epoch;
 use crate::state::epoch::Epochs;
@@ -335,7 +335,7 @@ impl<'a> Transaction<'a> {
 
     pub fn get_all_errors(&self) -> Errors {
         if self.data.updated_modules.is_empty() {
-            // Optimised path
+            // Optimized path
             return Errors::new(
                 self.readable
                     .modules
@@ -481,7 +481,7 @@ impl<'a> Transaction<'a> {
     /// Return all handles for which there is data, in a non-deterministic order.
     pub fn handles(&self) -> Vec<Handle> {
         if self.data.updated_modules.is_empty() {
-            // Optimised path
+            // Optimized path
             self.readable.modules.keys().cloned().collect()
         } else {
             let mut res = self
@@ -650,7 +650,7 @@ impl<'a> Transaction<'a> {
         if exclusive.dirty.require {
             // We have increased the `Require` level, so redo everything to make sure
             // we capture everything.
-            // Could be optimised to do less work (e.g. if you had Retain::Error before don't need to reload)
+            // Could be optimized to do less work (e.g. if you had Retain::Error before don't need to reload)
             let mut write = exclusive.write();
             write.steps.load = None;
             rebuild(write, true);
@@ -1197,7 +1197,7 @@ impl<'a> Transaction<'a> {
         let errors = &steps.load.as_ref()?.errors;
         let (bindings, answers) = steps.answers.as_deref().as_ref()?;
         let stdlib = self.get_stdlib(handle);
-        let recurser = Recurser::new();
+        let recurser = VarRecurser::new();
         let thread_state = ThreadState::new();
         let solver = AnswersSolver::new(
             &lookup,
@@ -1297,6 +1297,51 @@ impl<'a> Transaction<'a> {
                     module_data.state.write(Step::Load).unwrap().dirty.find = true;
                     dirty_set.insert(module_data.dupe());
                 }
+            }
+        }
+    }
+
+    /// Called if the `find` portion of loading might have changed for specific configs,
+    /// without wanting to fully reload all configs (and pay the performance penalty of
+    /// requerying a build system). If `configs` is empty, we short circuit.
+    /// E.g. a file was opened or closed, changing the set of 'open' build system targets,
+    /// and affecting how a go-to-definition or hover result would be produced.
+    pub fn invalidate_find_for_configs(&mut self, configs: SmallSet<ArcId<ConfigFile>>) {
+        if configs.is_empty() {
+            return;
+        }
+
+        // First do the work of clearing out the loaders for our config, but preserve all the other
+        // loaders.
+        let new_loaders = LockedMap::new();
+        self.data
+            .updated_loaders
+            .iter_unordered()
+            .chain(self.readable.loaders.iter())
+            .filter(|(c, _)| !configs.contains(*c))
+            .for_each(|(c, l)| {
+                new_loaders.insert(c.dupe(), l.dupe());
+            });
+        configs.iter().for_each(|config| {
+            new_loaders.insert(config.dupe(), Arc::new(LoaderFindCache::new(config.dupe())));
+        });
+        self.data.updated_loaders = new_loaders;
+
+        // Then mark all handles under that config as dirty.
+        let mut dirty_set = self.data.dirty.lock();
+        for module_data in self.data.updated_modules.values() {
+            if configs.contains(&*module_data.config.read()) {
+                module_data.state.write(Step::Load).unwrap().dirty.find = true;
+                dirty_set.insert(module_data.dupe());
+            }
+        }
+        for (handle, module_data) in self.readable.modules.iter() {
+            if self.data.updated_modules.get(handle).is_none()
+                && configs.contains(&module_data.config)
+            {
+                let module_data = self.get_module(handle);
+                module_data.state.write(Step::Load).unwrap().dirty.find = true;
+                dirty_set.insert(module_data.dupe());
             }
         }
     }
@@ -1417,7 +1462,7 @@ impl<'a> Transaction<'a> {
                 subscriber.finish_work(&m.handle, &alt.load.unwrap());
             }
         }
-        self.data.subscriber = None; // Finalise the progress bar before printing to stderr
+        self.data.subscriber = None; // Finalize the progress bar before printing to stderr
 
         fn line_key(x: &str) -> Option<(u64, &str)> {
             let (_, x) = x.rsplit_once(',')?;

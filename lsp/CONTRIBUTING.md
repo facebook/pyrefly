@@ -12,9 +12,9 @@ contributing. This file shows how to develop the extension locally.
 
 - Follow steps in Pre-requisites section.
 - Ensure `cargo` is installed
-- Open VS Code on the pyre2 folder.
+- Open VS Code on the toplevel pyrefly folder.
 - Switch to the Debug viewlet.
-- Select `Run Installed Extension (pyre2)` from the drop down.
+- Select `Run Installed Extension (pyrefly)` from the drop down.
 - Run the launch config.
 - By default, stderr of the language server will appear in the output pane of
   VSCode under "Pyrefly language server".

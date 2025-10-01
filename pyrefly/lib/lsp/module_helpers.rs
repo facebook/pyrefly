@@ -8,6 +8,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use dupe::Dupe as _;
 use lsp_types::Location;
 use lsp_types::Url;
 use pyrefly_build::handle::Handle;
@@ -18,7 +19,6 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::absolutize::Absolutize as _;
 use tracing::warn;
 
-use crate::module::from_path::module_from_path;
 use crate::module::module_info::ModuleInfo;
 use crate::module::typeshed::typeshed;
 use crate::state::state::State;
@@ -53,10 +53,15 @@ pub fn module_info_to_uri(module_info: &ModuleInfo) -> Option<Url> {
 pub fn handle_from_module_path(state: &State, path: ModulePath) -> Handle {
     let unknown = ModuleName::unknown();
     let config = state.config_finder().python_file(unknown, &path);
-    let module_name = to_real_path(&path)
-        .and_then(|path| module_from_path(&path, config.search_path()))
-        .unwrap_or(unknown);
-    Handle::new(module_name, path, config.get_sys_info())
+    match path.details() {
+        ModulePathDetails::BundledTypeshed(_) => {
+            let module_name = to_real_path(&path)
+                .and_then(|path| ModuleName::from_path(&path, config.search_path()))
+                .unwrap_or(unknown);
+            Handle::new(module_name, path, config.get_sys_info())
+        }
+        _ => config.handle_from_module_path(path.dupe()),
+    }
 }
 
 pub fn make_open_handle(state: &State, path: &Path) -> Handle {

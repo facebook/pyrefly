@@ -104,7 +104,7 @@ async function generateLlmsTxt({ content, routes, outDir }, context) {
 
 const config: Config = {
     title: 'Pyrefly',
-    tagline: 'A Static Type Checker for Python',
+    tagline: 'A fast Python type checker and language server',
     url: 'https://pyrefly.org',
     baseUrl: baseUrl,
     onBrokenLinks: 'throw',
@@ -138,7 +138,7 @@ const config: Config = {
           tagName: "meta",
           attributes: {
             property: "og:image",
-            content: baseUrl + "img/Pyrefly-Symbol.svg",
+            content: baseUrl + "img/Pyrefly-Preview-Symbol.png",
           },
         },
         {
@@ -159,7 +159,7 @@ const config: Config = {
           tagName: "meta",
           attributes: {
             property: "og:image:type",
-            content: "image/svg+xml",
+            content: "image/png",
           },
         },
       ],

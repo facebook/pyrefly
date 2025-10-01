@@ -4,29 +4,12 @@ exports[`Home page renders external site correctly 1`] = `
 <div>
   <div>
     <div>
-      Pyrefly: A Static Type Checker for Python
+      Pyrefly: A Fast Python Type Checker and Language Server
     </div>
     <div>
-      Pyrefly is a static type checker for Python
+      Pyrefly is a fast type checker and language server for Python with powerful IDE features
     </div>
     <div>
-      <div>
-        <div>
-          <span>
-            📝 The 2025 Python Typing and Tooling Survey is now open! Help shape the future of typed Python by taking the survey
-          </span>
-          <div>
-            <button>
-              Take the Survey
-            </button>
-          </div>
-        </div>
-        <button
-          aria-label="Dismiss banner"
-        >
-          ✕
-        </button>
-      </div>
       <section
         id="header-section"
       >
@@ -49,7 +32,7 @@ exports[`Home page renders external site correctly 1`] = `
             >
               <p>
                 <span>
-                  A fast Python type checker written in Rust
+                  A fast type checker and language server for Python with powerful IDE features
                 </span>
               </p>
             </div>
@@ -421,29 +404,12 @@ exports[`Home page renders internal site correctly 1`] = `
 <div>
   <div>
     <div>
-      Pyrefly: A Static Type Checker for Python
+      Pyrefly: A Fast Python Type Checker and Language Server
     </div>
     <div>
-      Pyrefly is a static type checker for Python
+      Pyrefly is a fast type checker and language server for Python with powerful IDE features
     </div>
     <div>
-      <div>
-        <div>
-          <span>
-            📝 The 2025 Python Typing and Tooling Survey is now open! Help shape the future of typed Python by taking the survey
-          </span>
-          <div>
-            <button>
-              Take the Survey
-            </button>
-          </div>
-        </div>
-        <button
-          aria-label="Dismiss banner"
-        >
-          ✕
-        </button>
-      </div>
       <section
         id="header-section"
       >
@@ -466,7 +432,7 @@ exports[`Home page renders internal site correctly 1`] = `
             >
               <p>
                 <span>
-                  A fast Python type checker written in Rust
+                  A fast type checker and language server for Python with powerful IDE features
                 </span>
               </p>
             </div>

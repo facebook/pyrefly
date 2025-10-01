@@ -17,7 +17,7 @@ use super::stdlib::Stdlib;
 use super::types::Type;
 
 #[derive(Debug, Clone)]
-pub struct Global {
+pub struct ImplicitGlobal {
     name: Name,
     ty: fn(&Stdlib) -> Type,
 }
@@ -29,27 +29,27 @@ fn dict_str_any(stdlib: &Stdlib) -> Type {
         .to_type()
 }
 
-const GLOBALS: &[Global] = &[
-    Global::new("__annotations__", dict_str_any),
-    Global::new("__builtins__", |_| Type::any_explicit()),
-    Global::new("__cached__", |stdlib| stdlib.str().clone().to_type()),
-    Global::new("__debug__", |stdlib| stdlib.bool().clone().to_type()),
-    Global::new("__dict__", dict_str_any),
-    Global::new("__file__", |stdlib| stdlib.str().clone().to_type()),
-    Global::new("__loader__", |_| Type::any_explicit()),
-    Global::new("__name__", |stdlib| stdlib.str().clone().to_type()),
-    Global::new("__package__", |stdlib| {
+const IMPLICIT_GLOBALS: &[ImplicitGlobal] = &[
+    ImplicitGlobal::new("__annotations__", dict_str_any),
+    ImplicitGlobal::new("__builtins__", |_| Type::any_explicit()),
+    ImplicitGlobal::new("__cached__", |stdlib| stdlib.str().clone().to_type()),
+    ImplicitGlobal::new("__debug__", |stdlib| stdlib.bool().clone().to_type()),
+    ImplicitGlobal::new("__dict__", dict_str_any),
+    ImplicitGlobal::new("__file__", |stdlib| stdlib.str().clone().to_type()),
+    ImplicitGlobal::new("__loader__", |_| Type::any_explicit()),
+    ImplicitGlobal::new("__name__", |stdlib| stdlib.str().clone().to_type()),
+    ImplicitGlobal::new("__package__", |stdlib| {
         Type::optional(stdlib.str().clone().to_type())
     }),
-    Global::new("__path__", |stdlib| {
+    ImplicitGlobal::new("__path__", |stdlib| {
         stdlib
             .mutable_sequence(stdlib.str().clone().to_type())
             .to_type()
     }),
-    Global::new("__spec__", |_| Type::any_explicit()),
+    ImplicitGlobal::new("__spec__", |_| Type::any_explicit()),
 ];
 
-impl Global {
+impl ImplicitGlobal {
     const fn new(name: &'static str, ty: fn(&Stdlib) -> Type) -> Self {
         Self {
             name: Name::new_static(name),
@@ -57,17 +57,17 @@ impl Global {
         }
     }
 
-    pub fn globals(has_docstring: bool) -> impl Iterator<Item = Global> {
-        GLOBALS
+    pub fn implicit_globals(has_docstring: bool) -> impl Iterator<Item = ImplicitGlobal> {
+        IMPLICIT_GLOBALS
             .iter()
             .cloned()
             .chain(iter::once(Self::doc(has_docstring)))
     }
 
     #[allow(dead_code)]
-    pub fn from_name(name: &Name) -> Option<Global> {
+    pub fn from_name(name: &Name) -> Option<ImplicitGlobal> {
         if name.starts_with("__") && name.ends_with("__") {
-            GLOBALS.iter().find(|x| &x.name == name).cloned()
+            IMPLICIT_GLOBALS.iter().find(|x| &x.name == name).cloned()
         } else {
             None
         }

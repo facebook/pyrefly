@@ -428,7 +428,7 @@ impl NarrowOps {
                     special_export = builder.as_special_export(func);
                     if matches!(
                         special_export,
-                        Some(SpecialExport::Len | SpecialExport::Type)
+                        Some(SpecialExport::Len | SpecialExport::BuiltinsType)
                     ) {
                         left = &arguments.args[0];
                     }
@@ -456,10 +456,10 @@ impl NarrowOps {
                     .filter_map(|(cmp_op, right)| {
                         let range = right.range();
                         let op = match (cmp_op, special_export) {
-                            (CmpOp::Is | CmpOp::Eq, Some(SpecialExport::Type)) => {
+                            (CmpOp::Is | CmpOp::Eq, Some(SpecialExport::BuiltinsType)) => {
                                 AtomicNarrowOp::TypeEq(right.clone())
                             }
-                            (CmpOp::IsNot | CmpOp::NotEq, Some(SpecialExport::Type)) => {
+                            (CmpOp::IsNot | CmpOp::NotEq, Some(SpecialExport::BuiltinsType)) => {
                                 AtomicNarrowOp::TypeNotEq(right.clone())
                             }
                             (CmpOp::IsNot | CmpOp::NotEq, Some(SpecialExport::GetAttr))

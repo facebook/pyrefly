@@ -454,6 +454,7 @@ dependencies = [
  "itoa 1.0.14",
  "rustversion",
  "ryu 1.0.17",
+ "serde",
  "static_assertions",
 ]
 
@@ -563,7 +564,7 @@ dependencies = [
 [[package]]
 name = "cxx"
 version = "1.0.160"
-source = "git+https://github.com/facebookexperimental/cxx.git?rev=43f8f85eb1b9d99f10f7228ab679997c484ade69#43f8f85eb1b9d99f10f7228ab679997c484ade69"
+source = "git+https://github.com/facebookexperimental/cxx.git?rev=870ebbecad0f6be394d4f9fb9bd62b551662651a#870ebbecad0f6be394d4f9fb9bd62b551662651a"
 dependencies = [
  "cc",
  "cxxbridge-cmd",
@@ -576,7 +577,7 @@ dependencies = [
 [[package]]
 name = "cxx-build"
 version = "1.0.160"
-source = "git+https://github.com/facebookexperimental/cxx.git?rev=43f8f85eb1b9d99f10f7228ab679997c484ade69#43f8f85eb1b9d99f10f7228ab679997c484ade69"
+source = "git+https://github.com/facebookexperimental/cxx.git?rev=870ebbecad0f6be394d4f9fb9bd62b551662651a#870ebbecad0f6be394d4f9fb9bd62b551662651a"
 dependencies = [
  "cc",
  "codespan-reporting",
@@ -590,7 +591,7 @@ dependencies = [
 [[package]]
 name = "cxxbridge-cmd"
 version = "1.0.160"
-source = "git+https://github.com/facebookexperimental/cxx.git?rev=43f8f85eb1b9d99f10f7228ab679997c484ade69#43f8f85eb1b9d99f10f7228ab679997c484ade69"
+source = "git+https://github.com/facebookexperimental/cxx.git?rev=870ebbecad0f6be394d4f9fb9bd62b551662651a#870ebbecad0f6be394d4f9fb9bd62b551662651a"
 dependencies = [
  "clap",
  "codespan-reporting",
@@ -603,12 +604,12 @@ dependencies = [
 [[package]]
 name = "cxxbridge-flags"
 version = "1.0.160"
-source = "git+https://github.com/facebookexperimental/cxx.git?rev=43f8f85eb1b9d99f10f7228ab679997c484ade69#43f8f85eb1b9d99f10f7228ab679997c484ade69"
+source = "git+https://github.com/facebookexperimental/cxx.git?rev=870ebbecad0f6be394d4f9fb9bd62b551662651a#870ebbecad0f6be394d4f9fb9bd62b551662651a"
 
 [[package]]
 name = "cxxbridge-macro"
 version = "1.0.160"
-source = "git+https://github.com/facebookexperimental/cxx.git?rev=43f8f85eb1b9d99f10f7228ab679997c484ade69#43f8f85eb1b9d99f10f7228ab679997c484ade69"
+source = "git+https://github.com/facebookexperimental/cxx.git?rev=870ebbecad0f6be394d4f9fb9bd62b551662651a#870ebbecad0f6be394d4f9fb9bd62b551662651a"
 dependencies = [
  "indexmap 2.10.0",
  "proc-macro2",
@@ -663,6 +664,8 @@ dependencies = [
  "lock_api",
  "once_cell",
  "parking_lot_core 0.9.9",
+ "rayon",
+ "serde",
 ]
 
 [[package]]
@@ -673,6 +676,17 @@ checksum = "28cfac68e08048ae1883171632c2aef3ebc555621ae56fbccce1cbf22dd7f058"
 dependencies = [
  "powerfmt",
  "serde",
+]
+
+[[package]]
+name = "derivative"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fcc3dd5e9e9c0b295d6e1e4d811fb6f157d5ffd784b8d202fc62eac8035a770b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -841,9 +855,9 @@ dependencies = [
 
 [[package]]
 name = "fsevent-sys"
-version = "4.0.0"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c0e564d24da983c053beff1bb7178e237501206840a3e6bf4e267b9e8ae734a"
+checksum = "76ee7a02da4d231650c7cea31349b889be2f45ddb3ef3032d2ec8185f6313fd2"
 dependencies = [
  "libc",
 ]
@@ -1458,9 +1472,9 @@ dependencies = [
 
 [[package]]
 name = "kqueue"
-version = "1.0.4"
+version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "058a107a784f8be94c7d35c1300f4facced2e93d2fbe5b1452b44e905ddca4a9"
+checksum = "eac30106d7dce88daf4a3fcb4879ea939476d5074a9b7ddd0fb97fa4bed5596a"
 dependencies = [
  "kqueue-sys",
  "libc",
@@ -1468,9 +1482,9 @@ dependencies = [
 
 [[package]]
 name = "kqueue-sys"
-version = "1.0.3"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8367585489f01bc55dd27404dcf56b95e6da061a256a666ab23be9ba96a2e587"
+checksum = "ed9625ffda8729b85e45cf04090035ac368927b8cebc34898e7c120f52e4838b"
 dependencies = [
  "bitflags 1.3.2",
  "libc",
@@ -2057,13 +2071,14 @@ dependencies = [
 
 [[package]]
 name = "pyrefly"
-version = "0.33.0"
+version = "0.35.0"
 dependencies = [
  "anstream",
  "anyhow",
  "blake3",
  "clap",
  "crossbeam-channel",
+ "dashmap",
  "dupe",
  "enum-iterator",
  "fuzzy-matcher",
@@ -2107,10 +2122,11 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_build"
-version = "0.33.0"
+version = "0.35.0"
 dependencies = [
  "anyhow",
  "dupe",
+ "pretty_assertions",
  "pyrefly_python",
  "pyrefly_util",
  "serde",
@@ -2123,7 +2139,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_bundled"
-version = "0.33.0"
+version = "0.35.0"
 dependencies = [
  "anyhow",
  "starlark_map",
@@ -2133,12 +2149,13 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_config"
-version = "0.33.0"
+version = "0.35.0"
 dependencies = [
  "anyhow",
  "clap",
  "configparser",
  "convert_case",
+ "derivative",
  "dupe",
  "enum-iterator",
  "itertools 0.14.0",
@@ -2167,7 +2184,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_derive"
-version = "0.33.0"
+version = "0.35.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2176,7 +2193,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_python"
-version = "0.33.0"
+version = "0.35.0"
 dependencies = [
  "anyhow",
  "dupe",
@@ -2191,6 +2208,7 @@ dependencies = [
  "ruff_python_parser",
  "ruff_text_size",
  "serde",
+ "serde_json",
  "starlark_map",
  "static_interner",
  "thiserror 2.0.12",
@@ -2199,7 +2217,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_types"
-version = "0.33.0"
+version = "0.35.0"
 dependencies = [
  "compact_str 0.8.0",
  "dupe",
@@ -2219,7 +2237,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_util"
-version = "0.33.0"
+version = "0.35.0"
 dependencies = [
  "anstream",
  "anyhow",
@@ -2448,6 +2466,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruff_cache"
+version = "0.0.0"
+source = "git+https://github.com/astral-sh/ruff/?rev=9bee8376a17401f9736b45fdefffb62edc2f1668#9bee8376a17401f9736b45fdefffb62edc2f1668"
+dependencies = [
+ "filetime",
+ "glob",
+ "globset",
+ "itertools 0.14.0",
+ "regex",
+ "seahash",
+]
+
+[[package]]
 name = "ruff_python_ast"
 version = "0.0.0"
 source = "git+https://github.com/astral-sh/ruff/?rev=9bee8376a17401f9736b45fdefffb62edc2f1668#9bee8376a17401f9736b45fdefffb62edc2f1668"
@@ -2459,10 +2490,12 @@ dependencies = [
  "is-macro",
  "itertools 0.14.0",
  "memchr",
+ "ruff_cache",
  "ruff_python_trivia",
  "ruff_source_file",
  "ruff_text_size",
  "rustc-hash",
+ "serde",
  "thiserror 2.0.12",
 ]
 
@@ -2512,6 +2545,7 @@ version = "0.0.0"
 source = "git+https://github.com/astral-sh/ruff/?rev=9bee8376a17401f9736b45fdefffb62edc2f1668#9bee8376a17401f9736b45fdefffb62edc2f1668"
 dependencies = [
  "get-size2",
+ "serde",
 ]
 
 [[package]]
@@ -2554,9 +2588,9 @@ dependencies = [
 
 [[package]]
 name = "rustversion"
-version = "1.0.14"
+version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ffc183a10b4478d04cbbbfc96d0873219d962dd5accaff2ffbd4ceb7df837f4"
+checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "ryu"
@@ -2592,11 +2626,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "764cad9e7e1ca5fe15b552859ff5d96a314e6ed2934f2260168cd5dfa5891409"
 
 [[package]]
-name = "serde"
-version = "1.0.219"
+name = "seahash"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f0e2c6ed6606019b4e29e69dbaba95b11854410e5347d525002456dbbb786b6"
+checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
+
+[[package]]
+name = "serde"
+version = "1.0.225"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd6c24dee235d0da097043389623fb913daddf92c76e9f5a1db88607a0bcbd1d"
 dependencies = [
+ "serde_core",
  "serde_derive",
 ]
 
@@ -2635,10 +2676,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_derive"
-version = "1.0.219"
+name = "serde_core"
+version = "1.0.225"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b0276cf7f2c73365f7157c8123c21cd9a50fbbd844757af28ca1f5925fc2a00"
+checksum = "659356f9a0cb1e529b24c01e43ad2bdf520ec4ceaf83047b83ddcc2251f96383"
+dependencies = [
+ "serde_derive",
+]
+
+[[package]]
+name = "serde_derive"
+version = "1.0.225"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ea936adf78b1f766949a4977b91d2f5595825bd6ec079aa9543ad2685fc4516"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2647,14 +2697,15 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.140"
+version = "1.0.145"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20068b6e96dc6c9bd23e01df8827e6c7e1f2fddd43c21810382803c136b99373"
+checksum = "402a6f66d8c709116cf22f558eab210f5a50187f702eb4d7e5ef38d9a7f1c79c"
 dependencies = [
  "itoa 1.0.14",
  "memchr",
  "ryu 1.0.17",
  "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -3249,7 +3300,7 @@ dependencies = [
 
 [[package]]
 name = "tsp_types"
-version = "0.33.0"
+version = "0.35.0"
 dependencies = [
  "lsp-server",
  "lsp-types",

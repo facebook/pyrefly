@@ -7,8 +7,9 @@
 
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_python::symbol_kind::SymbolKind;
+use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
@@ -16,18 +17,18 @@ use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtAssign;
+use ruff_python_ast::StmtExpr;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::StmtReturn;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use starlark_map::Hashed;
 
+use crate::binding::binding::AnnAssignHasValue;
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::ExprOrBinding;
-use crate::binding::binding::Initialized;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
@@ -35,15 +36,13 @@ use crate::binding::binding::KeyExpect;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::RaisedException;
 use crate::binding::bindings::BindingsBuilder;
-use crate::binding::bindings::LookupKind;
-use crate::binding::bindings::MutableCaptureLookupKind;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
-use crate::binding::scope::ScopeKind;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
+use crate::export::definitions::MutableCaptureKind;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::export::special::SpecialExport;
@@ -54,6 +53,37 @@ use crate::types::special_form::SpecialForm;
 use crate::types::types::Type;
 
 impl<'a> BindingsBuilder<'a> {
+    fn assert(&mut self, assert_range: TextRange, mut test: Expr, msg: Option<Expr>) {
+        let test_range = test.range();
+        self.ensure_expr(&mut test, &mut Usage::Narrowing(None));
+        let narrow_ops = NarrowOps::from_expr(self, Some(&test));
+        let static_test = self.sys_info.evaluate_bool(&test);
+        self.insert_binding(Key::Anon(test_range), Binding::Expr(None, test));
+        if let Some(mut msg_expr) = msg {
+            let mut base = self.scopes.clone_current_flow();
+            // Negate the narrowing of the test expression when typechecking
+            // the error message, since we know the assertion was false
+            let negated_narrow_ops = narrow_ops.negate();
+            self.bind_narrow_ops(
+                &negated_narrow_ops,
+                msg_expr.range(),
+                &Usage::Narrowing(None),
+            );
+            let mut msg = self.declare_current_idx(Key::UsageLink(msg_expr.range()));
+            self.ensure_expr(&mut msg_expr, msg.usage());
+            let idx = self.insert_binding(
+                KeyExpect(msg_expr.range()),
+                BindingExpect::TypeCheckExpr(msg_expr),
+            );
+            self.insert_binding_current(msg, Binding::UsageLink(LinkedKey::Expect(idx)));
+            self.scopes.swap_current_flow_with(&mut base);
+        };
+        self.bind_narrow_ops(&narrow_ops, assert_range, &Usage::Narrowing(None));
+        if let Some(false) = static_test {
+            self.scopes.mark_flow_termination();
+        }
+    }
+
     fn bind_unimportable_names(&mut self, x: &StmtImportFrom, as_error: bool) {
         let any = if as_error {
             Type::any_error()
@@ -80,13 +110,8 @@ impl<'a> BindingsBuilder<'a> {
         make_binding: impl FnOnce(Option<Idx<KeyAnnotation>>) -> Binding,
     ) {
         let assigned = self.declare_current_idx(Key::Definition(ShortIdentifier::expr_name(name)));
-        // TODO(stroxler): It probably should be an error if the annotation is ever non-None
-        let (ann, default) = self.bind_current(&name.id, &assigned, FlowStyle::Other);
-        let mut binding = make_binding(ann);
-        // TODO(stroxler): It probably should be an error if the default is ever non-None
-        if let Some(default) = default {
-            binding = Binding::Default(default, Box::new(binding));
-        }
+        let ann = self.bind_current(&name.id, &assigned, FlowStyle::Other);
+        let binding = make_binding(ann);
         self.insert_binding_current(assigned, binding);
     }
 
@@ -203,73 +228,19 @@ impl<'a> BindingsBuilder<'a> {
         })
     }
 
-    fn declare_nonlocal_name(&mut self, name: &Identifier) {
-        let key = Key::MutableCapture(ShortIdentifier::new(name));
-        let binding =
-            match self.lookup_mutable_captured_name(&name.id, MutableCaptureLookupKind::Nonlocal) {
-                Ok(found) => Binding::Forward(found),
-                Err(error) => {
-                    self.error(
-                        name.range,
-                        ErrorInfo::Kind(ErrorKind::UnknownName),
-                        error.message(name),
-                    );
-                    Binding::Type(Type::any_error())
-                }
-            };
-        let binding_key = self.insert_binding(key, binding);
-
-        self.scopes.add_to_current_static(
-            name.id.clone(),
-            name.range,
-            SymbolKind::Variable,
-            None,
-            true,
-        );
-
-        self.bind_name(&name.id, binding_key, FlowStyle::Other);
-    }
-
-    fn declare_global_name(&mut self, name: &Identifier) {
-        let key = Key::MutableCapture(ShortIdentifier::new(name));
-        let binding =
-            match self.lookup_mutable_captured_name(&name.id, MutableCaptureLookupKind::Global) {
-                Ok(found) => Binding::Forward(found),
-                Err(error) => {
-                    self.error(
-                        name.range,
-                        ErrorInfo::Kind(ErrorKind::UnknownName),
-                        error.message(name),
-                    );
-                    Binding::Type(Type::any_error())
-                }
-            };
-        let binding_key = self.insert_binding(key, binding);
-
-        self.scopes.add_to_current_static(
-            name.id.clone(),
-            name.range,
-            SymbolKind::Variable,
-            None,
-            true,
-        );
-
-        self.bind_name(&name.id, binding_key, FlowStyle::Other);
-    }
-
     /// Bind the annotation in an `AnnAssign`
     pub fn bind_annotation(
         &mut self,
         name: &Identifier,
         annotation: &mut Expr,
-        is_initialized: Initialized,
+        is_initialized: AnnAssignHasValue,
     ) -> Idx<KeyAnnotation> {
         let ann_key = KeyAnnotation::Annotation(ShortIdentifier::new(name));
         self.ensure_type(annotation, &mut None);
         let ann_val = if let Some(special) = SpecialForm::new(&name.id, annotation) {
             // Special case `_: SpecialForm` declarations (this mainly affects some names declared in `typing.pyi`)
             BindingAnnotation::Type(
-                AnnotationTarget::Assign(name.id.clone(), Initialized::Yes),
+                AnnotationTarget::Assign(name.id.clone(), AnnAssignHasValue::Yes),
                 special.to_type(),
             )
         } else {
@@ -310,36 +281,25 @@ impl<'a> BindingsBuilder<'a> {
 
     /// Evaluate the statements and update the bindings.
     /// Every statement should end up in the bindings, perhaps with a location that is never used.
-    pub fn stmt(&mut self, x: Stmt) {
+    pub fn stmt(&mut self, x: Stmt, parent: &NestingContext) {
         match x {
             Stmt::FunctionDef(x) => {
-                self.function_def(x);
+                self.function_def(x, parent);
             }
-            Stmt::ClassDef(x) => self.class_def(x),
+            Stmt::ClassDef(x) => self.class_def(x, parent),
             Stmt::Return(x) => {
                 self.record_return(x);
             }
             Stmt::Delete(mut x) => {
                 for target in &mut x.targets {
-                    let mut delete_link = self.declare_current_idx(Key::UsageLink(target.range()));
+                    let mut delete_idx = self.declare_current_idx(Key::Delete(target.range()));
                     if let Expr::Name(name) = target {
-                        let idx = self.ensure_mutable_name(name, delete_link.usage());
-                        self.scopes.upsert_flow_info(
-                            Hashed::new(&name.id),
-                            idx,
-                            Some(FlowStyle::Uninitialized),
-                        );
+                        self.ensure_expr_name(name, delete_idx.usage());
+                        self.scopes.mark_as_deleted(&name.id);
                     } else {
-                        self.ensure_expr(target, delete_link.usage());
+                        self.ensure_expr(target, delete_idx.usage());
                     }
-                    let delete_idx = self.insert_binding(
-                        KeyExpect(target.range()),
-                        BindingExpect::Delete(target.clone()),
-                    );
-                    self.insert_binding_current(
-                        delete_link,
-                        Binding::UsageLink(LinkedKey::Expect(delete_idx)),
-                    );
+                    self.insert_binding_current(delete_idx, Binding::Delete(target.clone()));
                 }
             }
             Stmt::Assign(ref x)
@@ -385,6 +345,7 @@ impl<'a> BindingsBuilder<'a> {
                                 {
                                     self.synthesize_enum_def(
                                         name,
+                                        parent,
                                         &mut call.func,
                                         arg_name,
                                         members,
@@ -398,6 +359,7 @@ impl<'a> BindingsBuilder<'a> {
                                 {
                                     self.synthesize_typed_dict_def(
                                         name,
+                                        parent,
                                         &mut call.func,
                                         arg_name,
                                         members,
@@ -412,6 +374,7 @@ impl<'a> BindingsBuilder<'a> {
                                 {
                                     self.synthesize_typing_named_tuple_def(
                                         name,
+                                        parent,
                                         &mut call.func,
                                         arg_name,
                                         members,
@@ -425,6 +388,7 @@ impl<'a> BindingsBuilder<'a> {
                                 {
                                     self.synthesize_collections_named_tuple_def(
                                         name,
+                                        parent,
                                         &mut call.func,
                                         arg_name,
                                         members,
@@ -435,7 +399,12 @@ impl<'a> BindingsBuilder<'a> {
                             }
                             SpecialExport::NewType => {
                                 if let [new_type_name, base] = &mut *call.arguments.args {
-                                    self.synthesize_typing_new_type(name, new_type_name, base);
+                                    self.synthesize_typing_new_type(
+                                        name,
+                                        parent,
+                                        new_type_name,
+                                        base,
+                                    );
                                     return;
                                 }
                             }
@@ -474,8 +443,8 @@ impl<'a> BindingsBuilder<'a> {
                         &name,
                         &mut x.annotation,
                         match (&value, &maybe_ellipses) {
-                            (None, None) => Initialized::No,
-                            _ => Initialized::Yes,
+                            (None, None) => AnnAssignHasValue::No,
+                            _ => AnnAssignHasValue::Yes,
                         },
                     );
                     let canonical_ann_idx = match value {
@@ -495,12 +464,11 @@ impl<'a> BindingsBuilder<'a> {
                                     initial_value: maybe_ellipses,
                                 }
                             } else {
-                                // A flow style might be already set for the
-                                // name, e.g. if it was defined previously.
-                                // If so, we use that style; otherwise, the flow
-                                // style lookup would return an uninitialized
-                                // flow style, which is what we want here.
-                                self.scopes.get_flow_style(&name.id, false).clone()
+                                // A flow style might be already set for the name, e.g. if it was defined
+                                // already. Otherwise it is uninitialized.
+                                self.scopes
+                                    .current_flow_style(&name.id)
+                                    .unwrap_or(FlowStyle::Uninitialized)
                             },
                         ),
                     };
@@ -565,12 +533,15 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     // Try and continue as much as we can, by throwing away the type or just binding to error
                     match x.value {
-                        Some(value) => self.stmt(Stmt::Assign(StmtAssign {
-                            node_index: AtomicNodeIndex::dummy(),
-                            range: x.range,
-                            targets: vec![target],
-                            value,
-                        })),
+                        Some(value) => self.stmt(
+                            Stmt::Assign(StmtAssign {
+                                node_index: AtomicNodeIndex::dummy(),
+                                range: x.range,
+                                targets: vec![target],
+                                value,
+                            }),
+                            parent,
+                        ),
                         None => {
                             self.bind_target_no_expr(&mut target, &|_| {
                                 Binding::Type(Type::any_error())
@@ -582,22 +553,13 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::AugAssign(mut x) => {
                 match x.target.as_ref() {
                     Expr::Name(name) => {
-                        // TODO(stroxler): Is this really a good key for an augmented assignment?
-                        // It works okay for type checking, but might have weird effects on the IDE.
                         let mut assigned = self
                             .declare_current_idx(Key::Definition(ShortIdentifier::expr_name(name)));
-                        // Ensure the target name, which must already be in scope (it is part of the implicit dunder method call
-                        // used in augmented assignment).
-                        self.ensure_mutable_name(name, assigned.usage());
+                        // Make sure the name is already initialized - it's current value is part of AugAssign semantics.
+                        self.ensure_expr_name(name, assigned.usage());
                         self.ensure_expr(&mut x.value, assigned.usage());
-                        // TODO(stroxler): Should we really be using `bind_key` here? This will update the
-                        // flow info to define the name, even if it was not previously defined.
-                        let (ann, default) =
-                            self.bind_current(&name.id, &assigned, FlowStyle::Other);
-                        let mut binding = Binding::AugAssign(ann, x.clone());
-                        if let Some(default) = default {
-                            binding = Binding::Default(default, Box::new(binding));
-                        }
+                        let ann = self.bind_current(&name.id, &assigned, FlowStyle::Other);
+                        let binding = Binding::AugAssign(ann, x.clone());
                         self.insert_binding_current(assigned, binding);
                     }
                     Expr::Attribute(attr) => {
@@ -630,10 +592,7 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             Stmt::TypeAlias(mut x) => {
-                if !matches!(
-                    self.scopes.current().kind,
-                    ScopeKind::Module | ScopeKind::Class(_)
-                ) {
+                if !self.scopes.in_module_or_class_top_level() {
                     self.error(
                         x.range,
                         ErrorInfo::Kind(ErrorKind::InvalidSyntax),
@@ -677,11 +636,11 @@ impl<'a> BindingsBuilder<'a> {
                 // Note that we set up the loop *after* the header is fully bound, because the
                 // loop iterator is only evaluated once before the loop begins.
                 self.setup_loop(x.range, &NarrowOps::new());
-                self.stmts(x.body);
-                self.teardown_loop(x.range, &NarrowOps::new(), x.orelse);
+                self.stmts(x.body, parent);
+                self.teardown_loop(x.range, &NarrowOps::new(), x.orelse, parent);
             }
             Stmt::While(mut x) => {
-                self.ensure_expr(&mut x.test, &mut Usage::Narrowing);
+                self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
                 self.setup_loop(x.range, &narrow_ops);
                 // Note that it is important we ensure *after* we set up the loop, so that both the
@@ -689,8 +648,8 @@ impl<'a> BindingsBuilder<'a> {
                 // made in the loop (e.g. if we reassign the test variable).
                 // Typecheck the test condition during solving.
                 self.insert_binding(KeyExpect(x.test.range()), BindingExpect::Bool(*x.test));
-                self.stmts(x.body);
-                self.teardown_loop(x.range, &narrow_ops, x.orelse);
+                self.stmts(x.body, parent);
+                self.teardown_loop(x.range, &narrow_ops, x.orelse, parent);
             }
             Stmt::If(x) => {
                 let range = x.range;
@@ -714,12 +673,12 @@ impl<'a> BindingsBuilder<'a> {
                     if this_branch_chosen == Some(false) {
                         // We definitely won't pick this branch. We still ensure the test
                         // expression to pick up any names it defines.
-                        self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing);
+                        self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing(None));
                         continue;
                     }
-                    self.bind_narrow_ops(&negated_prev_ops, range);
+                    self.bind_narrow_ops(&negated_prev_ops, range, &Usage::Narrowing(None));
                     let mut base = self.scopes.clone_current_flow();
-                    self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing);
+                    self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing(None));
                     let new_narrow_ops = NarrowOps::from_expr(self, test.as_ref());
                     if let Some(test_expr) = test {
                         // Typecheck the test condition during solving.
@@ -730,9 +689,9 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         implicit_else = false;
                     }
-                    self.bind_narrow_ops(&new_narrow_ops, range);
+                    self.bind_narrow_ops(&new_narrow_ops, range, &Usage::Narrowing(None));
                     negated_prev_ops.and_all(new_narrow_ops.negate());
-                    self.stmts(body);
+                    self.stmts(body, parent);
                     self.scopes.swap_current_flow_with(&mut base);
                     branches.push(base);
                     if this_branch_chosen == Some(true) {
@@ -753,7 +712,11 @@ impl<'a> BindingsBuilder<'a> {
                         // from the previous branches into the flow env.
                         // Note, using a default use_range is OK. The range is only needed to make the
                         // key distinct from other keys.
-                        self.bind_narrow_ops(&negated_prev_ops, TextRange::default());
+                        self.bind_narrow_ops(
+                            &negated_prev_ops,
+                            TextRange::default(),
+                            &Usage::Narrowing(None),
+                        );
                     }
                     self.merge_branches_into_current(branches, range);
                 }
@@ -785,10 +748,10 @@ impl<'a> BindingsBuilder<'a> {
                         );
                     }
                 }
-                self.stmts(x.body);
+                self.stmts(x.body, parent);
             }
             Stmt::Match(x) => {
-                self.stmt_match(x);
+                self.stmt_match(x, parent);
             }
             Stmt::Raise(x) => {
                 if let Some(mut exc) = x.exc {
@@ -823,8 +786,8 @@ impl<'a> BindingsBuilder<'a> {
                 //   |                     ^
                 //   ----> handler --------|
 
-                self.stmts(x.body);
-                self.stmts(x.orelse);
+                self.stmts(x.body, parent);
+                self.stmts(x.orelse, parent);
                 self.scopes.swap_current_flow_with(&mut base);
                 branches.push(base);
 
@@ -866,29 +829,16 @@ impl<'a> BindingsBuilder<'a> {
                         (None, None) => {}
                     }
 
-                    self.stmts(h.body);
+                    self.stmts(h.body, parent);
 
                     if let Some(name) = &h.name {
-                        // Mark the current caught exception name as
-                        // uninitialized in the current scope, so that it cannot
-                        // be used later.
+                        // Handle the implicit delete Python performs at the end of the `except` clause.
+                        //
+                        // Note that because there is no scoping, even if the name was defined above the
+                        // try/except, it will be unbound below whenever that name was used for a handler.
+                        //
                         // https://docs.python.org/3/reference/compound_stmts.html#except-clause
-                        let idx = self.lookup_name(
-                            Hashed::new(&name.id),
-                            LookupKind::Regular,
-                            &mut Usage::MutableLookup,
-                        );
-                        if let Ok(idx) = idx {
-                            self.scopes.upsert_flow_info(
-                                Hashed::new(&name.id),
-                                idx,
-                                Some(FlowStyle::Uninitialized),
-                            );
-                        } else {
-                            panic!(
-                                "Should have found the exception name `{name}` in the current scope"
-                            );
-                        }
+                        self.scopes.mark_as_deleted(&name.id);
                     }
 
                     self.scopes.swap_current_flow_with(&mut base);
@@ -896,34 +846,10 @@ impl<'a> BindingsBuilder<'a> {
                 }
 
                 self.set_current_flow_to_merged_branches(branches, range);
-                self.stmts(x.finalbody);
+                self.stmts(x.finalbody, parent);
             }
-            Stmt::Assert(mut x) => {
-                let assert_range = x.range();
-                let test_range = x.test.range();
-                self.ensure_expr(&mut x.test, &mut Usage::Narrowing);
-                let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
-                let static_test = self.sys_info.evaluate_bool(&x.test);
-                self.insert_binding(Key::Anon(test_range), Binding::Expr(None, *x.test));
-                if let Some(mut msg_expr) = x.msg {
-                    let mut base = self.scopes.clone_current_flow();
-                    // Negate the narrowing of the test expression when typechecking
-                    // the error message, since we know the assertion was false
-                    let negated_narrow_ops = narrow_ops.negate();
-                    self.bind_narrow_ops(&negated_narrow_ops, msg_expr.range());
-                    let mut msg = self.declare_current_idx(Key::UsageLink(msg_expr.range()));
-                    self.ensure_expr(&mut msg_expr, msg.usage());
-                    let idx = self.insert_binding(
-                        KeyExpect(msg_expr.range()),
-                        BindingExpect::TypeCheckExpr(*msg_expr),
-                    );
-                    self.insert_binding_current(msg, Binding::UsageLink(LinkedKey::Expect(idx)));
-                    self.scopes.swap_current_flow_with(&mut base);
-                };
-                self.bind_narrow_ops(&narrow_ops, assert_range);
-                if let Some(false) = static_test {
-                    self.scopes.mark_flow_termination();
-                }
+            Stmt::Assert(x) => {
+                self.assert(x.range(), *x.test, x.msg.map(|m| *m));
             }
             Stmt::Import(x) => {
                 for x in x.names {
@@ -946,15 +872,7 @@ impl<'a> BindingsBuilder<'a> {
                         }
                         None => {
                             let first = m.first_component();
-                            let flow_info = self.scopes.current().flow.info.get(&first);
-                            let module_key = match flow_info {
-                                Some(flow_info)
-                                    if matches!(flow_info.style, FlowStyle::MergeableImport(_)) =>
-                                {
-                                    Some(flow_info.key)
-                                }
-                                _ => None,
-                            };
+                            let module_key = self.scopes.existing_module_import_at(&first);
                             let key = self.insert_binding(
                                 Key::Import(first.clone(), x.name.range),
                                 Binding::Module(m, vec![first.clone()], module_key),
@@ -1096,13 +1014,40 @@ impl<'a> BindingsBuilder<'a> {
             }
             Stmt::Global(x) => {
                 for name in x.names {
-                    self.declare_global_name(&name);
+                    self.declare_mutable_capture(&name, MutableCaptureKind::Global);
                 }
             }
             Stmt::Nonlocal(x) => {
                 for name in x.names {
-                    self.declare_nonlocal_name(&name);
+                    self.declare_mutable_capture(&name, MutableCaptureKind::Nonlocal);
                 }
+            }
+            Stmt::Expr(StmtExpr {
+                range: expr_range,
+                value:
+                    box Expr::Call(ExprCall {
+                        range: call_range,
+                        func: box Expr::Name(name),
+                        arguments:
+                            Arguments {
+                                range: _,
+                                keywords: _,
+                                args,
+                                ..
+                            },
+                        ..
+                    }),
+                ..
+            }) if name.id.as_str() == "prod_assert" && (args.len() == 1 || args.len() == 2) => {
+                let (test, msg) = if args.len() == 1 {
+                    (args[0].clone(), None)
+                } else if args.len() == 2 {
+                    (args[0].clone(), Some(args[1].clone()))
+                } else {
+                    unreachable!("args.len() can only be 1 or 2")
+                };
+                self.insert_binding(Key::StmtExpr(expr_range), Binding::Type(Type::None));
+                self.assert(call_range, test, msg);
             }
             Stmt::Expr(mut x) => {
                 let mut current = self.declare_current_idx(Key::StmtExpr(x.value.range()));

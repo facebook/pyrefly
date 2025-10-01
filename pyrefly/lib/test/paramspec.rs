@@ -401,7 +401,7 @@ testcase!(
     r#"
 from typing import Callable, Concatenate
 
-X = Callable[Concatenate[int, "oops"], int]  # E: Expected a `ParamSpec`  # E: Expected a type form
+X = Callable[Concatenate[int, "oops"], int]  # E: Expected a `ParamSpec`  # E: Could not find name `oops`
 
 def f(x: X, y):
     x(0)

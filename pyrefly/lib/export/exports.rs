@@ -24,6 +24,7 @@ use starlark_map::small_set::SmallSet;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
 use crate::export::definitions::DunderAllEntry;
+use crate::export::special::SpecialExport;
 use crate::graph::calculation::Calculation;
 use crate::module::module_info::ModuleInfo;
 use crate::state::loader::FindError;
@@ -40,6 +41,7 @@ pub struct Export {
     pub symbol_kind: Option<SymbolKind>,
     pub docstring_range: Option<TextRange>,
     pub is_deprecated: bool,
+    pub special_export: Option<SpecialExport>,
 }
 
 /// Where is this export defined?
@@ -90,7 +92,7 @@ impl Exports {
             module_info.path().is_init(),
             sys_info,
         );
-        definitions.inject_globals();
+        definitions.inject_implicit_globals();
         definitions.ensure_dunder_all(module_info.path().style());
         if module_info.name() == ModuleName::builtins() {
             // The `builtins` module is a bit weird. It has no `__all__` in TypeShed,
@@ -159,25 +161,37 @@ impl Exports {
             let mut result: SmallMap<Name, ExportLocation> = SmallMap::new();
             for (name, definition) in self.0.definitions.definitions.iter_hashed() {
                 let is_deprecated = self.0.definitions.deprecated.contains_hashed(name);
+                let special_export = self.0.definitions.special_exports.get_hashed(name).copied();
                 let export = match &definition.style {
-                    DefinitionStyle::Local(symbol_kind) => ExportLocation::ThisModule(Export {
-                        location: definition.range,
-                        symbol_kind: Some(*symbol_kind),
-                        docstring_range: definition.docstring_range,
-                        is_deprecated,
-                    }),
-                    // If the import is invalid, the final location is this module.
-                    DefinitionStyle::ImportInvalidRelative => ExportLocation::ThisModule(Export {
+                    DefinitionStyle::Annotated(symbol_kind, ..)
+                    | DefinitionStyle::Unannotated(symbol_kind) => {
+                        ExportLocation::ThisModule(Export {
+                            location: definition.range,
+                            symbol_kind: Some(*symbol_kind),
+                            docstring_range: definition.docstring_range,
+                            is_deprecated,
+                            special_export,
+                        })
+                    }
+                    // The final location is this module in several edge cases that can occur analyzing invalid code:
+                    // - An invalid import
+                    // - A variable defined only by a `del` statement but never initialized
+                    // - A mutable capture at the top-level
+                    DefinitionStyle::ImportInvalidRelative
+                    | DefinitionStyle::Delete
+                    | DefinitionStyle::MutableCapture(..) => ExportLocation::ThisModule(Export {
                         location: definition.range,
                         symbol_kind: None,
                         docstring_range: definition.docstring_range,
                         is_deprecated,
+                        special_export,
                     }),
-                    DefinitionStyle::Global => ExportLocation::ThisModule(Export {
+                    DefinitionStyle::ImplicitGlobal => ExportLocation::ThisModule(Export {
                         location: definition.range,
                         symbol_kind: Some(SymbolKind::Constant),
                         docstring_range: None,
                         is_deprecated,
+                        special_export,
                     }),
                     DefinitionStyle::ImportAs(from, name) => {
                         ExportLocation::OtherModule(*from, Some(name.clone()))

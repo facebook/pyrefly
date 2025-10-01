@@ -121,7 +121,7 @@ impl InitArgs {
         error_count: usize,
     ) -> anyhow::Result<CommandExitStatus> {
         let prompt = format!(
-            "Found {error_count} errors.We can add suppression comments (e.g., `pyrefly: ignore`) to silence them for you. Would you like to suppress them? (y/N): "
+            "Found {error_count} errors. We can add suppression comments (e.g., `pyrefly: ignore`) to silence them for you. Would you like to suppress them? (y/N): "
         );
 
         if Self::prompt_user_confirmation(&prompt) {

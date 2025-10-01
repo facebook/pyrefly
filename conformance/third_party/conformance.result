@@ -17,16 +17,11 @@
     "Line 50: Expected 1 errors",
     "Line 51: Expected 1 errors",
     "Line 52: Expected 1 errors",
+    "Line 63: Expected 1 errors",
+    "Line 69: Expected 1 errors",
     "Line 72: Expected 1 errors",
     "Line 75: Expected 1 errors",
-    "Line 30: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveTuple']`\"]",
-    "Line 42: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveMapping']`\"]",
-    "Line 58: Unexpected errors ['Expected a type form, got instance of `_SpecialForm`']",
-    "Line 59: Unexpected errors ['`type[list[Unknown]]` is not subscriptable']",
-    "Line 62: Unexpected errors ['`type[list[Unknown]]` is not subscriptable']",
-    "Line 65: Unexpected errors ['Expected a type form, got instance of `_SpecialForm`']",
-    "Line 67: Unexpected errors ['`type[list[Unknown]]` is not subscriptable']",
-    "Line 68: Unexpected errors ['`type[list[Unknown]]` is not subscriptable']"
+    "Line 42: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveMapping']`\"]"
   ],
   "aliases_type_statement.py": [
     "Line 82: Expected 1 errors",
@@ -197,9 +192,7 @@
   "generics_syntax_scoping.py": [
     "Line 92: Expected 1 errors",
     "Line 95: Expected 1 errors",
-    "Line 98: Expected 1 errors",
-    "Line 66: Unexpected errors ['Found `S`, but it was not the global scope']",
-    "Line 67: Unexpected errors ['assert_type(Any, int) failed']"
+    "Line 98: Expected 1 errors"
   ],
   "generics_type_erasure.py": [],
   "generics_typevartuple_args.py": [],
@@ -218,9 +211,7 @@
     "Line 157: Unexpected errors ['assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed']"
   ],
   "generics_typevartuple_unpack.py": [],
-  "generics_upper_bound.py": [
-    "Line 51: Expected 1 errors"
-  ],
+  "generics_upper_bound.py": [],
   "generics_variance.py": [
     "Line 77: Expected 1 errors",
     "Line 81: Expected 1 errors",
@@ -241,11 +232,7 @@
     "Line 71: Unexpected errors ['`@` is not supported between `Matrix[Literal[2], Literal[3]]` and `Matrix[Literal[3], Literal[7]]`\\n  Argument `Matrix[Literal[3], Literal[7]]` is not assignable to parameter `other` with type `Matrix[Literal[3], int]` in function `Matrix.__matmul__`']",
     "Line 72: Unexpected errors ['assert_type(Matrix[Literal[2], int], Matrix[Literal[2], Literal[7]]) failed']"
   ],
-  "literals_literalstring.py": [
-    "Line 120: Expected 1 errors",
-    "Line 111: Unexpected errors [\"assert_type(str, Literal['hello']) failed\"]",
-    "Line 116: Unexpected errors ['assert_type(str, LiteralString) failed']"
-  ],
+  "literals_literalstring.py": [],
   "literals_parameterizations.py": [],
   "literals_semantics.py": [],
   "namedtuples_define_class.py": [],
@@ -300,9 +287,7 @@
     "Line 135: Expected 1 errors",
     "Line 165: Expected 1 errors"
   ],
-  "protocols_generic.py": [
-    "Line 144: Unexpected errors ['`ConcreteHasProperty1` is not assignable to `HasPropertyProto`']"
-  ],
+  "protocols_generic.py": [],
   "protocols_merging.py": [
     "Line 82: Expected 1 errors"
   ],
@@ -315,10 +300,7 @@
     "Line 92: Expected 1 errors",
     "Line 96: Expected 1 errors"
   ],
-  "protocols_self.py": [
-    "Line 32: Unexpected errors ['`One` is not assignable to variable `c` with type `Copyable`']",
-    "Line 33: Unexpected errors ['`Other` is not assignable to variable `c` with type `Copyable`']"
-  ],
+  "protocols_self.py": [],
   "protocols_subtyping.py": [],
   "protocols_variance.py": [
     "Line 21: Expected 1 errors",

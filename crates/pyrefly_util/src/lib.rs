@@ -40,6 +40,7 @@ pub mod forgetter;
 pub mod fs_anyhow;
 pub mod gas;
 pub mod globs;
+pub mod includes;
 pub mod lined_buffer;
 pub mod lock;
 pub mod locked_map;
@@ -59,6 +60,7 @@ pub mod uniques;
 pub mod upgrade_lock;
 pub mod upward_search;
 pub mod visit;
+pub mod watch_pattern;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod watcher;
 pub mod with_hash;

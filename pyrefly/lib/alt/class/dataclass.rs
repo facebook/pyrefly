@@ -10,6 +10,7 @@ use std::sync::Arc;
 use pyrefly_python::dunder;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
+use ruff_python_ast::Expr::EllipsisLiteral;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
@@ -223,13 +224,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         let mut init = map.get_bool(&DataclassFieldKeywords::INIT);
-        let default = [
+        let mut default = [
             &DataclassFieldKeywords::DEFAULT,
             &DataclassFieldKeywords::DEFAULT_FACTORY,
             &DataclassFieldKeywords::FACTORY,
         ]
         .iter()
         .any(|k| map.0.contains_key(*k));
+
+        if !default && dataclass_metadata.default_can_be_positional {
+            // Check whether a default was passed positionally. This is needed for `pydantic.Field`.
+            default = !matches!(args.args.first(), Some(EllipsisLiteral(_)) | None);
+        }
+
         let mut kw_only = map.get_bool(&DataclassFieldKeywords::KW_ONLY);
 
         let mut alias = if dataclass_metadata.class_validation_flags.validate_by_alias {
@@ -384,7 +391,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let callable = self.constructor_to_callable(&instance);
                 &self.distribute_over_union(&callable, |ty| {
                     if let Type::BoundMethod(m) = ty {
-                        self.bind_boundmethod(m).unwrap_or_else(|| ty.clone())
+                        self.bind_boundmethod(m, &mut |a, b| self.is_subset_eq(a, b))
+                            .unwrap_or_else(|| ty.clone())
                     } else {
                         ty.clone()
                     }

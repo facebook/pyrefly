@@ -18,7 +18,6 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::lock::Mutex;
-use pyrefly_util::recurser::Recurser;
 use pyrefly_util::uniques::UniqueFactory;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
@@ -47,6 +46,7 @@ use crate::graph::index::Idx;
 use crate::graph::index_map::IndexMap;
 use crate::module::module_info::ModuleInfo;
 use crate::solver::solver::Solver;
+use crate::solver::solver::VarRecurser;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::key_to_intermediate_definition;
 use crate::table;
@@ -104,7 +104,6 @@ pub struct Answers {
     table: AnswerTable,
     index: Option<Arc<Mutex<Index>>>,
     trace: Option<Mutex<Traces>>,
-    infer_with_first_use: bool,
 }
 
 pub type AnswerEntry<K> = IndexMap<K, Calculation<Arc<<K as Keyed>::Answer>, Var>>;
@@ -327,7 +326,7 @@ impl Solutions {
 }
 
 pub trait LookupAnswer: Sized {
-    /// Look up the value. If present, the `path` is a hint which can optimise certain cases.
+    /// Look up the value. If present, the `path` is a hint which can optimize certain cases.
     ///
     /// Return None if the file is undergoing concurrent modification.
     fn get<K: Solve<Self> + Exported>(
@@ -349,7 +348,6 @@ impl Answers {
         solver: Solver,
         enable_index: bool,
         enable_trace: bool,
-        infer_with_first_use: bool,
     ) -> Self {
         fn presize<K: Keyed>(items: &mut AnswerEntry<K>, bindings: &Bindings)
         where
@@ -379,16 +377,11 @@ impl Answers {
             table,
             index,
             trace,
-            infer_with_first_use,
         }
     }
 
     pub fn table(&self) -> &AnswerTable {
         &self.table
-    }
-
-    pub fn infer_with_first_use(&self) -> bool {
-        self.infer_with_first_use
     }
 
     #[expect(dead_code)]
@@ -436,7 +429,7 @@ impl Answers {
                 }
             }
         }
-        let recurser = &Recurser::new();
+        let recurser = &VarRecurser::new();
         let thread_state = &ThreadState::new();
         let answers_solver = AnswersSolver::new(
             answers,
@@ -528,7 +521,7 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        let recurser = &Recurser::new();
+        let recurser = &VarRecurser::new();
         let solver = AnswersSolver::new(
             answers,
             self,
@@ -684,6 +677,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             for AttrInfo {
                 name: _,
                 ty: _,
+                is_deprecated: _,
                 definition,
             } in self.completions(base.clone(), Some(attribute_name), false)
             {

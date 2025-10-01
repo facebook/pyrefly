@@ -9,6 +9,8 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::thread::sleep;
+use std::time::Duration;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
@@ -19,6 +21,7 @@ use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
 
 use crate::config::config::ConfigFile;
@@ -98,7 +101,7 @@ fn test_multiple_path() {
             ModulePath::memory(PathBuf::from(path)),
         );
     }
-    config.source_db = Some(ArcId::new(Box::new(sourcedb)));
+    config.source_db = Some(Arc::new(Box::new(sourcedb)));
     config.configure();
     let config = ArcId::new(config);
 
@@ -200,4 +203,79 @@ fn test_crash_on_search() {
     t.search_exports_exact("x");
     eprintln!("Second search");
     t.search_exports_exact("x");
+}
+
+const SEQUENTIAL_COMMITTABLE_TRANSACTIONS_SLEEP_TIME_MS: u64 = 100;
+
+#[test]
+fn test_sequential_committable_transactions() {
+    let mut t = TestEnv::new();
+    t.add("foo", "x = 1");
+    let (state, _) = t.to_state();
+    let state = Arc::new(state);
+    let state1 = state.dupe();
+    let state2 = state.dupe();
+    let state3 = state.dupe();
+    let state4 = state.dupe();
+    let state5 = state.dupe();
+    let counter = Arc::new(Mutex::new(0));
+    let counter1 = counter.dupe();
+    let counter2 = counter.dupe();
+    let counter3 = counter.dupe();
+    let counter4 = counter.dupe();
+    let counter5 = counter.dupe();
+
+    /// This function is called in many separate threads.
+    /// We want to make sure that state only allow one committable transaction at a time.
+    /// We will indirectly verify this by having each thread increment a shared counter twice
+    /// during the transaction. Due to the exclusivity of the transaction, we should never be able
+    /// to observe that the counter has an odd value.
+    fn do_work_and_verify(state: Arc<State>, counter: Arc<Mutex<usize>>) {
+        let t = state.new_committable_transaction(Require::Exports, None);
+        let initial_value = {
+            let mut lock = counter.lock();
+            let v = *lock;
+            assert!(v % 2 == 0);
+            *lock += 1;
+            v
+        };
+        sleep(Duration::from_millis(
+            SEQUENTIAL_COMMITTABLE_TRANSACTIONS_SLEEP_TIME_MS,
+        ));
+        {
+            let mut lock = counter.lock();
+            let v = *lock;
+            *lock += 1;
+            assert_eq!(initial_value + 1, v);
+            v
+        };
+        state.commit_transaction(t);
+    }
+
+    // We rapidly spin up 5 threads, each of which will increment the counter twice.
+    let t1 = std::thread::spawn(move || {
+        do_work_and_verify(state1, counter1);
+    });
+    let t2 = std::thread::spawn(move || {
+        do_work_and_verify(state2, counter2);
+    });
+    let t3 = std::thread::spawn(move || {
+        do_work_and_verify(state3, counter3);
+    });
+    let t4 = std::thread::spawn(move || {
+        do_work_and_verify(state4, counter4);
+    });
+    let t5 = std::thread::spawn(move || {
+        do_work_and_verify(state5, counter5);
+    });
+
+    t1.join().unwrap();
+    t2.join().unwrap();
+    t3.join().unwrap();
+    t4.join().unwrap();
+    t5.join().unwrap();
+
+    // When we are here, we are sure that there is no deadlock.
+    let lock = counter.lock();
+    assert_eq!(10, *lock);
 }

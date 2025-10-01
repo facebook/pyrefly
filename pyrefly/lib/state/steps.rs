@@ -170,7 +170,7 @@ impl Step {
         ast: Arc<ModModule>,
         exports: Exports,
     ) -> Arc<(Bindings, Arc<Answers>)> {
-        let solver = Solver::new();
+        let solver = Solver::new(ctx.infer_with_first_use);
         let enable_index = ctx.require.keep_index();
         let enable_trace = ctx.require.keep_answers_trace();
         let bindings = Bindings::new(
@@ -185,13 +185,7 @@ impl Step {
             enable_trace,
             ctx.untyped_def_behavior,
         );
-        let answers = Answers::new(
-            &bindings,
-            solver,
-            enable_index,
-            enable_trace,
-            ctx.infer_with_first_use,
-        );
+        let answers = Answers::new(&bindings, solver, enable_index, enable_trace);
         Arc::new((bindings, Arc::new(answers)))
     }
 

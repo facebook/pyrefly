@@ -18,7 +18,7 @@ use ruff_text_size::TextRange;
 use crate::module::Module;
 
 /// An identifier, where we can drop the `Name` part because it came from a `Module`.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ShortIdentifier(TextRange);
 
 impl ShortIdentifier {
@@ -29,6 +29,21 @@ impl ShortIdentifier {
     pub fn expr_name(x: &ExprName) -> Self {
         // Not represented as an Identifier, but literally in the source code in the same way
         Self(x.range)
+    }
+}
+
+impl PartialOrd for ShortIdentifier {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ShortIdentifier {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.0.start().cmp(&other.0.start()) {
+            std::cmp::Ordering::Equal => self.0.end().cmp(&other.0.end()),
+            ord => ord,
+        }
     }
 }
 

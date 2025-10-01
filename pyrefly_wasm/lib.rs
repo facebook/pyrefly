@@ -8,10 +8,9 @@
 // Things we disagree with
 #![allow(clippy::new_without_default)]
 
-use std::collections::HashMap;
-
 use pyrefly::playground::Playground;
 use pyrefly::playground::Position;
+use starlark_map::small_map::SmallMap;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -27,11 +26,14 @@ impl State {
     }
 
     #[wasm_bindgen(js_name=updateSandboxFiles)]
-    pub fn update_sandbox_files(&mut self, files: JsValue) -> Result<(), JsValue> {
-        let files_map: HashMap<String, String> = serde_wasm_bindgen::from_value(files)
-            .map_err(|e| JsValue::from_str(&format!("Failed to deserialize files: {}", e)))?;
-        self.0.update_sandbox_files(files_map);
-        Ok(())
+    pub fn update_sandbox_files(
+        &mut self,
+        files: JsValue,
+        force_update: bool,
+    ) -> Result<Option<String>, JsValue> {
+        let files_map: SmallMap<String, String> = serde_wasm_bindgen::from_value(files)
+            .map_err(|e| JsValue::from_str(&format!("Failed to deserialize files: {e}")))?;
+        Ok(self.0.update_sandbox_files(files_map, force_update))
     }
 
     #[wasm_bindgen(js_name=updateSingleFile)]

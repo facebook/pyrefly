@@ -6,6 +6,7 @@
  */
 
 use std::ffi::OsString;
+use std::iter;
 use std::mem;
 use std::path::Path;
 use std::sync::Arc;
@@ -17,6 +18,7 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
+use pyrefly_util::upward_search::FileGroup;
 use pyrefly_util::upward_search::UpwardSearch;
 use tracing::Level;
 use tracing::debug;
@@ -26,6 +28,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::config::ConfigFile;
+use crate::config::ConfigSource;
 use crate::error_kind::Severity;
 
 pub struct ConfigError {
@@ -153,12 +156,28 @@ impl ConfigFinder {
         let errors2 = errors.dupe();
 
         Self {
-            search: UpwardSearch::new(
-                ConfigFile::CONFIG_FILE_NAMES
-                    .iter()
-                    .chain(ConfigFile::ADDITIONAL_ROOT_FILE_NAMES)
-                    .map(OsString::from)
-                    .collect(),
+            search: UpwardSearch::new_grouped(
+                vec![
+                    // Prefer config files with actual Pyrefly configuration contents
+                    // over any marker file types. For `pyproject.toml`, this requires
+                    // a `[tool.pyrefly]` section (even if empty).
+                    FileGroup::new(
+                        ConfigFile::CONFIG_FILE_NAMES
+                            .iter()
+                            .map(OsString::from)
+                            .collect(),
+                        |c: &ArcId<ConfigFile>| matches!(c.source, ConfigSource::File(_)),
+                    ),
+                    // Perform a fallback search, taking any marker files that we can
+                    // find. For `pyproject.toml`, no `[tool.pyrefly]` is required
+                    // (though the previous search group would have ruled that out already).
+                    FileGroup::new_simple(
+                        iter::once(&ConfigFile::PYPROJECT_FILE_NAME)
+                            .chain(ConfigFile::ADDITIONAL_ROOT_FILE_NAMES)
+                            .map(OsString::from)
+                            .collect(),
+                    ),
+                ],
                 move |x| {
                     let (v, errors) = load(x);
                     errors2.lock().extend(errors);
@@ -188,12 +207,23 @@ impl ConfigFinder {
         self.errors.lock().extend(errors);
     }
 
-    /// Get the config file associated with a directory.
+    /// Get the config file associated with a (non-Python) file. If no config exists
+    /// on disk, return `None`.
+    ///
+    /// When searching for a config for a Python file, prefer [`Self::python_file`],
+    /// which will construct a synthetic config.
+    pub fn file(&self, file: &Path) -> Option<ArcId<ConfigFile>> {
+        self.directory(file.parent()?)
+    }
+
+    /// Get the config file associated with a directory. If no config exists on disk,
+    /// returns `None`.
     pub fn directory(&self, dir: &Path) -> Option<ArcId<ConfigFile>> {
         self.search.directory(dir)
     }
 
-    /// Get the config file given a Python file.
+    /// Get the config file given a Python file. If no config exists on disk, one will be
+    /// constructed.
     pub fn python_file(&self, name: ModuleName, path: &ModulePath) -> ArcId<ConfigFile> {
         match (self.before)(name, path) {
             Ok(Some(x)) => return x,

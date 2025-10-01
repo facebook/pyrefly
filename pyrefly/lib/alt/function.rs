@@ -466,6 +466,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self_type: &mut Option<Type>,
         errors: &ErrorCollector,
     ) -> (Type, Required) {
+        // We only want to use self for the first param, so take & replace with None
+        let self_type = std::mem::take(self_type);
         let (ty, required) = match self.bindings().get_function_param(name) {
             FunctionParameter::Annotated(idx) => {
                 // If the parameter is annotated, we check the default value against the annotation
@@ -489,17 +491,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // are also Var. If a default value of type T is provided, it will resolve to Any | T.
                 // Otherwise, it will be forced to Any
                 if let Some(ty) = self_type {
-                    self.is_subset_eq(&var.to_type(), ty);
+                    self.solver().solve_parameter(*var, ty);
                 } else if let Required::Optional(Some(default_ty)) = &required {
-                    self.is_subset_eq(
-                        &self.union(Type::any_implicit(), default_ty.clone()),
-                        &var.to_type(),
+                    self.solver().solve_parameter(
+                        *var,
+                        self.union(
+                            Type::any_implicit(),
+                            default_ty.clone().promote_literals(self.stdlib),
+                        ),
                     );
                 }
                 (self.solver().force_var(*var), required)
             }
         };
-        *self_type = None; // Stop using `self` type solve Var params after the first param.
         (ty, required)
     }
 
@@ -611,7 +615,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 paramspec_kwargs = Some(q.clone());
             }
 
-            if let Type::Unpack(box Type::TypedDict(typed_dict)) = &ty {
+            if let Type::Unpack(unpack) = &ty
+                && let Type::TypedDict(typed_dict) = &**unpack
+            {
                 for (name, _) in self.typed_dict_fields(typed_dict) {
                     if params.iter().any(|param| {
                         matches!(
@@ -820,7 +826,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 let call_attr = self.instance_as_dunder_call(&cls).and_then(|call_attr| {
                     if let Type::BoundMethod(m) = call_attr {
-                        Some(self.bind_boundmethod(&m).unwrap_or(m.func.as_type()))
+                        Some(
+                            self.bind_boundmethod(&m, &mut |a, b| self.is_subset_eq(a, b))
+                                .unwrap_or(m.func.as_type()),
+                        )
                     } else {
                         None
                     }
@@ -1073,15 +1082,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             sig
         };
         for (range, overload) in overloads.iter() {
+            let (overload_tparams, original_overload_func) = match overload {
+                OverloadType::Function(func) => (None, func),
+                OverloadType::Forall(forall) => (Some(&forall.tparams), &forall.body),
+            };
             let overload_func = {
-                let (tparams, func) = match overload {
-                    OverloadType::Function(func) => (None, func),
-                    OverloadType::Forall(forall) => (Some(&forall.tparams), &forall.body),
-                };
-                if let Some(tparams) = all_tparams(tparams) {
-                    self.subst_function(&tparams, func.clone())
+                if let Some(tparams) = all_tparams(overload_tparams) {
+                    self.subst_function(&tparams, original_overload_func.clone())
                 } else {
-                    func.clone()
+                    original_overload_func.clone()
                 }
             };
             let impl_func = {
@@ -1107,7 +1116,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
                 &|| {
                     TypeCheckContext::of_kind(TypeCheckKind::OverloadInput(
-                        overload_func.signature.clone(),
+                        original_overload_func.signature.clone(),
                         impl_sig.clone(),
                     ))
                 },
@@ -1229,28 +1238,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn bind_boundmethod(&self, m: &BoundMethod) -> Option<Type> {
-        self.bind_function(&m.func.clone().as_type(), &m.obj)
+    pub fn bind_boundmethod(
+        &self,
+        m: &BoundMethod,
+        is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
+    ) -> Option<Type> {
+        self.bind_function(&m.func.clone().as_type(), &m.obj, is_subset)
     }
 
     pub fn bind_dunder_new(&self, t: &Type, cls: ClassType) -> Option<Type> {
-        self.bind_function(t, &Type::Type(Box::new(Type::SelfType(cls))))
+        self.bind_function(
+            t,
+            &Type::Type(Box::new(Type::SelfType(cls))),
+            &mut |a, b| self.is_subset_eq(a, b),
+        )
     }
 
     /// If this is an unbound callable (i.e., a callable that is not BoundMethod), strip the first parameter.
     /// If it is generic, we use the bound object to instantiate type variables in the first argument.
-    fn bind_function(&self, t: &Type, obj: &Type) -> Option<Type> {
+    fn bind_function(
+        &self,
+        t: &Type,
+        obj: &Type,
+        is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
+    ) -> Option<Type> {
         match t {
             Type::Forall(forall) => match &forall.body {
                 Forallable::Callable(c) => c.split_first_param().map(|(param, c)| {
-                    let c = self.instantiate_callable_self(&forall.tparams, obj, param, c);
+                    let c =
+                        self.instantiate_callable_self(&forall.tparams, obj, param, c, is_subset);
                     Type::Forall(Box::new(Forall {
                         tparams: forall.tparams.clone(),
                         body: Forallable::Callable(c),
                     }))
                 }),
                 Forallable::Function(f) => f.signature.split_first_param().map(|(param, c)| {
-                    let c = self.instantiate_callable_self(&forall.tparams, obj, param, c);
+                    let c =
+                        self.instantiate_callable_self(&forall.tparams, obj, param, c, is_subset);
                     Type::Forall(Box::new(Forall {
                         tparams: forall.tparams.clone(),
                         body: Forallable::Function(Function {
@@ -1288,7 +1312,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .signature
                         .split_first_param()
                         .map(|(param, c)| {
-                            let c = self.instantiate_callable_self(&forall.tparams, obj, param, c);
+                            let c = self.instantiate_callable_self(
+                                &forall.tparams,
+                                obj,
+                                param,
+                                c,
+                                is_subset,
+                            );
                             OverloadType::Forall(Forall {
                                 tparams: forall.tparams.clone(),
                                 body: Function {
@@ -1316,6 +1346,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self_obj: &Type,
         self_param: &Type,
         callable: Callable,
+        is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
     ) -> Callable {
         self.solver().instantiate_callable_self(
             tparams,
@@ -1323,7 +1354,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self_param,
             callable,
             self.uniques,
-            self.type_order(),
+            is_subset,
         )
     }
 }

@@ -71,15 +71,15 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
         match bindings.get(current_idx) {
             Binding::Forward(k)
             | Binding::Narrow(k, _, _)
-            | Binding::Pin(k, ..)
-            | Binding::PinUpstream(k, ..)
+            | Binding::CompletedPartialType(k, ..)
+            | Binding::PartialTypeWithUpstreamsCompleted(k, ..)
             | Binding::Default(k, ..) => {
                 current_idx = *k;
             }
             Binding::Phi(ks) if !ks.is_empty() => current_idx = *ks.iter().next().unwrap(),
-            Binding::CheckLegacyTypeParam(k, _) => {
+            Binding::PossibleLegacyTParam(k, _) => {
                 let binding = bindings.get(*k);
-                current_idx = binding.0;
+                current_idx = binding.idx();
             }
             Binding::AssignToSubscript(subscript, _)
                 if let Some(key) =
@@ -114,9 +114,9 @@ fn create_intermediate_definition_from(
     while !gas.stop() {
         match current_binding {
             Binding::Forward(k) => current_binding = bindings.get(*k),
-            Binding::CheckLegacyTypeParam(k, _) => {
+            Binding::PossibleLegacyTParam(k, _) => {
                 let binding = bindings.get(*k);
-                current_binding = bindings.get(binding.0);
+                current_binding = bindings.get(binding.idx());
             }
             Binding::Import(m, name, original_name_range) => {
                 return Some(IntermediateDefinition::NamedImport(
@@ -135,6 +135,7 @@ fn create_intermediate_definition_from(
                     symbol_kind: Some(SymbolKind::Function),
                     docstring_range: func.docstring_range,
                     is_deprecated: false,
+                    special_export: None,
                 }));
             }
             Binding::ClassDef(idx, ..) => {
@@ -145,6 +146,7 @@ fn create_intermediate_definition_from(
                             symbol_kind: Some(SymbolKind::Class),
                             docstring_range: None,
                             is_deprecated: false,
+                            special_export: None,
                         }))
                     }
                     BindingClass::ClassDef(ClassBinding {
@@ -156,6 +158,7 @@ fn create_intermediate_definition_from(
                         symbol_kind: Some(SymbolKind::Class),
                         docstring_range: *docstring_range,
                         is_deprecated: false,
+                        special_export: None,
                     })),
                 };
             }
@@ -165,6 +168,7 @@ fn create_intermediate_definition_from(
                     symbol_kind: current_binding.symbol_kind(),
                     docstring_range: None,
                     is_deprecated: false,
+                    special_export: None,
                 }));
             }
         }

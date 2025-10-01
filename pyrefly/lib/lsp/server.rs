@@ -152,19 +152,24 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::globs::Globs;
+use pyrefly_util::includes::Includes as _;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
+use pyrefly_util::watch_pattern::WatchPattern;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
 use crate::error::error::Error;
+use crate::lsp::build_system::queue_source_db_rebuild_and_recheck;
+use crate::lsp::build_system::should_requery_build_system;
 use crate::lsp::features::hover::get_hover;
 use crate::lsp::lsp::apply_change_events;
 use crate::lsp::lsp::as_notification;
@@ -177,6 +182,7 @@ use crate::lsp::module_helpers::make_open_handle;
 use crate::lsp::module_helpers::module_info_to_uri;
 use crate::lsp::module_helpers::to_lsp_location;
 use crate::lsp::module_helpers::to_real_path;
+use crate::lsp::queue::HeavyTaskQueue;
 use crate::lsp::queue::LspEvent;
 use crate::lsp::queue::LspQueue;
 use crate::lsp::transaction_manager::TransactionManager;
@@ -265,6 +271,11 @@ impl ServerConnection {
 pub struct Server {
     connection: ServerConnection,
     lsp_queue: LspQueue,
+    recheck_queue: HeavyTaskQueue,
+    find_reference_queue: HeavyTaskQueue,
+    sourcedb_queue: HeavyTaskQueue,
+    /// Any configs whose find cache should be invalidated.
+    invalidated_configs: Arc<Mutex<SmallSet<ArcId<ConfigFile>>>>,
     initialize_params: InitializeParams,
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
@@ -463,6 +474,18 @@ pub fn lsp_loop(
     std::thread::spawn(move || {
         dispatch_lsp_events(&connection_for_dispatcher, lsp_queue2);
     });
+    let recheck_queue = server.recheck_queue.dupe();
+    std::thread::spawn(move || {
+        recheck_queue.run_until_stopped();
+    });
+    let find_reference_queue = server.find_reference_queue.dupe();
+    std::thread::spawn(move || {
+        find_reference_queue.run_until_stopped();
+    });
+    let sourcedb_queue = server.sourcedb_queue.dupe();
+    std::thread::spawn(move || {
+        sourcedb_queue.run_until_stopped();
+    });
     let mut ide_transaction_manager = TransactionManager::default();
     let mut canceled_requests = HashSet::new();
     while let Ok((subsequent_mutation, event)) = lsp_queue.recv() {
@@ -477,6 +500,9 @@ pub fn lsp_loop(
         }
     }
     eprintln!("waiting for connection to close");
+    server.recheck_queue.stop();
+    server.find_reference_queue.stop();
+    server.sourcedb_queue.stop();
     drop(server); // close connection
     Ok(())
 }
@@ -530,6 +556,17 @@ impl Server {
                 }
                 canceled_requests.insert(id);
             }
+            LspEvent::InvalidateConfigFind => {
+                let mut lock = self.invalidated_configs.lock();
+                let invalidated_configs = std::mem::take(&mut *lock);
+                drop(lock);
+                if !invalidated_configs.is_empty() {
+                    // a sourcedb rebuild completed before this, so it's okay
+                    // to re-setup the file watcher right now
+                    self.setup_file_watcher_if_necessary();
+                    self.invalidate_find_for_configs(invalidated_configs);
+                }
+            }
             LspEvent::DidOpenTextDocument(params) => {
                 self.did_open(ide_transaction_manager, subsequent_mutation, params)?;
             }
@@ -549,18 +586,14 @@ impl Server {
                 self.workspace_folders_changed(params);
             }
             LspEvent::DidChangeConfiguration(params) => {
-                self.did_change_configuration(ide_transaction_manager, params);
+                self.did_change_configuration(params);
             }
             LspEvent::LspResponse(x) => {
                 if let Some(request) = self.outgoing_requests.lock().remove(&x.id) {
                     if let Some((request, response)) =
                         as_request_response_pair::<WorkspaceConfiguration>(&request, &x)
                     {
-                        self.workspace_configuration_response(
-                            ide_transaction_manager,
-                            &request,
-                            &response,
-                        );
+                        self.workspace_configuration_response(&request, &response);
                     }
                 } else {
                     eprintln!("Response for unknown request: {x:?}");
@@ -880,6 +913,10 @@ impl Server {
         let s = Self {
             connection: ServerConnection(connection),
             lsp_queue,
+            recheck_queue: HeavyTaskQueue::new(),
+            find_reference_queue: HeavyTaskQueue::new(),
+            sourcedb_queue: HeavyTaskQueue::new(),
+            invalidated_configs: Arc::new(Mutex::new(SmallSet::new())),
             initialize_params,
             indexing_mode,
             workspace_indexing_limit,
@@ -975,15 +1012,22 @@ impl Server {
         {
             Some(DisplayTypeErrors::ForceOn) => TypeErrorDisplayStatus::EnabledInIdeConfig,
             Some(DisplayTypeErrors::ForceOff) => TypeErrorDisplayStatus::DisabledInIdeConfig,
-            Some(DisplayTypeErrors::Default) | None => {
-                if matches!(config.source, ConfigSource::Synthetic) {
-                    TypeErrorDisplayStatus::DisabledDueToMissingConfigFile
-                } else if config.disable_type_errors_in_ide(path) {
-                    TypeErrorDisplayStatus::DisabledInConfigFile
-                } else {
-                    TypeErrorDisplayStatus::EnabledInConfigFile
+            Some(DisplayTypeErrors::Default) | None => match &config.source {
+                // In this case, we don't have a config file.
+                ConfigSource::Synthetic => TypeErrorDisplayStatus::DisabledDueToMissingConfigFile,
+                // In this case, we have a config file like mypy.ini, but we don't parse it.
+                // We only use it as a sensible project root, and create a default config anyways.
+                // Therefore, we should treat it as if we don't have any config.
+                ConfigSource::Marker(_) => TypeErrorDisplayStatus::DisabledDueToMissingConfigFile,
+                // We actually have a pyrefly.toml, so we can decide based on the config.
+                ConfigSource::File(_) => {
+                    if config.disable_type_errors_in_ide(path) {
+                        TypeErrorDisplayStatus::DisabledInConfigFile
+                    } else {
+                        TypeErrorDisplayStatus::EnabledInConfigFile
+                    }
                 }
-            }
+            },
         }
     }
 
@@ -1033,6 +1077,17 @@ impl Server {
                 ide_transaction_manager.save(transaction);
             }
         }
+        queue_source_db_rebuild_and_recheck(
+            &self.state,
+            self.invalidated_configs.dupe(),
+            self.sourcedb_queue.dupe(),
+            self.lsp_queue.dupe(),
+            &handles,
+        );
+    }
+
+    fn invalidate_find_for_configs(&self, invalidated_configs: SmallSet<ArcId<ConfigFile>>) {
+        self.invalidate(|t| t.invalidate_find_for_configs(invalidated_configs));
     }
 
     fn populate_project_files_if_necessary(
@@ -1046,9 +1101,9 @@ impl Server {
                     if self.indexed_configs.lock().insert(config.dupe()) {
                         let state = self.state.dupe();
                         let lsp_queue = self.lsp_queue.dupe();
-                        std::thread::spawn(move || {
+                        self.recheck_queue.queue_task(Box::new(move || {
                             Self::populate_all_project_files_in_config(config, state, lsp_queue);
-                        });
+                        }));
                     }
                 }
                 IndexingMode::LazyBlocking => {
@@ -1083,14 +1138,14 @@ impl Server {
                 drop(indexed_workspaces);
                 let state = self.state.dupe();
                 let lsp_queue = self.lsp_queue.dupe();
-                std::thread::spawn(move || {
+                self.recheck_queue.queue_task(Box::new(move || {
                     Self::populate_all_workspaces_files(
                         roots_to_populate_files,
                         state,
                         workspace_indexing_limit,
                         lsp_queue,
                     );
-                });
+                }));
             }
             IndexingMode::LazyBlocking => {
                 indexed_workspaces.extend(roots_to_populate_files.iter().cloned());
@@ -1107,12 +1162,12 @@ impl Server {
 
     /// Perform an invalidation of elements on `State` and commit them.
     /// Runs asynchronously. Returns immediately and may wait a while for a committable transaction.
-    fn invalidate(&self, f: impl FnOnce(&mut Transaction) + Send + 'static) {
+    fn invalidate(&self, f: impl FnOnce(&mut Transaction) + Send + Sync + 'static) {
         let state = self.state.dupe();
         let lsp_queue = self.lsp_queue.dupe();
         let cancellation_handles = self.cancellation_handles.dupe();
         let open_files = self.open_files.dupe();
-        std::thread::spawn(move || {
+        self.recheck_queue.queue_task(Box::new(move || {
             let mut transaction = state.new_committable_transaction(Require::Indexing, None);
             f(transaction.as_mut());
 
@@ -1130,7 +1185,7 @@ impl Server {
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
             let _ = lsp_queue.send(LspEvent::RecheckFinished);
-        });
+        }));
     }
 
     /// Certain IDE features (e.g. find-references) require us to know the dependency graph of the
@@ -1276,13 +1331,36 @@ impl Server {
     }
 
     fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
-        if !params.changes.is_empty() {
-            self.invalidate(move |t| {
-                t.invalidate_events(&CategorizedEvents::new_lsp(params.changes))
-            });
+        if params.changes.is_empty() {
+            return;
         }
+
+        let events = CategorizedEvents::new_lsp(params.changes);
+
+        let should_requery_build_system = should_requery_build_system(&events);
+
+        self.invalidate(move |t| t.invalidate_events(&events));
         // rewatch files in case we loaded or dropped any configs
         self.setup_file_watcher_if_necessary();
+
+        // If a non-Python, non-config file was changed, then try rebuilding build systems.
+        // If no build system file was changed, then we should just not do anything. If
+        // a build system file was changed, then the change should take effect soon.
+        if should_requery_build_system {
+            let handles = self
+                .open_files
+                .read()
+                .keys()
+                .map(|x| make_open_handle(&self.state, x))
+                .collect::<Vec<_>>();
+            queue_source_db_rebuild_and_recheck(
+                &self.state,
+                self.invalidated_configs.dupe(),
+                self.sourcedb_queue.dupe(),
+                self.lsp_queue.dupe(),
+                &handles,
+            );
+        }
     }
 
     fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -1292,16 +1370,27 @@ impl Server {
         self.connection
             .publish_diagnostics_for_uri(params.text_document.uri, Vec::new(), None);
         let state = self.state.dupe();
+        let lsp_queue = self.lsp_queue.dupe();
         let open_files = self.open_files.dupe();
-        std::thread::spawn(move || {
+        let sourcedb_queue = self.sourcedb_queue.dupe();
+        let invalidated_configs = self.invalidated_configs.dupe();
+        self.recheck_queue.queue_task(Box::new(move || {
             // Clear out the memory associated with this file.
             // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
             // Having the extra file hanging around doesn't harm anything, but does use extra memory.
             let mut transaction = state.new_committable_transaction(Require::Indexing, None);
             transaction.as_mut().set_memory(vec![(uri, None)]);
-            Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
+            let handles =
+                Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
             state.commit_transaction(transaction);
-        });
+            queue_source_db_rebuild_and_recheck(
+                &state,
+                invalidated_configs,
+                sourcedb_queue,
+                lsp_queue,
+                &handles,
+            );
+        }));
     }
 
     fn workspace_folders_changed(&self, params: DidChangeWorkspaceFoldersParams) {
@@ -1310,11 +1399,7 @@ impl Server {
         self.request_settings_for_all_workspaces();
     }
 
-    fn did_change_configuration<'a>(
-        &'a self,
-        ide_transaction_manager: &mut TransactionManager<'a>,
-        params: DidChangeConfigurationParams,
-    ) {
+    fn did_change_configuration<'a>(&'a self, params: DidChangeConfigurationParams) {
         if let Some(workspace) = &self.initialize_params.capabilities.workspace
             && workspace.configuration == Some(true)
         {
@@ -1329,16 +1414,12 @@ impl Server {
         }
 
         if modified {
-            // Once the config finishes changing, we'll recheck
-            self.invalidate_config();
-            // If disable_type_errors has changed, we want that to take effect immediately.
-            self.validate_in_memory(ide_transaction_manager);
+            self.invalidate_config_and_validate_in_memory();
         }
     }
 
     fn workspace_configuration_response<'a>(
         &'a self,
-        ide_transaction_manager: &mut TransactionManager<'a>,
         request: &ConfigurationParams,
         response: &[Value],
     ) {
@@ -1353,9 +1434,7 @@ impl Server {
             }
         }
         if modified {
-            self.invalidate_config();
-            // If disable_type_errors has changed, we want that to take effect immediately.
-            self.validate_in_memory(ide_transaction_manager);
+            self.invalidate_config_and_validate_in_memory();
         }
     }
 
@@ -1535,7 +1614,7 @@ impl Server {
         ide_transaction_manager: &mut TransactionManager<'a>,
         uri: &Url,
         position: Position,
-        map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + 'static,
+        map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
     ) {
         let Some(handle) = self.make_handle_if_enabled(uri) else {
             return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
@@ -1573,7 +1652,7 @@ impl Server {
         let cancellation_handles = self.cancellation_handles.dupe();
 
         let connection = self.connection.dupe();
-        std::thread::spawn(move || {
+        self.find_reference_queue.queue_task(Box::new(move || {
             let mut transaction = state.cancellable_transaction();
             cancellation_handles
                 .lock()
@@ -1610,7 +1689,7 @@ impl Server {
                     )))
                 }
             }
-        });
+        }));
     }
 
     fn references<'a>(
@@ -1857,18 +1936,25 @@ impl Server {
         })
     }
 
+    /// Converts a [`WatchPattern`] into a [`GlobPattern`] that can be used and watched
+    /// by VSCode, provided its `relative_pattern_support`.
     fn get_pattern_to_watch(
-        root: &Path,
-        pattern: String,
+        pattern: WatchPattern<'_>,
         relative_pattern_support: bool,
     ) -> GlobPattern {
-        if relative_pattern_support && let Ok(url) = Url::from_directory_path(root) {
-            GlobPattern::Relative(RelativePattern {
-                base_uri: OneOf::Right(url),
-                pattern,
-            })
-        } else {
-            GlobPattern::String(root.join(pattern).to_string_lossy().into_owned())
+        match pattern {
+            WatchPattern::File(root) => GlobPattern::String(root.to_string_lossy().into_owned()),
+            WatchPattern::Root(root, pattern)
+                if relative_pattern_support && let Ok(url) = Url::from_directory_path(root) =>
+            {
+                GlobPattern::Relative(RelativePattern {
+                    base_uri: OneOf::Right(url),
+                    pattern,
+                })
+            }
+            WatchPattern::Root(root, pattern) => {
+                GlobPattern::String(root.join(pattern).to_string_lossy().into_owned())
+            }
         }
     }
 
@@ -1899,29 +1985,24 @@ impl Server {
                 for root in &roots {
                     PYTHON_EXTENSIONS.iter().for_each(|suffix| {
                         glob_patterns.push(Self::get_pattern_to_watch(
-                            root,
-                            format!("**/*.{suffix}"),
+                            WatchPattern::root(root, format!("**/*.{suffix}")),
                             relative_pattern_support,
                         ));
                     });
                     ConfigFile::CONFIG_FILE_NAMES.iter().for_each(|config| {
                         glob_patterns.push(Self::get_pattern_to_watch(
-                            root,
-                            format!("**/{config}"),
+                            WatchPattern::root(root, format!("**/{config}")),
                             relative_pattern_support,
                         ))
                     });
                 }
-                for (root, pattern) in self
-                    .workspaces
-                    .loaded_configs
-                    .get_patterns_for_cached_configs()
-                {
-                    glob_patterns.push(Self::get_pattern_to_watch(
-                        &root,
-                        pattern,
-                        relative_pattern_support,
-                    ));
+                for config in self.workspaces.loaded_configs.clean_and_get_configs() {
+                    config.get_paths_to_watch().into_iter().for_each(|pattern| {
+                        glob_patterns.push(Self::get_pattern_to_watch(
+                            pattern,
+                            relative_pattern_support,
+                        ));
+                    });
                 }
                 let watchers = glob_patterns
                     .into_iter()
@@ -1968,9 +2049,32 @@ impl Server {
         }
     }
 
-    /// Asynchronously invalidate configuration
-    fn invalidate_config(&self) {
-        self.invalidate(|t| t.invalidate_config());
+    /// Asynchronously invalidate configuration and then validate in-memory files
+    /// This ensures validate_in_memory() only runs after config invalidation completes
+    fn invalidate_config_and_validate_in_memory(&self) {
+        let state = self.state.dupe();
+        let lsp_queue = self.lsp_queue.dupe();
+        let cancellation_handles = self.cancellation_handles.dupe();
+        let open_files = self.open_files.dupe();
+        self.recheck_queue.queue_task(Box::new(move || {
+            let mut transaction = state.new_committable_transaction(Require::Indexing, None);
+            transaction.as_mut().invalidate_config();
+
+            Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
+
+            // Commit will be blocked until there are no ongoing reads.
+            // If we have some long running read jobs that can be cancelled, we should cancel them
+            // to unblock committing transactions.
+            for (_, cancellation_handle) in cancellation_handles.lock().drain() {
+                cancellation_handle.cancel();
+            }
+            // we have to run, not just commit to process updates
+            state.run_with_committing_transaction(transaction, &[], Require::Everything);
+            // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
+            // the main event loop of the server. As a result, the server can do a revalidation of
+            // all the in-memory files based on the fresh main State as soon as possible.
+            let _ = lsp_queue.send(LspEvent::RecheckFinished);
+        }));
     }
 }
 

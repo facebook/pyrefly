@@ -111,6 +111,7 @@ pub fn binding_memory(transaction: &Transaction) -> String {
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_python::nesting_context::NestingContext;
     use pyrefly_python::short_identifier::ShortIdentifier;
     use ruff_python_ast::Identifier;
     use ruff_text_size::TextRange;
@@ -119,7 +120,7 @@ mod tests {
     use crate::binding::binding::BindingClass;
     use crate::binding::binding::BindingClassMetadata;
     use crate::binding::binding::Key;
-    use crate::binding::pydantic::PydanticMetadataBinding;
+    use crate::binding::pydantic::PydanticConfigDict;
     use crate::graph::index::Idx;
     use crate::types::class::ClassDefIndex;
 
@@ -144,6 +145,7 @@ mod tests {
         let v = BindingClass::FunctionalClassDef(
             ClassDefIndex(0),
             Identifier::new("my_class", TextRange::default()),
+            NestingContext::toplevel(),
             SmallMap::new(),
         );
         assert_eq!(
@@ -162,7 +164,7 @@ mod tests {
             keywords: Default::default(),
             decorators: Default::default(),
             is_new_type: false,
-            pydantic_metadata: PydanticMetadataBinding::default(),
+            pydantic_config_dict: PydanticConfigDict::default(),
         };
         assert_eq!(
             ReportKey::new(module, &v),

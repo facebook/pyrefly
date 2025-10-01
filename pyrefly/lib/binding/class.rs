@@ -8,8 +8,10 @@
 use std::mem;
 use std::sync::LazyLock;
 
+use dupe::Dupe as _;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
+use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::prelude::SliceExt;
 use regex::Regex;
@@ -58,14 +60,11 @@ use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyVariance;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
-use crate::binding::bindings::LegacyTParamBuilder;
-use crate::binding::pydantic::PydanticMetadataBinding;
-use crate::binding::scope::ClassFieldInBody;
+use crate::binding::bindings::LegacyTParamCollector;
+use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::scope::ClassIndices;
 use crate::binding::scope::FlowStyle;
-use crate::binding::scope::InstanceAttribute;
 use crate::binding::scope::Scope;
-use crate::binding::scope::ScopeKind;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
 use crate::types::class::ClassDefIndex;
@@ -113,12 +112,9 @@ impl<'a> BindingsBuilder<'a> {
         (class_object, class_indices)
     }
 
-    pub fn class_def(&mut self, mut x: StmtClassDef) {
+    pub fn class_def(&mut self, mut x: StmtClassDef, parent: &NestingContext) {
         let (mut class_object, class_indices) = self.class_object_and_indices(&x.name);
-        let mut pydantic_frozen = None;
-        let mut pydantic_config_dict_extra = None;
-        let mut pydantic_validate_by_name = false;
-        let mut pydantic_validate_by_alias = true;
+        let mut pydantic_config_dict = PydanticConfigDict::default();
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let body = mem::take(&mut x.body);
         let decorators_with_ranges = self.ensure_and_bind_decorators_with_ranges(
@@ -132,7 +128,7 @@ impl<'a> BindingsBuilder<'a> {
             self.type_params(x);
         });
 
-        let mut legacy = Some(LegacyTParamBuilder::new(x.type_params.is_some()));
+        let mut legacy = Some(LegacyTParamCollector::new(x.type_params.is_some()));
         let bases = x.bases().map(|base| {
             let mut base = base.clone();
             // Forward refs are fine *inside* of a base expression in the type arguments,
@@ -218,8 +214,8 @@ impl<'a> BindingsBuilder<'a> {
             BindingClassSynthesizedFields(class_indices.class_idx),
         );
 
-        let legacy_tparam_builder = legacy.unwrap();
-        legacy_tparam_builder.add_name_definitions(self);
+        let legacy_tparam_collector = legacy.unwrap();
+        self.add_name_definitions(&legacy_tparam_collector);
 
         self.scopes.push(Scope::class_body(
             x.range,
@@ -227,107 +223,43 @@ impl<'a> BindingsBuilder<'a> {
             x.name.clone(),
         ));
         self.init_static_scope(&body, false);
-        self.stmts(body);
+        self.stmts(
+            body,
+            &NestingContext::class(ShortIdentifier::new(&x.name), parent.dupe()),
+        );
+        let field_definitions = self.scopes.finish_class_and_get_field_definitions();
 
-        let last_scope = self.scopes.pop();
-        self.scopes.pop(); // annotation scope
-        let mut fields = SmallMap::with_capacity(last_scope.stat.0.len());
-        for (name, info) in last_scope.flow.info.iter_hashed() {
-            // Ignore a name not in the current flow's static. This can happen because operations
-            // like narrows can change the local flow info for a name defined in some parent scope.
-            if let Some(stat_info) = last_scope.stat.0.get_hashed(name) {
-                let (definition, is_initialized_on_class) = {
-                    if let FlowStyle::FunctionDef(_, has_return_annotation) = info.style {
-                        (
-                            ClassFieldDefinition::MethodLike {
-                                definition: info.key,
-                                has_return_annotation,
-                            },
-                            true,
-                        )
-                    } else {
-                        match info.as_initial_value() {
-                            ClassFieldInBody::InitializedByAssign(e) => {
-                                self.extract_pydantic_config_dict_metadata(
-                                    &e,
-                                    name,
-                                    &mut pydantic_frozen,
-                                    &mut pydantic_config_dict_extra,
-                                    &mut pydantic_validate_by_name,
-                                    &mut pydantic_validate_by_alias,
-                                );
-                                (
-                                    ClassFieldDefinition::AssignedInBody {
-                                        value: ExprOrBinding::Expr(e.clone()),
-                                        annotation: stat_info.annot,
-                                    },
-                                    true,
-                                )
-                            }
-                            ClassFieldInBody::InitializedWithoutAssign => (
-                                ClassFieldDefinition::DefinedWithoutAssign {
-                                    definition: info.key,
-                                },
-                                true,
-                            ),
-                            ClassFieldInBody::Uninitialized => {
-                                let annotation = stat_info.annot.unwrap_or_else(
-                                    || panic!("A class field known in the body but uninitialized always has an annotation.")
-                                );
-                                (
-                                    ClassFieldDefinition::DeclaredByAnnotation { annotation },
-                                    false,
-                                )
-                            }
-                        }
-                    }
-                };
-                let binding = BindingClassField {
-                    class_idx: class_indices.class_idx,
-                    name: name.into_key().clone(),
-                    range: stat_info.loc,
-                    definition,
-                };
-                fields.insert_hashed(
-                    name.cloned(),
-                    ClassFieldProperties::new(
-                        stat_info.annot.is_some(),
-                        is_initialized_on_class,
-                        stat_info.loc,
-                    ),
-                );
-                let key_field = KeyClassField(class_indices.def_index, name.into_key().clone());
-                self.insert_binding(key_field, binding);
-            }
-        }
-        if let ScopeKind::Class(class_scope) = last_scope.kind {
-            for (name, method, InstanceAttribute(value, annotation, range)) in
-                class_scope.method_defined_attributes()
+        let mut fields = SmallMap::with_capacity(field_definitions.len());
+        for (name, (definition, range)) in field_definitions.into_iter_hashed() {
+            if let ClassFieldDefinition::AssignedInBody {
+                value: ExprOrBinding::Expr(e),
+                ..
+            } = &definition
             {
-                if !fields.contains_key_hashed(name.as_ref()) {
-                    fields.insert_hashed(
-                        name.clone(),
-                        ClassFieldProperties::new(annotation.is_some(), false, range),
-                    );
-
-                    let key_field = KeyClassField(class_indices.def_index, name.key().clone());
-                    self.insert_binding(
-                        key_field,
-                        BindingClassField {
-                            class_idx: class_indices.class_idx,
-                            name: name.into_key(),
-                            range,
-                            definition: ClassFieldDefinition::DefinedInMethod {
-                                value,
-                                annotation,
-                                method,
-                            },
-                        },
-                    );
-                }
+                self.extract_pydantic_config_dict(e, &name, &mut pydantic_config_dict);
             }
-        } else {
-            unreachable!("Expected class body scope, got {:?}", last_scope.kind);
+            let (is_initialized_on_class, is_annotated) = match &definition {
+                ClassFieldDefinition::DefinedInMethod { annotation, .. } => {
+                    (false, annotation.is_some())
+                }
+                ClassFieldDefinition::DeclaredByAnnotation { .. } => (false, true),
+                ClassFieldDefinition::AssignedInBody { annotation, .. } => {
+                    (true, annotation.is_some())
+                }
+                _ => (true, false),
+            };
+            fields.insert_hashed(
+                name.clone(),
+                ClassFieldProperties::new(is_annotated, is_initialized_on_class, range),
+            );
+            let key_field = KeyClassField(class_indices.def_index, name.clone().into_key());
+            let binding = BindingClassField {
+                class_idx: class_indices.class_idx,
+                name: name.into_key(),
+                range,
+                definition,
+            };
+            self.insert_binding(key_field, binding);
         }
 
         let decorator_keys = decorators_with_ranges
@@ -342,7 +274,7 @@ impl<'a> BindingsBuilder<'a> {
 
         // Insert a `KeyTParams` / `BindingTParams` pair, but only if there is at least
         // one generic base class - otherwise, it is not possible that legacy tparams are used.
-        let legacy_tparams = legacy_tparam_builder.lookup_keys();
+        let legacy_tparams = legacy_tparam_collector.lookup_keys();
         let tparams_require_binding = !legacy_tparams.is_empty();
         if tparams_require_binding {
             let scoped_type_params = mem::take(&mut x.type_params);
@@ -370,6 +302,7 @@ impl<'a> BindingsBuilder<'a> {
             BindingClass::ClassDef(ClassBinding {
                 def_index: class_indices.def_index,
                 def: x,
+                parent: parent.dupe(),
                 fields,
                 tparams_require_binding,
                 docstring_range,
@@ -396,12 +329,7 @@ impl<'a> BindingsBuilder<'a> {
                 keywords: keywords.into_boxed_slice(),
                 decorators: decorators_with_ranges.clone().into_boxed_slice(),
                 is_new_type: false,
-                pydantic_metadata: self.make_pydantic_metadata(
-                    pydantic_frozen,
-                    pydantic_config_dict_extra,
-                    pydantic_validate_by_name,
-                    pydantic_validate_by_alias,
-                ),
+                pydantic_config_dict,
             },
         );
     }
@@ -471,6 +399,7 @@ impl<'a> BindingsBuilder<'a> {
         class_name: Identifier,
         class_object: CurrentIdx,
         class_indices: ClassIndices,
+        parent: &NestingContext,
         base: Option<Expr>,
         keywords: Box<[(Name, Expr)]>,
         // name, position, annotation, value
@@ -502,7 +431,7 @@ impl<'a> BindingsBuilder<'a> {
                 keywords,
                 decorators: Box::new([]),
                 is_new_type,
-                pydantic_metadata: PydanticMetadataBinding::default(),
+                pydantic_config_dict: PydanticConfigDict::default(),
             },
         );
         self.insert_binding_idx(
@@ -615,7 +544,12 @@ impl<'a> BindingsBuilder<'a> {
         );
         self.insert_binding_idx(
             class_indices.class_idx,
-            BindingClass::FunctionalClassDef(class_indices.def_index, class_name, fields),
+            BindingClass::FunctionalClassDef(
+                class_indices.def_index,
+                class_name,
+                parent.dupe(),
+                fields,
+            ),
         );
 
         self.insert_binding_idx(
@@ -635,6 +569,7 @@ impl<'a> BindingsBuilder<'a> {
     pub fn synthesize_enum_def(
         &mut self,
         name: &ExprName,
+        parent: &NestingContext,
         func: &mut Expr,
         arg_name: &mut Expr,
         members: &mut [Expr],
@@ -736,6 +671,7 @@ impl<'a> BindingsBuilder<'a> {
             class_name,
             class_object,
             class_indices,
+            parent,
             Some(func.clone()),
             Box::new([]),
             member_definitions,
@@ -751,6 +687,7 @@ impl<'a> BindingsBuilder<'a> {
     pub fn synthesize_collections_named_tuple_def(
         &mut self,
         name: &ExprName,
+        parent: &NestingContext,
         func: &mut Expr,
         arg_name: &Expr,
         members: &mut [Expr],
@@ -858,6 +795,7 @@ impl<'a> BindingsBuilder<'a> {
             class_name,
             class_object,
             class_indices,
+            parent,
             None,
             Box::new([]),
             member_definitions_with_defaults,
@@ -872,6 +810,7 @@ impl<'a> BindingsBuilder<'a> {
     pub fn synthesize_typing_named_tuple_def(
         &mut self,
         name: &ExprName,
+        parent: &NestingContext,
         func: &mut Expr,
         arg_name: &Expr,
         members: &[Expr],
@@ -923,6 +862,7 @@ impl<'a> BindingsBuilder<'a> {
             class_name,
             class_object,
             class_indices,
+            parent,
             Some(func.clone()),
             Box::new([]),
             member_definitions,
@@ -937,6 +877,7 @@ impl<'a> BindingsBuilder<'a> {
     pub fn synthesize_typing_new_type(
         &mut self,
         name: &ExprName,
+        parent: &NestingContext,
         new_type_name: &mut Expr,
         base: &mut Expr,
     ) {
@@ -949,6 +890,7 @@ impl<'a> BindingsBuilder<'a> {
             class_name,
             class_object,
             class_indices,
+            parent,
             Some(base.clone()),
             Box::new([]),
             Vec::new(),
@@ -962,6 +904,7 @@ impl<'a> BindingsBuilder<'a> {
     pub fn synthesize_typed_dict_def(
         &mut self,
         name: &ExprName,
+        parent: &NestingContext,
         func: &mut Expr,
         arg_name: &Expr,
         args: &mut [Expr],
@@ -1041,6 +984,7 @@ impl<'a> BindingsBuilder<'a> {
             class_name,
             class_object,
             class_indices,
+            parent,
             Some(func.clone()),
             base_class_keywords.into_boxed_slice(),
             member_definitions,

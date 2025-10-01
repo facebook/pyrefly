@@ -119,6 +119,38 @@ class B(A):
 );
 
 testcase!(
+    test_override_generic_simple,
+    r#"
+class A:
+    def m[T](self, x: T) -> T: ...
+
+class B(A):
+    def m[T](self, x: T) -> T: ...   # OK
+
+class C(A):
+    def m(self, x: int) -> int: ...  # E: `C.m` overrides parent class `A` in an inconsistent manner
+    "#,
+);
+
+testcase!(
+    test_override_generic_bounds,
+    r#"
+class A: ...
+class B(A): ...
+class C(B): ...
+
+class Base:
+    def m[T: B](self, x: T) -> T: ...
+
+class Derived1(Base):
+    def m[T: A](self, x: T) -> T: ...  # OK, [T: A] accepts all types that [T: B] does
+
+class Derived2(Base):
+    def m[T: C](self, x: T) -> T: ...  # E: `Derived2.m` overrides parent class `Base` in an inconsistent manner
+    "#,
+);
+
+testcase!(
     test_no_base_override,
     r#"
 from typing import override
@@ -482,5 +514,38 @@ class A:
 class B(A):
     def f(self, x1: int):  # E: Got parameter name `x1`, expected `x`
         pass
+    "#,
+);
+
+testcase!(
+    test_override_dunder_names,
+    r#"
+from typing import Iterator
+
+class Base: pass
+class Derived(Base): pass
+
+class UseBase:
+    __private: Base
+    def __iter__(self) -> Iterator[list[Base]]: ...
+
+class UseDerived(UseBase):
+    __private: Derived
+    def __iter__(self) -> Iterator[list[Derived]]: ...  # E: `UseDerived.__iter__` overrides parent class `UseBase` in an inconsistent manner 
+    "#,
+);
+
+testcase!(
+    bug = "We currently skip checking overrides of `__call__`, which is a soundness hole",
+    test_override_dunder_call,
+    r#"
+class Base: pass
+class Derived(Base): pass
+
+class UseBase:
+    def __call__(self) -> list[Base]: ...
+
+class UseDerived(UseBase):
+    def __call__(self) -> list[Derived]: ...
     "#,
 );

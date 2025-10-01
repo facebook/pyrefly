@@ -53,25 +53,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let expr_b = &args[1];
             let a = self.expr_infer_with_hint(expr_a, hint, errors);
             let b = self.expr_untype(expr_b, TypeFormContext::FunctionArgument, errors);
-            let mut a = self
-                .canonicalize_all_class_types(self.solver().deep_force(a), expr_a.range())
-                .promote_typevar_values(self.stdlib)
-                .explicit_any()
-                .noreturn_to_never()
-                .anon_callables();
-            let mut b = self
-                .canonicalize_all_class_types(self.solver().deep_force(b), expr_b.range())
-                .explicit_any()
-                .noreturn_to_never()
-                .anon_callables();
-            // Make assert_type(Self@SomeClass, typing.Self) work.
             let self_form = Type::SpecialForm(SpecialForm::SelfType);
-            a.subst_self_type_mut(&self_form);
-            b.subst_self_type_mut(&self_form);
-
-            // Re-sort unions. Make sure to keep this as the final step before comparison.
-            a = a.sort_unions();
-            b = b.sort_unions();
+            let normalize_type = |ty: Type, expr: &Expr| {
+                let mut ty = self
+                    .canonicalize_all_class_types(self.solver().deep_force(ty), expr.range())
+                    .promote_typevar_values(self.stdlib)
+                    .explicit_any()
+                    .noreturn_to_never()
+                    .anon_callables()
+                    .distribute_type_over_union();
+                // Make assert_type(Self@SomeClass, typing.Self) work.
+                ty.subst_self_type_mut(&self_form);
+                // Re-sort unions. Make sure to keep this as the final step before comparison.
+                ty.sort_unions()
+            };
+            let a = normalize_type(a, expr_a);
+            let b = normalize_type(b, expr_b);
             if a != b {
                 self.error(
                     errors,
@@ -317,7 +314,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         for ty in self.as_class_info(ty) {
             if let Type::ClassDef(cls) = &ty {
-                if cls.has_qname("typing", "Any") {
+                if cls.has_toplevel_qname("typing", "Any") {
                     self.error(
                         errors,
                         range,
@@ -462,7 +459,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn as_class_info(&self, ty: Type) -> Vec<Type> {
         fn f<'a, Ans: LookupAnswer>(me: &AnswersSolver<'a, Ans>, t: Type, res: &mut Vec<Type>) {
             match t {
-                Type::Var(v) if let Some(_guard) = me.recurser.recurse(v) => {
+                Type::Var(v) if let Some(_guard) = me.recurse(v) => {
                     f(me, me.solver().force_var(v), res)
                 }
                 Type::ClassType(ref c)

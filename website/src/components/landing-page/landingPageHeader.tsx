@@ -60,7 +60,7 @@ export default function LandingPageHeader(): React.ReactElement {
                         )}
                     >
                         <span>
-                            A fast Python type checker written in Rust
+                            A fast type checker and language server for Python with powerful IDE features
                         </span>
                     </p>
                 )}

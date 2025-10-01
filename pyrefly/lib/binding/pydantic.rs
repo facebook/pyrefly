@@ -25,31 +25,41 @@ pub const STRICT: Name = Name::new_static("strict");
 const FROZEN: Name = Name::new_static("frozen");
 const EXTRA: Name = Name::new_static("extra");
 
-// Pydantic metadata that we will later extend to include more fields
-// This is different than the PydanticMetadata that goes into the class metadata itself.
-// TODO Zeina: look into if we want to store the expr itself or the boolean. Right now,
-// this maps 1:1 to PydanticMetadata structure we encounter in the answers phase,
-// but this will likely change as we add more fields.
+/// If a class body contains a `model_config` attribute assigned to a `pydantic.ConfigDict`, the
+/// configuration options from the `ConfigDict`. In the answers phase, this will be merged with
+/// configuration options from the class keywords to produce a full Pydantic model configuration.
 #[derive(Debug, Clone, Default)]
-pub struct PydanticMetadataBinding {
+pub struct PydanticConfigDict {
     pub frozen: Option<bool>,
     pub extra: Option<bool>,
+    pub validation_flags: PydanticValidationFlags,
+}
+
+/// Flags that control whether a Pydantic model validates its fields by their names or their aliases
+#[derive(Debug, Clone)]
+pub struct PydanticValidationFlags {
     pub validate_by_name: bool,
     pub validate_by_alias: bool,
+}
+
+impl Default for PydanticValidationFlags {
+    fn default() -> Self {
+        Self {
+            validate_by_name: false,
+            validate_by_alias: true,
+        }
+    }
 }
 
 impl<'a> BindingsBuilder<'a> {
     // The goal of this function is to extract pydantic metadata (https://docs.pydantic.dev/latest/concepts/models/) from expressions.
     // TODO: Consider propagating the entire expression instead of the value
     // in case it is aliased.
-    pub fn extract_pydantic_config_dict_metadata(
+    pub fn extract_pydantic_config_dict(
         &self,
         e: &Expr,
-        name: Hashed<&Name>,
-        pydantic_frozen: &mut Option<bool>,
-        pydantic_extra: &mut Option<bool>,
-        pydantic_validate_by_name: &mut bool,
-        pydantic_validate_by_alias: &mut bool,
+        name: &Hashed<Name>,
+        pydantic_config_dict: &mut PydanticConfigDict,
     ) {
         if name.as_str() == "model_config"
             && let Some(call) = e.as_call_expr()
@@ -61,14 +71,14 @@ impl<'a> BindingsBuilder<'a> {
                     && arg_name.id == FROZEN
                     && let Expr::BooleanLiteral(bl) = &kw.value
                 {
-                    *pydantic_frozen = Some(bl.value);
+                    pydantic_config_dict.frozen = Some(bl.value);
                 }
 
                 if let Some(arg_name) = &kw.arg
                     && arg_name.id == EXTRA
                 {
                     let config_dict_extra = kw.value.clone().string_literal_expr();
-                    *pydantic_extra = match config_dict_extra {
+                    pydantic_config_dict.extra = match config_dict_extra {
                         Some(extra) => {
                             let val = extra.value.to_str();
 
@@ -88,31 +98,16 @@ impl<'a> BindingsBuilder<'a> {
                     && arg_name.id == VALIDATE_BY_NAME
                     && let Expr::BooleanLiteral(bl) = &kw.value
                 {
-                    *pydantic_validate_by_name = bl.value;
+                    pydantic_config_dict.validation_flags.validate_by_name = bl.value;
                 }
 
                 if let Some(arg_name) = &kw.arg
                     && arg_name.id == VALIDATE_BY_ALIAS
                     && let Expr::BooleanLiteral(bl) = &kw.value
                 {
-                    *pydantic_validate_by_alias = bl.value;
+                    pydantic_config_dict.validation_flags.validate_by_alias = bl.value;
                 }
             }
-        }
-    }
-
-    pub fn make_pydantic_metadata(
-        &self,
-        frozen: Option<bool>,
-        extra: Option<bool>,
-        validate_by_name: bool,
-        validate_by_alias: bool,
-    ) -> PydanticMetadataBinding {
-        PydanticMetadataBinding {
-            frozen,
-            extra,
-            validate_by_name,
-            validate_by_alias,
         }
     }
 }

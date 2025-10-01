@@ -8,8 +8,9 @@
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 
+/// Configuration for a Pydantic model.
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq, VisitMut, Default)]
-pub struct PydanticMetadata {
+pub struct PydanticConfig {
     pub frozen: bool,
     pub validate_by_name: bool,
     pub validate_by_alias: bool,

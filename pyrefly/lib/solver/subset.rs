@@ -378,7 +378,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 && let Some(want) = self.type_order.instance_as_dunder_call(&protocol)
             {
                 if let Type::BoundMethod(method) = &want
-                    && let Some(want_no_self) = self.type_order.bind_boundmethod(method)
+                    && let Some(want_no_self) =
+                        self.type_order.bind_boundmethod(method, &mut |got, want| {
+                            self.is_subset_eq(got, want).is_ok()
+                        })
                 {
                     self.is_subset_eq(&got, &want_no_self)?;
                 } else {
@@ -792,18 +795,29 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 self.is_subset_eq(&l.as_type(), u)
             }),
             (Type::BoundMethod(method), Type::Callable(_) | Type::Function(_))
-                if let Some(l_no_self) = self.type_order.bind_boundmethod(method) =>
+                if let Some(l_no_self) =
+                    self.type_order.bind_boundmethod(method, &mut |got, want| {
+                        self.is_subset_eq(got, want).is_ok()
+                    }) =>
             {
                 self.is_subset_eq(&l_no_self, want)
             }
             (Type::Callable(_) | Type::Function(_), Type::BoundMethod(method))
-                if let Some(u_no_self) = self.type_order.bind_boundmethod(method) =>
+                if let Some(u_no_self) =
+                    self.type_order.bind_boundmethod(method, &mut |got, want| {
+                        self.is_subset_eq(got, want).is_ok()
+                    }) =>
             {
                 self.is_subset_eq(got, &u_no_self)
             }
             (Type::BoundMethod(l), Type::BoundMethod(u))
-                if let Some(l_no_self) = self.type_order.bind_boundmethod(l)
-                    && let Some(u_no_self) = self.type_order.bind_boundmethod(u) =>
+                if let Some(l_no_self) = self
+                    .type_order
+                    .bind_boundmethod(l, &mut |got, want| self.is_subset_eq(got, want).is_ok())
+                    && let Some(u_no_self) =
+                        self.type_order.bind_boundmethod(u, &mut |got, want| {
+                            self.is_subset_eq(got, want).is_ok()
+                        }) =>
             {
                 self.is_subset_eq(&l_no_self, &u_no_self)
             }
@@ -1122,9 +1136,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 self.is_subset_eq(got, &self.type_order.stdlib().none_type().clone().to_type())
             }
             (Type::Forall(forall), _) => {
-                let (_, got) = self.type_order.instantiate_fresh_forall((**forall).clone());
-                self.is_subset_eq(&got, want)
+                // Finalizing the quantified vars returns instantiation errors
+                let (vs, got) = self.type_order.instantiate_fresh_forall((**forall).clone());
+                let result = self.is_subset_eq(&got, want);
+                result.and(
+                    self.finish_quantified(vs)
+                        .map_err(SubsetError::TypeVarSpecialization),
+                )
             }
+            (_, Type::Forall(forall)) => self.is_subset_eq(got, &forall.body.clone().as_type()),
             (Type::TypeAlias(ta), _) => {
                 self.is_subset_eq(&ta.as_value(self.type_order.stdlib()), want)
             }

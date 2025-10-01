@@ -19,6 +19,7 @@ use regex::Regex;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::error;
+use tracing::info;
 
 use crate::error::error::Error;
 use crate::state::errors::Errors;
@@ -69,6 +70,7 @@ fn read_and_validate_file(path: &Path) -> anyhow::Result<String> {
 /// The list of failures includes the error that occurred, which may be a read or write error.
 fn add_suppressions(
     path_errors: &SmallMap<PathBuf, Vec<Error>>,
+    same_line: bool,
 ) -> (Vec<(&PathBuf, anyhow::Error)>, Vec<&PathBuf>) {
     let mut failures = vec![];
     let mut successes = vec![];
@@ -83,16 +85,22 @@ fn add_suppressions(
         let deduped_errors = dedup_errors(errors);
         let mut buf = String::new();
         for (idx, line) in file.lines().enumerate() {
-            if let Some(error_comment) = deduped_errors.get(&idx) {
-                // As a simple formatting step, indent the error comment to match the line below it.
-                if let Some(first_char) = line.find(|c: char| !c.is_whitespace()) {
-                    buf.push_str(&line[..first_char]);
+            if same_line && let Some(error_comment) = deduped_errors.get(&idx) {
+                let new_line = format!("{} {}", line, error_comment);
+                buf.push_str(&new_line);
+                buf.push('\n');
+            } else {
+                if let Some(error_comment) = deduped_errors.get(&idx) {
+                    // As a simple formatting step, indent the error comment to match the line below it.
+                    if let Some(first_char) = line.find(|c: char| !c.is_whitespace()) {
+                        buf.push_str(&line[..first_char]);
+                    }
+                    buf.push_str(error_comment);
+                    buf.push('\n');
                 }
-                buf.push_str(error_comment);
+                buf.push_str(line);
                 buf.push('\n');
             }
-            buf.push_str(line);
-            buf.push('\n');
         }
         if let Err(e) = fs_anyhow::write(path, buf) {
             failures.push((path, e));
@@ -103,7 +111,7 @@ fn add_suppressions(
     (failures, successes)
 }
 
-pub fn suppress_errors(errors: Vec<Error>) {
+pub fn suppress_errors(errors: Vec<Error>, same_line: bool) {
     let mut path_errors: SmallMap<PathBuf, Vec<Error>> = SmallMap::new();
     for e in errors {
         if e.severity() >= Severity::Warn
@@ -112,21 +120,21 @@ pub fn suppress_errors(errors: Vec<Error>) {
             path_errors.entry(path.clone()).or_default().push(e);
         }
     }
-    eprintln!("Inserting error suppressions...");
+    info!("Inserting error suppressions...");
     if path_errors.is_empty() {
-        eprintln!("No errors to suppress!");
+        info!("No errors to suppress!");
         return;
     }
-    let (failures, successes) = add_suppressions(&path_errors);
-    eprintln!(
+    let (failures, successes) = add_suppressions(&path_errors, same_line);
+    info!(
         "Finished suppressing errors in {}/{} files",
         successes.len(),
         path_errors.len()
     );
     if !failures.is_empty() {
-        eprintln!("Failed to suppress errors in {} files:", failures.len());
+        info!("Failed to suppress errors in {} files:", failures.len());
         for (path, e) in failures {
-            eprintln!("  {path:#?}: {e}");
+            info!("  {path:#?}: {e}");
         }
     }
 }
@@ -215,7 +223,7 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) {
             }
         }
     }
-    eprintln!(
+    info!(
         "Removed {} unused error suppression(s) in {} file(s)",
         removed_ignores.values().sum::<usize>(),
         removed_ignores.len(),
@@ -255,14 +263,24 @@ mod tests {
     }
 
     fn assert_suppress_errors(before: &str, after: &str) {
-        assert_suppressions(before, after, SuppressFlag::Add, false)
+        assert_suppressions(before, after, SuppressFlag::Add, false, false)
+    }
+
+    fn assert_suppress_same_line(before: &str, after: &str) {
+        assert_suppressions(before, after, SuppressFlag::Add, false, true)
     }
 
     fn assert_remove_ignores(before: &str, after: &str, all: bool) {
-        assert_suppressions(before, after, SuppressFlag::Remove, all)
+        assert_suppressions(before, after, SuppressFlag::Remove, all, false)
     }
 
-    fn assert_suppressions(before: &str, after: &str, kind: SuppressFlag, all: bool) {
+    fn assert_suppressions(
+        before: &str,
+        after: &str,
+        kind: SuppressFlag,
+        all: bool,
+        same_line: bool,
+    ) {
         let tdir = tempfile::tempdir().unwrap();
 
         let mut config = ConfigFile::default();
@@ -288,7 +306,7 @@ mod tests {
         transaction.run(&[handle.dupe()], Require::Everything);
         let loads = transaction.get_errors([handle.clone()].iter());
         if kind == SuppressFlag::Add {
-            suppress::suppress_errors(loads.collect_errors().shown);
+            suppress::suppress_errors(loads.collect_errors().shown, same_line);
         } else {
             suppress::remove_unused_ignores(&loads, all);
         }
@@ -526,5 +544,18 @@ def g() -> str:
     return "hello"
 "#;
         assert_remove_ignores(before, after, true);
+    }
+    #[test]
+    fn test_add_suppressions_same_line() {
+        assert_suppress_same_line(
+            r#"
+x: str = 1
+
+"#,
+            r#"
+x: str = 1 # pyrefly: ignore  # bad-assignment
+
+"#,
+        );
     }
 }

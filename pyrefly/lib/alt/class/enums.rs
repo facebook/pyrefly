@@ -9,14 +9,19 @@ use std::sync::Arc;
 
 use pyrefly_types::class::ClassType;
 use pyrefly_types::read_only::ReadOnlyReason;
+use pyrefly_types::tuple::Tuple;
 use ruff_python_ast::name::Name;
+use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::class::class_field::ClassFieldInitialization;
+use crate::alt::class::class_field::WithDefiningClass;
 use crate::alt::types::class_metadata::ClassMetadata;
+use crate::alt::types::class_metadata::ClassSynthesizedField;
+use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::types::class::Class;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
@@ -97,7 +102,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
     ) -> Option<ClassAttribute> {
         if metadata.is_enum() && (name == &VALUE || name == &VALUE_PROP) {
-            if self.field_is_inherited_from_enum(class.class_object(), &VALUE) {
+            if !self.field_is_inherited_from_enum(class.class_object(), &VALUE_PROP) {
+                // If `value` has been overridden, do not use the type of `_value_`
+                self.get_instance_attribute(class, &VALUE_PROP)
+            } else if self.field_is_inherited_from_enum(class.class_object(), &VALUE) {
                 // The `_value_` annotation on `enum.Enum` is `Any`; we can infer a better type
                 let enum_value_types: Vec<_> = self
                     .get_enum_members(class.class_object())
@@ -144,5 +152,69 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             None
         }
+    }
+
+    pub fn get_django_enum_synthesized_fields(
+        &self,
+        cls: &Class,
+    ) -> Option<ClassSynthesizedFields> {
+        let metadata = self.get_metadata_for_class(cls);
+        let enum_metadata = metadata.enum_metadata()?;
+        if !enum_metadata.is_django {
+            return None;
+        }
+
+        let enum_members = self.get_enum_members(cls);
+
+        let mut label_types: Vec<Type> = enum_members
+            .iter()
+            .filter_map(|lit| {
+                if let Lit::Enum(lit_enum) = lit
+                    && let Type::Tuple(Tuple::Concrete(elements)) = &lit_enum.ty
+                    && elements.len() >= 2
+                {
+                    Some(elements[1].clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        label_types.push(self.stdlib.str().clone().to_type());
+        let label_type = self.unions(label_types);
+
+        let base_value_type = match self.get_class_member(cls, &VALUE) {
+            Some(WithDefiningClass { value, .. }) => value.ty(),
+            _ => Type::any_implicit(),
+        };
+
+        // if value is optional, make the type optional
+        let empty_name = Name::new_static("__empty__");
+        let has_empty = self.get_class_member(cls, &empty_name).is_some();
+        let values_type = if has_empty {
+            self.union(base_value_type.clone(), Type::None)
+        } else {
+            base_value_type
+        };
+
+        let mut fields = SmallMap::new();
+
+        let field_specs = [
+            ("labels", self.stdlib.list(label_type.clone()).to_type()),
+            ("label", label_type.clone()),
+            ("values", self.stdlib.list(values_type.clone()).to_type()),
+            (
+                "choices",
+                self.stdlib
+                    .list(Type::Tuple(Tuple::Concrete(vec![values_type, label_type])))
+                    .to_type(),
+            ),
+        ];
+
+        for (name, ty) in field_specs {
+            fields.insert(Name::new_static(name), ClassSynthesizedField::new(ty));
+        }
+
+        Some(ClassSynthesizedFields::new(fields))
     }
 }

@@ -17,11 +17,53 @@ use starlark_map::small_map::SmallMap;
 use crate::absolutize::Absolutize as _;
 use crate::lock::RwLock;
 
+/// A single filegroup used in an upward search, paired with a predicate on whether
+/// the loaded result should be used or the search should continue. This is especially
+/// useful when you have one set of filenames that would be preferred, but require
+/// introspection on whether the result is actually useful.
+///
+/// For example, whether a `pyproject.toml` should be considered a configuration file
+/// (has a `[tool.pyrefly]` section) or marker file (is probably the root of a project).
+pub struct FileGroup<T> {
+    /// The filenames we are looking for. Multi-component paths are supported, such as
+    /// `.git/info/exclude`.
+    filenames: Vec<OsString>,
+    /// A predicate denoting wehterh the loaded result from this filegroup should be returned
+    /// by the [`UpwardSearch`].
+    predicate: Box<dyn Fn(&T) -> bool + Send + Sync>,
+}
+
+impl<T> FileGroup<T> {
+    /// Creates a new `FileGroup`, searching for the given filenames, and only using
+    /// the loaded result if `predicate` returns true.
+    pub fn new(
+        filenames: Vec<OsString>,
+        predicate: impl Fn(&T) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            filenames,
+            predicate: Box::new(predicate),
+        }
+    }
+
+    /// Creates a simple instance of `FileGroup`, whose predicate always returns true.
+    pub fn new_simple(filenames: Vec<OsString>) -> Self {
+        Self {
+            filenames,
+            predicate: Box::new(|_| true),
+        }
+    }
+}
+
 /// A cached way to search the file system upwards for specific files.
 pub struct UpwardSearch<T> {
     /// The filenames we are looking for. Multi-component paths are supported, such as
     /// `.git/info/exclude`.
-    filenames: Vec<OsString>,
+    /// Each [`FileGroup`] represents filetypes we should perform
+    /// a full upward search for before starting to search for the next group.
+    /// If the predicate in a filegroup returns false, the returned result is discarded,
+    /// and the search continues.
+    filegroups: Vec<FileGroup<T>>,
     /// The cached state, with previously found entries.
     state: RwLock<SmallMap<PathBuf, Option<T>>>,
     /// Given a config file that exists on disk, load it.
@@ -31,12 +73,29 @@ pub struct UpwardSearch<T> {
 impl<T: Dupe + Debug> UpwardSearch<T> {
     /// Given the files you want to find, and a function to load a file
     /// (which must have one of those filenames), create a cached searcher.
+    /// This only performs a single upward search, with all files at the same
+    /// group priority.
+    /// The predicate used always returns true, which means the first file
+    /// found is always returned.
     pub fn new(
         filenames: Vec<OsString>,
         load: impl Fn(&Path) -> T + Send + Sync + 'static,
     ) -> Self {
+        Self::new_grouped(vec![FileGroup::new_simple(filenames)], load)
+    }
+
+    /// Given the files you want to find, and a function to load a file
+    /// (which must have one of those filenames), create a cached searcher.
+    /// Each [`FileGroup`] represents a set of files at the same priority level, which we will
+    /// perform a full upward search for before moving onto the next group for a match.
+    /// The associated function determines if the loaded `T` should be used, or if
+    /// the upward search should continue/move onto later search groups.
+    pub fn new_grouped(
+        filegroups: Vec<FileGroup<T>>,
+        load: impl Fn(&Path) -> T + Send + Sync + 'static,
+    ) -> Self {
         Self {
-            filenames,
+            filegroups,
             state: Default::default(),
             load: Box::new(load),
         }
@@ -78,22 +137,26 @@ impl<T: Dupe + Debug> UpwardSearch<T> {
         drop(lock);
 
         // We didn't find a perfect hit, so now search the actual path
-        let mut buffer = dir.to_owned();
-        'outer: for i in 0..cache_answer.as_ref().map_or(FULL_PATH, |x| x.0) {
-            for stem in &self.filenames {
-                let stem_length = PathBuf::from(stem).components().count();
-                buffer.push(stem);
-                if buffer.exists() {
-                    let c = Some((self.load)(&buffer));
-                    found_answer = Some((i + 1, c));
-                    break 'outer;
+        'outer: for filegroup in &self.filegroups {
+            let mut buffer = dir.to_owned();
+            for i in 0..cache_answer.as_ref().map_or(FULL_PATH, |x| x.0) {
+                for stem in &filegroup.filenames {
+                    let stem_length = PathBuf::from(stem).components().count();
+                    buffer.push(stem);
+                    if buffer.exists() {
+                        let c = (self.load)(&buffer);
+                        if (filegroup.predicate)(&c) {
+                            found_answer = Some((i + 1, Some(c)));
+                            break 'outer;
+                        }
+                    }
+                    for _ in 0..stem_length {
+                        buffer.pop();
+                    }
                 }
-                for _ in 0..stem_length {
-                    buffer.pop();
+                if !buffer.pop() {
+                    break;
                 }
-            }
-            if !buffer.pop() {
-                break;
             }
         }
 
@@ -208,6 +271,195 @@ mod tests {
                 .directory_absolute(&root.path().join("a/e/f/g"))
                 .unwrap(),
             &root.path().join("a/b/c/d.test")
+        );
+    }
+
+    #[test]
+    fn test_grouped_path() {
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("a/b/c/d")).unwrap();
+        fs::write(root.path().join("a/b/c/d/mypy.ini"), "").unwrap();
+        fs::write(root.path().join("a/b/c/pyrightconfig.json"), "").unwrap();
+        fs::write(root.path().join("a/b/pyproject.toml"), "").unwrap();
+        fs::write(root.path().join("a/pyrefly.toml"), "").unwrap();
+
+        let upward_search = |trim_front| {
+            let groups = [
+                vec![OsString::from("pyrefly.toml")],
+                vec![OsString::from("pyproject.toml")],
+                vec![
+                    OsString::from("pyrightconfig.json"),
+                    OsString::from("mypy.ini"),
+                ],
+            ];
+            UpwardSearch::new_grouped(
+                groups
+                    .into_iter()
+                    .skip(trim_front)
+                    .map(FileGroup::new_simple)
+                    .collect(),
+                |p| Arc::new(p.to_path_buf()),
+            )
+        };
+
+        assert_eq!(
+            **upward_search(0)
+                .directory_absolute(&root.path().join("a/b/c/d"))
+                .unwrap(),
+            root.path().join("a/pyrefly.toml")
+        );
+        assert_eq!(
+            **upward_search(1)
+                .directory_absolute(&root.path().join("a/b/c/d"))
+                .unwrap(),
+            root.path().join("a/b/pyproject.toml")
+        );
+        assert_eq!(
+            **upward_search(2)
+                .directory_absolute(&root.path().join("a/b/c/d"))
+                .unwrap(),
+            root.path().join("a/b/c/d/mypy.ini")
+        );
+        assert_eq!(
+            **upward_search(0)
+                .directory_absolute(&root.path().join("a/b/c"))
+                .unwrap(),
+            root.path().join("a/pyrefly.toml")
+        );
+        assert_eq!(
+            **upward_search(1)
+                .directory_absolute(&root.path().join("a/b/c"))
+                .unwrap(),
+            root.path().join("a/b/pyproject.toml")
+        );
+        assert_eq!(
+            **upward_search(2)
+                .directory_absolute(&root.path().join("a/b/c"))
+                .unwrap(),
+            root.path().join("a/b/c/pyrightconfig.json")
+        );
+        assert_eq!(
+            **upward_search(0)
+                .directory_absolute(&root.path().join("a/b"))
+                .unwrap(),
+            root.path().join("a/pyrefly.toml")
+        );
+        assert_eq!(
+            **upward_search(1)
+                .directory_absolute(&root.path().join("a/b"))
+                .unwrap(),
+            root.path().join("a/b/pyproject.toml")
+        );
+        assert_eq!(
+            upward_search(2).directory_absolute(&root.path().join("a/b")),
+            None,
+        );
+    }
+
+    #[test]
+    fn test_predicate_path() {
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("a/b")).unwrap();
+        fs::write(root.path().join("a/b/pyproject.toml"), "").unwrap();
+        fs::write(root.path().join("a/pyrefly.toml"), "").unwrap();
+        fs::write(root.path().join("pyproject.toml"), "[tool.pyrefly]").unwrap();
+
+        let pred = |b| -> Box<dyn Fn(&Arc<PathBuf>) -> bool + Send + Sync + 'static> {
+            Box::new(move |_| b)
+        };
+
+        let upward_search = |p| {
+            let groups = vec![
+                FileGroup::new(
+                    vec![
+                        OsString::from("pyrefly.toml"),
+                        OsString::from("pyproject.toml"),
+                    ],
+                    p,
+                ),
+                FileGroup::new(
+                    vec![OsString::from("mypy.ini"), OsString::from("pyproject.toml")],
+                    pred(true),
+                ),
+            ];
+            UpwardSearch::new_grouped(groups, |p| Arc::new(p.to_path_buf()))
+        };
+
+        fn matches_file<'a>(f: &'a str) -> Box<dyn Fn(&Arc<PathBuf>) -> bool + Send + Sync + 'a> {
+            Box::new(move |p| p.file_name().unwrap().to_str().unwrap() == f)
+        }
+
+        fn not_empty() -> Box<dyn Fn(&Arc<PathBuf>) -> bool + Send + Sync + 'static> {
+            Box::new(|p| !fs::read_to_string(&**p).unwrap().is_empty())
+        }
+
+        // tests if simple behavior is the same
+        assert_eq!(
+            **upward_search(pred(true))
+                .directory_absolute(&root.path().join("a/b"))
+                .unwrap(),
+            root.path().join("a/b/pyproject.toml"),
+        );
+        assert_eq!(
+            **upward_search(pred(true))
+                .directory_absolute(&root.path().join("a"))
+                .unwrap(),
+            root.path().join("a/pyrefly.toml"),
+        );
+        assert_eq!(
+            **upward_search(pred(true))
+                .directory_absolute(root.path())
+                .unwrap(),
+            root.path().join("pyproject.toml"),
+        );
+
+        // tests that we only select files if they match the filename predicate
+        assert_eq!(
+            **upward_search(matches_file("pyproject.toml"))
+                .directory_absolute(&root.path().join("a/b"))
+                .unwrap(),
+            root.path().join("a/b/pyproject.toml"),
+        );
+        assert_eq!(
+            **upward_search(matches_file("pyproject.toml"))
+                .directory_absolute(&root.path().join("a"))
+                .unwrap(),
+            root.path().join("pyproject.toml"),
+        );
+        assert_eq!(
+            **upward_search(matches_file("pyrefly.toml"))
+                .directory_absolute(&root.path().join("a/b"))
+                .unwrap(),
+            root.path().join("a/pyrefly.toml"),
+        );
+        // tests that we fall back to the 'always return true' group if nothing is found in the
+        // first predicate group
+        assert_eq!(
+            **upward_search(matches_file("does_not_exist"))
+                .directory_absolute(&root.path().join("a/b"))
+                .unwrap(),
+            root.path().join("a/b/pyproject.toml"),
+        );
+
+        // tests that searching for a non-empty file will skip over empty files
+        assert_eq!(
+            **upward_search(not_empty())
+                .directory_absolute(&root.path().join("a/b"))
+                .unwrap(),
+            root.path().join("pyproject.toml"),
+        );
+        // tests that removing the file with contents will fall back to the second group
+        fs::remove_file(root.path().join("pyproject.toml")).unwrap();
+        assert_eq!(
+            **upward_search(not_empty())
+                .directory_absolute(&root.path().join("a/b"))
+                .unwrap(),
+            root.path().join("a/b/pyproject.toml"),
+        );
+        assert!(
+            upward_search(not_empty())
+                .directory_absolute(&root.path().join("a"))
+                .is_none()
         );
     }
 }

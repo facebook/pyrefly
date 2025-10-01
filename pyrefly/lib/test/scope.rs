@@ -55,21 +55,6 @@ async def test_async():
 );
 
 testcase!(
-    bug = "Pyrefly's uninitialized local checks behave unpredictably depending on parent scopes",
-    test_uninitialized_local_shadows,
-    r#"
-from typing import reveal_type
-x = 5
-def f():
-    # These two lines ought to analyze the same, but we don't catch the use of an uninitialized local `x`.
-    reveal_type(y)  # E: `y` is uninitialized  # E: revealed type: Literal['y']
-    reveal_type(x)  # E: revealed type: Literal['x']
-    y = "y"
-    x = "x"
-"#,
-);
-
-testcase!(
     test_async_for_outside_async_function_def,
     r#"
 import asyncio
@@ -117,161 +102,6 @@ def f():
 );
 
 testcase!(
-    test_global_ref_before_def,
-    r#"
-def f():
-    global x
-    x = "foo"
-x: str = ""
-"#,
-);
-
-testcase!(
-    test_global_not_found,
-    r#"
-x: str = ""
-global a  # E: Could not find name `a`
-"#,
-);
-
-testcase!(
-    test_global_assign_before_def,
-    r#"
-x: str = ""
-global x  # E: `x` was assigned in the current scope before the global declaration
-"#,
-);
-
-testcase!(
-    test_global_aug_assign,
-    r#"
-x: str = ""
-def f():
-    x += "a"  # E: `x` is not mutable from the current scope
-def g():
-    global x
-    x += "a"
-def h0():
-    global x
-    def h1():
-        x += "a"   # E: `x` is not mutable from the current scope
-"#,
-);
-
-// Note: the root cause of behavior in this test is that if there is no assignment, we ignore the
-// mutable capture entirely (leading to an error saying the mutation is invalid), whereas
-// if there is an assignment we incorrectly mark the name as defined in the local scope.
-testcase!(
-    bug = "We fail to mark a del of a mutable capture as illegal",
-    test_global_del,
-    r#"
-x: str = ""
-def f():
-    global x
-    x = "foo"
-    del x  # Not okay: it will work at runtime, but is not statically analyzable
-# A minor variation on f(), relevant to specific implementation bugs in our scope analysis
-# Here we do error, but for the wrong reason - we think `x` is an immutable capture.
-def g():
-    global x
-    del x
-f()
-f()  # This will crash at runtime!
-"#,
-);
-
-testcase!(
-    bug = "It is not safe to treat global as a normal flow-sensitive definition",
-    test_unannotated_global_with_reassignment,
-    r#"
-from typing import assert_type, Literal
-x = "x"
-def f():
-    global x
-    x = 42  # Should be a type error, does not respect module-level static analysis
-    assert_type(x, Literal[42])
-f()
-# This is why allowing the reassignment is unsafe
-assert_type(x, Literal['x'])
-"#,
-);
-
-testcase!(
-    test_global_assign_incompatible,
-    r#"
-x: str = ""
-def f():
-    global x
-    x = 1  # E: `Literal[1]` is not assignable to variable `x` with type `str`
-def g():
-    x = 1  # OK, this is a new x
-"#,
-);
-
-testcase!(
-    test_global_after_local_define,
-    r#"
-x: str = ""
-def f() -> None:
-    y: int = 1
-    global y  # E: `y` was assigned in the current scope before the global declaration
-"#,
-);
-
-testcase!(
-    bug = "We fail to add x to the global scope so that it's visible from `outer`",
-    test_global_can_see_past_enclosing_scopes,
-    r#"
-from typing import assert_type
-x: str = ""
-def outer():
-    x: int = 5
-    def f():
-        # This works fine in Python, `x` is the global `x`, not the one from `outer`.
-        global x # E: Found `x`, but it was not the global scope
-        assert_type(x, str)  # E: assert_type(Any, str)
-"#,
-);
-
-testcase!(
-    bug = "We currently never complain on aug assign, but when we fix it we need to be careful about type changes",
-    test_global_aug_assign_incompatible_type,
-    r#"
-from typing import assert_type
-class C:
-    def __iadd__(self, other: C) -> C: ...
-    def __sub__(self, other: C) -> C: ...
-    def __mul__(self, other: C) -> int: ...
-c0, c1, c2 = C(), C(), C()
-def f():
-    global c0
-    global c1
-    global c2
-    # Should be permitted, the resulting operation is in-place
-    c0 += C()
-    # Should be permitted, the resulting operation returns a new C which is okay
-    c1 -= C()
-    # Should *not* be permitted, this changes the type of the global in a way
-    # that is incompatible with static analysis of the global scope
-    c2 *= C()
-f()
-# This shows what would go wrong if we allow the aug assign on `c2`
-assert_type(c2, C)
-"#,
-);
-
-testcase!(
-    test_global_reference_in_nested_function,
-    r#"
-x: str = ""
-def f() -> None:
-    global x
-    def g() -> str:
-        return x
-"#,
-);
-
-testcase!(
     test_nonlocal_simple,
     r#"
 def f(x: int) -> None:
@@ -282,12 +112,30 @@ def f(x: int) -> None:
 );
 
 testcase!(
+    test_global_ref_before_def,
+    r#"
+def f():
+    global x
+    x = "foo"
+x: str = ""
+"#,
+);
+
+testcase!(
     test_nonlocal_ref_before_def,
     r#"
 def f(x: int) -> None:
     def g():
         nonlocal x
         x = 1
+"#,
+);
+
+testcase!(
+    test_global_not_found,
+    r#"
+x: str = ""
+global a  # E: Could not find name `a`
 "#,
 );
 
@@ -303,28 +151,53 @@ def f() -> None:
 );
 
 testcase!(
-    test_nonlocal_assign_before_def,
+    test_global_can_see_past_enclosing_scopes,
     r#"
-def f() -> None:
-    a: str = ""
-    nonlocal a  # E: `a` was assigned in the current scope before the nonlocal declaration
+from typing import assert_type
+x: str = ""
+def outer():
+    x: int = 5
+    def f():
+        global x
+        assert_type(x, str)
 "#,
 );
 
 testcase!(
-    test_nonlocal_aug_assign,
+    test_nonlocal_finds_global,
     r#"
+from typing import reveal_type
+x: str = ""
+def f() -> None:
+    nonlocal x  # E: Found `x`, but it is coming from the global scope
 def outer():
-    x: str = ""
-    def f():
-        x += "a"  # E: `x` is not mutable from the current scope
-    def g():
-        nonlocal x
-        x += "a"
-    def h0():
-        nonlocal x
-        def h1():
-            x += "a"   # E: `x` is not mutable from the current scope
+    x: int = 5
+    def middle():
+        global x
+        reveal_type(x)  # E: revealed type: str
+        def inner():
+            nonlocal x  # E: Found `x`, but it is coming from the global scope
+            reveal_type(x)  # E: revealed type: Unknown
+"#,
+);
+
+testcase!(
+    test_global_reference_in_nested_function,
+    r#"
+x: str = ""
+def f() -> None:
+    global x
+    def g() -> str:
+        return x
+"#,
+);
+
+testcase!(
+    test_mutable_capture_assign_before_def,
+    r#"
+def f() -> None:
+    a: str = ""
+    nonlocal a  # E: `a` was assigned in the current scope before the nonlocal declaration
 "#,
 );
 
@@ -333,7 +206,7 @@ def outer():
 // if there is an assignment we incorrectly mark the name as defined in the local scope.
 testcase!(
     bug = "We fail to mark a del of a mutable capture as illegal",
-    test_nonlocal_del,
+    test_mutable_capture_del,
     r#"
 def outer():
     x: str = ""
@@ -352,7 +225,7 @@ def outer():
 
 testcase!(
     bug = "It is not safe to treat nonlocal as a normal flow-sensitive definition",
-    test_unannotated_nonlocal_with_reassignment,
+    test_unannotated_mutable_capture_with_reassignment,
     r#"
 from typing import assert_type, Literal
 def outer():
@@ -367,7 +240,7 @@ def outer():
 "#,
 );
 testcase!(
-    test_nonlocal_assign_incompatible,
+    test_mutable_capture_assign_incompatible,
     r#"
 def f() -> None:
     a: str = ""
@@ -380,7 +253,7 @@ def f() -> None:
 );
 
 testcase!(
-    test_nonlocal_multiple_annotations,
+    test_mutable_capture_multiple_annotations,
     r#"
 def f() -> None:
     a: str = ""
@@ -391,16 +264,7 @@ def f() -> None:
 );
 
 testcase!(
-    test_nonlocal_not_in_local_scope,
-    r#"
-x: str = ""
-def f() -> None:
-    nonlocal x  # E: Found `x`, but it was not in a valid enclosing scope
-"#,
-);
-
-testcase!(
-    test_nonlocal_reference_in_nested_function,
+    test_mutable_capture_reference_in_nested_function,
     r#"
 def f() -> None:
     x: str = ""
@@ -412,7 +276,6 @@ def f() -> None:
 );
 
 testcase!(
-    bug = "A mutable capture is not actually in scope, it can't define a class attribute.",
     test_mutable_capture_class_body,
     r#"
 from typing import assert_type
@@ -420,7 +283,18 @@ x = 5
 class C:
     global x
     x = 7
-assert_type(C().x, int)  # This should be a lookup error
+C().x  # E: `C` has no attribute `x`
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1210
+testcase!(
+    test_mutable_capture_with_annotation_class_body,
+    r#"
+x = 5
+class C:
+    global x
+    x: int
 "#,
 );
 
@@ -439,13 +313,25 @@ x = "str"
 );
 
 testcase!(
-    bug = "We don't detect a case that crashes at runtime (the compiler rejects this)",
+    bug = "We detect the error (we didn't at one point) but the error message is not very good",
     test_mutable_capture_read_before_declared,
     r#"
 x = 42
 def f():
-    print(x)  # Should error, the compiler crashes with "SyntaxError: name 'x' is used prior to global declaration"
+    # We should really be producing an error more like the compiler's, which says you can't use `x` before the declaration
+    print(x)  # E: `x` is uninitialized
     global x
+"#,
+);
+
+// Regression test against a panic in the presence of parser error recovery:
+// https://github.com/facebook/pyrefly/issues/1203
+testcase!(
+    test_mutable_capture_syntax_error,
+    r#"
+def f():
+    be be:  # E: `be` is uninitialized  # E: Parse error  # E: Parse error
+    global be   # E: `be` was assigned in the current scope before the global declaration
 "#,
 );
 
@@ -471,13 +357,12 @@ z = str(z)  # E: `z` is uninitialized  # E: `str` is not assignable to variable 
 );
 
 testcase!(
-    bug = "The duplication of flow and static leads to us accidentally allowing uninitialized reads when a var shadows an enclosing scope",
     test_uninitialized_when_shadowing,
     r#"
 from typing import assert_type
 x: int = 5
 def f():
-    assert_type(x, str)  # This should error, it crashes at runtime. We do understand the type, but we fail to track initialization.
+    assert_type(x, str)  # E: `x` is uninitialized
     x: str = "foo"
     "#,
 );
@@ -539,24 +424,19 @@ testcase!(
     test_local_defined_by_mutation_no_shadowing,
     r#"
 def f() -> None:
-    x += 1  # E: Could not find name `x`
-    del y  # E: Could not find name `y`
+    x += 1  # E: `x` is uninitialized
+    del y  # E: `y` is uninitialized
 "#,
 );
 
 testcase!(
-    bug = "We incorrectly treat mutations as potentially modifying non-mutable captures",
     test_local_defined_by_mutation_with_shadowing,
     r#"
 x: int = 0
 y: int = 0
 def f() -> None:
-    # This is *not* an invalid mutation of the global `x` (that is impossible syntactically).
-    # Instead, it is *defining* a local (and should produce an uninitialaized local error in this case).
-    # The runtime error is pretty clear here: UnboundLocalError: local variable 'x' referenced before assignment
-    x += 1  # E: `x` is not mutable from the current scope
-    # Same problem here, `del` defines a local, and the runtime gives the same error.
-    del y  # E: `y` is not mutable from the current scope
+    x += 1  # E: `x` is uninitialized
+    del y  # E: `y` is uninitialized
 "#,
 );
 
@@ -705,7 +585,51 @@ def check[T](new: T, old: T) -> None:
 testcase!(
     test_dunder_all_mutated_without_def,
     r#"
-__all__ += []  # E: Could not find name `__all__`
+__all__ += []  # E: `__all__` is uninitialized
+"#,
+);
+
+testcase!(
+    test_aug_assign_lookup_inconsistencies,
+    r#"
+from typing import reveal_type
+def f():
+    reveal_type(x)  # E: revealed type: Unknown  # E: `x` is uninitialized
+    x += 5  # E: `x` is uninitialized
+    reveal_type(x)  # E: revealed type: Unknown
+"#,
+);
+
+testcase!(
+    test_del_defines_a_local,
+    r#"
+from typing import reveal_type
+x = 5
+def f():
+    reveal_type(y)  # E: revealed type: Unknown  # E: `y` is uninitialized
+    reveal_type(x)  # E: revealed type: Unknown  # E: `x` is uninitialized
+    del y  # E: `y` is uninitialized
+    del x  # E: `x` is uninitialized
+f()
+"#,
+);
+
+// This does come up in practice - see https://github.com/facebook/pyrefly/issues/1146
+testcase!(
+    test_class_scope_annotation_shadows_global,
+    r#"
+class A: pass
+class B:
+    # This sets `A` in `__annotations__`, but because class scopes are dynamic,
+    # `A` still refers to the global.
+    A: A
+    x: A = A()
+class C:
+    # The use of `del` is more of an edge case, but our implementation has to
+    # define the behavior and we should test it. It behaves the same.
+    A = A()
+    del A
+    y: A = A()
 "#,
 );
 

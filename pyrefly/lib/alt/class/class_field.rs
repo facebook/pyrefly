@@ -667,6 +667,7 @@ impl ClassField {
     }
 }
 
+#[derive(Debug)]
 enum InstanceKind {
     ClassType,
     TypedDict,
@@ -677,6 +678,7 @@ enum InstanceKind {
 }
 
 /// Wrapper to hold a specialized instance of a class , unifying ClassType and TypedDict.
+#[derive(Debug)]
 struct Instance<'a> {
     kind: InstanceKind,
     class: &'a Class,
@@ -800,7 +802,7 @@ fn bind_class_attribute(
     }
 }
 
-/// Return the type of making it bound, or if not,
+/// Return the type of making it bound, or if not, the unbound type.
 fn make_bound_method_helper(
     obj: Type,
     attr: Type,
@@ -808,20 +810,30 @@ fn make_bound_method_helper(
 ) -> Result<Type, Type> {
     // Don't bind functions originating from callback protocols, because the self param
     // has already been removed.
-    let should_bind = |metadata: &FuncMetadata| {
+    let should_bind2 = |metadata: &FuncMetadata| {
         !matches!(metadata.kind, FunctionKind::CallbackProtocol(_)) && should_bind(metadata)
     };
     let func = match attr {
         Type::Forall(box Forall {
             tparams,
             body: Forallable::Function(func),
-        }) if should_bind(&func.metadata) => BoundMethodType::Forall(Forall {
+        }) if should_bind2(&func.metadata) => BoundMethodType::Forall(Forall {
             tparams,
             body: func,
         }),
-        Type::Function(func) if should_bind(&func.metadata) => BoundMethodType::Function(*func),
-        Type::Overload(overload) if should_bind(&overload.metadata) => {
+        Type::Function(func) if should_bind2(&func.metadata) => BoundMethodType::Function(*func),
+        Type::Overload(overload) if should_bind2(&overload.metadata) => {
             BoundMethodType::Overload(overload)
+        }
+        Type::Union(ref ts) => {
+            let mut bound_methods = Vec::with_capacity(ts.len());
+            for t in ts {
+                match make_bound_method_helper(obj.clone(), t.clone(), should_bind) {
+                    Ok(x) => bound_methods.push(x),
+                    Err(_) => return Err(attr),
+                }
+            }
+            return Ok(unions(bound_methods));
         }
         _ => return Err(attr),
     };
@@ -893,7 +905,7 @@ pub struct WithDefiningClass<T> {
 
 impl<T> WithDefiningClass<T> {
     pub(in crate::alt::class) fn defined_on(&self, module: &str, cls: &str) -> bool {
-        self.defining_class.has_qname(module, cls)
+        self.defining_class.has_toplevel_qname(module, cls)
     }
 }
 
@@ -1730,10 +1742,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return;
         }
 
-        // TODO(zeina): skip private properties and dunder methods for now. This will need some special casing.
-        if (field_name.starts_with('_') && field_name.ends_with('_'))
-            || (field_name.starts_with("__") && !field_name.ends_with("__"))
-        {
+        // Object construction (`__new__` and `__init__`) should not participate in override checks
+        if field_name == &dunder::NEW || field_name == &dunder::INIT {
+            return;
+        }
+
+        // TODO(grievejia): In principle we should not really skip `__call__`. But the reality is that
+        // there are too many classes on typeshed whose `__call__` are marked as follows:
+        // ```
+        // def __call__(self, *args: Any, **kwds: Any) -> Any: ...
+        // ```
+        // If we follow our pre-existing subtyping rule, this kind of signature would be non-overridable
+        // -- any overrider must be able to take ANY arguments which can't be practical. We need to either
+        // special-case typeshed or special-case callable subtyping to make `__call__` override check more usable.
+        if field_name == &dunder::CALL {
+            return;
+        }
+
+        // Private attributes should not participate in overrload checks
+        if field_name.starts_with("__") && !field_name.ends_with("__") {
+            return;
+        }
+
+        // TODO: This should only be ignored when `cls` is a dataclass
+        if field_name.as_str() == "__post_init__" {
+            return;
+        }
+
+        // TODO: This should only be ignored when `_ignore_` is defined on enums
+        if field_name.as_str() == "_ignore_" {
             return;
         }
 

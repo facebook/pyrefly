@@ -90,7 +90,7 @@ f("",3,True)
 4 | f()
       ^
 Signature Help Result: active=0
-- (
+- def f(
     a: str,
     b: int,
     c: bool
@@ -99,7 +99,7 @@ Signature Help Result: active=0
 6 | f("", )
          ^
 Signature Help Result: active=0
-- (
+- def f(
     a: str,
     b: int,
     c: bool
@@ -108,7 +108,7 @@ Signature Help Result: active=0
 8 | f("",3, )
            ^
 Signature Help Result: active=0
-- (
+- def f(
     a: str,
     b: int,
     c: bool
@@ -117,7 +117,7 @@ Signature Help Result: active=0
 10 | f("",3,True)
             ^
 Signature Help Result: active=0
-- (
+- def f(
     a: str,
     b: int,
     c: bool
@@ -143,7 +143,7 @@ f(
 4 | f(
       ^
 Signature Help Result: active=0
-- (a: str) -> None, parameters=[a: str], active parameter = 0
+- def f(a: str) -> None, parameters=[a: str], active parameter = 0
 "#
         .trim(),
         report.trim(),
@@ -168,12 +168,12 @@ f(g())
 5 | f()
       ^
 Signature Help Result: active=0
-- (a: str) -> None, parameters=[a: str], active parameter = 0
+- def f(a: str) -> None, parameters=[a: str], active parameter = 0
 
 7 | f(g())
         ^
 Signature Help Result: active=0
-- (b: int) -> None, parameters=[b: int], active parameter = 0
+- def g(b: int) -> None, parameters=[b: int], active parameter = 0
 "#
         .trim(),
         report.trim(),
@@ -203,7 +203,7 @@ foo.f("",3,True)
 6 | foo.f()
           ^
 Signature Help Result: active=0
-- (
+- def f(
     self: Foo,
     a: str,
     b: int,
@@ -213,7 +213,7 @@ Signature Help Result: active=0
 8 | foo.f("", )
              ^
 Signature Help Result: active=0
-- (
+- def f(
     self: Foo,
     a: str,
     b: int,
@@ -223,7 +223,7 @@ Signature Help Result: active=0
 10 | foo.f("",3, )
                 ^
 Signature Help Result: active=0
-- (
+- def f(
     self: Foo,
     a: str,
     b: int,
@@ -233,7 +233,7 @@ Signature Help Result: active=0
 12 | foo.f("",3,True)
                 ^
 Signature Help Result: active=0
-- (
+- def f(
     self: Foo,
     a: str,
     b: int,

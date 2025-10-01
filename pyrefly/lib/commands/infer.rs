@@ -13,7 +13,7 @@ use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
-use pyrefly_util::globs::FilteredGlobs;
+use pyrefly_util::includes::Includes;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextSize;
 use tracing::error;
@@ -191,14 +191,14 @@ impl InferArgs {
     }
 
     pub fn run_inner(
-        files_to_check: FilteredGlobs,
+        files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
         flags: InferFlags,
     ) -> anyhow::Result<CommandExitStatus> {
         let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
         let state = State::new(config_finder);
         let holder = Forgetter::new(state, false);
-        let handles = Handles::new(expanded_file_list, holder.as_ref().config_finder());
+        let handles = Handles::new(expanded_file_list);
         let mut forgetter = Forgetter::new(
             holder.as_ref().new_transaction(Require::Everything, None),
             true,
@@ -207,7 +207,14 @@ impl InferArgs {
         let mut cancellable_transaction = holder.as_ref().cancellable_transaction();
         let transaction = forgetter.as_mut();
 
-        for handle in handles.all() {
+        let (handles, _, sourcedb_errors) = handles.all(holder.as_ref().config_finder());
+        if !sourcedb_errors.is_empty() {
+            for error in sourcedb_errors {
+                error.print();
+            }
+            return Err(anyhow::anyhow!("Failed to query sourcedb."));
+        }
+        for handle in handles {
             transaction.run(&[handle.dupe()], Require::Everything);
             let stdlib = transaction.get_stdlib(&handle);
             let inferred_types: Option<Vec<(ruff_text_size::TextSize, Type, AnnotationKind)>> =
@@ -335,7 +342,7 @@ mod test {
         t.add(&path.display().to_string(), input);
         let includes =
             Globs::new(vec![format!("{}/**/*", tdir.path().display()).to_owned()]).unwrap();
-        let f_globs = FilteredGlobs::new(includes, Globs::empty(), None);
+        let f_globs = Box::new(FilteredGlobs::new(includes, Globs::empty(), None));
         let config_finder = t.config_finder();
         let result = InferArgs::run_inner(f_globs, config_finder, flags);
         assert!(

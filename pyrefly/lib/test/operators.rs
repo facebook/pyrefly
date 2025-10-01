@@ -508,3 +508,26 @@ def f(x: Tensor, i: int):
 
     "#,
 );
+
+testcase!(
+    test_magic_dunder_call_with_metaclass,
+    r#"
+from typing import assert_type
+
+class Meta(type):
+    def __add__(cls, other) -> int:
+        return 0
+
+class A(metaclass=Meta):
+    @classmethod
+    def __add__(cls, other) -> str:
+        return ""
+
+class B(A):
+    pass
+
+# The `+` operation uses `Meta.__add__`, unlike a direct `__add__` call, which uses `A.__add__`.
+assert_type(B + B, int)
+assert_type(B.__add__(B), str)
+    "#,
+);

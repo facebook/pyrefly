@@ -164,6 +164,13 @@ jobs:
           # aarch64-linux builds need JEMALLOC_SYS_WITH_LG_PAGE=16, or they segfault.
           # See https://github.com/facebook/pyrefly/issues/380
           JEMALLOC_SYS_WITH_LG_PAGE: 16
+      - name: Test wheel (unactivated venv)
+        if: ${{ startsWith(matrix.target, 'x86_64') }}
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install pyrefly/dist/"${PACKAGE_NAME}"-*.whl --force-reinstall
+          .venv/bin/python -m "${BINARY_NAME}" --version
+          rm -rf .venv
       - name: Test wheel
         if: ${{ startsWith(matrix.target, 'x86_64') }}
         run: |

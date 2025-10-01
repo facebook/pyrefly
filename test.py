@@ -187,8 +187,9 @@ class BuckExecutor(Executor):
             [
                 "arc",
                 "rust-clippy",
+                "--flagfile",
+                "fbcode//mode/opt",
                 "...",
-                "--reuse-current-config",
             ]
         )
 
@@ -201,13 +202,13 @@ class BuckExecutor(Executor):
                 "buck2",
                 "uquery",
                 "kind('rust_test|rust_library', ...)",
-                "--reuse-current-config",
+                "@fbcode//mode/opt",
             ],
             capture_output=True,
         )
         tests = [line.strip() for line in res.stdout.splitlines()] + ["test:"]
         run(
-            ["buck2", "test", "--reuse-current-config"]
+            ["buck2", "test", "@fbcode//mode/opt"]
             + tests
             + ["--", "--run-disabled", "--return-zero-on-skips"]
         )
@@ -217,7 +218,7 @@ class BuckExecutor(Executor):
             [
                 "buck2",
                 "run",
-                "--reuse-current-config",
+                "@fbcode//mode/opt",
                 "conformance:conformance_output_script",
                 "--",
                 "./conformance/third_party",

@@ -84,7 +84,7 @@ impl Incremental {
                 ModulePath::memory(PathBuf::from(file)),
             );
         }
-        config.source_db = Some(ArcId::new(Box::new(sourcedb)));
+        config.source_db = Some(Arc::new(Box::new(sourcedb)));
         config.configure();
         let config = ArcId::new(config);
 
@@ -428,7 +428,7 @@ fn test_dueling_typevar() {
     i.set("bar", "from foo import T");
     i.set(
         "main",
-        "import foo\nimport bar\ndef f(x: foo.T) -> bar.T: return x",
+        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x",
     );
     i.check(&["main"], &["main", "foo", "bar"]);
 
@@ -438,7 +438,7 @@ fn test_dueling_typevar() {
     // Observe that foo.T and bar.T are no longer equal.
     i.set(
         "main",
-        "import foo\nimport bar\ndef f(x: foo.T) -> bar.T: return x # E: Returned type `TypeVar[T]` is not assignable to declared return type `TypeVar[T]`",
+        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x # E: `TypeVar[T]` is not assignable to `TypeVar[T]`",
     );
     i.check(&["main"], &["main"]);
 }

@@ -1007,3 +1007,36 @@ import unittest.main
 unittest.main()  # E: Expected a callable, got `Module[unittest.main]`
     "#,
 );
+
+fn env_re_export_special() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+from typing import TypeVar
+from typing import TypeVarTuple as _TypeVarTuple
+from typing import TypeAlias
+from typing import Annotated as MyAnnotated
+"#,
+    )
+}
+
+testcase!(
+    test_re_exported_special,
+    env_re_export_special(),
+    r#"
+from foo import TypeVar
+import foo
+from foo import TypeAlias as TA, MyAnnotated
+
+T = TypeVar("T")
+Ts = foo._TypeVarTuple("Ts")
+
+X: TA = list[int]
+
+x: X = [1, 2, 3]
+def test(x: T, ys: tuple[*Ts]) -> tuple[T, *Ts]:
+    return (x, *ys)
+
+y: MyAnnotated[int, "hello"] = 1
+"#,
+);

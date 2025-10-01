@@ -55,268 +55,6 @@ assert_type(y, Literal[7, 100])
 );
 
 testcase!(
-    test_while_simple,
-    r#"
-from typing import assert_type, Literal
-def f(condition) -> None:
-    x = None
-    while condition():
-        assert_type(x, Literal["hello world"] | None)
-        x = "hello world"
-        assert_type(x, Literal["hello world"])
-    assert_type(x, Literal["hello world"] | None)
-    "#,
-);
-
-testcase!(
-    bug = "A recursive redefinition in a loop does not work as before after first-use variable pinning.",
-    test_while_infinite,
-    r#"
-from typing import assert_type, Any, Literal
-def f(condition) -> None:
-    x = 1
-    while condition():  # E: `Literal[1] | list[int]` is not assignable to `int`
-        assert_type(x, Literal[1] | list[int])
-        x = [x]
-        assert_type(x, list[int])
-    assert_type(x, Literal[1] | list[int])
-    "#,
-);
-
-testcase!(
-    test_while_noop,
-    r#"
-from typing import assert_type, Literal
-def f(condition) -> None:
-    x = 1
-    while condition():
-        pass
-    assert_type(x, Literal[1])
-    "#,
-);
-
-testcase!(
-    test_while_fancy_noop,
-    r#"
-from typing import assert_type, Any, Literal
-def f(condition) -> None:
-    x = 1
-    while condition():
-        x = x
-    assert_type(x, Literal[1])
-    "#,
-);
-
-testcase!(
-    test_while_if,
-    r#"
-from typing import assert_type, Any, Literal
-def f(condition1, condition2) -> None:
-    x = None
-    while condition1():
-        if condition2():
-            x = "hello"
-    assert_type(x, Literal['hello'] | None)
-    "#,
-);
-
-testcase!(
-    test_while_two_vars,
-    r#"
-from typing import assert_type, Any, Literal
-def f(cond1, cond2, cond3) -> None:
-    x = 1
-    y = ""
-    while cond1():
-        if cond2():
-            x = y
-        if cond3():
-            y = x
-    assert_type(x, Literal["", 1])
-    assert_type(y, Literal["", 1])
-    "#,
-);
-
-testcase!(
-    test_while_else,
-    r#"
-from typing import assert_type, Literal
-def f(condition) -> None:
-    x = None
-    while condition():
-        x = 1
-    else:
-        x = ""
-    assert_type(x, Literal[""])
-    "#,
-);
-
-testcase!(
-    test_while_break_else,
-    r#"
-from typing import assert_type, Any, Literal
-def f(cond1, cond2) -> None:
-    x = None
-    while cond1():
-        if cond2():
-            x = "value"
-            break
-        else:
-            x = "overwritten"
-    else:
-        assert_type(x, Literal["overwritten"] | None)
-        x = "default"
-    assert_type(x, Literal["default", "value"])
-    "#,
-);
-
-testcase!(
-    test_while_else_while,
-    r#"
-while False:
-    x = 0
-else:
-    while False:
-        x = 1
-    "#,
-);
-
-testcase!(
-    test_while_infinite_implicit_return,
-    r#"
-def f1(b) -> int:
-    while True:
-        if b():
-            return 1
-
-def f2(b) -> int:  # E: Function declared to return `int` but is missing an explicit `return`
-    while True:
-        if b():
-            break
-    "#,
-);
-
-testcase!(
-    test_while_reassignment_with_annotation,
-    r#"
-from typing import assert_type, Literal
-def f(cond):
-    x: int = 0
-    while cond():
-        x: int = 1
-    assert_type(x, int)
-    "#,
-);
-
-testcase!(
-    test_for_simple,
-    r#"
-from typing import assert_type
-def f(x: list[int]) -> None:
-    for i in x:
-        assert_type(i, int)
-    assert_type(i, int)
-    "#,
-);
-
-testcase!(
-    test_for_tuple,
-    r#"
-from typing import assert_type
-def f(x: tuple[int, str]) -> None:
-    for i in x:
-        assert_type(i, int | str)
-    "#,
-);
-
-testcase!(
-    test_for_literal_string,
-    r#"
-from typing import assert_type, LiteralString
-for i in "abcd":
-    assert_type(i, LiteralString)
-    "#,
-);
-
-testcase!(
-    test_for_any,
-    r#"
-from typing import Any, assert_type
-def f(x: Any):
-    for i in x:
-        assert_type(i, Any)
-    "#,
-);
-
-testcase!(
-    test_for_reassign,
-    r#"
-from typing import assert_type
-def f(x: list[int]):
-    y = None
-    for i in x:
-        y = i
-    assert_type(y, int | None)
-    "#,
-);
-
-testcase!(
-    test_for_else_reassign,
-    r#"
-from typing import assert_type, Literal
-def f(x: list[int]):
-    y = None
-    for i in x:
-        y = i
-    else:
-        y = 'done'
-    assert_type(y, Literal['done'])
-    "#,
-);
-
-testcase!(
-    test_for_multiple_targets,
-    r#"
-from typing import assert_type
-def f(x: list[tuple[int, str]]) -> None:
-    for (i, j) in x:
-        assert_type(i, int)
-        assert_type(j, str)
-    "#,
-);
-
-testcase!(
-    test_for_scope,
-    r#"
-from typing import assert_type
-def f(x: list[int]) -> None:
-    for i in x:
-        pass
-    assert_type(i, int)
-    "#,
-);
-
-testcase!(
-    test_for_target_annot_compatible,
-    r#"
-def f(x: list[int]) -> None:
-    i: int = 0
-    for i in x:
-        pass
-    "#,
-);
-
-testcase!(
-    test_for_target_annot_incompatible,
-    r#"
-def f(x: list[int]) -> None:
-    i: str = ""
-    for i in x: # E: Cannot use variable `i` with type `str` to iterate through `list[int]`
-        pass
-    "#,
-);
-
-testcase!(
     test_listcomp_simple,
     r#"
 from typing import assert_type
@@ -473,11 +211,14 @@ def f(x):
     "#,
 );
 
+// Regression test to ensure we don't forget to create loop recursion
+// bindings when the loop has early termination.
 testcase!(
     test_return_in_for,
     r#"
 def f(x: str):
     for c in x:
+        x = c
         return
     "#,
 );
@@ -1030,6 +771,514 @@ def f(x: bool, y: int):
     "#,
 );
 
+testcase!(
+    test_if_which_exits,
+    r#"
+def foo(val: int | None, b: bool) -> int:
+    if val is None:
+        if b:
+            return 1
+        else:
+            return 2
+    return val
+"#,
+);
+
+testcase!(
+    test_shortcuit_or_after_flow,
+    r#"
+bar: str = "bar"
+
+def func():
+    foo: str | None = None
+
+    for x in []:
+        for y in []:
+            pass
+
+    baz: str = foo or bar
+"#,
+);
+
+testcase!(
+    test_export_not_in_flow,
+    r#"
+if 0.1:
+    vari = "test"
+    raise SystemExit
+"#,
+);
+
+testcase!(
+    test_assert_not_in_flow,
+    r#"
+from typing import assert_type, Literal
+if 0.1:
+    vari = "test"
+    raise SystemExit
+assert_type(vari, Literal["test"]) # E: `vari` is uninitialized
+"#,
+);
+
+testcase!(
+    test_assert_false_terminates_flow,
+    r#"
+def test1() -> int:
+    assert False
+def test2() -> int:  # E: Function declared to return `int` but is missing an explicit `return`
+    assert True
+    "#,
+);
+
+testcase!(
+    bug = "Merge flow is lax about possibly-undefined locals, so we don't catch that `x` may be uninitialized.",
+    test_if_defines_variable_in_one_side,
+    r#"
+from typing import assert_type, Literal
+def condition() -> bool: ...
+if condition():
+    x = 1
+else:
+    pass
+assert_type(x, Literal[1])  # Here, we did not catch that `x` may not be initialized
+    "#,
+);
+
+testcase!(
+    bug = "Merge flow is lax about possibly-undefined locals, so we don't catch that `z` may be uninitialized.",
+    test_named_inside_boolean_op,
+    r#"
+from typing import assert_type, Literal
+b: bool = True
+y = 5
+x0 = True or (y := b) and False
+assert_type(y, Literal[5, True])  # this is as expected
+x0 = True or (z := b) and False
+assert_type(z, bool)  # here, we did not catch that `z` may not be initialized
+"#,
+);
+
+testcase!(
+    test_redundant_condition_func,
+    r#"
+def foo() -> bool: ...
+
+if foo:  # E: Function object `foo` used as condition
+    ...
+while foo:  # E: Function object `foo` used as condition
+    ...
+[x for x in range(42) if foo]  # E: Function object `foo` used as condition
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_class,
+    r#"
+class Foo:
+    def __bool__(self) -> bool: ...
+
+if Foo:  # E: Class name `Foo` used as condition
+    ...
+while Foo:  # E: Class name `Foo` used as condition
+    ...
+[x for x in range(42) if Foo]  # E: Class name `Foo` used as condition
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_int,
+    r#"
+if 42:  # E: Integer literal used as condition. It's equivalent to `True`
+    ...
+while 0:  # E: Integer literal used as condition. It's equivalent to `False`
+    ...
+[x for x in range(42) if 42]  # E: Integer literal used as condition
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_str_bytes,
+    r#"
+if "test":  # E: String literal used as condition. It's equivalent to `True`
+    ...
+while "":  # E: String literal used as condition. It's equivalent to `False`
+    ...
+[x for x in range(42) if b"test"]  # E: Bytes literal used as condition
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_enum,
+    r#"
+import enum
+class E(enum.Enum):
+    A = 1
+    B = 2
+    C = 3
+if E.A:  # E: Enum literal `E.A` used as condition
+    ...
+while E.B:  # E: Enum literal `E.B` used as condition
+    ...
+[x for x in range(42) if E.C]  # E: Enum literal `E.C` used as condition
+    "#,
+);
+
+testcase!(
+    crash_no_try_type,
+    r#"
+# Used to crash, https://github.com/facebook/pyrefly/issues/766
+try:
+    pass
+except as r: # E: Parse error: Expected one or more exception types
+    pass
+"#,
+);
+
+testcase!(
+    bug = "We unsoundly merge narrows dropping missing flow. See the incorrect reveal_type(y) result.",
+    test_narrows_in_flow_merge_when_not_in_base_flow,
+    r#"
+from typing import reveal_type
+class A: pass
+class B(A): pass
+class C(A): pass
+x: A = A()
+y: A = A()
+def f():
+    if isinstance(x, B):
+        assert isinstance(y, B)
+        pass
+    elif isinstance(x, C):
+        assert isinstance(y, C)
+        pass
+    # We get this case right, but for a brittle reason: we negate the tests in the base flow.
+    reveal_type(x)  # E: revealed type: A | B | C
+    # The negation trick doesn't work here, and we get an incorrect narrow.
+    reveal_type(y)  # E: revealed type: B | C
+"#,
+);
+
+testcase!(
+    bug = "Loop recursion is causing problems, see https://github.com/facebook/pyrefly/issues/778",
+    loop_with_sized_operation,
+    r#"
+intList: list[int] = [5, 6, 7, 8]
+for j in [1, 2, 3, 4]:
+    for i in range(len(intList)):  # E: `Sized | list[int]` is not assignable to `list[int]` (caused by inconsistent types when breaking cycles)
+        intList[i] *= 42
+print([value for value in intList])  # E: Type `Sized` is not iterable
+"#,
+);
+
+testcase!(
+    test_setitem_with_loop_and_walrus,
+    r#"
+def f():
+    d: dict[int, int] = {}
+    for i in range(10):
+        idx = i
+        d[idx] = (x := idx)
+    "#,
+);
+
+testcase!(
+    test_bad_setitem_with_loop_and_walrus,
+    r#"
+def f():
+    d: dict[str, int] = {}
+    for i in range(10):
+        idx = i
+        d[idx] = (x := idx)  # E: `int` is not assignable to parameter `key` with type `str`
+    "#,
+);
+
+testcase!(
+    test_false_and_walrus,
+    r#"
+def f(v):
+    if False and (value := v):
+        print(value)
+    else:
+        print(value)
+    "#,
+);
+
+testcase!(
+    test_trycatch_implicit_return,
+    r#"
+def f() -> int:
+    try:
+        return 1
+    finally:
+        pass
+    "#,
+);
+
+testcase!(
+    test_while_simple,
+    r#"
+from typing import assert_type, Literal
+def f(condition) -> None:
+    x = None
+    while condition():
+        assert_type(x, Literal["hello world"] | None)
+        x = "hello world"
+        assert_type(x, Literal["hello world"])
+    assert_type(x, Literal["hello world"] | None)
+    "#,
+);
+
+testcase!(
+    bug = "A recursive redefinition in a loop produces a hard-to-follow error message + location",
+    test_while_creates_recursive_type,
+    r#"
+from typing import assert_type, Any, Literal
+def f(condition) -> None:
+    x = 1
+    # It's fine to error here, but ideally we would error at the assignment
+    # rather than the `while`, and ideally we would note that the type is recursive
+    # in a way we don't support.
+    while condition():  # E: `Literal[1] | list[int]` is not assignable to `int`
+        assert_type(x, Literal[1] | list[int])
+        x = [x]
+        assert_type(x, list[int])
+    assert_type(x, Literal[1] | list[int])
+    "#,
+);
+
+testcase!(
+    test_while_noop,
+    r#"
+from typing import assert_type, Literal
+def f(condition) -> None:
+    x = 1
+    while condition():
+        pass
+    assert_type(x, Literal[1])
+    "#,
+);
+
+testcase!(
+    test_while_fancy_noop,
+    r#"
+from typing import assert_type, Any, Literal
+def f(condition) -> None:
+    x = 1
+    while condition():
+        x = x
+    assert_type(x, Literal[1])
+    "#,
+);
+
+testcase!(
+    test_while_if,
+    r#"
+from typing import assert_type, Any, Literal
+def f(condition1, condition2) -> None:
+    x = None
+    while condition1():
+        if condition2():
+            x = "hello"
+    assert_type(x, Literal['hello'] | None)
+    "#,
+);
+
+testcase!(
+    test_while_two_vars,
+    r#"
+from typing import assert_type, Any, Literal
+def f(cond1, cond2, cond3) -> None:
+    x = 1
+    y = ""
+    while cond1():
+        if cond2():
+            x = y
+        if cond3():
+            y = x
+    assert_type(x, Literal["", 1])
+    assert_type(y, Literal["", 1])
+    "#,
+);
+
+testcase!(
+    test_while_else,
+    r#"
+from typing import assert_type, Literal
+def f(condition) -> None:
+    x = None
+    while condition():
+        x = 1
+    else:
+        x = ""
+    assert_type(x, Literal[""])
+    "#,
+);
+
+testcase!(
+    test_while_break_else,
+    r#"
+from typing import assert_type, Any, Literal
+def f(cond1, cond2) -> None:
+    x = None
+    while cond1():
+        if cond2():
+            x = "value"
+            break
+        else:
+            x = "overwritten"
+    else:
+        assert_type(x, Literal["overwritten"] | None)
+        x = "default"
+    assert_type(x, Literal["default", "value"])
+    "#,
+);
+
+testcase!(
+    test_while_else_while,
+    r#"
+while False:
+    x = 0
+else:
+    while False:
+        x = 1
+    "#,
+);
+
+testcase!(
+    test_while_infinite_implicit_return,
+    r#"
+def f1(b) -> int:
+    while True:
+        if b():
+            return 1
+
+def f2(b) -> int:  # E: Function declared to return `int` but is missing an explicit `return`
+    while True:
+        if b():
+            break
+    "#,
+);
+
+testcase!(
+    test_while_reassignment_with_annotation,
+    r#"
+from typing import assert_type, Literal
+def f(cond):
+    x: int = 0
+    while cond():
+        x: int = 1
+    assert_type(x, int)
+    "#,
+);
+
+testcase!(
+    test_for_simple,
+    r#"
+from typing import assert_type
+def f(x: list[int]) -> None:
+    for i in x:
+        assert_type(i, int)
+    assert_type(i, int)
+    "#,
+);
+
+testcase!(
+    test_for_tuple,
+    r#"
+from typing import assert_type
+def f(x: tuple[int, str]) -> None:
+    for i in x:
+        assert_type(i, int | str)
+    "#,
+);
+
+testcase!(
+    test_for_literal_string,
+    r#"
+from typing import assert_type, LiteralString
+for i in "abcd":
+    assert_type(i, LiteralString)
+    "#,
+);
+
+testcase!(
+    test_for_any,
+    r#"
+from typing import Any, assert_type
+def f(x: Any):
+    for i in x:
+        assert_type(i, Any)
+    "#,
+);
+
+testcase!(
+    test_for_reassign,
+    r#"
+from typing import assert_type
+def f(x: list[int]):
+    y = None
+    for i in x:
+        y = i
+    assert_type(y, int | None)
+    "#,
+);
+
+testcase!(
+    test_for_else_reassign,
+    r#"
+from typing import assert_type, Literal
+def f(x: list[int]):
+    y = None
+    for i in x:
+        y = i
+    else:
+        y = 'done'
+    assert_type(y, Literal['done'])
+    "#,
+);
+
+testcase!(
+    test_for_multiple_targets,
+    r#"
+from typing import assert_type
+def f(x: list[tuple[int, str]]) -> None:
+    for (i, j) in x:
+        assert_type(i, int)
+        assert_type(j, str)
+    "#,
+);
+
+testcase!(
+    test_for_scope,
+    r#"
+from typing import assert_type
+def f(x: list[int]) -> None:
+    for i in x:
+        pass
+    assert_type(i, int)
+    "#,
+);
+
+testcase!(
+    test_for_target_annot_compatible,
+    r#"
+def f(x: list[int]) -> None:
+    i: int = 0
+    for i in x:
+        pass
+    "#,
+);
+
+testcase!(
+    test_for_target_annot_incompatible,
+    r#"
+def f(x: list[int]) -> None:
+    i: str = ""
+    for i in x: # E: Cannot use variable `i` with type `str` to iterate through `list[int]`
+        pass
+    "#,
+);
+
 fn loop_export_env() -> TestEnv {
     TestEnv::one(
         "imported",
@@ -1080,7 +1329,6 @@ def f(cond: bool):
 );
 
 testcase!(
-    bug = "We don't properly restrict loop checks to the current scope",
     test_nested_loop_increment,
     r#"
 from typing import assert_type, Literal
@@ -1094,6 +1342,9 @@ def f_toplevel(cond: bool):
         n += 1
     assert_type(n, float | int)
 while True:
+    # Make sure we treat a function nested in a loop the same
+    # way (i.e. that the loop in a parent scope doesn't affect
+    # flow merging in function scope).
     def f_in_loop(cond: bool):
         n = "n"
         if cond:
@@ -1224,79 +1475,6 @@ def foo() -> list[int]:
 );
 
 testcase!(
-    test_if_which_exits,
-    r#"
-def foo(val: int | None, b: bool) -> int:
-    if val is None:
-        if b:
-            return 1
-        else:
-            return 2
-    return val
-"#,
-);
-
-testcase!(
-    test_shortcuit_or_after_flow,
-    r#"
-bar: str = "bar"
-
-def func():
-    foo: str | None = None
-
-    for x in []:
-        for y in []:
-            pass
-
-    baz: str = foo or bar
-"#,
-);
-
-testcase!(
-    test_export_not_in_flow,
-    r#"
-if 0.1:
-    vari = "test"
-    raise SystemExit
-"#,
-);
-
-testcase!(
-    test_assert_not_in_flow,
-    r#"
-from typing import assert_type, Literal
-if 0.1:
-    vari = "test"
-    raise SystemExit
-assert_type(vari, Literal["test"]) # E: `vari` is uninitialized
-"#,
-);
-
-testcase!(
-    test_assert_false_terminates_flow,
-    r#"
-def test1() -> int:
-    assert False
-def test2() -> int:  # E: Function declared to return `int` but is missing an explicit `return`
-    assert True
-    "#,
-);
-
-testcase!(
-    bug = "Merge flow is lax about possibly-undefined locals, so we don't catch that `z` may be uninitialized.",
-    test_named_inside_boolean_op,
-    r#"
-from typing import assert_type, Literal
-b: bool = True
-y = 5
-x0 = True or (y := b) and False
-assert_type(y, Literal[5, True])  # this is as expected
-x0 = True or (z := b) and False
-assert_type(z, bool)  # here, we did not catch that `z` may not be initialized
-"#,
-);
-
-testcase!(
     test_loop_nested_binding,
     r#"
 # This used to fail, thinking the type was Never
@@ -1315,138 +1493,15 @@ def f():
 );
 
 testcase!(
-    test_loop_fails_to_reveal,
+    test_reveal_type_in_loop,
     r#"
 # This used to get confused by what reveal_type is
 from typing import *
-
 x = 1
-
 while True:
     reveal_type(x) # E: revealed type: Literal[1]
     break
 else:
     exit(1)
 "#,
-);
-
-testcase!(
-    test_redundant_condition_func,
-    r#"
-def foo() -> bool: ...
-
-if foo:  # E: Function object `foo` used as condition
-    ...
-while foo:  # E: Function object `foo` used as condition
-    ...
-[x for x in range(42) if foo]  # E: Function object `foo` used as condition
-    "#,
-);
-
-testcase!(
-    test_redundant_condition_class,
-    r#"
-class Foo:
-    def __bool__(self) -> bool: ...
-
-if Foo:  # E: Class name `Foo` used as condition
-    ...
-while Foo:  # E: Class name `Foo` used as condition
-    ...
-[x for x in range(42) if Foo]  # E: Class name `Foo` used as condition
-    "#,
-);
-
-testcase!(
-    test_redundant_condition_int,
-    r#"
-if 42:  # E: Integer literal used as condition. It's equivalent to `True`
-    ...
-while 0:  # E: Integer literal used as condition. It's equivalent to `False`
-    ...
-[x for x in range(42) if 42]  # E: Integer literal used as condition
-    "#,
-);
-
-testcase!(
-    test_redundant_condition_str_bytes,
-    r#"
-if "test":  # E: String literal used as condition. It's equivalent to `True`
-    ...
-while "":  # E: String literal used as condition. It's equivalent to `False`
-    ...
-[x for x in range(42) if b"test"]  # E: Bytes literal used as condition
-    "#,
-);
-
-testcase!(
-    test_redundant_condition_enum,
-    r#"
-import enum
-class E(enum.Enum):
-    A = 1
-    B = 2
-    C = 3
-if E.A:  # E: Enum literal `E.A` used as condition
-    ...
-while E.B:  # E: Enum literal `E.B` used as condition
-    ...
-[x for x in range(42) if E.C]  # E: Enum literal `E.C` used as condition
-    "#,
-);
-
-testcase!(
-    crash_no_try_type,
-    r#"
-# Used to crash, https://github.com/facebook/pyrefly/issues/766
-try:
-    pass
-except as r: # E: Parse error: Expected one or more exception types
-    pass
-"#,
-);
-
-testcase!(
-    bug = "Loop recursion is causing problems, see https://github.com/facebook/pyrefly/issues/778",
-    loop_with_sized_operation,
-    r#"
-intList: list[int] = [5, 6, 7, 8]
-for j in [1, 2, 3, 4]:
-    for i in range(len(intList)):  # E: `Sized | list[int]` is not assignable to `list[int]` (caused by inconsistent types when breaking cycles)
-        intList[i] *= 42
-print([value for value in intList])  # E: Type `Sized` is not iterable
-"#,
-);
-
-testcase!(
-    test_setitem_with_loop_and_walrus,
-    r#"
-def f():
-    d: dict[int, int] = {}
-    for i in range(10):
-        idx = i
-        d[idx] = (x := idx)
-    "#,
-);
-
-testcase!(
-    test_bad_setitem_with_loop_and_walrus,
-    r#"
-def f():
-    d: dict[str, int] = {}
-    for i in range(10):
-        idx = i
-        d[idx] = (x := idx)  # E: `int` is not assignable to parameter `key` with type `str`
-    "#,
-);
-
-testcase!(
-    test_false_and_walrus,
-    r#"
-def f(v):
-    if False and (value := v):
-        print(value)
-    else:
-        print(value)
-    "#,
 );

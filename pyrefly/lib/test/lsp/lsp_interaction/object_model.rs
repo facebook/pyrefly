@@ -218,6 +218,37 @@ impl TestServer {
         }));
     }
 
+    pub fn inlay_hint(
+        &mut self,
+        file: &'static str,
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+    ) {
+        let path = self.get_root_or_panic().join(file);
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/inlayHint".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&path).unwrap().to_string()
+                },
+                "range": {
+                    "start": {
+                        "line": start_line,
+                        "character": start_char
+                    },
+                    "end": {
+                        "line": end_line,
+                        "character": end_char
+                    }
+                }
+            }),
+        }));
+    }
+
     pub fn send_configuration_response(&self, id: i32, result: serde_json::Value) {
         self.send_message(Message::Response(Response {
             id: RequestId::from(id),
@@ -273,6 +304,10 @@ impl TestServer {
         RequestId::from(*idx)
     }
 
+    pub fn current_request_id(&self) -> RequestId {
+        RequestId::from(*self.request_idx.lock().unwrap())
+    }
+
     fn get_root_or_panic(&self) -> PathBuf {
         self.root
             .clone()
@@ -294,7 +329,7 @@ impl TestClient {
     ) -> Self {
         Self {
             receiver,
-            timeout: Duration::from_secs(25),
+            timeout: Duration::from_secs(50),
             root: None,
             request_idx,
         }
@@ -312,21 +347,15 @@ impl TestClient {
                         ValidationResult::Skip => continue,
                         ValidationResult::Pass => return,
                         ValidationResult::Fail => {
-                            panic!(
-                                "Message validation failed: {}. Message: {:?}",
-                                description, msg
-                            );
+                            panic!("Message validation failed: {description}. Message: {msg:?}");
                         }
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    panic!("Timeout waiting for message: {}", description);
+                    panic!("Timeout waiting for message: {description}");
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    panic!(
-                        "Channel disconnected while waiting for message: {}",
-                        description
-                    );
+                    panic!("Channel disconnected while waiting for message: {description}");
                 }
             }
         }
@@ -340,7 +369,23 @@ impl TestClient {
                 assert_eq!(&expected_str, &actual_str, "Response mismatch");
                 ValidationResult::Pass
             },
-            &format!("Expected message: {:?}", expected_message),
+            &format!("Expected message: {expected_message:?}"),
+        );
+    }
+
+    pub fn expect_request(&self, expected_request: Request) {
+        let expected_str =
+            serde_json::to_string(&Message::Request(expected_request.clone())).unwrap();
+        self.expect_message_helper(
+            |msg| match msg {
+                Message::Notification(_) | Message::Response(_) => ValidationResult::Skip,
+                Message::Request(_) => {
+                    let actual_str = serde_json::to_string(msg).unwrap();
+                    assert_eq!(&expected_str, &actual_str, "Request mismatch");
+                    ValidationResult::Pass
+                }
+            },
+            &format!("Expected Request: {expected_request:?}"),
         );
     }
 
@@ -356,13 +401,12 @@ impl TestClient {
                     ValidationResult::Pass
                 }
             },
-            &format!("Expected response: {:?}", expected_response),
+            &format!("Expected response: {expected_response:?}"),
         );
     }
 
     /// Wait until we get a publishDiagnostics notification with the correct number of errors
-    pub fn expect_publish_diagnostics_error_count(&self, path: String, count: usize) {
-        let path_clone = path.clone();
+    pub fn expect_publish_diagnostics_error_count(&self, path: PathBuf, count: usize) {
         self.expect_message_helper(
             |msg| {
                 match msg {
@@ -370,26 +414,34 @@ impl TestClient {
                         // Check if this notification is for the expected file
                         if let Some(uri) = params.get("uri")
                             && let Some(uri_str) = uri.as_str()
-                                && uri_str == path_clone {
-                                    // Count the diagnostics
-                                    if let Some(diagnostics) = params.get("diagnostics")
-                                        && let Some(diagnostics_array) = diagnostics.as_array() {
-                                            let actual_count = diagnostics_array.len();
-                                            if actual_count == count {
-                                                return ValidationResult::Pass;
-                                            } else {
-                                                // If the counts do not match, we continue waiting
-                                                return ValidationResult::Skip;
-                                            }
+                            && let (Ok(expected_url), Ok(actual_url)) = (Url::parse(Url::from_file_path(&path).unwrap().as_ref()), Url::parse(uri_str))
+                            && let (Ok(expected_path), Ok(actual_path)) = (expected_url.to_file_path(), actual_url.to_file_path()) {
+                                // Canonicalize both paths for comparison to handle symlinks and normalize case
+                                // This is very relevant for publish diagnostics, where the LS might send a notification for 
+                                // a file that does not exactly match the file_open message. 
+                                let expected_canonical = expected_path.canonicalize().unwrap_or(expected_path);
+                                let actual_canonical = actual_path.canonicalize().unwrap_or(actual_path);
+
+                                if expected_canonical == actual_canonical
+                                    && let Some(diagnostics) = params.get("diagnostics")
+                                    && let Some(diagnostics_array) = diagnostics.as_array() {
+                                        let actual_count = diagnostics_array.len();
+                                        if actual_count == count {
+                                            return ValidationResult::Pass;
+                                        } else {
+                                            // If the counts do not match, we continue waiting
+                                            return ValidationResult::Skip;
                                         }
-                                    panic!("publishDiagnostics notification malformed: missing or invalid 'diagnostics' field");
-                                }
+                                    } else if expected_canonical == actual_canonical {
+                                        panic!("publishDiagnostics notification malformed: missing or invalid 'diagnostics' field");
+                                    }
+                            }
                         ValidationResult::Skip
                     }
                     _ => ValidationResult::Skip
                 }
             },
-            &format!("publishDiagnostics notification with {} errors for file: {}", count, path),
+            &format!("publishDiagnostics notification with {count} errors for file: {}", path.display()),
         );
     }
 
@@ -508,7 +560,7 @@ impl TestClient {
                     ValidationResult::Pass
                 }
             },
-            &format!("Expected configuration request: {:?}", expected_msg),
+            &format!("Expected configuration request: {expected_msg:?}"),
         );
     }
 

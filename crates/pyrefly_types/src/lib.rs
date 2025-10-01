@@ -36,7 +36,6 @@ pub mod lit_int;
 pub mod literal;
 pub mod module;
 pub mod param_spec;
-pub mod qname;
 pub mod quantified;
 pub mod read_only;
 pub mod simplify;

@@ -52,6 +52,7 @@ pub struct ClassMetadata {
     has_base_any: bool,
     is_new_type: bool,
     is_final: bool,
+    is_deprecated: bool,
     total_ordering_metadata: Option<TotalOrderingMetadata>,
     /// If this class is decorated with `typing.dataclass_transform(...)`, the keyword arguments
     /// that were passed to the `dataclass_transform` call.
@@ -86,6 +87,7 @@ impl ClassMetadata {
         has_base_any: bool,
         is_new_type: bool,
         is_final: bool,
+        is_deprecated: bool,
         total_ordering_metadata: Option<TotalOrderingMetadata>,
         dataclass_transform_metadata: Option<DataclassTransformKeywords>,
         pydantic_model_kind: Option<PydanticModelKind>,
@@ -103,6 +105,7 @@ impl ClassMetadata {
             has_base_any,
             is_new_type,
             is_final,
+            is_deprecated,
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
@@ -123,6 +126,7 @@ impl ClassMetadata {
             has_base_any: false,
             is_new_type: false,
             is_final: false,
+            is_deprecated: false,
             total_ordering_metadata: None,
             dataclass_transform_metadata: None,
             pydantic_model_kind: None,
@@ -152,6 +156,10 @@ impl ClassMetadata {
 
     pub fn is_final(&self) -> bool {
         self.is_final
+    }
+
+    pub fn is_deprecated(&self) -> bool {
+        self.is_deprecated
     }
 
     pub fn has_generic_base_class(&self) -> bool {
@@ -335,6 +343,8 @@ pub struct EnumMetadata {
     pub is_flag: bool,
     /// Is there any `_value_` field present.
     pub has_value: bool,
+    /// Whether this is a special Django enum.
+    pub is_django: bool,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
@@ -357,6 +367,8 @@ pub struct DataclassMetadata {
     pub alias_keyword: Name,
     // a tuple to indicate whether we should validate by name or alias
     pub class_validation_flags: ClassValidationFlags,
+    // Whether a default can be passed positionally to field specifier calls
+    pub default_can_be_positional: bool,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]

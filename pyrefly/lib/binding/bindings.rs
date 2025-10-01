@@ -11,12 +11,12 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use dupe::Dupe;
-use itertools::Either;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::types::Type;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::AnyParameterRef;
@@ -56,9 +56,9 @@ use crate::binding::binding::LastStmt;
 use crate::binding::binding::TypeParameter;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
-use crate::binding::scope::FlowInfo;
+use crate::binding::scope::Exportable;
 use crate::binding::scope::FlowStyle;
-use crate::binding::scope::ScopeKind;
+use crate::binding::scope::NameReadInfo;
 use crate::binding::scope::ScopeTrace;
 use crate::binding::scope::Scopes;
 use crate::binding::table::TableKeyed;
@@ -66,6 +66,7 @@ use crate::config::base::UntypedDefBehavior;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
+use crate::export::definitions::MutableCaptureKind;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::export::special::SpecialExport;
@@ -78,9 +79,58 @@ use crate::state::loader::FindError;
 use crate::table;
 use crate::table_for_each;
 use crate::table_try_for_each;
-use crate::types::globals::Global;
+use crate::types::globals::ImplicitGlobal;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::types::Var;
+
+/// The result of looking up a name. Similar to `NameReadInfo`, but
+/// differs because the `BindingsBuilder` layer is responsible for both
+/// intercepting first-usage reads and for wrapping forward-reference `Key`s
+/// in `Idx<Key>` by inserting them into the bindings table.
+#[derive(Debug)]
+pub enum NameLookupResult {
+    /// I am the bound key for this name in the current scope stack.
+    /// I might be:
+    /// - initialized (either part of the current flow, or an anywhere-style
+    ///   lookup across a barrier)
+    /// - possibly-initialized (I come from the current flow, but somewhere upstream
+    ///   there is branching flow where I was only defined by some branches)
+    /// - uninitialized (I am definitely not initialized in a way static analysis
+    ///   understands) and this key is either the most recent stale flow key (e.g.
+    ///   if I am used after a `del` or is an anywhere-style lookup)
+    Found {
+        idx: Idx<Key>,
+        uninitialized: UninitializedInFlow,
+    },
+    /// This name is not defined in the current scope stack.
+    NotFound,
+}
+
+impl NameLookupResult {
+    fn found(self) -> Option<Idx<Key>> {
+        match self {
+            NameLookupResult::Found { idx, .. } => Some(idx),
+            NameLookupResult::NotFound => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum UninitializedInFlow {
+    No,
+    Conditionally,
+    Yes,
+}
+
+impl UninitializedInFlow {
+    pub fn as_error_message(&self, name: &Name) -> Option<String> {
+        match self {
+            UninitializedInFlow::No => None,
+            UninitializedInFlow::Conditionally => Some(format!("`{name}` may be uninitialized")),
+            UninitializedInFlow::Yes => Some(format!("`{name}` is uninitialized")),
+        }
+    }
+}
 
 #[derive(Clone, Dupe, Debug)]
 pub struct Bindings(Arc<BindingsInner>);
@@ -294,37 +344,24 @@ impl Bindings {
             builder.inject_builtins();
         }
         builder.inject_globals();
-        builder.stmts(x.body);
+        builder.stmts(x.body, &NestingContext::toplevel());
         assert_eq!(builder.scopes.loop_depth(), 0);
         let scope_trace = builder.scopes.finish();
-        let last_scope = scope_trace.toplevel_scope();
         let exported = exports.exports(lookup);
-        for (name, static_info) in last_scope.stat.0.iter_hashed() {
-            let info = last_scope.flow.info.get_hashed(name);
-            let binding = match info {
-                Some(FlowInfo { key, .. }) => {
-                    if let Some(ann) = static_info.annot {
-                        Binding::AnnotatedType(ann, Box::new(Binding::Forward(*key)))
-                    } else {
-                        Binding::Forward(*key)
-                    }
+        for (name, exportable) in scope_trace.exportables().into_iter_hashed() {
+            let binding = match exportable {
+                Exportable::Initialized(key, Some(ann)) => {
+                    Binding::AnnotatedType(ann, Box::new(Binding::Forward(key)))
                 }
-                None => {
-                    // The variable is not in the flow scope, so probably it has not been defined
-                    // in any flow that reaches the end. So just use the anywhere version.
-                    Binding::Forward(
-                        builder
-                            .table
-                            .types
-                            .0
-                            .insert(static_info.as_key(name.into_key())),
-                    )
+                Exportable::Initialized(key, None) => Binding::Forward(key),
+                Exportable::Uninitialized(key) => {
+                    Binding::Forward(builder.table.types.0.insert(key))
                 }
             };
-            if exported.contains_key_hashed(name) {
+            if exported.contains_key_hashed(name.as_ref()) {
                 builder
                     .table
-                    .insert(KeyExport(name.into_key().clone()), BindingExport(binding));
+                    .insert(KeyExport(name.into_key()), BindingExport(binding));
             }
         }
         Self(Arc::new(BindingsInner {
@@ -372,7 +409,10 @@ impl BindingTable {
         idx
     }
 
-    fn insert_anywhere(&mut self, name: Name, range: TextRange, idx: Idx<Key>) {
+    /// Record the binding of a value to a variable in an Anywhere binding (which
+    /// will take the phi of all values bound at different points). If necessary, we
+    /// insert the Anywhere.
+    fn record_bind_in_anywhere(&mut self, name: Name, range: TextRange, idx: Idx<Key>) {
         let phi_idx = self.types.0.insert(Key::Anywhere(name, range));
         match self
             .types
@@ -398,73 +438,6 @@ impl BindingTable {
             .unwrap();
         pred_binding.successor = Some(function_idx);
     }
-}
-
-/// Errors that can occur when we try to look up a name
-pub enum LookupError {
-    /// We can't find the name at all
-    NotFound,
-    /// We expected the name to be mutable from the current scope, but it's not
-    NotMutable,
-}
-
-impl LookupError {
-    pub fn message(&self, name: &Identifier) -> String {
-        match self {
-            Self::NotFound => format!("Could not find name `{name}`"),
-            Self::NotMutable => format!("`{name}` is not mutable from the current scope"),
-        }
-    }
-}
-
-#[derive(PartialEq, Eq)]
-pub enum LookupKind {
-    Regular,
-    /// Look up a name that must be mutable from the current scope, like a `del` or augmented assignment statement
-    Mutable,
-}
-
-pub enum MutableCaptureLookupError {
-    /// We can't find the name at all
-    NotFound,
-    /// We expected the name to be in an enclosing, non-global scope, but it's not
-    NonlocalScope,
-    /// This variable was assigned before the nonlocal declaration
-    AssignedBeforeNonlocal,
-    /// We expected the name to be in the global scope, but it's not
-    GlobalScope,
-    /// This variable was assigned before the global declaration
-    AssignedBeforeGlobal,
-}
-
-impl MutableCaptureLookupError {
-    pub fn message(&self, name: &Identifier) -> String {
-        match self {
-            Self::NotFound => format!("Could not find name `{name}`"),
-            Self::NonlocalScope => {
-                format!("Found `{name}`, but it was not in a valid enclosing scope")
-            }
-            Self::AssignedBeforeNonlocal => {
-                format!(
-                    "`{name}` was assigned in the current scope before the nonlocal declaration"
-                )
-            }
-            Self::GlobalScope => {
-                format!("Found `{name}`, but it was not the global scope")
-            }
-            Self::AssignedBeforeGlobal => {
-                format!("`{name}` was assigned in the current scope before the global declaration")
-            }
-        }
-    }
-}
-
-#[derive(PartialEq, Eq)]
-pub enum MutableCaptureLookupKind {
-    /// Look up a name in a `global` statement
-    Global,
-    /// Look up a name in a `nonlocal` statement
-    Nonlocal,
 }
 
 /// An abstraction representing the `Idx<Key>` for a binding that we
@@ -601,33 +574,30 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn init_static_scope(&mut self, x: &[Stmt], top_level: bool) {
-        let current = self.scopes.current_mut();
-        current.stat.stmts(
+        self.scopes.init_current_static(
             x,
             &self.module_info,
             top_level,
             self.lookup,
             self.sys_info,
-            |x| {
+            &mut |x| {
                 self.table
                     .annotations
                     .0
                     .insert(KeyAnnotation::Annotation(x))
             },
         );
-        // Presize the flow, as its likely to need as much space as static
-        current.flow.info.reserve(current.stat.0.capacity());
     }
 
-    pub fn stmts(&mut self, xs: Vec<Stmt>) {
+    pub fn stmts(&mut self, xs: Vec<Stmt>, parent: &NestingContext) {
         for x in xs {
-            self.stmt(x);
+            self.stmt(x, parent);
         }
     }
 
     fn inject_globals(&mut self) {
-        for global in Global::globals(self.has_docstring) {
-            let key = Key::Global(global.name().clone());
+        for global in ImplicitGlobal::implicit_globals(self.has_docstring) {
+            let key = Key::ImplicitGlobal(global.name().clone());
             let idx = self.table.insert(key, Binding::Global(global.clone()));
             self.bind_name(global.name(), idx, FlowStyle::Other);
         }
@@ -663,7 +633,7 @@ impl<'a> BindingsBuilder<'a> {
         match e {
             Expr::Name(name) => {
                 self.scopes
-                    .as_special_export(&name.id, None, self.module_info.name())
+                    .as_special_export(&name.id, None, self.module_info.name(), self.lookup)
             }
             Expr::Attribute(ExprAttribute {
                 value, attr: name, ..
@@ -671,6 +641,7 @@ impl<'a> BindingsBuilder<'a> {
                 &name.id,
                 Some(&base_name.id),
                 self.module_info.name(),
+                self.lookup,
             ),
             _ => None,
         }
@@ -684,157 +655,52 @@ impl<'a> BindingsBuilder<'a> {
         self.errors.add(range, info, msg);
     }
 
-    pub fn lookup_mutable_captured_name(
-        &mut self,
-        name: &Name,
-        kind: MutableCaptureLookupKind,
-    ) -> Result<Idx<Key>, MutableCaptureLookupError> {
-        let name = Hashed::new(name);
-        let mut barrier = false;
-        let allow_nonlocal_reference = kind == MutableCaptureLookupKind::Nonlocal;
-        let allow_global_reference = kind == MutableCaptureLookupKind::Global;
-        let mut result = Err(MutableCaptureLookupError::NotFound);
-        // If there is static info for the name in the current scope and this value is not None
-        // set the `annot` field to this value
-        let mut static_annot_override = None;
-        for (idx, scope) in self.scopes.iter_rev().enumerate() {
-            let in_current_scope = idx == 0;
-            let valid_nonlocal_reference = allow_nonlocal_reference
-                && !in_current_scope
-                && !matches!(scope.kind, ScopeKind::Module | ScopeKind::Class(_));
-            let valid_global_reference = allow_global_reference
-                && !in_current_scope
-                && matches!(scope.kind, ScopeKind::Module);
-            if scope.flow.info.get_hashed(name).is_some() {
-                match kind {
-                    MutableCaptureLookupKind::Nonlocal => {
-                        if in_current_scope {
-                            // If there's a flow type for the name in the current scope
-                            // it must have been assigned before
-                            return Err(MutableCaptureLookupError::AssignedBeforeNonlocal);
-                        }
-                    }
-                    MutableCaptureLookupKind::Global => {
-                        if in_current_scope {
-                            // If there's a flow type for the name in the current scope
-                            // it must have been assigned before
-                            return Err(MutableCaptureLookupError::AssignedBeforeGlobal);
-                        }
-                    }
-                }
+    pub fn declare_mutable_capture(&mut self, name: &Identifier, kind: MutableCaptureKind) {
+        // Record any errors finding the identity of the mutable capture, and get a binding
+        // that provides the type coming from the parent scope.
+        let binding = match self
+            .scopes
+            .validate_mutable_capture_and_get_key(Hashed::new(&name.id), kind)
+        {
+            Ok(key) => Binding::Forward(self.table.types.0.insert(key)),
+            Err(error) => {
+                self.error(
+                    name.range,
+                    ErrorInfo::Kind(ErrorKind::UnknownName),
+                    error.message(name),
+                );
+                Binding::Type(Type::any_error())
             }
-            if !matches!(scope.kind, ScopeKind::Class(_))
-                && let Some(info) = scope.stat.0.get_hashed(name)
-            {
-                match kind {
-                    MutableCaptureLookupKind::Nonlocal => {
-                        if valid_nonlocal_reference {
-                            let key = info.as_key(name.into_key());
-                            result = Ok(self.table.types.0.insert(key));
-                            // We can't return immediately, because we need to override
-                            // the static annotation in the current scope with the one we found
-                            static_annot_override = info.annot;
-                            break;
-                        } else if !in_current_scope {
-                            return Err(MutableCaptureLookupError::NonlocalScope);
-                        }
-                    }
-                    MutableCaptureLookupKind::Global => {
-                        if valid_global_reference {
-                            let key = info.as_key(name.into_key());
-                            result = Ok(self.table.types.0.insert(key));
-                            // We can't return immediately, because we need to override
-                            // the static annotation in the current scope with the one we found
-                            static_annot_override = info.annot;
-                            break;
-                        } else if !in_current_scope {
-                            return Err(MutableCaptureLookupError::GlobalScope);
-                        }
-                    }
-                }
-            }
-            barrier = barrier || scope.barrier;
-        }
-        self.scopes
-            .set_annotation_for_mutable_capture(name, static_annot_override);
-        result
+        };
+        // Insert that type into the current flow.
+        let idx = self.insert_binding(Key::MutableCapture(ShortIdentifier::new(name)), binding);
+        self.bind_name(&name.id, idx, FlowStyle::Other);
     }
 
-    pub fn lookup_name(
-        &mut self,
-        name: Hashed<&Name>,
-        kind: LookupKind,
-        usage: &mut Usage,
-    ) -> Result<Idx<Key>, LookupError> {
-        self.lookup_name_inner(name, kind, usage)
-            .map(|(result, first_use)| {
+    pub fn lookup_name(&mut self, name: Hashed<&Name>, usage: &mut Usage) -> NameLookupResult {
+        match self.scopes.look_up_name_for_read(name) {
+            NameReadInfo::Flow {
+                idx,
+                uninitialized: is_initialized,
+            } => {
+                let (idx, first_use) = self.detect_first_use(idx, usage);
                 if let Some(used_idx) = first_use {
-                    self.record_possible_first_use(used_idx, usage);
+                    self.record_first_use(used_idx, usage);
                 }
-                result
-            })
-    }
-
-    /// Helper function, needed to work around the borrow checker given heavy use of mutable refs.
-    ///
-    /// When lookup succeeds, returns a pair `idx, maybe_first_use`, where `maybe_first_use`
-    /// is an option of a possible first-use `(used_idx)` to track for deterministic
-    /// type inference.
-    fn lookup_name_inner(
-        &mut self,
-        name: Hashed<&Name>,
-        kind: LookupKind,
-        usage: &mut Usage,
-    ) -> Result<(Idx<Key>, Option<Idx<Key>>), LookupError> {
-        let mut barrier = false;
-        let ok_no_usage = |idx| Ok((idx, None));
-        let is_current_scope_annotation =
-            matches!(self.scopes.current().kind, ScopeKind::Annotation);
-        for (lookup_depth, scope) in self.scopes.iter_rev().enumerate() {
-            let is_class = matches!(scope.kind, ScopeKind::Class(_));
-            // From https://docs.python.org/3/reference/executionmodel.html#resolution-of-names:
-            //   The scope of names defined in a class block is limited to the
-            //   class block; it does not extend to the code blocks of
-            //   methods. This includes comprehensions and generator
-            //   expressions, but it does not include annotation scopes, which
-            //   have access to their enclosing class scopes."""
-            if is_class
-                && !((lookup_depth == 0) || (is_current_scope_annotation && lookup_depth == 1))
-            {
-                // Note: class body scopes have `barrier = false`, so skipping the barrier update is okay.
-                continue;
-            }
-
-            if let Some(flow) = scope.flow.info.get_hashed(name)
-                && !barrier
-            {
-                let (idx, maybe_pinned_idx) = self.detect_possible_first_use(flow.key, usage);
-                if let Some(pinned_idx) = maybe_pinned_idx {
-                    return Ok((idx, Some(pinned_idx)));
-                } else {
-                    return ok_no_usage(idx);
+                NameLookupResult::Found {
+                    idx,
+                    uninitialized: is_initialized,
                 }
             }
-            // Class body scopes are dynamic, not static, so if we don't find a name in the
-            // current flow we keep looking. In every other kind of scope, anything the Python
-            // compiler has identified as local shadows enclosing scopes, so we should prefer
-            // inner static lookups to outer flow lookups.
-            if !is_class && let Some(info) = scope.stat.0.get_hashed(name) {
-                match kind {
-                    LookupKind::Regular => {
-                        let key = info.as_key(name.into_key());
-                        return ok_no_usage(self.table.types.0.insert(key));
-                    }
-                    LookupKind::Mutable => {
-                        if barrier {
-                            return Err(LookupError::NotMutable);
-                        }
-                    }
-                }
-            }
-            barrier = barrier || scope.barrier;
+            NameReadInfo::Anywhere {
+                key,
+                uninitialized: is_initialized,
+            } => NameLookupResult::Found {
+                idx: self.table.types.0.insert(key),
+                uninitialized: is_initialized,
+            },
+            NameReadInfo::NotFound => NameLookupResult::NotFound,
         }
-        Err(LookupError::NotFound)
     }
 
     /// Look up the idx for a name. The first output is the idx to use for the
@@ -852,22 +718,24 @@ impl<'a> BindingsBuilder<'a> {
     ///   usage as the first read, return `(pinned_idx, None)`: we don't need to
     ///   record first use because that is done already, but we want to continue
     ///   forwarding the raw binding throughout this first use.
-    fn detect_possible_first_use(
+    fn detect_first_use(
         &self,
         flow_idx: Idx<Key>,
         usage: &mut Usage,
     ) -> (Idx<Key>, Option<Idx<Key>>) {
         match self.table.types.1.get(flow_idx) {
-            Some(Binding::Pin(unpinned_idx, FirstUse::Undetermined)) => match usage {
-                Usage::StaticTypeInformation | Usage::Narrowing | Usage::MutableLookup => {
-                    (flow_idx, Some(flow_idx))
+            Some(Binding::CompletedPartialType(unpinned_idx, FirstUse::Undetermined)) => {
+                match usage {
+                    Usage::StaticTypeInformation | Usage::Narrowing(_) => {
+                        (flow_idx, Some(flow_idx))
+                    }
+                    Usage::CurrentIdx(..) => (*unpinned_idx, Some(flow_idx)),
                 }
-                Usage::CurrentIdx(..) => (*unpinned_idx, Some(flow_idx)),
-            },
-            Some(Binding::Pin(unpinned_idx, first_use)) => match first_use {
+            }
+            Some(Binding::CompletedPartialType(unpinned_idx, first_use)) => match first_use {
                 FirstUse::DoesNotPin => (flow_idx, None),
                 FirstUse::Undetermined => match usage {
-                    Usage::StaticTypeInformation | Usage::Narrowing | Usage::MutableLookup => {
+                    Usage::StaticTypeInformation | Usage::Narrowing(_) => {
                         (flow_idx, Some(flow_idx))
                     }
                     Usage::CurrentIdx(..) => (*unpinned_idx, Some(flow_idx)),
@@ -875,12 +743,12 @@ impl<'a> BindingsBuilder<'a> {
                 FirstUse::UsedBy(usage_idx) => {
                     // Detect secondary reads of the same name from a first use, and make
                     // sure they all use the raw binding rather than the `Pin`.
-                    let currently_in_first_use = match usage {
-                        Usage::CurrentIdx(idx, ..) => idx == usage_idx,
-                        Usage::Narrowing | Usage::StaticTypeInformation | Usage::MutableLookup => {
-                            false
-                        }
-                    };
+                    // TODO(grievejia): This would eliminate cycles formed on the secondary reads,
+                    // but may cause nondeterminism in presence of multiple walrus operators
+                    // nested in a single expression. We really need to re-think how first-usage
+                    // pinning can interact with things like narrowing and walrus.
+                    let currently_in_first_use =
+                        usage.current_idx().is_some_and(|idx| &idx == usage_idx);
                     if currently_in_first_use {
                         (*unpinned_idx, None)
                     } else {
@@ -893,111 +761,21 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     /// Record a first use detected in `detect_possible_first_use`.
-    fn record_possible_first_use(&mut self, used: Idx<Key>, usage: &mut Usage) {
+    fn record_first_use(&mut self, used: Idx<Key>, usage: &mut Usage) {
         match self.table.types.1.get_mut(used) {
-            Some(Binding::Pin(.., first_use @ FirstUse::Undetermined)) => {
+            Some(Binding::CompletedPartialType(.., first_use @ FirstUse::Undetermined)) => {
                 *first_use = match usage {
                     Usage::CurrentIdx(use_idx, first_uses_of) => {
                         first_uses_of.insert(used);
                         FirstUse::UsedBy(*use_idx)
                     }
-                    Usage::StaticTypeInformation | Usage::Narrowing | Usage::MutableLookup => {
-                        FirstUse::DoesNotPin
-                    }
+                    Usage::StaticTypeInformation | Usage::Narrowing(_) => FirstUse::DoesNotPin,
                 };
             }
             b => {
                 unreachable!("Expected a Binding::Pin needing first use, got {:?}", b)
             }
         }
-    }
-
-    /// Look up a name that might refer to a legacy tparam. This is used by `intercept_lookup`
-    /// when in a setting where we have to check values currently in scope to see if they are
-    /// legacy type parameters and need to be re-bound into quantified type variables.
-    ///
-    /// The returned value will be:
-    /// - Either::Right(None) if the name is not in scope; we'll just skip it (the same
-    ///   code will be traversed elsewhere, so no need for a duplicate type error)
-    /// - Either::Right(Idx<Key>) if the name is in scope and does not point at a
-    ///   legacy type parameter. In this case, the intercepted lookup should just forward
-    ///   the existing binding.
-    /// - Either::Left(Idx<KeyLegacyTypeParameter>) if the name might be a legacy type
-    ///   parameter. We actually cannot currently be sure; imported names have to be treated
-    ///   as though they *might* be legacy type parameters. Making a final decision is deferred
-    ///   until the solve stage.
-    fn lookup_legacy_tparam(
-        &mut self,
-        name: &Identifier,
-    ) -> Either<Idx<KeyLegacyTypeParam>, Option<Idx<Key>>> {
-        let found = self
-            .lookup_name(
-                Hashed::new(&name.id),
-                LookupKind::Regular,
-                &mut Usage::StaticTypeInformation,
-            )
-            .ok();
-        if let Some(idx) = found {
-            match self.lookup_legacy_tparam_from_idx(name, idx) {
-                Some(left) => Either::Left(left),
-                None => Either::Right(Some(idx)),
-            }
-        } else {
-            Either::Right(None)
-        }
-    }
-
-    /// Perform the inner loop of looking up a possible legacy type parameter, given a starting
-    /// binding. The loop follows `Forward` nodes backward, and returns:
-    /// - Some(...) if we find either a legacy type variable or an import (in which case it *might*
-    ///   be a legacy type variable, so we'll let the solve stage decide)
-    /// - None if we find something that is definitely not a legacy type variable.
-    fn lookup_legacy_tparam_from_idx(
-        &mut self,
-        name: &Identifier,
-        mut idx: Idx<Key>,
-    ) -> Option<Idx<KeyLegacyTypeParam>> {
-        // We are happy to follow some forward bindings, but it's possible to have a cycle of such bindings.
-        // Therefore we arbitrarily cut off at 100 forward hops.
-        for _ in 1..100 {
-            if let Some(b) = self.table.types.1.get(idx) {
-                match b {
-                    Binding::Forward(fwd_idx) => {
-                        idx = *fwd_idx;
-                    }
-                    Binding::TypeVar(..) | Binding::ParamSpec(..) | Binding::TypeVarTuple(..) => {
-                        return Some(self.insert_binding(
-                            KeyLegacyTypeParam(ShortIdentifier::new(name)),
-                            BindingLegacyTypeParam(idx),
-                        ));
-                    }
-                    Binding::Import(..) => {
-                        // TODO: We need to recursively look through imports to determine
-                        // whether it is a legacy type parameter. We can't simply walk through
-                        // bindings, because we could recursively reach ourselves, resulting in
-                        // a deadlock.
-                        return Some(self.insert_binding(
-                            KeyLegacyTypeParam(ShortIdentifier::new(name)),
-                            BindingLegacyTypeParam(idx),
-                        ));
-                    }
-                    _ => {
-                        // If we hit anything other than a type variable, an import, or a Forward,
-                        // then we know this name does not point at a type variable
-                        return None;
-                    }
-                }
-            } else {
-                // This case happens if the name is associated with a promised binding
-                // that is not yet in the table. I'm fuzzy when exactly this occurs, but
-                // such names cannot point at legacy type variables.
-                //
-                // TODO(stroxler): it would be nice to have an actual example here, but I am
-                // still not sure when exactly it happens.
-                return None;
-            }
-        }
-        None
     }
 
     pub fn bind_definition(
@@ -1007,7 +785,7 @@ impl<'a> BindingsBuilder<'a> {
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
         let idx = self.insert_binding(Key::Definition(ShortIdentifier::new(name)), binding);
-        self.bind_name(&name.id, idx, style).0
+        self.bind_name(&name.id, idx, style)
     }
 
     /// Bind a name in scope to the idx of `current`, inserting `binding` as the binding.
@@ -1019,7 +797,7 @@ impl<'a> BindingsBuilder<'a> {
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
         let idx = self.insert_binding_current(current, binding);
-        self.bind_name(&name.id, idx, style).0
+        self.bind_name(&name.id, idx, style)
     }
 
     /// Bind a name in scope to the idx of `current`, without inserting a binding.
@@ -1031,38 +809,35 @@ impl<'a> BindingsBuilder<'a> {
         name: &Name,
         current: &CurrentIdx,
         style: FlowStyle,
-    ) -> (Option<Idx<KeyAnnotation>>, Option<Idx<Key>>) {
+    ) -> Option<Idx<KeyAnnotation>> {
         self.bind_name(name, current.idx(), style)
     }
 
     /// Bind a name in the current flow. Panics if the name is not in the current static scope.
     ///
-    /// Return a pair of:
-    /// 1. The annotation that should be used at the moment, if one was provided.
-    /// 2. The default that should be used if you are in a loop.
+    /// Return the first annotation for this variable, if one exists, which the binding we
+    /// eventually produce for `idx` will often use to verify we don't assign an incompatible type.
     pub fn bind_name(
         &mut self,
         name: &Name,
         idx: Idx<Key>,
         style: FlowStyle,
-    ) -> (Option<Idx<KeyAnnotation>>, Option<Idx<Key>>) {
+    ) -> Option<Idx<KeyAnnotation>> {
         let name = Hashed::new(name);
-        let default = self.scopes.upsert_flow_info(name, idx, Some(style));
-        let info = self
+        let write_info = self
             .scopes
-            .current()
-            .stat
-            .0
-            .get_hashed(name)
+            .define_in_current_flow(name, idx, style)
             .unwrap_or_else(|| {
-                let module = self.module_info.name();
-                panic!("Name `{name}` not found in static scope of module `{module}`")
+                panic!(
+                    "Name `{name}` not found in static scope of module `{}`.",
+                    self.module_info.name(),
+                )
             });
-        if info.count > 1 {
+        if let Some(range) = write_info.anywhere_range {
             self.table
-                .insert_anywhere(name.into_key().clone(), info.loc, idx);
+                .record_bind_in_anywhere(name.into_key().clone(), range, idx);
         }
-        (info.annot, default)
+        write_info.annotation
     }
 
     pub fn type_params(&mut self, x: &mut TypeParams) {
@@ -1107,13 +882,7 @@ impl<'a> BindingsBuilder<'a> {
                     QuantifiedKind::TypeVarTuple
                 }
             };
-            self.scopes.add_to_current_static(
-                name.id.clone(),
-                name.range,
-                SymbolKind::TypeParameter,
-                None,
-                false,
-            );
+            self.scopes.add_parameter_to_current_static(&name, None);
             self.bind_definition(
                 &name,
                 Binding::TypeParameter(Box::new(TypeParameter {
@@ -1129,15 +898,17 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    pub fn bind_narrow_ops(&mut self, narrow_ops: &NarrowOps, use_range: TextRange) {
+    pub fn bind_narrow_ops(&mut self, narrow_ops: &NarrowOps, use_range: TextRange, usage: &Usage) {
         for (name, (op, op_range)) in narrow_ops.0.iter_hashed() {
-            if let Ok(name_key) = self.lookup_name(name, LookupKind::Regular, &mut Usage::Narrowing)
+            if let Some(initial_idx) = self
+                .lookup_name(name, &mut Usage::narrowing_from(usage))
+                .found()
             {
-                let binding_key = self.insert_binding(
+                let narrowed_idx = self.insert_binding(
                     Key::Narrow(name.into_key().clone(), *op_range, use_range),
-                    Binding::Narrow(name_key, Box::new(op.clone()), use_range),
+                    Binding::Narrow(initial_idx, Box::new(op.clone()), use_range),
                 );
-                self.scopes.upsert_flow_info(name, binding_key, None);
+                self.scopes.narrow_in_current_flow(name, narrowed_idx);
             }
         }
     }
@@ -1146,18 +917,12 @@ impl<'a> BindingsBuilder<'a> {
         // Create a parameter var; the binding for the lambda expr itself will use this to pass
         // any contextual typing information as a side-effect to the parameter binding used in
         // the lambda body.
-        let var = self.solver.fresh_parameter(self.uniques);
+        let var = self.solver.fresh_unwrap(self.uniques);
         let idx = self.insert_binding(
             Key::Definition(ShortIdentifier::new(name)),
             Binding::LambdaParameter(var),
         );
-        self.scopes.add_to_current_static(
-            name.id.clone(),
-            name.range,
-            SymbolKind::Parameter,
-            None,
-            false,
-        );
+        self.scopes.add_parameter_to_current_static(name, None);
         self.bind_name(&name.id, idx, FlowStyle::Other);
     }
 
@@ -1185,14 +950,87 @@ impl<'a> BindingsBuilder<'a> {
                 ),
             }),
         );
-        self.scopes.add_to_current_static(
-            name.id.clone(),
-            name.range,
-            SymbolKind::Parameter,
-            annot,
-            false,
-        );
+        self.scopes.add_parameter_to_current_static(name, annot);
         self.bind_name(&name.id, key, FlowStyle::Other);
+    }
+}
+
+#[derive(Debug)]
+pub enum LegacyTParamId {
+    /// A simple name referring to a legacy type parameter.
+    Name(Identifier),
+    /// A <name>.<name> reference to a legacy type parameter.
+    Attr(Identifier, Identifier),
+}
+
+impl LegacyTParamId {
+    /// Get the identifier of the name that will actually be bound (for a normal name, this is
+    /// just itself; for a `<base>.<attr>` attribute it is the base portion, which gets narrowed).
+    fn as_identifier(&self) -> &Identifier {
+        match self {
+            Self::Name(name) => name,
+            Self::Attr(base, _) => base,
+        }
+    }
+
+    /// Create the `Key` actually used to model the legacy type parameter
+    /// name (or an attribute narrow of the base name, if this is an attribute
+    /// of an imported module like `foo.T`) as a type.
+    ///
+    /// Note that the range here is not the range of the full `LegacyTParamId`, but
+    /// just of the name being bound (which in the `Attr` case is just the base
+    /// rather than the entire identifier).
+    fn as_possible_legacy_tparam_key(&self) -> Key {
+        Key::PossibleLegacyTParam(self.as_identifier().range)
+    }
+
+    /// Get the key used to track this potential legacy tparam in the `legacy_tparams` map.
+    fn tvar_name(&self) -> String {
+        match self {
+            Self::Name(name) => name.id.as_str().to_owned(),
+            Self::Attr(base, attr) => format!("{base}.{attr}"),
+        }
+    }
+}
+
+impl Ranged for LegacyTParamId {
+    fn range(&self) -> TextRange {
+        match self {
+            Self::Name(name) => name.range,
+            Self::Attr(_, attr) => attr.range,
+        }
+    }
+}
+
+/// A name we found that might either be a legacy type variable or be a module
+/// that has a legacy type variable as an attribute.
+struct PossibleTParam {
+    id: LegacyTParamId,
+    idx: Idx<Key>,
+    tparam_idx: Idx<KeyLegacyTypeParam>,
+}
+
+enum TParamLookupResult {
+    MaybeTParam(PossibleTParam),
+    NotTParam(Idx<Key>),
+    NotFound,
+}
+
+impl TParamLookupResult {
+    fn idx(&self) -> Option<Idx<Key>> {
+        match self {
+            Self::MaybeTParam(possible_tparam) => Some(possible_tparam.idx),
+            Self::NotTParam(idx) => Some(*idx),
+            Self::NotFound => None,
+        }
+    }
+
+    fn as_name_lookup_result(&self) -> NameLookupResult {
+        self.idx()
+            .map_or(NameLookupResult::NotFound, |idx| NameLookupResult::Found {
+                idx,
+                uninitialized: UninitializedInFlow::No,
+            })
     }
 }
 
@@ -1200,84 +1038,19 @@ impl<'a> BindingsBuilder<'a> {
 /// annotations or base class lists of classes, in order to check whether they
 /// point at type variable declarations and need to be converted to type
 /// parameters.
-pub struct LegacyTParamBuilder {
+pub struct LegacyTParamCollector {
     /// All of the names used. Each one may or may not point at a type variable
     /// and therefore bind a legacy type parameter.
-    legacy_tparams: SmallMap<Name, Either<(Identifier, Idx<KeyLegacyTypeParam>), Option<Idx<Key>>>>,
+    legacy_tparams: SmallMap<String, TParamLookupResult>,
     /// Are there scoped type parameters? Used to control downstream errors.
     has_scoped_tparams: bool,
 }
 
-impl LegacyTParamBuilder {
+impl LegacyTParamCollector {
     pub fn new(has_scoped_tparams: bool) -> Self {
         Self {
             legacy_tparams: SmallMap::new(),
             has_scoped_tparams,
-        }
-    }
-
-    /// Perform a lookup of a name used in either base classes of a class or
-    /// parameter/return annotations of a function.
-    ///
-    /// We have a special "intercepted" lookup to create bindings that allow us
-    /// to later determine whether this name points at a type variable
-    /// declaration, in which case we intercept it to treat it as a type
-    /// parameter in the current scope.
-    pub fn intercept_lookup(
-        &mut self,
-        builder: &mut BindingsBuilder,
-        name: &Identifier,
-    ) -> Option<Binding> {
-        let result = self
-            .legacy_tparams
-            .entry(name.id.clone())
-            .or_insert_with(|| {
-                builder
-                    .lookup_legacy_tparam(name)
-                    .map_left(|idx| (name.clone(), idx))
-            });
-        match result {
-            Either::Left((_, idx)) => {
-                let range_if_scoped_params_exist = if self.has_scoped_tparams {
-                    Some(name.range())
-                } else {
-                    None
-                };
-                Some(Binding::CheckLegacyTypeParam(
-                    *idx,
-                    range_if_scoped_params_exist,
-                ))
-            }
-            Either::Right(idx) => idx.map(Binding::Forward),
-        }
-    }
-
-    /// Add `Definition` bindings to a class or function body scope for all the names
-    /// referenced in the function parameter/return annotations or the class bases.
-    ///
-    /// We do this so that AnswersSolver has the opportunity to determine whether any
-    /// of those names point at legacy (pre-PEP-695) type variable declarations, in which
-    /// case the name should be treated as a Quantified type parameter inside this scope.
-    pub fn add_name_definitions(&self, builder: &mut BindingsBuilder) {
-        for entry in self.legacy_tparams.values() {
-            if let Either::Left((name, idx)) = entry {
-                builder.scopes.add_to_current_static(
-                    name.id.clone(),
-                    name.range,
-                    SymbolKind::TypeParameter,
-                    None,
-                    false,
-                );
-                builder.bind_definition(
-                    name,
-                    // Note: we use None as the range here because the range is
-                    // used to error if legacy tparams are mixed with scope
-                    // tparams, and we only want to do that once (which we do in
-                    // the binding created by `forward_lookup`).
-                    Binding::CheckLegacyTypeParam(*idx, None),
-                    builder.scopes.get_flow_style(&name.id, true).clone(),
-                );
-            }
         }
     }
 
@@ -1289,7 +1062,173 @@ impl LegacyTParamBuilder {
     pub fn lookup_keys(&self) -> Vec<Idx<KeyLegacyTypeParam>> {
         self.legacy_tparams
             .values()
-            .filter_map(|x| x.as_ref().left().as_ref().map(|(_, idx)| *idx))
+            .filter_map(|x| match x {
+                TParamLookupResult::MaybeTParam(possible_tparam) => {
+                    Some(possible_tparam.tparam_idx)
+                }
+                _ => None,
+            })
             .collect()
+    }
+}
+
+/// The legacy-tparams-specifc logic is in a second impl because that lets us define it
+/// just under where the key data structures live.
+impl<'a> BindingsBuilder<'a> {
+    /// Perform a lookup of a name used in either base classes of a class or
+    /// parameter/return annotations of a function.
+    ///
+    /// We have a special "intercepted" lookup to create bindings that allow us
+    /// to later determine whether this name points at a type variable
+    /// declaration, in which case we intercept it to treat it as a type
+    /// parameter in the current scope.
+    pub fn intercept_lookup(
+        &mut self,
+        legacy_tparams: &mut LegacyTParamCollector,
+        id: LegacyTParamId,
+    ) -> NameLookupResult {
+        let result = legacy_tparams
+            .legacy_tparams
+            .entry(id.tvar_name())
+            .or_insert_with(|| self.lookup_legacy_tparam(id, legacy_tparams.has_scoped_tparams));
+        result.as_name_lookup_result()
+    }
+
+    /// Look up a name that might refer to a legacy tparam. This is used by `intercept_lookup`
+    /// when in a setting where we have to check values currently in scope to see if they are
+    /// legacy type parameters and need to be re-bound into quantified type variables.
+    ///
+    /// The returned value will be:
+    /// - Either::Right(None) if the name is not in scope; we'll just skip it (the same
+    ///   code will be traversed elsewhere, so no need for a duplicate type error)
+    /// - Either::Right(Idx<Key>) if the name is in scope and does not point at a
+    ///   legacy type parameter. In this case, the intercepted lookup should just forward
+    ///   the existing binding.
+    /// - Either::Left(Idx<KeyLegacyTypeParameter>) if the name might be a legacy type
+    ///   parameter. We actually cannot currently be sure; imported names have to be treated
+    ///   as though they *might* be legacy type parameters. Making a final decision is deferred
+    ///   until the solve stage.
+    fn lookup_legacy_tparam(
+        &mut self,
+        id: LegacyTParamId,
+        has_scoped_type_params: bool,
+    ) -> TParamLookupResult {
+        let name = id.as_identifier();
+        self.lookup_name(Hashed::new(&name.id), &mut Usage::StaticTypeInformation)
+            .found()
+            .map_or(TParamLookupResult::NotFound, |original_idx| {
+                match self.lookup_legacy_tparam_from_idx(id, original_idx, has_scoped_type_params) {
+                    Some(possible_tparam) => TParamLookupResult::MaybeTParam(possible_tparam),
+                    None => TParamLookupResult::NotTParam(original_idx),
+                }
+            })
+    }
+
+    /// Perform the inner loop of looking up a possible legacy type parameter, given a starting
+    /// binding. The loop follows `Forward` nodes backward, and returns:
+    /// - Some(...) if we find either a legacy type variable or an import (in which case it *might*
+    ///   be a legacy type variable, so we'll let the solve stage decide)
+    /// - None if we find something that is definitely not a legacy type variable.
+    fn lookup_legacy_tparam_from_idx(
+        &mut self,
+        id: LegacyTParamId,
+        mut original_idx: Idx<Key>,
+        has_scoped_type_params: bool,
+    ) -> Option<PossibleTParam> {
+        // Follow Forwards to get to the actual original binding.
+        // Short circuit if there are too many forwards - it may mean there's a cycle.
+        let mut original_binding = self.table.types.1.get(original_idx);
+        let mut counter = 0;
+        while let Some(Binding::Forward(fwd_idx)) = original_binding {
+            if counter > 100 {
+                return None;
+            } else {
+                counter += 1;
+                original_idx = *fwd_idx;
+                original_binding = self.table.types.1.get(original_idx);
+            }
+        }
+        // If we found a potential legacy type variable, first insert the key / binding pair
+        // for the raw lookup, then insert another key / binding pair for the
+        // `CheckLegacyTypeParam`, and return the `Idx<Key>`.
+        let tparam_idx = Self::make_legacy_tparam(&id, original_binding, original_idx)
+            .map(|(k, v)| self.insert_binding(k, v))?;
+        let idx = self.insert_binding(
+            id.as_possible_legacy_tparam_key(),
+            Binding::PossibleLegacyTParam(
+                tparam_idx,
+                if has_scoped_type_params {
+                    Some(id.range())
+                } else {
+                    None
+                },
+            ),
+        );
+        Some(PossibleTParam {
+            id,
+            idx,
+            tparam_idx,
+        })
+    }
+
+    /// Given a name (either a bare name or a `<base>.<attribute>`) name, produce
+    /// `Some((key, binding))` if we cannot rule out that the name is a legacy type
+    /// variable; the solver will make the final decision.
+    ///
+    /// To break down "when we cannot rule out":
+    /// - We know for certain that a bare name whose binding is a legacy type
+    ///   variable *is* a legacy type varaible
+    /// - We cannot be sure in a few cases:
+    ///   - a bare name that is an imported name
+    ///   - a `module.attr` name, where the base is an imported module
+    ///   - either kind of name and a forward reference where we don't yet know
+    ///     what it will be
+    /// - In all other cases, we know for sure the name is *not* a legacy
+    ///   type variable, and we will return `None`
+    fn make_legacy_tparam(
+        id: &LegacyTParamId,
+        binding: Option<&Binding>,
+        original_idx: Idx<Key>,
+    ) -> Option<(KeyLegacyTypeParam, BindingLegacyTypeParam)> {
+        match id {
+            LegacyTParamId::Name(name) => match binding {
+                Some(
+                    Binding::TypeVar(..)
+                    | Binding::ParamSpec(..)
+                    | Binding::TypeVarTuple(..)
+                    | Binding::Import(..),
+                )
+                | None => Some((
+                    KeyLegacyTypeParam(ShortIdentifier::new(name)),
+                    BindingLegacyTypeParam::ParamKeyed(original_idx),
+                )),
+                Some(_) => None,
+            },
+            LegacyTParamId::Attr(_, attr) => match binding {
+                Some(Binding::Module(..)) | None => Some((
+                    KeyLegacyTypeParam(ShortIdentifier::new(attr)),
+                    BindingLegacyTypeParam::ModuleKeyed(original_idx, Box::new(attr.id.clone())),
+                )),
+                Some(_) => None,
+            },
+        }
+    }
+
+    /// Add `Definition` bindings to a class or function body scope for all the names
+    /// referenced in the function parameter/return annotations or the class bases.
+    ///
+    /// We do this so that AnswersSolver has the opportunity to determine whether any
+    /// of those names point at legacy (pre-PEP-695) type variable declarations, in which
+    /// case the name should be treated as a Quantified type parameter inside this scope.
+    pub fn add_name_definitions(&mut self, legacy_tparams: &LegacyTParamCollector) {
+        for entry in legacy_tparams.legacy_tparams.values() {
+            match entry {
+                TParamLookupResult::MaybeTParam(possible_tparam) => {
+                    self.scopes
+                        .add_possible_legacy_tparam(possible_tparam.id.as_identifier());
+                }
+                _ => {}
+            }
+        }
     }
 }

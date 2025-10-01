@@ -32,6 +32,18 @@ def foo(x: A | B) -> None:
 );
 
 testcase!(
+    test_distribute_type_over_union,
+    r#"
+from typing import assert_type
+def f(x: type[int] | type[str], y: type[int | str]) -> None:
+    assert_type(x, type[int] | type[str])
+    assert_type(x, type[int | str])  
+    assert_type(y, type[int] | type[str])
+    assert_type(y, type[int | str])  
+"#,
+);
+
+testcase!(
     test_simple_call,
     r#"
 from typing import assert_type
@@ -801,7 +813,8 @@ def foo(x: int):
 testcase!(
     test_builtins_type_constructor,
     r#"
-from typing import assert_type
+from typing import assert_type, LiteralString, Literal, TypedDict
+from types import NoneType
 class Foo:
     @classmethod
     def method(cls, x: str) -> int:
@@ -810,6 +823,17 @@ class Foo:
         assert_type(type(self).method("tst"), int)
 x = Foo()
 assert_type(type(x), type[Foo])
+x2: LiteralString = "test"
+assert_type(type(x2), type[str])
+x3 = (1, 2)
+assert_type(type(x3), type[tuple])
+x4 = None
+assert_type(type(x4), type[NoneType])
+x5: Literal[""] = ""
+assert_type(type(x5), type[str])
+class TD(TypedDict): ...
+x6: TD = {}
+assert_type(type(x6), type[dict])
 "#,
 );
 
@@ -991,7 +1015,7 @@ import typing
 typing.assert_type(0, str)  # E: assert_type(Literal[0], str) failed
 # Make sure that calling by bare name without importing performs the assertion, as this is very convenient for debugging.
 # It's fine if a name error is also generated.
-assert_type(0, str)  # E: assert_type(Literal[0], str) failed  # E: Could not find name `assert_type`
+assert_type(0, str)  # E: assert_type(Literal[0], str) failed  # E: `assert_type` must be imported from `typing` for runtime usage
     "#,
 );
 
@@ -1003,7 +1027,7 @@ import typing
 typing.reveal_type(0)  # E: revealed type: Literal[0]
 # Make sure that calling by bare name without importing reveals the type, as this is very convenient for debugging.
 # It's fine if a name error is also generated.
-reveal_type(0)  # E: revealed type: Literal[0]  # E: Could not find name `reveal_type`
+reveal_type(0)  # E: revealed type: Literal[0]  # E: `reveal_type` must be imported from `typing` for runtime usage
     "#,
 );
 
@@ -1441,19 +1465,6 @@ def g(f: Callable[[Any], int], inputs: Any) -> None:
 );
 
 testcase!(
-    test_legacy_typevar_revealed_type,
-    r#"
-from typing import reveal_type, TypeVar
-
-T = TypeVar("T")
-TypeForm = type[T]
-
-reveal_type(T)  # E: TypeVar[T]
-reveal_type(TypeForm)  # E: revealed type: type[type[T]]
-    "#,
-);
-
-testcase!(
     test_union_function_exponential,
     r#"
 # This used to take an exponential amount of time to type check
@@ -1773,5 +1784,33 @@ testcase!(
     TestEnv::one_with_path("foo", "foo.pyi", "def f(x: bool = ...): pass"),
     r#"
 import foo
+    "#,
+);
+
+testcase!(
+    test_functional_type_creation,
+    r#"
+from typing import assert_type
+X = type("X", (object,), {"foo": "bar"})
+assert_type(X, type)
+    "#,
+);
+
+testcase!(
+    test_typing_annotated_validation,
+    r#"
+from typing import Annotated, ClassVar
+X = Annotated[int, 'ok']
+class A:
+    x: Annotated[ClassVar[int], 'also ok']
+Y = Annotated[ClassVar[int], 'wrong context']  # E: `ClassVar` is not allowed in this context
+Z = Annotated[0, 'not a type']  # E: Expected a type form, got instance of `Literal[0]`
+    "#,
+);
+
+testcase!(
+    test_starred_empty_tuple_no_panic,
+    r#"
+(),*()
     "#,
 );

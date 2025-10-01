@@ -311,13 +311,11 @@ fn initialize_environment_impl<'a>(
 
 fn initialize_environment<'a>(
     class: &'a Class,
-    initial_inference_map: InferenceMap,
     environment: &mut VarianceEnv,
     get_class_bases: &impl Fn(&Class) -> Arc<ClassBases>,
     get_fields: &impl Fn(&Class) -> SmallMap<Name, Arc<ClassField>>,
     get_tparams: &impl Fn(&Class) -> Arc<TParams>,
 ) {
-    environment.insert(class.dupe(), initial_inference_map);
     let mut on_var = |_name: &Name, _variance: Variance, _inj: bool| {};
     let mut on_edge = |c: &Class| {
         initialize_environment_impl(c, environment, get_class_bases, get_fields, get_tparams)
@@ -332,7 +330,7 @@ fn initialize_environment<'a>(
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    pub fn variance_map(&self, class: &Class) -> Arc<VarianceMap> {
+    fn compute_variance_env(&self, class: &Class) -> VarianceEnv {
         fn fixpoint<'a, Ans: LookupAnswer>(
             solver: &AnswersSolver<'a, Ans>,
             mut env: VarianceEnv,
@@ -376,31 +374,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             env
         }
 
+        let mut environment = VarianceEnv::new();
         let initial_inference_map_for_class =
             initial_inference_map(self.get_class_tparams(class).as_vec());
         let need_inference = initial_inference_map_for_class
             .iter()
             .any(|(_, status)| status.specified_variance.is_none());
-        let final_inference_map_for_class = if !need_inference {
-            initial_inference_map_for_class
+        environment.insert(class.dupe(), initial_inference_map_for_class);
+        if !need_inference {
+            environment
         } else {
-            let mut environment = VarianceEnv::new();
             initialize_environment(
                 class,
-                initial_inference_map_for_class,
                 &mut environment,
                 &|c| self.get_base_types_for_class(c),
                 &|c| self.get_class_field_map(c),
                 &|c| self.get_class_tparams(c),
             );
+            fixpoint(self, environment)
+        }
+    }
 
-            let environment = fixpoint(self, environment);
-            environment
-                .get(class)
-                .expect("class name must be present in environment")
-                .clone()
-        };
-        let class_variances = final_inference_map_for_class
+    pub fn variance_map(&self, class: &Class) -> Arc<VarianceMap> {
+        let class_variances = self
+            .compute_variance_env(class)
+            .get(class)
+            .expect("class name must be present in environment")
             .iter()
             .map(|(name, status)| {
                 (

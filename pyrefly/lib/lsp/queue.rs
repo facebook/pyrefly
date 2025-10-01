@@ -29,11 +29,15 @@ use lsp_types::DidSaveTextDocumentParams;
 pub enum LspEvent {
     // Part 1: Events that the server should try to handle first.
     /// Notify the server that recheck finishes, so server can revalidate all in-memory content
-    /// based on the latest `State`.
+    /// based on the latest `State`. The included config files are configs whose find
+    /// caches should be invalidated. on the next run.
     RecheckFinished,
     /// Inform the server that a request is cancelled.
     /// Server should know about this ASAP to avoid wasting time on cancelled requests.
     CancelRequest(RequestId),
+    /// Inform the server that the given configs' find caches are now invalid, and
+    /// that a new type check must occur.
+    InvalidateConfigFind,
     // Part 2: Events that can be queued in FIFO order and handled at a later time.
     DidOpenTextDocument(DidOpenTextDocumentParams),
     DidChangeTextDocument(DidChangeTextDocumentParams),
@@ -57,7 +61,9 @@ enum LspEventKind {
 impl LspEvent {
     fn kind(&self) -> LspEventKind {
         match self {
-            Self::RecheckFinished | Self::CancelRequest(_) => LspEventKind::Priority,
+            Self::RecheckFinished | Self::CancelRequest(_) | Self::InvalidateConfigFind => {
+                LspEventKind::Priority
+            }
             Self::DidOpenTextDocument(_)
             | Self::DidChangeTextDocument(_)
             | Self::DidCloseTextDocument(_)
@@ -138,5 +144,72 @@ impl LspQueue {
             last_mutation = 0;
         }
         Ok((last_mutation != 0, x))
+    }
+}
+
+pub struct HeavyTask(Box<dyn FnOnce() + Send + Sync + 'static>);
+
+struct HeavyTaskQueueInner {
+    task_sender: Sender<HeavyTask>,
+    task_receiver: Receiver<HeavyTask>,
+    stop_sender: Sender<()>,
+    stop_receiver: Receiver<()>,
+}
+
+/// A queue for heavy tasks that should be run in the background thread.
+#[derive(Clone, Dupe)]
+pub struct HeavyTaskQueue(Arc<HeavyTaskQueueInner>);
+
+impl HeavyTaskQueue {
+    pub fn new() -> Self {
+        let (task_sender, task_receiver) = crossbeam_channel::unbounded();
+        let (stop_sender, stop_receiver) = crossbeam_channel::unbounded();
+        Self(Arc::new(HeavyTaskQueueInner {
+            task_sender,
+            task_receiver,
+            stop_sender,
+            stop_receiver,
+        }))
+    }
+
+    pub fn queue_task(&self, f: Box<dyn FnOnce() + Send + Sync + 'static>) {
+        self.0
+            .task_sender
+            .send(HeavyTask(f))
+            .expect("Failed to queue heavy task")
+    }
+
+    pub fn run_until_stopped(&self) {
+        let mut receiver_selector = Select::new_biased();
+        // Biased selector will pick the receiver with lower index over higher ones,
+        // so we register priority_events_receiver first.
+        let stop_receiver_index = receiver_selector.recv(&self.0.stop_receiver);
+        let task_receiver_index = receiver_selector.recv(&self.0.task_receiver);
+        loop {
+            let selected = receiver_selector.select();
+            match selected.index() {
+                i if i == stop_receiver_index => {
+                    selected
+                        .recv(&self.0.stop_receiver)
+                        .expect("Failed to receive stop signal");
+                    return;
+                }
+                i if i == task_receiver_index => {
+                    let task = selected
+                        .recv(&self.0.task_receiver)
+                        .expect("Failed to receive heavy task");
+                    (task.0)();
+                }
+                _ => unreachable!(),
+            };
+        }
+    }
+
+    /// Make `run_until_stopped` exit after finishing the current task.
+    pub fn stop(&self) {
+        self.0
+            .stop_sender
+            .send(())
+            .expect("Failed to stop the queue");
     }
 }

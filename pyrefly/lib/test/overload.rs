@@ -700,11 +700,32 @@ S = TypeVar("S")
 # (`exception` is kw-only in the implementation) so that we can test how legacy TypeVars are
 # printed in the error message.
 @overload
-def catch(exception: T) -> T: ...  # E: Implementation signature `(f: S | None = None, *, exception: T) -> S | T` does not accept all arguments that overload signature `(exception: object) -> object` accepts
+def catch(exception: T) -> T: ...  # E: Implementation signature `(f: S | None = None, *, exception: T) -> S | T` does not accept all arguments that overload signature `(exception: T) -> T` accepts
 
 @overload
 def catch(f: S, *, exception: T) -> S | T: ...
 
 def catch(f: S | None = None, *, exception: T) -> S | T: ...
+    "#,
+);
+
+testcase!(
+    test_abstract,
+    r#"
+from abc import abstractmethod
+from typing import Literal, overload
+
+class Derp:
+    @overload
+    @abstractmethod
+    def f(self, m: Literal["x"] = "x") -> int: ...
+    @overload
+    @abstractmethod
+    def f(self, m: str) -> str: ...
+    @abstractmethod
+    def f(self, m: str = "x") -> int | str: ...
+
+def test(x: Derp, m: Literal["y"] = "y") -> str:
+    return x.f(m)
     "#,
 );

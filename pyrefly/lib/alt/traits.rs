@@ -22,6 +22,7 @@ use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
 use crate::alt::types::yields::YieldFromResult;
 use crate::alt::types::yields::YieldResult;
+use crate::binding::binding::AnnAssignHasValue;
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::AnnotationWithTarget;
 use crate::binding::binding::Binding;
@@ -43,7 +44,6 @@ use crate::binding::binding::BindingVariance;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::EmptyAnswer;
-use crate::binding::binding::Initialized;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
@@ -316,7 +316,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyAnnotation {
 
     fn promote_recursive(_: Var) -> Self::Answer {
         AnnotationWithTarget {
-            target: AnnotationTarget::Assign(Name::default(), Initialized::Yes),
+            target: AnnotationTarget::Assign(Name::default(), AnnAssignHasValue::Yes),
             annotation: Annotation::default(),
         }
     }

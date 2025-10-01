@@ -12,7 +12,8 @@ suite('Extension Test Suite', () => {
 	const extension: vscode.Extension<unknown> | undefined = vscode.extensions.getExtension('meta.pyrefly');
 
 	test('Test activation', async function () {
-		this.timeout(5000);
+		// On macos-13, we've noticed successful test activation take up to 3500ms.
+		this.timeout(10000);
 		await extension?.activate();
 		assert.ok(true);
 	});

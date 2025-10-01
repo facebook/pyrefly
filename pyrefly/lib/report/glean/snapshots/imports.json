@@ -654,7 +654,7 @@
             "key": "imports.py"
           },
           "span": {
-            "length": 16,
+            "length": 5,
             "start": 85
           }
         }
@@ -1023,7 +1023,7 @@
             "key": "imports.py"
           },
           "span": {
-            "length": 16,
+            "length": 5,
             "start": 85
           }
         }

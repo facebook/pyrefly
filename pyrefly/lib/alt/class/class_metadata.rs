@@ -38,7 +38,7 @@ use crate::alt::types::class_metadata::NamedTupleMetadata;
 use crate::alt::types::class_metadata::ProtocolMetadata;
 use crate::alt::types::class_metadata::TotalOrderingMetadata;
 use crate::alt::types::class_metadata::TypedDictMetadata;
-use crate::alt::types::pydantic::PydanticMetadata;
+use crate::alt::types::pydantic::PydanticConfig;
 use crate::alt::types::pydantic::PydanticModelKind;
 use crate::binding::base_class::BaseClass;
 use crate::binding::base_class::BaseClassExpr;
@@ -46,7 +46,7 @@ use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::base_class::BaseClassGenericKind;
 use crate::binding::binding::Key;
 use crate::binding::pydantic::FROZEN_DEFAULT;
-use crate::binding::pydantic::PydanticMetadataBinding;
+use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::pydantic::VALIDATE_BY_ALIAS;
 use crate::binding::pydantic::VALIDATE_BY_NAME;
 use crate::binding::pydantic::VALIDATION_ALIAS;
@@ -112,7 +112,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         keywords: &[(Name, Expr)],
         decorators: &[(Idx<Key>, TextRange)],
         is_new_type: bool,
-        pydantic_metadata_binding: &PydanticMetadataBinding,
+        pydantic_config_dict: &PydanticConfigDict,
         errors: &ErrorCollector,
     ) -> ClassMetadata {
         // Get class decorators.
@@ -194,9 +194,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
 
-        let pydantic_metadata = self.pydantic_metadata(
+        let pydantic_config = self.pydantic_config(
             &bases_with_metadata,
-            pydantic_metadata_binding,
+            pydantic_config_dict,
             &keywords,
             errors,
             cls.range(),
@@ -232,6 +232,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let is_final = decorators.iter().any(|(decorator, _)| {
             decorator.ty().callee_kind() == Some(CalleeKind::Function(FunctionKind::Final))
         });
+        let is_deprecated = decorators.iter().any(|(decorator, _)| {
+             matches!(decorator.ty(), Type::ClassType(cls) if cls.has_qname("warnings", "deprecated"))
+        });
 
         let total_ordering_metadata = decorators.iter().find_map(|(decorator, decorator_range)| {
             decorator.ty().callee_kind().and_then(|kind| {
@@ -259,17 +262,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &keywords,
             &decorators,
             dataclass_defaults_from_base_class,
-            pydantic_metadata.as_ref(),
+            pydantic_config.as_ref(),
         );
         let dataclass_metadata = self.dataclass_metadata(
             cls,
             &decorators,
             &bases_with_metadata,
             dataclass_from_dataclass_transform,
-            pydantic_metadata.as_ref(),
+            pydantic_config.as_ref(),
         );
         if let Some(dm) = dataclass_metadata.as_ref()
-            && pydantic_metadata.is_none()
+            && pydantic_config.is_none()
         {
             self.validate_frozen_dataclass_inheritance(cls, dm, &bases_with_metadata, errors);
         }
@@ -294,7 +297,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             keywords.into_map(|(name, annot)| (name, annot.ty.unwrap_or_else(Type::any_implicit)));
 
         // get pydantic model info. A root model is by default also a base model, while not every base model is a root model
-        let pydantic_model_kind = pydantic_metadata
+        let pydantic_model_kind = pydantic_config
             .as_ref()
             .map(|m| m.pydantic_model_kind.clone());
 
@@ -311,6 +314,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             has_base_any,
             is_new_type,
             is_final,
+            is_deprecated,
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
@@ -395,7 +399,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bases_with_metadata
             .iter()
             .find_map(|(base_class_object, metadata)| {
-                if base_class_object.has_qname(
+                if base_class_object.has_toplevel_qname(
                     ModuleName::type_checker_internals().as_str(),
                     "NamedTupleFallback",
                 ) {
@@ -422,17 +426,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
     }
 
-    fn pydantic_metadata(
+    fn pydantic_config(
         &self,
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
-        pydantic_metadata_binding: &PydanticMetadataBinding,
+        pydantic_config_dict: &PydanticConfigDict,
         keywords: &[(Name, Annotation)],
         errors: &ErrorCollector,
         range: TextRange,
-    ) -> Option<PydanticMetadata> {
+    ) -> Option<PydanticConfig> {
         let has_pydantic_base_model_base_class =
             bases_with_metadata.iter().any(|(base_class_object, _)| {
-                base_class_object.has_qname(ModuleName::pydantic().as_str(), "BaseModel")
+                base_class_object.has_toplevel_qname(ModuleName::pydantic().as_str(), "BaseModel")
             });
 
         let is_pydantic_base_model = has_pydantic_base_model_base_class
@@ -446,7 +450,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let has_pydantic_root_model_base_class =
             bases_with_metadata.iter().any(|(base_class_object, _)| {
-                base_class_object.has_qname(ModuleName::pydantic_root_model().as_str(), "RootModel")
+                base_class_object
+                    .has_toplevel_qname(ModuleName::pydantic_root_model().as_str(), "RootModel")
             });
 
         let has_root_model_kind = bases_with_metadata.iter().any(|(_, metadata)| {
@@ -462,19 +467,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             PydanticModelKind::BaseModel
         };
 
-        let PydanticMetadataBinding {
+        let PydanticConfigDict {
             frozen,
             extra,
-            validate_by_name,
-            validate_by_alias,
-        } = pydantic_metadata_binding;
+            validation_flags,
+        } = pydantic_config_dict;
 
         // Note: class keywords take precedence over ConfigDict keywords.
         // But another design choice is to error if there is a conflict. We can consider this design for v2.
-        let validate_by_alias =
-            self.extract_validate_flag(keywords, &VALIDATE_BY_ALIAS, *validate_by_alias);
-        let validate_by_name =
-            self.extract_validate_flag(keywords, &VALIDATE_BY_NAME, *validate_by_name);
+        let validate_by_alias = self.extract_validate_flag(
+            keywords,
+            &VALIDATE_BY_ALIAS,
+            validation_flags.validate_by_alias,
+        );
+        let validate_by_name = self.extract_validate_flag(
+            keywords,
+            &VALIDATE_BY_NAME,
+            validation_flags.validate_by_name,
+        );
 
         // Here, "ignore" and "allow" translate to true, while "forbid" translates to false.
         // With no keyword, the default is "true" and I default to "false" on a wrong keyword.
@@ -532,7 +542,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .unwrap_or(FROZEN_DEFAULT),
         };
 
-        Some(PydanticMetadata {
+        Some(PydanticConfig {
             frozen: *frozen,
             validate_by_alias,
             validate_by_name,
@@ -705,6 +715,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
         errors: &ErrorCollector,
     ) -> Option<EnumMetadata> {
+        let is_django = bases_with_metadata.iter().any(|(base, base_meta)| {
+            base.has_toplevel_qname(ModuleName::django_models_enums().as_str(), "Choices")
+                || base_meta
+                    .enum_metadata()
+                    .as_ref()
+                    .is_some_and(|meta| meta.is_django)
+        });
+
         if let Some(metaclass) = metaclass
             && self
                 .as_superclass(metaclass, self.stdlib.enum_meta().class_object())
@@ -732,6 +750,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &Type::ClassType(self.stdlib.enum_flag().clone()),
                     )
                 }),
+                is_django,
             })
         } else {
             None
@@ -772,7 +791,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         keywords: &[(Name, Annotation)],
         decorators: &[(Arc<TypeInfo>, TextRange)],
         dataclass_defaults_from_base_class: Option<DataclassTransformKeywords>,
-        pydantic_metadata: Option<&PydanticMetadata>,
+        pydantic_config: Option<&PydanticConfig>,
     ) -> Option<(DataclassKeywords, Vec<CalleeKind>)> {
         // This is set when we should apply dataclass-like transformations to the class. The class
         // should be transformed if:
@@ -791,7 +810,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut kws = DataclassKeywords::from_type_map(&TypeMap(map), &defaults);
 
             // Inject frozen data from pydantic model
-            if let Some(pydantic) = pydantic_metadata {
+            if let Some(pydantic) = pydantic_config {
                 kws.frozen = pydantic.frozen || kws.frozen;
                 kws.extra = pydantic.extra;
             }
@@ -826,7 +845,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         decorators: &[(Arc<TypeInfo>, TextRange)],
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
         dataclass_from_dataclass_transform: Option<(DataclassKeywords, Vec<CalleeKind>)>,
-        pydantic_metadata: Option<&PydanticMetadata>,
+        pydantic_config: Option<&PydanticConfig>,
     ) -> Option<DataclassMetadata> {
         // If we inherit from a dataclass, inherit its metadata. Note that if this class is
         // itself decorated with @dataclass, we'll compute new metadata and overwrite this.
@@ -837,7 +856,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(m)
         });
 
-        let class_validation_flags = pydantic_metadata.map_or(
+        let class_validation_flags = pydantic_config.map_or(
             ClassValidationFlags {
                 validate_by_name: false,
                 validate_by_alias: true,
@@ -847,9 +866,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 validate_by_alias: pyd.validate_by_alias,
             },
         );
+        let default_can_be_positional = pydantic_config.is_some();
 
         let mut alias_keyword = DataclassFieldKeywords::ALIAS;
-        if pydantic_metadata.is_some() {
+        if pydantic_config.is_some() {
             alias_keyword = VALIDATION_ALIAS;
         }
         for (decorator, _) in decorators {
@@ -867,6 +887,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ],
                         alias_keyword: alias_keyword.clone(),
                         class_validation_flags: class_validation_flags.clone(),
+                        default_can_be_positional,
                     });
                 }
                 // `@dataclass(...)`
@@ -886,6 +907,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ],
                         alias_keyword: alias_keyword.clone(),
                         class_validation_flags: class_validation_flags.clone(),
+                        default_can_be_positional,
                     });
                 }
                 _ => {}
@@ -898,6 +920,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 field_specifiers,
                 alias_keyword: alias_keyword.clone(),
                 class_validation_flags,
+                default_can_be_positional,
             });
         }
         dataclass_metadata

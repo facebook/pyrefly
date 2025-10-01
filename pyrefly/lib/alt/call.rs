@@ -128,7 +128,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 });
                 Some(CallTarget::FunctionOverload(funcs, *overload.metadata))
             }
-            Type::BoundMethod(box BoundMethod { obj, func }) => {
+            Type::BoundMethod(bm) => {
+                let BoundMethod { obj, func } = *bm;
                 match self.as_call_target_impl(func.as_type(), quantified) {
                     Some(CallTarget::Function(func)) => Some(CallTarget::BoundMethod(obj, func)),
                     Some(CallTarget::FunctionOverload(overloads, meta)) => {
@@ -156,7 +157,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     },
                 )))
             }
-            Type::Type(box Type::Any(style)) => Some(CallTarget::Any(style)),
+            Type::Type(inner) if let Type::Any(style) = *inner => Some(CallTarget::Any(style)),
             Type::Forall(forall) => {
                 let mut target = self.as_call_target_impl(forall.body.as_type(), quantified);
                 match &mut target {
@@ -170,7 +171,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 target
             }
-            Type::Var(v) if let Some(_guard) = self.recurser.recurse(v) => {
+            Type::Var(v) if let Some(_guard) = self.recurse(v) => {
                 self.as_call_target_impl(self.solver().force_var(v), quantified)
             }
             Type::Union(xs) => {

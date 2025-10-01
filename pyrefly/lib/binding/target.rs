@@ -8,9 +8,11 @@
 use pyrefly_python::short_identifier::ShortIdentifier;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
+use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Operator;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
@@ -26,10 +28,10 @@ use crate::binding::binding::KeyExpect;
 use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::BindingsBuilder;
-use crate::binding::bindings::LookupKind;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::binding::scope::FlowStyle;
+use crate::binding::scope::NameReadInfo;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 
@@ -121,19 +123,19 @@ impl<'a> BindingsBuilder<'a> {
         );
     }
 
-    /// Check whether a name is well-defined, when updating flow info for
-    /// attribute / subscript assignments. The lookup kind is regular but the
-    /// usage is MutableLookup because these operations are non-mutating from a
-    /// scope rules point of view, but the checks are not useful for first-usage
-    /// tracking since we're just checking whether the mutation of a facet
-    /// deserves a narrow binding.
-    fn name_is_defined(&mut self, name: &Identifier) -> bool {
-        self.lookup_name(
-            Hashed::new(&name.id),
-            LookupKind::Regular,
-            &mut Usage::MutableLookup,
-        )
-        .is_ok()
+    /// Narrow a name to `Idx` if the name is defined in the current scope stack. Used
+    /// to handle attribute and subscript assignment narrows, which we want to allow whenever
+    /// the name was defined, but we don't want them to cause us to treat nonexistent names
+    /// as defined downstream.
+    fn narrow_if_name_is_defined(&mut self, identifier: Identifier, narrowed_idx: Idx<Key>) {
+        let name = Hashed::new(&identifier.id);
+        let name_is_defined = !matches!(
+            self.scopes.look_up_name_for_read(name),
+            NameReadInfo::NotFound,
+        );
+        if name_is_defined {
+            self.scopes.narrow_in_current_flow(name, narrowed_idx);
+        }
     }
 
     /// Create a binding to verify that an attribute assignment is valid and
@@ -166,13 +168,7 @@ impl<'a> BindingsBuilder<'a> {
             Binding::AssignToAttribute(attr, Box::new(value.clone())),
         );
         if let Some(identifier) = narrowing_identifier {
-            let name = Hashed::new(&identifier.id);
-            // This is a mutable usage even though it's not a "mutable lookup" because the
-            // scoping rules for attribute assignment are normal lookups, but they aren't useful
-            // for first-usage tracking.
-            if self.name_is_defined(&identifier) {
-                self.scopes.upsert_flow_info(name, idx, None);
-            }
+            self.narrow_if_name_is_defined(identifier, idx);
         }
         value
     }
@@ -217,10 +213,7 @@ impl<'a> BindingsBuilder<'a> {
         let idx = self
             .insert_binding_current(user, Binding::AssignToSubscript(subscript, Box::new(value)));
         if let Some(identifier) = narrowing_identifier {
-            let name = Hashed::new(&identifier.id);
-            if self.name_is_defined(&identifier) {
-                self.scopes.upsert_flow_info(name, idx, None);
-            }
+            self.narrow_if_name_is_defined(identifier, idx);
         }
     }
 
@@ -414,11 +407,8 @@ impl<'a> BindingsBuilder<'a> {
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
         }
-        let (ann, default) = self.bind_current(&name.id, &user, FlowStyle::Other);
-        let mut binding = make_binding(assigned.as_deref(), ann);
-        if let Some(default) = default {
-            binding = Binding::Default(default, Box::new(binding));
-        }
+        let ann = self.bind_current(&name.id, &user, FlowStyle::Other);
+        let binding = make_binding(assigned.as_deref(), ann);
         self.insert_binding_current(user, binding);
     }
 
@@ -445,8 +435,8 @@ impl<'a> BindingsBuilder<'a> {
         direct_ann: Option<(&Expr, Idx<KeyAnnotation>)>,
     ) -> Option<Idx<KeyAnnotation>> {
         let identifier = ShortIdentifier::new(name);
-        let mut user = self.declare_current_idx(Key::Definition(identifier.clone()));
-        let pinned_idx = self.idx_for_promise(Key::PinnedDefinition(identifier.clone()));
+        let mut user = self.declare_current_idx(Key::Definition(identifier));
+        let pinned_idx = self.idx_for_promise(Key::CompletedPartialType(identifier));
         let is_definitely_type_alias = if let Some((e, _)) = direct_ann
             && self.as_special_export(e) == Some(SpecialExport::TypeAlias)
         {
@@ -466,15 +456,12 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             FlowStyle::Other
         };
-        let (canonical_ann, default) = self.bind_name(&name.id, pinned_idx, style);
+        let canonical_ann = self.bind_name(&name.id, pinned_idx, style);
         let ann = match direct_ann {
             Some((_, idx)) => Some((AnnotationStyle::Direct, idx)),
             None => canonical_ann.map(|idx| (AnnotationStyle::Forwarded, idx)),
         };
-        let mut binding = Binding::NameAssign(name.id.clone(), ann, value);
-        if let Some(default) = default {
-            binding = Binding::Default(default, Box::new(binding));
-        }
+        let binding = Binding::NameAssign(name.id.clone(), ann, value);
         // Record the raw assignment
         let (first_used_by, def_idx) = user.decompose();
         let def_idx = self.insert_binding_idx(def_idx, binding);
@@ -483,14 +470,17 @@ impl<'a> BindingsBuilder<'a> {
             def_idx
         } else {
             self.insert_binding(
-                Key::UpstreamPinnedDefinition(identifier),
-                Binding::PinUpstream(def_idx, first_used_by.into_iter().collect()),
+                Key::PartialTypeWithUpstreamsCompleted(identifier),
+                Binding::PartialTypeWithUpstreamsCompleted(
+                    def_idx,
+                    first_used_by.into_iter().collect(),
+                ),
             )
         };
         // Insert the Pin binding that will pin any types, potentially after evaluating the first downstream use.
         self.insert_binding_idx(
             pinned_idx,
-            Binding::Pin(unpinned_idx, FirstUse::Undetermined),
+            Binding::CompletedPartialType(unpinned_idx, FirstUse::Undetermined),
         );
         canonical_ann
     }
@@ -501,8 +491,29 @@ impl<'a> BindingsBuilder<'a> {
         match x {
             Expr::Subscript(x) => matches!(
                 self.as_special_export(&x.value),
-                Some(SpecialExport::Union | SpecialExport::Optional)
+                Some(
+                    SpecialExport::Union
+                        | SpecialExport::Optional
+                        | SpecialExport::Annotated
+                        | SpecialExport::Callable
+                        | SpecialExport::BuiltinsDict
+                        | SpecialExport::TypingDict
+                        | SpecialExport::BuiltinsList
+                        | SpecialExport::TypingList
+                        | SpecialExport::BuiltinsTuple
+                        | SpecialExport::TypingTuple
+                        | SpecialExport::BuiltinsType
+                        | SpecialExport::TypingType
+                )
             ),
+            Expr::BinOp(ExprBinOp {
+                left,
+                op: Operator::BitOr,
+                right,
+                ..
+            }) => {
+                self.is_definitely_type_alias_rhs(left) || self.is_definitely_type_alias_rhs(right)
+            }
             _ => false,
         }
     }
