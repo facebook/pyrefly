@@ -164,12 +164,12 @@ export default function Sandbox({
     // Rename a file
     const renameFile = useCallback((oldName: string, newName: string) => {
         if (!newName.trim() || models.has(newName)) return false;
-        // Allow renaming to `pyrefly.toml` specifically; otherwise only allow `.py`
+        // Allow renaming to `pyrefly.toml` specifically; otherwise only allow `.py` and `.pyi`
         let finalName: string;
         const trimmedNew = newName.trim();
         if (trimmedNew === 'pyrefly.toml' || trimmedNew.endsWith('/pyrefly.toml')) {
             finalName = 'pyrefly.toml';
-        } else if (trimmedNew.endsWith('.py')) {
+        } else if (trimmedNew.endsWith('.py') || trimmedNew.endsWith('.pyi')) {
             finalName = trimmedNew;
         } else {
             return false;
@@ -222,7 +222,7 @@ export default function Sandbox({
         }
 
         const finalName = inputValue.trim();
-        if (!finalName.endsWith('.py') && finalName !== 'pyrefly.toml') {
+        if (!finalName.endsWith('.py') && !finalName.endsWith('.pyi') && finalName !== 'pyrefly.toml') {
             return false;
         }
 
