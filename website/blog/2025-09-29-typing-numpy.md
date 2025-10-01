@@ -7,14 +7,16 @@ tags: [typechecking, news]
 hide_table_of_contents: false
 ---
 
-Because [NumPy](https://numpy.org/) is one of the most downloaded packages in the Python ecosystem, any incremental improvement can have a large impact on the data science ecosystem. In particular, improvements related to static typing can improve developer experience and help downstream libraries write safer code. We'll tell the story about how we helped bring its type-completeness score to nearly 90% from an initial 33%.
+Because [NumPy](https://numpy.org/) is one of the most downloaded packages in the Python ecosystem, any incremental improvement can have a large impact on the data science ecosystem. In particular, improvements related to static typing can improve developer experience and help downstream libraries write safer code. We'll tell the story about how we (Quansight Labs, with support from Meta's Pyrefly team) helped bring its type-completeness score to nearly 90% from an initial 33%.
+
+<!-- truncate -->
 
 **TL;DR**:
 
 - NumPy's type-completeness score was ~33%.
 - A one-line fix doubled coverage to over 80%.
 - Fully typing MaskedArray pushed the score to nearly 90%.
-- What's left? Top-level numpy.ma functions, more precise overloads, and adding a type-checker to NumPy's CI.
+- What's left? Top-level `numpy.ma` functions, more precise overloads, and adding a type-checker to NumPy's CI.
 
 ## Wait, what's type completeness?
 
