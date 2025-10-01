@@ -39,7 +39,7 @@ would have a 50% type-completeness score, because:
 
 By changing the `foo` signature to be `def foo(a: int) -> None:`, the type-completeness score would jump to 100%. The more type-complete a library is, the more helpful the suggestions an IDE can show to the user.
 
-Note that type-completeness only measures how much of the public API is covered by types. If you want to verify that those types are correct and self-consistent, you'll also need to run a type checker. The most used type checkers currently are [mypy](https://github.com/python/mypy) and Pyright, but [Pyrefly](https://github.com/facebook/pyrefly) and [ty](https://github.com/astral-sh/ty) are also attracting a lot of attention due to their impressive performance characteristics (note however that neither yet describes itself as production-ready, so temper your expectations accordingly if you try them out!).
+Note that type-completeness only measures how much of the public API (at least, the part known to Pyright) is covered by types. If you want to verify that those types are correct and self-consistent, you'll also need to run a type checker. The most used type checkers currently are [mypy](https://github.com/python/mypy) and Pyright, but [Pyrefly](https://github.com/facebook/pyrefly) and [ty](https://github.com/astral-sh/ty) are also attracting a lot of attention due to their impressive performance characteristics (note however that neither yet describes itself as production-ready, so temper your expectations accordingly if you try them out!).
 
 ## How type-complete is NumPy?
 
@@ -56,17 +56,17 @@ The output showed a completeness score of...18%. Wait, only 18%? This seemed ver
 
 The first issue was caused by an import from the standard library `decimal` module, which itself is partially untyped. Given that this is outside of NumPy's direct control, we decided to exclude it from the coverage report by using `--ignoreexternal`, [as suggested by Eric Traut](https://github.com/microsoft/pyright/discussions/9911).
 
-For the second issue, PyRight gives us an option to export the coverage report to json (`--outputjson`). We could then parse the json and exclude `numpy.tests`. Given that NumPy users wouldn't ordinarily interact with NumPy's internal test suite but that PyRight considers it public, we decided that it made sense for us to exclude tests in order to focus our efforts on what would make the biggest user-facing impact.
+For the second issue, Pyright gives us an option to export the coverage report to json (`--outputjson`). We could then parse the json and exclude `numpy.tests`. Given that NumPy users wouldn't ordinarily interact with NumPy's internal test suite but that Pyright considers it public, we decided that it made sense for us to exclude tests in order to focus our efforts on what would make the biggest user-facing impact.
 
 Once we'd addressed the two steps above, the baseline type-completeness score became 33%. This was our starting point. We could then focus our efforts on the remaining 67%!
 
 ## The one-line change which doubled type-completeness
 
-Pyright's report includes classes, methods, functions, type aliases, and more. A lot of scientific Python code centres around some central classes such as `ndarray`. `ndarray` was reported as "partially unknown", but eye-balling the exported symbols related to that class revealed something interesting:
+Pyright's report includes classes, methods, functions, type aliases, and more. A lot of scientific Python code centres around some central classes such as `numpy.ndarray`. `ndarray` was reported as "partially unknown", but eye-balling the exported symbols related to that class revealed something interesting:
 
 ```python
-In [13]: np.mean([x['isTypeKnown'] for x in exported if x['name'].startswith('numpy.ndarray.')])
-Out[13]: np.float64(0.9811320754716981)
+>>> np.mean([x['isTypeKnown'] for x in exported if x['name'].startswith('numpy.ndarray.')])
+np.float64(0.9811320754716981)
 ```
 
 So, `ndarray` was reported as "partially unknown", but 98% of its methods had known types. It shouldn't be much effort to bring that number to 100%! In fact, all it took was a [one-line change to fix a typo in a type annotation](https://github.com/numpy/numpy/pull/28908): 
@@ -83,8 +83,8 @@ That's it! `CanIndex` was an unknown symbol and was probably mistyped, and repla
 When we looked at the percentage of typed symbols from the MaskedArray class, we noticed something interesting:
 
 ```python
-In [14]: np.mean([x['isTypeKnown'] for x in exported if x['name'].startswith('numpy.ma.core.MaskedArray.')])
-Out[14]: np.float64(0.2)
+>>> np.mean([x['isTypeKnown'] for x in exported if x['name'].startswith('numpy.ma.core.MaskedArray.')])
+np.float64(0.2)
 ```
 
 Only 20% of them were typed! That's quite a contrast with `ndarray`, which was already at 98% when we started. It's also a fairly widely used class, appearing in the codebases of pandas, scikit-learn, and xarray. Given how poorly typed it was, we decided it would be a good candidate to spend time on!
