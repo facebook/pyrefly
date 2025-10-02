@@ -84,10 +84,10 @@ impl TspServer {
         )?;
 
         // Increment snapshot after the inner server has processed the event
-        if should_increment_snapshot {
-            if let Ok(mut current) = self.current_snapshot.lock() {
-                *current += 1;
-            }
+        if should_increment_snapshot
+            && let Ok(mut current) = self.current_snapshot.lock()
+        {
+            *current += 1;
         }
 
         Ok(result)
