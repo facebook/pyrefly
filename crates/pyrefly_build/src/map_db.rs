@@ -78,4 +78,12 @@ impl SourceDatabase for MapDatabase {
     fn requery_source_db(&self, _: SmallSet<PathBuf>) -> anyhow::Result<bool> {
         Ok(false)
     }
+
+    fn get_critical_files(&self) -> SmallSet<PathBuf> {
+        self.0
+            .values()
+            .flatten()
+            .map(|p| p.as_path().to_path_buf())
+            .collect()
+    }
 }

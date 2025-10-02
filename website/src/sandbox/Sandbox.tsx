@@ -32,11 +32,10 @@ import type { PyreflyErrorMessage } from './SandboxResults';
 import { DEFAULT_SANDBOX_PROGRAM } from './DefaultSandboxProgram';
 import { DEFAULT_UTILS_PROGRAM } from './DefaultUtilsProgram';
 import { usePythonWorker } from './usePythonWorker';
-import PythonVersionSelector from './PythonVersionSelector';
 
 // Import type for Pyrefly State
 export interface PyreflyState {
-    updateSandboxFiles: (files: Record<string, string>) => void;
+    updateSandboxFiles: (files: Record<string, string>, force_update: boolean) => string | null;
     updateSingleFile: (filename: string, content: string) => void;
     setActiveFile: (filename: string) => void;
     getErrors: () => ReadonlyArray<PyreflyErrorMessage>;
@@ -113,7 +112,8 @@ export default function Sandbox({
             newModel = existingModel;
         } else {
             // Create new file from scratch
-            newModel = monaco.editor.createModel(content, 'python', monaco.Uri.file(`/${fileName}`));
+            const language = fileName.endsWith('.toml') ? 'toml' : 'python';
+            newModel = monaco.editor.createModel(content, language, monaco.Uri.file(`/${fileName}`));
         }
 
         setModels(prev => new Map(prev).set(fileName, newModel));
@@ -153,7 +153,7 @@ export default function Sandbox({
         }
 
         // Create the file
-        createNewFile(fileName, '# New Python file\n');
+        createNewFile(fileName, '');
 
         // Start renaming mode with empty input
         setRenamingFile(fileName);
@@ -164,18 +164,26 @@ export default function Sandbox({
     // Rename a file
     const renameFile = useCallback((oldName: string, newName: string) => {
         if (!newName.trim() || models.has(newName)) return false;
-
-        // Ensure .py extension
-        const finalName = newName.endsWith('.py') ? newName : `${newName}.py`;
+        // Allow renaming to `pyrefly.toml` specifically; otherwise only allow `.py`
+        let finalName: string;
+        const trimmedNew = newName.trim();
+        if (trimmedNew === 'pyrefly.toml' || trimmedNew.endsWith('/pyrefly.toml')) {
+            finalName = 'pyrefly.toml';
+        } else if (trimmedNew.endsWith('.py')) {
+            finalName = trimmedNew;
+        } else {
+            return false;
+        }
         if (models.has(finalName)) return false;
 
         const oldModel = models.get(oldName);
         if (!oldModel) return false;
 
         // Create new model with new name
+        const language = finalName.endsWith('.toml') ? 'toml' : 'python';
         const newModel = monaco.editor.createModel(
             oldModel.getValue(),
-            'python',
+            language,
             monaco.Uri.file(`/${finalName}`)
         );
 
@@ -213,9 +221,10 @@ export default function Sandbox({
             return false;
         }
 
-        const finalName = inputValue.trim().endsWith('.py')
-            ? inputValue.trim()
-            : `${inputValue.trim()}.py`;
+        const finalName = inputValue.trim();
+        if (!finalName.endsWith('.py') && finalName !== 'pyrefly.toml') {
+            return false;
+        }
 
         // Allow saving with the same name (no change)
         if (finalName === currentFileName) {
@@ -313,7 +322,7 @@ export default function Sandbox({
                                 placeholder="Enter filename"
                                 autoFocus
                             />
-                            <span {...stylex.props(styles.extensionLabel)}>.py</span>
+                            <span {...stylex.props(styles.extensionLabel)}></span>
                         </div>
                     ) : (
                         <button
@@ -348,7 +357,7 @@ export default function Sandbox({
                     <button
                         onClick={handleRenameSave}
                         {...stylex.props(
-                           styles.actionButton,
+                            styles.actionButton,
                             styles.saveButton,
                             !isValidFilename(renameInputValue, renamingFile) && styles.disabledButton
                         )}
@@ -372,7 +381,16 @@ export default function Sandbox({
 
     useEffect(() => {
         if (models.size === 0) {
-            const restored = restoreProjectFromURL(createNewFile, setActiveFileName, setModels);
+            // Respect legacy ?version= from URL for backward compatibility
+            let initialVersion: string;
+            const versionFromURL = getVersionFromURL();
+            if (versionFromURL) {
+                setPythonVersion(versionFromURL);
+                initialVersion = versionFromURL;
+            } else {
+                initialVersion = pythonVersion;
+            }
+            const restored = restoreProjectFromURL(createNewFile, setActiveFileName, setModels, initialVersion);
 
             if (!restored) {
                 if (isCodeSnippet) {
@@ -383,19 +401,13 @@ export default function Sandbox({
                     // For sandbox mode, create the default files
                     createNewFile('sandbox.py', DEFAULT_SANDBOX_PROGRAM);
                     createNewFile('utils.py', DEFAULT_UTILS_PROGRAM);
+                    // Add a default pyrefly.toml so users can immediately tweak configuration
+                    createNewFile('pyrefly.toml', defaultPyreflyToml(initialVersion));
                     setActiveFileName('sandbox.py');
                 }
             }
         }
     }, [createNewFile, models.size, isCodeSnippet, sampleFilename, codeSample]);
-
-    // Initialize Python version from URL on component mount
-    useEffect(() => {
-        const versionFromURL = getVersionFromURL();
-        if (versionFromURL) {
-            setPythonVersion(versionFromURL);
-        }
-    }, []);
 
     // Initialize WebAssembly only when the component is in the viewport
     useEffect(() => {
@@ -451,8 +463,7 @@ export default function Sandbox({
         forceRecheck();
     }, [pyreService, model]);
 
-    // Initial type check when models and pyreService are ready
-    useEffect(() => {
+    function updateAllFiles(forceUpdate: boolean): boolean {
         if (models.size > 0 && pyreService && model) {
             const allFiles: Record<string, string> = {};
             models.forEach((model, filename) => {
@@ -460,10 +471,20 @@ export default function Sandbox({
             });
 
             if (Object.keys(allFiles).length > 0) {
-                pyreService.updateSandboxFiles(allFiles);
+                const newVersion = pyreService.updateSandboxFiles(allFiles, forceUpdate);
+                if (newVersion) {
+                    setPythonVersion(newVersion);
+                }
                 pyreService.setActiveFile(activeFileName);
             }
+            return true;
+        }
+        return false;
+    }
 
+    // Initial type check when models and pyreService are ready
+    useEffect(() => {
+        if (updateAllFiles(true)) {
             setTimeout(() => forceRecheck(), 100);
         }
     }, [models.size, pyreService, model, activeFileName]);
@@ -484,7 +505,10 @@ export default function Sandbox({
 
         // typecheck on edit
         try {
-            if (models.size > 1) {
+            if (activeFileName === "pyrefly.toml") {
+                updateAllFiles(false);
+                pyreService.setActiveFile(activeFileName);
+            } else if (models.size > 1) {
                 const currentFileContent = model.getValue();
                 pyreService.updateSingleFile(activeFileName, currentFileContent);
                 pyreService.setActiveFile(activeFileName);
@@ -614,17 +638,6 @@ export default function Sandbox({
         editor.setSelection(range);
     };
 
-    const handleVersionChange = (newVersion: string) => {
-        setPythonVersion(newVersion);
-        if (models.size > 0 && !isCodeSnippet) {
-            const allFiles: Record<string, string> = {};
-            models.forEach((model, filename) => {
-                allFiles[filename] = model.getValue();
-            });
-            updateURL(allFiles, activeFileName, newVersion);
-        }
-    };
-
     const buttons = getMonacoButtons(
         isCodeSnippet,
         model,
@@ -634,8 +647,6 @@ export default function Sandbox({
         forceRecheck,
         codeSample,
         pythonVersion,
-        handleVersionChange,
-        loading,
         models,
         activeFileName
     );
@@ -665,7 +676,6 @@ export default function Sandbox({
                     forceRecheck,
                     onEditorMount,
                     editorHeightforCodeSnippet,
-                    pythonVersion,
                     activeFileName,
                     models
                 )}
@@ -710,7 +720,7 @@ interface ProjectState {
     activeFile: string;
 }
 
-function updateURL(allFiles: Record<string, string>, activeFile: string, version?: string): void {
+function updateURL(allFiles: Record<string, string>, activeFile: string): void {
     const projectState: ProjectState = {
         files: allFiles,
         activeFile: activeFile
@@ -718,9 +728,6 @@ function updateURL(allFiles: Record<string, string>, activeFile: string, version
     const compressed = LZString.compressToEncodedURIComponent(JSON.stringify(projectState));
     const params = new URLSearchParams();
     params.set('project', compressed);
-    if (version) {
-        params.set('version', version);
-    }
     const newURL = `${window.location.pathname}?${params.toString()}`;
     window.history.replaceState({}, '', newURL);
 }
@@ -779,10 +786,20 @@ function fetchCurMonacoModelAndTriggerUpdate(
     return model;
 }
 
+function defaultPyreflyToml(pythonVersion: string) {
+        return [
+            '# Pyrefly sandbox configuration.',
+            '# See https://pyrefly.org/en/docs/configuration/ for available configuration options.',
+            `python-version = "${pythonVersion}"`,
+            ''
+        ].join('\n');
+}
+
 function restoreProjectFromURL(
     createNewFile: (fileName: string, content: string) => void,
     setActiveFileName: (fileName: string) => void,
-    setModels: React.Dispatch<React.SetStateAction<Map<string, editor.ITextModel>>>
+    setModels: React.Dispatch<React.SetStateAction<Map<string, editor.ITextModel>>>,
+    pythonVersion: string,
 ): boolean {
     const projectState = getProjectFromURL();
     if (!projectState) return false;
@@ -793,6 +810,12 @@ function restoreProjectFromURL(
     Object.entries(projectState.files).forEach(([fileName, content]) => {
         createNewFile(fileName, content);
     });
+
+    if (!projectState.files['pyrefly.toml']) {
+        // For backwards compatibility, use the version if restoring from a project with a version
+        // but no pyrefly.toml.
+        createNewFile('pyrefly.toml', defaultPyreflyToml(pythonVersion));
+    }
 
     if (projectState.activeFile && projectState.files[projectState.activeFile]) {
         setActiveFileName(projectState.activeFile);
@@ -812,7 +835,6 @@ function getPyreflyEditor(
     forceRecheck: () => void,
     onEditorMount: (editor: editor.IStandaloneCodeEditor) => void,
     editorHeightforCodeSnippet: number | null,
-    pythonVersion: string,
     activeFileName: string,
     models: Map<string, editor.ITextModel>
 ): React.ReactElement {
@@ -869,7 +891,7 @@ function getPyreflyEditor(
                                 allFiles[filename] = model.getValue();
                             }
                         });
-                        updateURL(allFiles, activeFileName, pythonVersion);
+                        updateURL(allFiles, activeFileName);
                     }
                 }}
                 onMount={onEditorMount}
@@ -897,8 +919,6 @@ function getMonacoButtons(
     forceRecheck: () => void,
     codeSample: string,
     pythonVersion: string,
-    handleVersionChange: (version: string) => void,
-    loading: boolean,
     models: Map<string, editor.ITextModel>,
     activeFileName: string
 ): ReadonlyArray<React.ReactElement> {
@@ -909,7 +929,7 @@ function getMonacoButtons(
             getCopyButton(model),
             /* Hide reset button if it's readonly, which is when it's a code snippet on mobile */
             !isMobile()
-                ? getResetButton(model, forceRecheck, codeSample, isCodeSnippet, pythonVersion, models, activeFileName)
+                ? getResetButton(model, forceRecheck, codeSample, isCodeSnippet, models, activeFileName)
                 : null,
         ].filter(Boolean);
     } else {
@@ -920,13 +940,8 @@ function getMonacoButtons(
                 setPyodideStatus
             ),
             getShareUrlButton(),
-            getResetButton(model, forceRecheck, codeSample, isCodeSnippet, pythonVersion, models, activeFileName),
+            getResetButton(model, forceRecheck, codeSample, isCodeSnippet, models, activeFileName),
             getGitHubIssuesButton(model, pythonVersion),
-            <PythonVersionSelector
-                selectedVersion={pythonVersion}
-                onVersionChange={handleVersionChange}
-                loading={loading}
-            />,
         ];
     }
 
@@ -1081,7 +1096,6 @@ function getResetButton(
     forceRecheck: () => void,
     codeSample: string,
     isCodeSnippet: boolean,
-    pythonVersion: string,
     models: Map<string, editor.ITextModel>,
     activeFileName: string
 ): React.ReactElement {
@@ -1100,7 +1114,7 @@ function getResetButton(
                                 allFiles[filename] = model.getValue();
                             }
                         });
-                        updateURL(allFiles, activeFileName, pythonVersion);
+                        updateURL(allFiles, activeFileName);
                     }
                     forceRecheck();
                 }

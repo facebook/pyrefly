@@ -6,7 +6,9 @@
  */
 
 use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::fmt::Debug;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -16,8 +18,10 @@ use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::sys_info::SysInfo;
 use serde::Deserialize;
+use serde::Serialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use tempfile::NamedTempFile;
 use vec1::Vec1;
 
 use crate::source_db::Target;
@@ -25,8 +29,8 @@ use crate::source_db::Target;
 /// An enum representing something that has been included by the build system, and
 /// which the build system should query for when building the sourcedb.
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub enum Include {
-    #[expect(unused)]
+pub(crate) enum Include {
+    #[allow(unused)]
     Target(Target),
     Path(PathBuf),
 }
@@ -44,9 +48,17 @@ impl Include {
     }
 }
 
-pub fn query_source_db<'a>(
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub struct BxlArgs {
+    isolation_dir: Option<String>,
+    extras: Option<Vec<String>>,
+}
+
+pub(crate) fn query_source_db<'a>(
     files: impl Iterator<Item = &'a Include>,
     cwd: &Path,
+    bxl_args: &BxlArgs,
 ) -> anyhow::Result<TargetManifestDatabase> {
     let mut files = files.peekable();
     if files.peek().is_none() {
@@ -56,12 +68,31 @@ pub fn query_source_db<'a>(
         });
     }
 
+    let mut argfile = NamedTempFile::with_prefix("pyrefly_buck_query_")
+        .with_context(|| "Failed to create temporary argfile for querying Buck".to_owned())?;
+    let mut argfile_args = OsString::from("--");
+    files.flat_map(Include::to_bxl_args).for_each(|arg| {
+        argfile_args.push("\n");
+        argfile_args.push(arg);
+    });
+
+    argfile
+        .as_file_mut()
+        .write_all(argfile_args.as_encoded_bytes())
+        .with_context(|| "Could not write to argfile when querying Buck".to_owned())?;
+
     let mut cmd = Command::new("buck2");
+    if let Some(isolation_dir) = &bxl_args.isolation_dir {
+        cmd.arg("--isolation-dir");
+        cmd.arg(isolation_dir);
+    }
     cmd.arg("bxl");
     cmd.arg("--reuse-current-config");
+    if let Some(metadata) = &bxl_args.extras {
+        cmd.args(metadata);
+    }
     cmd.arg("prelude//python/sourcedb/pyrefly.bxl:main");
-    cmd.arg("--");
-    cmd.args(files.flat_map(Include::to_bxl_args));
+    cmd.arg(format!("@{}", argfile.path().display()));
     cmd.current_dir(cwd);
 
     let result = cmd.output()?;
@@ -87,6 +118,7 @@ pub(crate) struct PythonLibraryManifest {
     pub srcs: SmallMap<ModuleName, Vec1<PathBuf>>,
     #[serde(flatten)]
     pub sys_info: SysInfo,
+    pub buildfile_path: PathBuf,
 }
 
 impl PythonLibraryManifest {
@@ -108,6 +140,7 @@ impl PythonLibraryManifest {
         self.srcs
             .iter_mut()
             .for_each(|(_, paths)| paths.iter_mut().for_each(|p| *p = root.join(&**p)));
+        self.buildfile_path = root.join(&self.buildfile_path);
     }
 }
 
@@ -181,6 +214,7 @@ mod tests {
                         ),
                         ],
                         &[],
+                        "colorama/BUCK",
                     ),
                     Target::from_string("//colorama:colorama".to_owned()) => TargetManifest::alias(
                         "//colorama:py"
@@ -198,6 +232,7 @@ mod tests {
                         &[
                         "//colorama:colorama"
                         ],
+                        "click/BUCK",
                     ),
                     Target::from_string("//click:click".to_owned()) => TargetManifest::alias(
                         "//click:py"
@@ -221,6 +256,7 @@ mod tests {
                         &[
                         "//click:click"
                         ],
+                        "pyre/client/log/BUCK"
                     ),
                     Target::from_string("//pyre/client/log:log2".to_owned()) => TargetManifest::lib(
                         &[
@@ -241,6 +277,7 @@ mod tests {
                         &[
                         "//click:click"
                         ],
+                        "pyre/client/log/BUCK"
                     )
                 },
                 PathBuf::from("/path/to/this/repository"),
@@ -277,21 +314,24 @@ mod tests {
             }
         }
 
-        pub fn lib(srcs: &[(&str, &[&str])], deps: &[&str]) -> Self {
+        pub fn lib(srcs: &[(&str, &[&str])], deps: &[&str], buildfile: &str) -> Self {
             TargetManifest::Library(PythonLibraryManifest {
                 srcs: map_srcs(srcs, None),
                 deps: map_deps(deps),
                 sys_info: SysInfo::new(PythonVersion::new(3, 12, 0), PythonPlatform::linux()),
+                buildfile_path: PathBuf::from(buildfile),
             })
         }
     }
 
     impl PythonLibraryManifest {
-        fn new(srcs: &[(&str, &[&str])], deps: &[&str]) -> Self {
+        fn new(srcs: &[(&str, &[&str])], deps: &[&str], buildfile: &str) -> Self {
+            let root = "/path/to/this/repository";
             Self {
-                srcs: map_srcs(srcs, Some("/path/to/this/repository")),
+                srcs: map_srcs(srcs, Some(root)),
                 deps: map_deps(deps),
                 sys_info: SysInfo::new(PythonVersion::new(3, 12, 0), PythonPlatform::linux()),
+                buildfile_path: PathBuf::from(root).join(buildfile),
             }
         }
     }
@@ -309,6 +349,7 @@ mod tests {
         ]
       },
       "deps": [],
+      "buildfile_path": "colorama/BUCK",
       "python_version": "3.12",
       "python_platform": "linux"
     },
@@ -325,6 +366,7 @@ mod tests {
       "deps": [
         "//colorama:colorama"
       ],
+      "buildfile_path": "click/BUCK",
       "python_version": "3.12",
       "python_platform": "linux"
     },
@@ -344,6 +386,7 @@ mod tests {
       "deps": [
         "//click:click"
       ],
+      "buildfile_path": "pyre/client/log/BUCK",
       "python_version": "3.12",
       "python_platform": "linux"
     },
@@ -360,6 +403,7 @@ mod tests {
       "deps": [
         "//click:click"
       ],
+      "buildfile_path": "pyre/client/log/BUCK",
       "python_version": "3.12",
       "python_platform": "linux"
     }
@@ -385,6 +429,7 @@ mod tests {
                     ),
                 ],
                 &[],
+                "colorama/BUCK",
             ),
             Target::from_string("//click:py".to_owned()) => PythonLibraryManifest::new(
                 &[
@@ -399,6 +444,7 @@ mod tests {
                 &[
                     "//colorama:py"
                 ],
+                "click/BUCK",
             ),
             Target::from_string("//pyre/client/log:log".to_owned()) => PythonLibraryManifest::new(
                 &[
@@ -419,6 +465,7 @@ mod tests {
                 &[
                     "//click:py"
                 ],
+                "pyre/client/log/BUCK",
             ),
             Target::from_string("//pyre/client/log:log2".to_owned()) => PythonLibraryManifest::new(
                 &[
@@ -439,6 +486,7 @@ mod tests {
                 &[
                     "//click:py"
                 ],
+                "pyre/client/log/BUCK",
             )
         };
         assert_eq!(

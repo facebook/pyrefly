@@ -159,6 +159,10 @@ impl SourceDatabase for BuckCheckSourceDatabase {
     fn requery_source_db(&self, _: SmallSet<PathBuf>) -> anyhow::Result<bool> {
         Ok(false)
     }
+
+    fn get_critical_files(&self) -> SmallSet<PathBuf> {
+        SmallSet::new()
+    }
 }
 
 impl BuckCheckSourceDatabase {

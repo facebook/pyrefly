@@ -100,7 +100,7 @@ pub enum NameLookupResult {
     ///   if I am used after a `del` or is an anywhere-style lookup)
     Found {
         idx: Idx<Key>,
-        is_initialized: InitializedInFlow,
+        uninitialized: UninitializedInFlow,
     },
     /// This name is not defined in the current scope stack.
     NotFound,
@@ -116,18 +116,18 @@ impl NameLookupResult {
 }
 
 #[derive(Debug)]
-pub enum InitializedInFlow {
-    Yes,
-    Maybe,
+pub enum UninitializedInFlow {
     No,
+    Conditionally,
+    Yes,
 }
 
-impl InitializedInFlow {
+impl UninitializedInFlow {
     pub fn as_error_message(&self, name: &Name) -> Option<String> {
         match self {
-            InitializedInFlow::Yes => None,
-            InitializedInFlow::Maybe => Some(format!("`{name}` may be uninitialized")),
-            InitializedInFlow::No => Some(format!("`{name}` is uninitialized")),
+            UninitializedInFlow::No => None,
+            UninitializedInFlow::Conditionally => Some(format!("`{name}` may be uninitialized")),
+            UninitializedInFlow::Yes => Some(format!("`{name}` is uninitialized")),
         }
     }
 }
@@ -681,7 +681,7 @@ impl<'a> BindingsBuilder<'a> {
         match self.scopes.look_up_name_for_read(name) {
             NameReadInfo::Flow {
                 idx,
-                is_initialized,
+                uninitialized: is_initialized,
             } => {
                 let (idx, first_use) = self.detect_first_use(idx, usage);
                 if let Some(used_idx) = first_use {
@@ -689,15 +689,15 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 NameLookupResult::Found {
                     idx,
-                    is_initialized,
+                    uninitialized: is_initialized,
                 }
             }
             NameReadInfo::Anywhere {
                 key,
-                is_initialized,
+                uninitialized: is_initialized,
             } => NameLookupResult::Found {
                 idx: self.table.types.0.insert(key),
-                is_initialized,
+                uninitialized: is_initialized,
             },
             NameReadInfo::NotFound => NameLookupResult::NotFound,
         }
@@ -724,11 +724,15 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
     ) -> (Idx<Key>, Option<Idx<Key>>) {
         match self.table.types.1.get(flow_idx) {
-            Some(Binding::Pin(unpinned_idx, FirstUse::Undetermined)) => match usage {
-                Usage::StaticTypeInformation | Usage::Narrowing(_) => (flow_idx, Some(flow_idx)),
-                Usage::CurrentIdx(..) => (*unpinned_idx, Some(flow_idx)),
-            },
-            Some(Binding::Pin(unpinned_idx, first_use)) => match first_use {
+            Some(Binding::CompletedPartialType(unpinned_idx, FirstUse::Undetermined)) => {
+                match usage {
+                    Usage::StaticTypeInformation | Usage::Narrowing(_) => {
+                        (flow_idx, Some(flow_idx))
+                    }
+                    Usage::CurrentIdx(..) => (*unpinned_idx, Some(flow_idx)),
+                }
+            }
+            Some(Binding::CompletedPartialType(unpinned_idx, first_use)) => match first_use {
                 FirstUse::DoesNotPin => (flow_idx, None),
                 FirstUse::Undetermined => match usage {
                     Usage::StaticTypeInformation | Usage::Narrowing(_) => {
@@ -759,7 +763,7 @@ impl<'a> BindingsBuilder<'a> {
     /// Record a first use detected in `detect_possible_first_use`.
     fn record_first_use(&mut self, used: Idx<Key>, usage: &mut Usage) {
         match self.table.types.1.get_mut(used) {
-            Some(Binding::Pin(.., first_use @ FirstUse::Undetermined)) => {
+            Some(Binding::CompletedPartialType(.., first_use @ FirstUse::Undetermined)) => {
                 *first_use = match usage {
                     Usage::CurrentIdx(use_idx, first_uses_of) => {
                         first_uses_of.insert(used);
@@ -1025,7 +1029,7 @@ impl TParamLookupResult {
         self.idx()
             .map_or(NameLookupResult::NotFound, |idx| NameLookupResult::Found {
                 idx,
-                is_initialized: InitializedInFlow::Yes,
+                uninitialized: UninitializedInFlow::No,
             })
     }
 }

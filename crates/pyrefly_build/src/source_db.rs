@@ -78,4 +78,8 @@ pub trait SourceDatabase: Send + Sync + fmt::Debug {
     /// The resulting bool represents whether find caches
     /// related to this sourcedb should be invalidated.
     fn requery_source_db(&self, files: SmallSet<PathBuf>) -> anyhow::Result<bool>;
+    /// The source database-related configuration files a watcher should wait for
+    /// changes on. Changes to one of these returned watchfiles should force
+    /// a sourcedb rebuild.
+    fn get_critical_files(&self) -> SmallSet<PathBuf>;
 }

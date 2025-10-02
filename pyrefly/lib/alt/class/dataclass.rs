@@ -10,6 +10,7 @@ use std::sync::Arc;
 use pyrefly_python::dunder;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
+use ruff_python_ast::Expr::EllipsisLiteral;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
@@ -26,7 +27,6 @@ use crate::alt::class::class_field::DataclassMember;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
-use crate::alt::types::class_metadata::ClassValidationFlags;
 use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::binding::pydantic::GE;
 use crate::binding::pydantic::GT;
@@ -223,16 +223,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         let mut init = map.get_bool(&DataclassFieldKeywords::INIT);
-        let default = [
+        let mut default = [
             &DataclassFieldKeywords::DEFAULT,
             &DataclassFieldKeywords::DEFAULT_FACTORY,
             &DataclassFieldKeywords::FACTORY,
         ]
         .iter()
         .any(|k| map.0.contains_key(*k));
+
+        if !default && dataclass_metadata.default_can_be_positional {
+            // Check whether a default was passed positionally. This is needed for `pydantic.Field`.
+            default = !matches!(args.args.first(), Some(EllipsisLiteral(_)) | None);
+        }
+
         let mut kw_only = map.get_bool(&DataclassFieldKeywords::KW_ONLY);
 
-        let mut alias = if dataclass_metadata.class_validation_flags.validate_by_alias {
+        let mut alias = if dataclass_metadata.init_defaults.init_by_alias {
             map.get_string(alias_keyword)
                 .or_else(|| map.get_string(&DataclassFieldKeywords::ALIAS))
                 .map(Name::new)
@@ -257,8 +263,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 func,
                 args,
                 errors,
-                alias_keyword,
-                dataclass_metadata.class_validation_flags.clone(),
+                if dataclass_metadata.init_defaults.init_by_alias {
+                    Some(alias_keyword)
+                } else {
+                    None
+                },
                 &mut init,
                 &mut kw_only,
                 &mut alias,
@@ -269,7 +278,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             init: init.unwrap_or(true),
             default,
             kw_only,
-            alias,
+            init_by_name: dataclass_metadata.init_defaults.init_by_name || alias.is_none(),
+            init_by_alias: alias,
             lt,
             gt,
             ge,
@@ -284,8 +294,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         func: &Type,
         args: &Arguments,
         errors: &ErrorCollector,
-        alias_key_to_use: &Name,
-        validation_flags: ClassValidationFlags,
+        // The name of the function parameter from which to fill in an alias keyword value
+        alias_keyword: Option<&Name>,
         init: &mut Option<bool>,
         kw_only: &mut Option<bool>,
         alias: &mut Option<Name>,
@@ -343,8 +353,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if name == &DataclassFieldKeywords::KW_ONLY {
                     self.fill_in_literal(kw_only, ty, default_ty, |ty| ty.as_bool());
                 }
-                if validation_flags.validate_by_alias && alias.is_none() && name == alias_key_to_use
-                {
+                if alias.is_none() && Some(name) == alias_keyword {
                     self.fill_in_literal(alias, ty, default_ty, |ty| match ty {
                         Type::Literal(Lit::Str(s)) => Some(Name::new(s)),
                         _ => None,
@@ -461,8 +470,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let strict = field_flags.strict.unwrap_or(strict_default);
                 if field_flags.init {
                     let has_default = field_flags.default
-                        || (dataclass.class_validation_flags.validate_by_name
-                            && dataclass.class_validation_flags.validate_by_alias);
+                        || (field_flags.init_by_name && field_flags.init_by_alias.is_some());
                     let is_kw_only = field_flags.is_kw_only();
                     if !is_kw_only {
                         if !has_default
@@ -482,10 +490,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             has_seen_default = true;
                         }
                     }
-                    if dataclass.class_validation_flags.validate_by_name
-                        || (dataclass.class_validation_flags.validate_by_alias
-                            && field_flags.alias.is_none())
-                    {
+                    if field_flags.init_by_name {
                         params.push(self.as_param(
                             &field,
                             &name,
@@ -496,9 +501,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             errors,
                         ));
                     }
-                    if let Some(alias) = &field_flags.alias
-                        && dataclass.class_validation_flags.validate_by_alias
-                    {
+                    if let Some(alias) = &field_flags.init_by_alias {
                         params.push(self.as_param(
                             &field,
                             alias,

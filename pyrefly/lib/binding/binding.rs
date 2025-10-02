@@ -58,7 +58,7 @@ use crate::binding::base_class::BaseClass;
 use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::bindings::Bindings;
 use crate::binding::narrow::NarrowOp;
-use crate::binding::pydantic::PydanticMetadataBinding;
+use crate::binding::pydantic::PydanticConfigDict;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::types::annotation::Annotation;
@@ -323,17 +323,14 @@ pub enum Key {
     Definition(ShortIdentifier),
     /// I am a mutable capture (`global` or `nonlocal`) declared at this location.
     MutableCapture(ShortIdentifier),
-    /// I am a name assignment that is also a first use of some other name assign.
-    ///
-    /// My raw definition contains unpinned placeholder types from both myself
-    /// and upstream definitions, this binding will have all upstream
-    /// placeholders (but not those originating from me) pinned.
-    UpstreamPinnedDefinition(ShortIdentifier),
     /// I am the pinned version of a definition corresponding to a name assignment.
     ///
-    /// Used in cases where the raw definition might introduce placeholder `Var` types
-    /// that need to be hidden from all lookups except the first usage to avoid nondeterminism.
-    PinnedDefinition(ShortIdentifier),
+    /// See [Binding::CompletedPartialType] for more details.
+    CompletedPartialType(ShortIdentifier),
+    /// I am a wrapper around a assignment that is also a first use of some other name assign.
+    ///
+    /// See [Binding::PartialTypeWithUpstreamCompleted] for more details.
+    PartialTypeWithUpstreamsCompleted(ShortIdentifier),
     /// I am a name with possible attribute/subscript narrowing coming from an assignment at this location.
     FacetAssign(ShortIdentifier),
     /// The type at a specific return point.
@@ -396,8 +393,8 @@ impl Ranged for Key {
             Self::ImplicitGlobal(_) => TextRange::default(),
             Self::Definition(x) => x.range(),
             Self::MutableCapture(x) => x.range(),
-            Self::UpstreamPinnedDefinition(x) => x.range(),
-            Self::PinnedDefinition(x) => x.range(),
+            Self::PartialTypeWithUpstreamsCompleted(x) => x.range(),
+            Self::CompletedPartialType(x) => x.range(),
             Self::FacetAssign(x) => x.range(),
             Self::ReturnExplicit(r) => *r,
             Self::ReturnImplicit(x) => x.range(),
@@ -429,11 +426,11 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::Import(n, r) => write!(f, "Key::Import({n} {})", ctx.display(r)),
             Self::ImplicitGlobal(n) => write!(f, "Key::Global({n})"),
             Self::Definition(x) => write!(f, "Key::Definition({})", short(x)),
-            Self::MutableCapture(x) => write!(f, "Key::Declaration({})", short(x)),
-            Self::UpstreamPinnedDefinition(x) => {
-                write!(f, "Key::UpstreamPinnedDefinition({})", short(x))
+            Self::MutableCapture(x) => write!(f, "Key::MutableCapture({})", short(x)),
+            Self::CompletedPartialType(x) => write!(f, "Key::CompletedPartialType({})", short(x)),
+            Self::PartialTypeWithUpstreamsCompleted(x) => {
+                write!(f, "Key::PartialTypeWithUpstreamsCompleted({})", short(x))
             }
-            Self::PinnedDefinition(x) => write!(f, "Key::PinnedDefinition({})", short(x)),
             Self::FacetAssign(x) => write!(f, "Key::FacetAssign({})", short(x)),
             Self::BoundName(x) => write!(f, "Key::BoundName({})", short(x)),
             Self::Anon(r) => write!(f, "Key::Anon({})", ctx.display(r)),
@@ -1235,6 +1232,7 @@ pub enum Binding {
         Name,
         Option<(AnnotationStyle, Idx<KeyAnnotation>)>,
         Box<Expr>,
+        Option<Box<[Idx<KeyLegacyTypeParam>]>>,
     ),
     /// A type alias declared with the `type` soft keyword
     ScopedTypeAlias(Name, Option<TypeParams>, Box<Expr>),
@@ -1264,24 +1262,58 @@ pub enum Binding {
     AssignToSubscript(ExprSubscript, Box<ExprOrBinding>),
     /// A placeholder binding, used to force the solving of some other `K::Value` (for
     /// example, forcing a `BindingExpect` to be solved) in the context of first-usage-based
-    /// type inference.
+    /// inference of partial types.
     UsageLink(LinkedKey),
     /// Inside of a class body, we check whether an expression resolves to the `SelfType` special
     /// export. If so, we create a `SelfTypeLiteral` key/binding pair so that the AnswersSolver can
     /// later synthesize the correct `Type::SelfType` (this binding is needed
     /// because we need access to the current class to do so).
     SelfTypeLiteral(Idx<KeyClass>, TextRange),
-    /// Binding used to pin placeholder types from `NameAssign` bindings. The first
-    /// entry should always correspond to a `Key::Definition` from a name assignment
-    /// and the second entry tells us if and where this definition is first used.
-    Pin(Idx<Key>, FirstUse),
+    /// Binding used to pin placeholder types from `NameAssign` bindings, which
+    /// can produce partial types that have `Var`s representing still-unknown
+    /// type parameters not determine by the initial assignment (e.g. empty
+    /// containers).
+    ///
+    /// The first entry should always correspond to a `Key::Definition` from a
+    /// name assignment and the second entry tells us if and where this
+    /// definition is first used.
+    ///
+    /// For example, in
+    /// ```python
+    /// x = []
+    /// x.append(1)
+    /// y = []
+    /// print(y)
+    /// z = []
+    /// ```
+    /// all three of the raw `NameAssign`s will result in a partial type `list[@_]`,
+    /// and downstream:
+    /// - the `Pin` for `x` will depend on the `Binding::Expr` for `x.append(1)`, which
+    ///   will force the type to `list[int]`.
+    /// - the `Pin` for `y` will depend on the `Binding::Expr` for `print(y)`, which
+    ///   will not force anything. Then the `Pin` itself will pin placeholders,
+    ///   resulting in `list[Any]`
+    /// - the `Pin` for `z` will have an empty `FirstUse`, so as with `y` it will
+    ///   simply force the placeholder and produce list[`Any`]
+    CompletedPartialType(Idx<Key>, FirstUse),
     /// Binding used to pin any *upstream* placeholder types for a NameAssign that is also
-    /// a first use. First uses depend on this binding, so that upstream `Var`s cannot
-    /// leak into them but `Var`s originating from this assignment can.
+    /// a first use. Any first use of the name defined here depend on this binding rather
+    /// than directly on the `NameAssign` so that upstream `Var`s cannot leak into the
+    /// partial type into them but `Var`s originating from this assignment can.
     ///
     /// The Idx is the upstream raw `NameAssign`, and the slice has `Idx`s that point at
     /// all the `Pin`s for which that raw `NameAssign` was the first use.
-    PinUpstream(Idx<Key>, Box<[Idx<Key>]>),
+    ///
+    /// For example:
+    /// ```python
+    /// x = []
+    /// y = [], x
+    /// ```
+    /// the raw `NameAssign` for `y` will produce `tuple[list[@0], list[@1]]`,
+    /// but the `PartialTypeWithUpstreamsCompleted` for `y` will use the "completed"
+    /// partial type of `x` (which it achieves by forcing the `Binding::Pin` for
+    /// `x` before expanding types) and result in `tuple[list[@_], Any]`.
+    PartialTypeWithUpstreamsCompleted(Idx<Key>, Box<[Idx<Key>]>),
     /// `del` statement
     Delete(Expr),
 }
@@ -1408,10 +1440,10 @@ impl DisplayWith<Bindings> for Binding {
                     op.display_with(ctx.module())
                 )
             }
-            Self::NameAssign(name, None, expr) => {
+            Self::NameAssign(name, None, expr, _) => {
                 write!(f, "NameAssign({name}, None, {})", m.display(expr))
             }
-            Self::NameAssign(name, Some((style, annot)), expr) => {
+            Self::NameAssign(name, Some((style, annot)), expr, _) => {
                 write!(
                     f,
                     "NameAssign({name}, {style:?}, {}, {})",
@@ -1515,8 +1547,8 @@ impl DisplayWith<Bindings> for Binding {
                     m.display(r)
                 )
             }
-            Self::Pin(k, first_use) => {
-                write!(f, "Pin({}, ", ctx.display(*k),)?;
+            Self::CompletedPartialType(k, first_use) => {
+                write!(f, "CompletedPartialType({}, ", ctx.display(*k),)?;
                 match first_use {
                     FirstUse::Undetermined => write!(f, "Undetermined")?,
                     FirstUse::DoesNotPin => write!(f, "DoesNotPin")?,
@@ -1524,10 +1556,10 @@ impl DisplayWith<Bindings> for Binding {
                 }
                 write!(f, ")")
             }
-            Self::PinUpstream(k, first_used_by) => {
+            Self::PartialTypeWithUpstreamsCompleted(k, first_used_by) => {
                 write!(
                     f,
-                    "PinUpstream({}, [{}])",
+                    "PartialTypeWithUpstreamsCompleted({}, [{}])",
                     ctx.display(*k),
                     commas_iter(|| first_used_by.iter().map(|x| ctx.display(*x)))
                 )
@@ -1558,10 +1590,10 @@ impl Binding {
             Binding::ScopedTypeAlias(_, _, _) | Binding::TypeAliasType(_, _, _) => {
                 Some(SymbolKind::TypeAlias)
             }
-            Binding::NameAssign(name, _, _) if name.as_str() == name.to_uppercase() => {
+            Binding::NameAssign(name, _, _, _) if name.as_str() == name.to_uppercase() => {
                 Some(SymbolKind::Constant)
             }
-            Binding::NameAssign(name, _, _) => {
+            Binding::NameAssign(name, _, _, _) => {
                 if name.as_str().chars().all(|c| c.is_uppercase() || c == '_') {
                     Some(SymbolKind::Constant)
                 } else {
@@ -1597,8 +1629,8 @@ impl Binding {
             | Binding::UsageLink(_)
             | Binding::SelfTypeLiteral(..)
             | Binding::AssignToSubscript(_, _)
-            | Binding::Pin(..)
-            | Binding::PinUpstream(..)
+            | Binding::CompletedPartialType(..)
+            | Binding::PartialTypeWithUpstreamsCompleted(..)
             | Binding::Delete(_) => None,
         }
     }
@@ -1956,7 +1988,7 @@ pub struct BindingClassMetadata {
     pub decorators: Box<[(Idx<Key>, TextRange)]>,
     /// Is this a new type? True only for synthesized classes created from a `NewType` call.
     pub is_new_type: bool,
-    pub pydantic_metadata: PydanticMetadataBinding,
+    pub pydantic_config_dict: PydanticConfigDict,
 }
 
 impl DisplayWith<Bindings> for BindingClassMetadata {

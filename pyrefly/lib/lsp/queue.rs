@@ -25,9 +25,6 @@ use lsp_types::DidChangeWorkspaceFoldersParams;
 use lsp_types::DidCloseTextDocumentParams;
 use lsp_types::DidOpenTextDocumentParams;
 use lsp_types::DidSaveTextDocumentParams;
-use pyrefly_config::config::ConfigFile;
-use pyrefly_util::arc_id::ArcId;
-use starlark_map::small_set::SmallSet;
 
 pub enum LspEvent {
     // Part 1: Events that the server should try to handle first.
@@ -40,7 +37,7 @@ pub enum LspEvent {
     CancelRequest(RequestId),
     /// Inform the server that the given configs' find caches are now invalid, and
     /// that a new type check must occur.
-    InvalidateConfigFind(SmallSet<ArcId<ConfigFile>>),
+    InvalidateConfigFind,
     // Part 2: Events that can be queued in FIFO order and handled at a later time.
     DidOpenTextDocument(DidOpenTextDocumentParams),
     DidChangeTextDocument(DidChangeTextDocumentParams),
@@ -64,7 +61,7 @@ enum LspEventKind {
 impl LspEvent {
     fn kind(&self) -> LspEventKind {
         match self {
-            Self::RecheckFinished | Self::CancelRequest(_) | Self::InvalidateConfigFind(_) => {
+            Self::RecheckFinished | Self::CancelRequest(_) | Self::InvalidateConfigFind => {
                 LspEventKind::Priority
             }
             Self::DidOpenTextDocument(_)

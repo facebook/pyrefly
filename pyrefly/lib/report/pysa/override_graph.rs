@@ -8,7 +8,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use dashmap::DashMap;
 use pyrefly_build::handle::Handle;
 use pyrefly_types::class::Class;
 use pyrefly_util::thread_pool::ThreadPool;
@@ -39,7 +38,7 @@ pub(crate) struct OverrideGraph {
 
 pub struct ModuleReversedOverrideGraph(HashMap<FunctionRef, FunctionRef>);
 
-pub struct WholeProgramReversedOverrideGraph(DashMap<FunctionRef, FunctionRef>);
+pub struct WholeProgramReversedOverrideGraph(dashmap::ReadOnlyView<FunctionRef, FunctionRef>);
 
 impl OverrideGraph {
     pub fn new() -> Self {
@@ -57,20 +56,21 @@ impl OverrideGraph {
 
     pub fn from_reversed(reversed_override_graph: &WholeProgramReversedOverrideGraph) -> Self {
         let mut graph = OverrideGraph::new();
-        for entry in reversed_override_graph.0.iter() {
-            graph.add_edge(entry.value().clone(), entry.key().clone());
+        for (overriding_method, base_method) in reversed_override_graph.0.iter() {
+            graph.add_edge(base_method.clone(), overriding_method.clone());
         }
         graph
     }
 }
 
 impl WholeProgramReversedOverrideGraph {
+    #[cfg(test)]
     pub fn new() -> WholeProgramReversedOverrideGraph {
-        WholeProgramReversedOverrideGraph(DashMap::new())
+        WholeProgramReversedOverrideGraph(dashmap::DashMap::new().into_read_only())
     }
 
-    pub fn get(&self, method: &FunctionRef) -> Option<FunctionRef> {
-        self.0.get(method).map(|v| v.clone())
+    pub fn get<'a>(&'a self, method: &FunctionRef) -> Option<&'a FunctionRef> {
+        self.0.get(method)
     }
 }
 
@@ -133,7 +133,7 @@ fn get_super_class_member(
                         context.module_info.display_range(last_function.id_range()),
                     ),
                 },
-                identifier: field.to_string(),
+                function_name: field.clone(),
             }
         })
 }
@@ -173,16 +173,16 @@ pub fn build_reversed_override_graph(
     transaction: &Transaction,
     module_ids: &ModuleIds,
 ) -> WholeProgramReversedOverrideGraph {
-    let reversed_override_graph = WholeProgramReversedOverrideGraph::new();
+    let reversed_override_graph = dashmap::DashMap::new();
 
     ThreadPool::new().install(|| {
         handles.par_iter().for_each(|handle| {
             let context = ModuleContext::create(handle, transaction, module_ids).unwrap();
             for (key, value) in create_reversed_override_graph_for_module(&context).0 {
-                reversed_override_graph.0.insert(key, value);
+                reversed_override_graph.insert(key, value);
             }
         });
     });
 
-    reversed_override_graph
+    WholeProgramReversedOverrideGraph(reversed_override_graph.into_read_only())
 }

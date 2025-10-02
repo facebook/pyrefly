@@ -21,7 +21,6 @@
 #![deny(clippy::trivially_copy_pass_by_ref)]
 #![feature(box_patterns)]
 #![feature(if_let_guard)]
-#![feature(let_chains)]
 
 pub mod alias;
 pub mod annotation;

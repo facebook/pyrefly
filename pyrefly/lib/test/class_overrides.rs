@@ -516,3 +516,36 @@ class B(A):
         pass
     "#,
 );
+
+testcase!(
+    test_override_dunder_names,
+    r#"
+from typing import Iterator
+
+class Base: pass
+class Derived(Base): pass
+
+class UseBase:
+    __private: Base
+    def __iter__(self) -> Iterator[list[Base]]: ...
+
+class UseDerived(UseBase):
+    __private: Derived
+    def __iter__(self) -> Iterator[list[Derived]]: ...  # E: `UseDerived.__iter__` overrides parent class `UseBase` in an inconsistent manner 
+    "#,
+);
+
+testcase!(
+    bug = "We currently skip checking overrides of `__call__`, which is a soundness hole",
+    test_override_dunder_call,
+    r#"
+class Base: pass
+class Derived(Base): pass
+
+class UseBase:
+    def __call__(self) -> list[Base]: ...
+
+class UseDerived(UseBase):
+    def __call__(self) -> list[Derived]: ...
+    "#,
+);

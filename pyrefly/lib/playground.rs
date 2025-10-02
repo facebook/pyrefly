@@ -77,6 +77,13 @@ impl SourceDatabase for PlaygroundSourceDatabase {
     fn requery_source_db(&self, _: SmallSet<PathBuf>) -> anyhow::Result<bool> {
         Ok(false)
     }
+
+    fn get_critical_files(&self) -> SmallSet<PathBuf> {
+        self.module_mappings
+            .values()
+            .map(|p| p.as_path().to_path_buf())
+            .collect()
+    }
 }
 
 #[derive(Serialize)]
@@ -131,7 +138,7 @@ impl Range {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Diagnostic {
     #[serde(rename(serialize = "startLineNumber"))]
     pub start_line: i32,
@@ -180,6 +187,8 @@ pub struct Playground {
     active_filename: String,
     sys_info: SysInfo,
     config_finder: ConfigFinder,
+    /// Diagnostics produced while loading/parsing configuration in the sandbox
+    config_diagnostics: Vec<Diagnostic>,
 }
 
 impl Playground {
@@ -211,25 +220,67 @@ impl Playground {
             active_filename: String::new(),
             sys_info,
             config_finder: config_finder_for_self,
+            config_diagnostics: Vec::new(),
         })
     }
 
-    pub fn update_sandbox_files(&mut self, files: SmallMap<String, String>) {
-        self.handles.clear();
+    pub fn update_sandbox_files(
+        &mut self,
+        files: SmallMap<String, String>,
+        force_update: bool,
+    ) -> Option<String> {
+        self.config_diagnostics.clear();
+        // Parse configuration if present in the in-memory files
+        let mut parsed_config: Option<ConfigFile> = None;
+        if let Some(cfg_str) = files.get("pyrefly.toml") {
+            match toml::from_str::<ConfigFile>(cfg_str) {
+                Ok(cfg) => parsed_config = Some(cfg),
+                Err(err) => {
+                    // Attach a diagnostic to pyrefly.toml on parse/validation failure
+                    self.config_diagnostics.push(Diagnostic {
+                        start_line: 1,
+                        start_col: 1,
+                        end_line: 1,
+                        end_col: 1,
+                        message_header: "TOML parse error".to_owned(),
+                        message_details: err.to_string(),
+                        kind: "parse-error".to_owned(),
+                        // MarkerSeverity.Error (8)
+                        severity: 8,
+                        filename: "pyrefly.toml".to_owned(),
+                    });
+                    if !force_update {
+                        return None;
+                    }
+                }
+            }
+        }
 
-        let mut config = ConfigFile::default();
+        self.handles.clear();
+        // Base configuration: use parsed config if available, otherwise defaults
+        let mut config = parsed_config.unwrap_or_default();
         config.python_environment.set_empty_to_default();
         config.interpreters.skip_interpreter_query = true;
-        config.python_environment.python_version = Some(self.sys_info.version());
-        config.python_environment.python_platform = Some(self.sys_info.platform().clone());
 
+        // Determine runtime SysInfo from config (if provided) or previous value
+        let desired_version = config
+            .python_environment
+            .python_version
+            .unwrap_or(self.sys_info.version());
+        let desired_platform = self.sys_info.platform().clone();
+        self.sys_info = SysInfo::new(desired_version, desired_platform.clone());
+        config.python_environment.python_version = Some(self.sys_info.version());
+        config.python_environment.python_platform = Some(desired_platform);
+
+        // Build source DB from .py files only
         let mut file_contents = Vec::new();
         let mut module_mappings = SmallMap::new();
-
         for (filename, content) in &files {
+            if !filename.ends_with(".py") {
+                continue;
+            }
             let module_name =
                 ModuleName::from_str(filename.strip_suffix(".py").unwrap_or(filename));
-
             let module_path = PathBuf::from(format!("{}.py", module_name.as_str()));
             let memory_path = ModulePath::memory(module_path.clone());
 
@@ -265,6 +316,10 @@ impl Playground {
 
         self.state
             .run_with_committing_transaction(transaction, &handles, Require::Everything);
+        Some(format!(
+            "{}.{}",
+            desired_version.major, desired_version.minor
+        ))
     }
 
     pub fn update_single_file(&mut self, filename: String, content: String) {
@@ -327,6 +382,8 @@ impl Playground {
             all_diagnostics.extend(file_errors);
         }
 
+        // Include any diagnostics gathered while loading config
+        all_diagnostics.extend(self.config_diagnostics.iter().cloned());
         all_diagnostics
     }
 
@@ -418,7 +475,7 @@ mod tests {
 
         let mut files = SmallMap::new();
         files.insert("main.py".to_owned(), "from typing import *".to_owned());
-        state.update_sandbox_files(files);
+        state.update_sandbox_files(files, true);
         state.set_active_file("main.py");
 
         assert_eq!(
@@ -436,7 +493,7 @@ mod tests {
         let mut state = Playground::new(None).unwrap();
         let mut files = SmallMap::new();
         files.insert("main.py".to_owned(), "from t".to_owned());
-        state.update_sandbox_files(files);
+        state.update_sandbox_files(files, true);
         state.set_active_file("main.py");
 
         let expected_headers = &[
@@ -474,7 +531,7 @@ mod tests {
             "def helper_function() -> str:\n    return \"Hello from utils!\"".to_owned(),
         );
 
-        state.update_sandbox_files(files);
+        state.update_sandbox_files(files, true);
         state.set_active_file("sandbox.py");
 
         let errors = state.get_errors();
@@ -509,7 +566,7 @@ mod tests {
             "def get_number() -> int:\n    return \"not a number\"".to_owned(),
         );
 
-        state.update_sandbox_files(files);
+        state.update_sandbox_files(files, true);
         state.set_active_file("sandbox.py");
 
         let errors = state.get_errors();
@@ -548,7 +605,7 @@ mod tests {
             "def get_number() -> int:\n    return 42".to_owned(),
         );
 
-        state.update_sandbox_files(files);
+        state.update_sandbox_files(files, true);
         state.set_active_file("sandbox.py");
 
         let errors = state.get_errors();

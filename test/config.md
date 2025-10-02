@@ -175,3 +175,65 @@ Configuration at * (glob)
 * (glob+)
 [0]
 ```
+
+## We'll use the first marker file we find as a project root
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/config_finder/project && \
+> touch $TMPDIR/config_finder/pyproject.toml && \
+> touch $TMPDIR/config_finder/project/pyproject.toml && \
+> touch $TMPDIR/config_finder/project/main.py && \
+> $PYREFLY dump-config $TMPDIR/config_finder/project/main.py
+Default configuration for project root marked by `*/config_finder/project/pyproject.toml` (glob)
+* (glob+)
+[0]
+```
+
+## We'll prefer a Pyrefly config in a parent directory to a marker file
+
+<!-- Reusing configs set up in tests between here and "We'll use the first marker file we find as a project root" -->
+
+```scrut {output_stream: stdout}
+$ touch $TMPDIR/config_finder/pyrefly.toml && \
+> $PYREFLY dump-config $TMPDIR/config_finder/project/main.py
+Configuration at `*/config_finder/pyrefly.toml` (glob)
+* (glob+)
+[0]
+```
+
+## We'll prefer a Pyproject with Pyrefly config in a parent directory to a marker file
+
+<!-- Reusing configs set up in tests between here and "We'll use the first marker file we find as a project root" -->
+
+```scrut {output_stream: stdout}
+$ rm $TMPDIR/config_finder/pyrefly.toml && \
+> echo "[tool.pyrefly]" > $TMPDIR/config_finder/pyproject.toml && \
+> $PYREFLY dump-config $TMPDIR/config_finder/project/main.py
+Configuration at `*/config_finder/pyproject.toml` (glob)
+* (glob+)
+[0]
+```
+
+## We'll use the first Pyrefly config we find
+
+<!-- Reusing configs set up in tests between here and "We'll use the first marker file we find as a project root" -->
+
+```scrut {output_stream: stdout}
+$ echo "[tool.pyrefly]" > $TMPDIR/config_finder/project/pyproject.toml && \
+> $PYREFLY dump-config $TMPDIR/config_finder/project/main.py
+Configuration at `*/config_finder/project/pyproject.toml` (glob)
+* (glob+)
+[0]
+```
+
+## We'll prefer pyrefly.toml to pyproject.toml
+
+<!-- Reusing configs set up in tests between here and "We'll use the first marker file we find as a project root" -->
+
+```scrut {output_stream: stdout}
+$ touch $TMPDIR/config_finder/project/pyrefly.toml && \
+> $PYREFLY dump-config $TMPDIR/config_finder/project/main.py
+Configuration at `*/config_finder/project/pyrefly.toml` (glob)
+* (glob+)
+[0]
+```

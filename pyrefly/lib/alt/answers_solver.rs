@@ -19,7 +19,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::display::commas_iter;
-use pyrefly_util::recurser::Recurser;
+use pyrefly_util::recurser::Guard;
 use pyrefly_util::uniques::UniqueFactory;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
@@ -51,6 +51,7 @@ use crate::graph::calculation::Calculation;
 use crate::graph::calculation::ProposalResult;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
+use crate::solver::solver::VarRecurser;
 use crate::solver::type_order::TypeOrder;
 use crate::types::class::Class;
 use crate::types::stdlib::Stdlib;
@@ -399,7 +400,7 @@ pub struct AnswersSolver<'a, Ans: LookupAnswer> {
     bindings: &'a Bindings,
     pub exports: &'a dyn LookupExport,
     pub uniques: &'a UniqueFactory,
-    pub recurser: &'a Recurser<Var>,
+    pub recurser: &'a VarRecurser,
     pub stdlib: &'a Stdlib,
 }
 
@@ -411,7 +412,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bindings: &'a Bindings,
         exports: &'a dyn LookupExport,
         uniques: &'a UniqueFactory,
-        recurser: &'a Recurser<Var>,
+        recurser: &'a VarRecurser,
         stdlib: &'a Stdlib,
         thread_state: &'a ThreadState,
     ) -> AnswersSolver<'a, Ans> {
@@ -699,6 +700,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.solver().fresh_recursive(self.uniques, t)
     }
 
+    pub fn recurse(&'a self, var: Var) -> Option<Guard<'a, Var>> {
+        self.solver().recurse(var, self.recurser)
+    }
+
     pub fn record_recursive(
         &self,
         loc: TextRange,
@@ -793,7 +798,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::Type(box Type::Union(tys)) if !in_type => {
                         tys.iter().for_each(|ty| self.go(ty, true))
                     }
-                    Type::Var(v) if let Some(_guard) = self.me.recurser.recurse(*v) => {
+                    Type::Var(v) if let Some(_guard) = self.me.recurse(*v) => {
                         self.go(&self.me.solver().force_var(*v), in_type)
                     }
                     _ if in_type => (self.f)(&Type::Type(Box::new(ty.clone()))),

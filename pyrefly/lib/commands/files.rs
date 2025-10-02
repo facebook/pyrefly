@@ -56,7 +56,11 @@ pub struct FilesArgs {
 }
 
 fn config_finder(args: ConfigOverrideArgs) -> ConfigFinder {
-    standard_config_finder(Arc::new(move |_, x| args.override_config(x)))
+    standard_config_finder(Arc::new(move |_, x, mut config_errors| {
+        let (c, mut configure_errors) = args.override_config(x);
+        config_errors.append(&mut configure_errors);
+        (c, config_errors)
+    }))
 }
 
 fn absolutize(globs: Globs) -> Globs {

@@ -133,8 +133,15 @@ impl ClassMetadata {
         }
     }
 
-    pub fn metaclass(&self) -> Option<&ClassType> {
+    /// The class's custom (non-`type`) metaclass, if it has one.
+    pub fn custom_metaclass(&self) -> Option<&ClassType> {
         self.metaclass.0.as_ref()
+    }
+
+    /// The class's metaclass.
+    pub fn metaclass<'a>(&'a self, stdlib: &'a Stdlib) -> &'a ClassType {
+        self.custom_metaclass()
+            .unwrap_or_else(|| stdlib.builtins_type())
     }
 
     #[allow(dead_code)] // This is used in tests now, and will be needed later in production.
@@ -352,10 +359,21 @@ pub struct NamedTupleMetadata {
     pub elements: SmallSet<Name>,
 }
 
+/// Defaults for `init_by_name` and `init_by_default`, per-field flags that control the name of
+/// a field's corresponding `__init__` parameter. See DataclassFieldKeywords for more information.
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
-pub struct ClassValidationFlags {
-    pub validate_by_name: bool,
-    pub validate_by_alias: bool,
+pub struct InitDefaults {
+    pub init_by_name: bool,
+    pub init_by_alias: bool,
+}
+
+impl Default for InitDefaults {
+    fn default() -> Self {
+        Self {
+            init_by_name: false,
+            init_by_alias: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
@@ -365,8 +383,9 @@ pub struct DataclassMetadata {
     pub kws: DataclassKeywords,
     pub field_specifiers: Vec<CalleeKind>,
     pub alias_keyword: Name,
-    // a tuple to indicate whether we should validate by name or alias
-    pub class_validation_flags: ClassValidationFlags,
+    pub init_defaults: InitDefaults,
+    /// Whether a default can be passed positionally to field specifier calls
+    pub default_can_be_positional: bool,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]

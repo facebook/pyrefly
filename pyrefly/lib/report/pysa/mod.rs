@@ -10,11 +10,13 @@ pub mod call_graph;
 pub mod class;
 pub mod context;
 pub mod function;
+pub mod global_variable;
 pub mod is_test_module;
 pub mod location;
 pub mod module;
 pub mod override_graph;
 pub mod scope;
+pub mod type_of_expression;
 pub mod types;
 
 use core::panic;
@@ -34,13 +36,11 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::thread_pool::ThreadPool;
 use rayon::prelude::*;
+use ruff_python_ast::name::Name;
 use serde::Serialize;
 use tracing::info;
 
 use crate::module::typeshed::typeshed;
-use crate::report::pysa::ast_visitor::GlobalVariable;
-use crate::report::pysa::ast_visitor::ModuleAstVisitorResult;
-use crate::report::pysa::ast_visitor::visit_module_ast;
 use crate::report::pysa::class::ClassDefinition;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::export_all_classes;
@@ -51,12 +51,15 @@ use crate::report::pysa::function::ModuleFunctionDefinitions;
 use crate::report::pysa::function::WholeProgramFunctionDefinitions;
 use crate::report::pysa::function::add_undecorated_signatures;
 use crate::report::pysa::function::collect_function_base_definitions;
+use crate::report::pysa::global_variable::GlobalVariable;
+use crate::report::pysa::global_variable::export_global_variables;
 use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleId;
 use crate::report::pysa::module::ModuleIds;
 use crate::report::pysa::module::ModuleKey;
 use crate::report::pysa::override_graph::OverrideGraph;
 use crate::report::pysa::override_graph::build_reversed_override_graph;
+use crate::report::pysa::type_of_expression::export_type_of_expressions;
 use crate::report::pysa::types::PysaType;
 use crate::state::state::Transaction;
 
@@ -94,23 +97,21 @@ pub struct PysaModuleFile {
     type_of_expression: HashMap<PysaLocation, PysaType>,
     function_definitions: ModuleFunctionDefinitions<FunctionDefinition>,
     class_definitions: HashMap<PysaLocation, ClassDefinition>,
-    global_variables: HashMap<String, GlobalVariable>,
+    global_variables: HashMap<Name, GlobalVariable>,
 }
 
 pub fn get_module_file(
     context: &ModuleContext,
     function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
 ) -> PysaModuleFile {
-    let ModuleAstVisitorResult {
-        type_of_expression,
-        global_variables,
-    } = visit_module_ast(context);
+    let global_variables = export_global_variables(context);
+    let type_of_expression = export_type_of_expressions(context);
 
     let function_base_definitions_for_module = function_base_definitions
         .get_for_module(context.module_id)
         .unwrap();
     let function_definitions =
-        add_undecorated_signatures(&function_base_definitions_for_module, context);
+        add_undecorated_signatures(function_base_definitions_for_module, context);
     let class_definitions = export_all_classes(context);
 
     PysaModuleFile {

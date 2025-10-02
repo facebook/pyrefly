@@ -131,3 +131,21 @@ Model(y="123") # E: Missing argument `x` in function `Model.__init__`
 Model(x="123")   
     "#,
 );
+
+testcase!(
+    test_configdict_validate_by_alias_optional,
+    pydantic_env(),
+    r#"
+from pydantic import BaseModel, Field, ConfigDict
+class Example(BaseModel):
+    id: str
+    some_attribute: str = Field("", alias="someAttribute")
+    optional_attribute: str | None = Field(None, alias="optionalAttribute")
+
+    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
+
+x1 = Example(id="1", some_attribute="value")
+x2 = Example(id="1", someAttribute="value")  
+x3 = Example(id="1", someAttribute123="value")  
+    "#,
+);

@@ -276,7 +276,6 @@ def f() -> None:
 );
 
 testcase!(
-    bug = "A mutable capture is not actually in scope, it can't define a class attribute.",
     test_mutable_capture_class_body,
     r#"
 from typing import assert_type
@@ -284,7 +283,18 @@ x = 5
 class C:
     global x
     x = 7
-assert_type(C().x, int)  # This should be a lookup error
+C().x  # E: `C` has no attribute `x`
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1210
+testcase!(
+    test_mutable_capture_with_annotation_class_body,
+    r#"
+x = 5
+class C:
+    global x
+    x: int
 "#,
 );
 
@@ -311,6 +321,17 @@ def f():
     # We should really be producing an error more like the compiler's, which says you can't use `x` before the declaration
     print(x)  # E: `x` is uninitialized
     global x
+"#,
+);
+
+// Regression test against a panic in the presence of parser error recovery:
+// https://github.com/facebook/pyrefly/issues/1203
+testcase!(
+    test_mutable_capture_syntax_error,
+    r#"
+def f():
+    be be:  # E: `be` is uninitialized  # E: Parse error  # E: Parse error
+    global be   # E: `be` was assigned in the current scope before the global declaration
 "#,
 );
 

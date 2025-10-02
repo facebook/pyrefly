@@ -171,7 +171,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 target
             }
-            Type::Var(v) if let Some(_guard) = self.recurser.recurse(v) => {
+            Type::Var(v) if let Some(_guard) = self.recurse(v) => {
                 self.as_call_target_impl(self.solver().force_var(v), quantified)
             }
             Type::Union(xs) => {

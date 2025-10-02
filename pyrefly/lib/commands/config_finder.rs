@@ -35,7 +35,9 @@ use crate::module::typeshed::BundledTypeshed;
 /// of the project may be `None` if it can't be found (no [`Path::parent()`]) or it's irrelevant (bundled typeshed).
 pub fn standard_config_finder(
     configure: Arc<
-        dyn Fn(Option<&Path>, ConfigFile) -> (ArcId<ConfigFile>, Vec<ConfigError>) + Send + Sync,
+        dyn Fn(Option<&Path>, ConfigFile, Vec<ConfigError>) -> (ArcId<ConfigFile>, Vec<ConfigError>)
+            + Send
+            + Sync,
     >,
 ) -> ConfigFinder {
     let configure2 = configure.dupe();
@@ -58,7 +60,7 @@ pub fn standard_config_finder(
     };
 
     let empty = LazyLock::new(move || {
-        let (config, errors) = configure3(None, ConfigFile::default());
+        let (config, errors) = configure3(None, ConfigFile::default(), vec![]);
         // Since this is a config we generated, these are likely internal errors.
         debug_log(errors);
         config
@@ -67,11 +69,8 @@ pub fn standard_config_finder(
     ConfigFinder::new(
         Box::new(move |file| {
             let (file_config, parse_errors) = ConfigFile::from_file(file);
-            let (config, validation_errors) = configure(file.parent(), file_config);
-            (
-                config,
-                parse_errors.into_iter().chain(validation_errors).collect(),
-            )
+            let (config, validation_errors) = configure(file.parent(), file_config, parse_errors);
+            (config, validation_errors)
         }),
         // Fall back to using a default config, but let's see if we can make the `search_path` somewhat useful
         // based on a few heuristics.
@@ -85,6 +84,7 @@ pub fn standard_config_finder(
                     let (config, errors) = configure2(
                         path.parent(),
                         ConfigFile::init_at_root(&path, &ProjectLayout::Flat),
+                        vec![],
                     );
                     // Since this is a config we generated, these are likely internal errors.
                     debug_log(errors);
@@ -124,6 +124,7 @@ pub fn standard_config_finder(
                                 root: ConfigBase::default_for_ide_without_config(),
                                 ..Default::default()
                             },
+                            vec![],
                         );
                         // Since this is a config we generated, these are likely internal errors.
                         debug_log(errors);
@@ -154,7 +155,7 @@ mod tests {
     #[test]
     fn test_site_package_path_from_environment() {
         let args = ConfigOverrideArgs::default();
-        let config = standard_config_finder(Arc::new(move |_, x| args.override_config(x)))
+        let config = standard_config_finder(Arc::new(move |_, x, _| args.override_config(x)))
             .python_file(ModuleName::unknown(), &ModulePath::filesystem("".into()));
         let env = PythonEnvironment::get_default_interpreter_env();
         if let Some(paths) = env.site_package_path {
@@ -173,7 +174,7 @@ mod tests {
         ) -> ArcId<ConfigFile> {
             let expect_dir = expect_dir.map(|p| p.to_path_buf());
             let module_path2 = module_path.clone();
-            standard_config_finder(Arc::new(move |dir, x| {
+            standard_config_finder(Arc::new(move |dir, x, _| {
                 assert_eq!(
                     dir.map(|p| p.to_path_buf()),
                     expect_dir,

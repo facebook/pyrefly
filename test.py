@@ -149,6 +149,7 @@ class CargoExecutor(Executor):
                     ),
                     "JQ": jq_path if jq_path else "",
                     "TEST_PY": str(script_dir / "test.py"),
+                    "PYREFLY_PY": str(script_dir / "pyrefly" / "python"),
                     "PATH": os.environ.get("PATH", ""),
                 },
             )

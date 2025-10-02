@@ -5,285 +5,268 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::collections::HashMap;
-
-use pyrefly_python::ast::Ast;
+use dupe::Dupe;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::class::Class;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
-use ruff_python_ast::ExprName;
+use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtClassDef;
+use ruff_python_ast::StmtFunctionDef;
+use ruff_python_ast::identifier::Identifier;
+use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
-use serde::Serialize;
+use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 
-use crate::binding::binding::Key;
+use crate::alt::types::decorated_function::DecoratedFunction;
+use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyDecoratedFunction;
+use crate::report::pysa::class::ClassId;
 use crate::report::pysa::context::ModuleContext;
+use crate::report::pysa::function::FunctionId;
+use crate::report::pysa::function::should_export_function;
 use crate::report::pysa::location::PysaLocation;
-use crate::report::pysa::types::PysaType;
 
-/// Visit the AST of a module and collect information.
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct GlobalVariable {
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub type_: Option<PysaType>,
-    pub location: PysaLocation,
+pub enum Scope {
+    TopLevel,
+    ExportedFunction {
+        function_id: FunctionId,
+        function_name: Name,
+        #[allow(dead_code)]
+        location: TextRange,
+        #[allow(dead_code)]
+        decorated_function: DecoratedFunction,
+    },
+    ExportedClass {
+        #[allow(dead_code)]
+        class_id: ClassId,
+        #[allow(dead_code)]
+        class_name: Name,
+        #[allow(dead_code)]
+        location: TextRange,
+        #[allow(dead_code)]
+        class: Class,
+    },
+    NonExportedFunction {
+        #[allow(dead_code)]
+        function_name: Name,
+        #[allow(dead_code)]
+        location: TextRange,
+    },
+    NonExportedClass {
+        #[allow(dead_code)]
+        class_name: Name,
+        #[allow(dead_code)]
+        location: TextRange,
+    },
+    FunctionDecorators,
+    FunctionTypeParams,
+    FunctionParameters,
+    FunctionReturnAnnotation,
+    ClassDecorators,
+    ClassTypeParams,
+    ClassArguments,
 }
 
-pub struct ModuleAstVisitorResult {
-    pub type_of_expression: HashMap<PysaLocation, PysaType>,
-    pub global_variables: HashMap<String, GlobalVariable>,
+pub struct Scopes {
+    stack: Vec<Scope>,
 }
 
-struct VisitorContext<'a> {
-    module_context: &'a ModuleContext<'a>,
-    type_of_expression: &'a mut HashMap<PysaLocation, PysaType>,
-    global_variables: &'a mut HashMap<String, GlobalVariable>,
-}
-
-fn visit_expression(e: &Expr, context: &mut VisitorContext) {
-    let range = e.range();
-
-    // If the expression has a type, export it.
-    if let Some(type_) = context.module_context.answers.get_type_trace(range) {
-        let display_range = context.module_context.module_info.display_range(range);
-
-        assert!(
-            context
-                .type_of_expression
-                .insert(
-                    PysaLocation::new(display_range),
-                    PysaType::from_type(&type_, context.module_context)
-                )
-                .is_none(),
-            "Found expressions with the same location"
-        );
+impl Scopes {
+    pub fn current(&self) -> &Scope {
+        self.stack.last().unwrap()
     }
-
-    e.recurse(&mut |e| visit_expression(e, context));
 }
 
-fn visit_assign_target(target: &Expr, is_top_level: bool, context: &mut VisitorContext) {
-    if !is_top_level {
-        return;
-    }
-
-    Ast::expr_lvalue(target, &mut |global: &ExprName| {
-        let type_ = context
-            .module_context
-            .bindings
-            .key_to_idx_hashed_opt(Hashed::new(&Key::Definition(ShortIdentifier::expr_name(
-                global,
-            ))))
-            .and_then(|idx| context.module_context.answers.get_idx(idx));
-        if let Some(type_) = type_.as_ref()
-            && type_.ty().is_type_variable()
-        {
-            // Don't export type variable globals.
-            return;
-        }
-        let location = PysaLocation::new(
-            context
-                .module_context
-                .module_info
-                .display_range(global.range()),
-        );
-        context
-            .global_variables
-            .entry(global.id.to_string())
-            .or_insert(GlobalVariable {
-                type_: type_.map(|type_| PysaType::from_type(type_.ty(), context.module_context)),
-                location,
-            });
-    });
+pub trait AstScopedVisitor {
+    fn visit_statement(&mut self, stmt: &Stmt, scopes: &Scopes);
+    fn visit_expression(&mut self, expr: &Expr, scopes: &Scopes);
+    fn enter_function_scope(&mut self, function_def: &StmtFunctionDef, scopes: &Scopes);
+    fn exit_function_scope(&mut self, function_def: &StmtFunctionDef, scopes: &Scopes);
+    fn enter_class_scope(&mut self, class_def: &StmtClassDef, scopes: &Scopes);
+    fn exit_class_scope(&mut self, function_def: &StmtClassDef, scopes: &Scopes);
+    fn enter_toplevel_scope(&mut self, ast: &ModModule, scopes: &Scopes);
+    fn exit_toplevel_scope(&mut self, ast: &ModModule, scopes: &Scopes);
 }
 
-fn visit_statement(stmt: &Stmt, is_top_level: bool, context: &mut VisitorContext) {
+fn visit_expression<V: AstScopedVisitor>(expr: &Expr, visitor: &mut V, scopes: &mut Scopes) {
+    visitor.visit_expression(expr, scopes);
+    expr.recurse(&mut |e| visitor.visit_expression(e, scopes));
+}
+
+fn visit_statement<V: AstScopedVisitor>(
+    stmt: &Stmt,
+    visitor: &mut V,
+    scopes: &mut Scopes,
+    module_context: &ModuleContext,
+) {
+    visitor.visit_statement(stmt, scopes);
+
     match stmt {
         Stmt::FunctionDef(function_def) => {
-            visit_expressions(
-                function_def
-                    .decorator_list
-                    .iter()
-                    .map(|decorator| &decorator.expression),
-                context,
-            );
-            visit_expressions(
-                function_def
-                    .parameters
-                    .posonlyargs
-                    .iter()
-                    .filter_map(|argument| argument.default.as_deref()),
-                context,
-            );
-            visit_expressions(
-                function_def
-                    .parameters
-                    .args
-                    .iter()
-                    .filter_map(|argument| argument.default.as_deref()),
-                context,
-            );
-            visit_expressions(
-                function_def
-                    .parameters
-                    .kwonlyargs
-                    .iter()
-                    .filter_map(|argument| argument.default.as_deref()),
-                context,
-            );
-            visit_statements(
-                function_def.body.iter(),
-                /* is_top_level */ false,
-                context,
-            );
+            let key = KeyDecoratedFunction(ShortIdentifier::new(&function_def.name));
+            if let Some(idx) = module_context
+                .bindings
+                .key_to_idx_hashed_opt(Hashed::new(&key))
+            {
+                let decorated_function = DecoratedFunction::from_bindings_answers(
+                    idx,
+                    &module_context.bindings,
+                    &module_context.answers,
+                );
+                if should_export_function(&decorated_function, module_context) {
+                    scopes.stack.push(Scope::ExportedFunction {
+                        function_id: FunctionId::Function {
+                            location: PysaLocation::new(
+                                module_context
+                                    .module_info
+                                    .display_range(function_def.identifier()),
+                            ),
+                        },
+                        location: function_def.identifier().range(),
+                        function_name: function_def.name.id().clone(),
+                        decorated_function,
+                    });
+                } else {
+                    scopes.stack.push(Scope::NonExportedFunction {
+                        function_name: function_def.name.id().clone(),
+                        location: function_def.identifier().range(),
+                    });
+                }
+            } else {
+                scopes.stack.push(Scope::NonExportedFunction {
+                    function_name: function_def.name.id().clone(),
+                    location: function_def.identifier().range(),
+                });
+            }
+            visitor.enter_function_scope(function_def, scopes);
+
+            scopes.stack.push(Scope::FunctionDecorators);
+            function_def
+                .decorator_list
+                .recurse(&mut |e| visit_expression(e, visitor, scopes));
+            scopes.stack.pop();
+
+            scopes.stack.push(Scope::FunctionTypeParams);
+            function_def.type_params.recurse(&mut |e| {
+                visit_expression(e, visitor, scopes);
+            });
+            scopes.stack.pop();
+
+            scopes.stack.push(Scope::FunctionParameters);
+            function_def.parameters.recurse(&mut |e| {
+                visit_expression(e, visitor, scopes);
+            });
+            scopes.stack.pop();
+
+            scopes.stack.push(Scope::FunctionReturnAnnotation);
+            function_def.returns.recurse(&mut |e| {
+                visit_expression(e, visitor, scopes);
+            });
+            scopes.stack.pop();
+
+            for stmt in &function_def.body {
+                visit_statement(stmt, visitor, scopes, module_context);
+            }
+
+            visitor.exit_function_scope(function_def, scopes);
+            scopes.stack.pop();
         }
         Stmt::ClassDef(class_def) => {
-            visit_expressions(
-                class_def
-                    .decorator_list
-                    .iter()
-                    .map(|decorator| &decorator.expression),
-                context,
-            );
-            if let Some(arguments) = &class_def.arguments {
-                visit_expressions(arguments.args.iter(), context);
-                visit_expressions(
-                    arguments.keywords.iter().map(|keyword| &keyword.value),
-                    context,
-                );
-            }
-            visit_statements(
-                class_def.body.iter(),
-                /* is_top_level */ false,
-                context,
-            );
-        }
-        Stmt::Expr(e) => {
-            visit_expression(&e.value, context);
-        }
-        Stmt::Assign(assign) => {
-            stmt.visit(&mut |e| visit_expression(e, context));
-            for t in &assign.targets {
-                visit_assign_target(t, is_top_level, context);
-            }
-        }
-        Stmt::AnnAssign(assign) => {
-            stmt.visit(&mut |e| visit_expression(e, context));
-            visit_assign_target(&assign.target, is_top_level, context);
-        }
-        Stmt::AugAssign(assign) => {
-            stmt.visit(&mut |e| visit_expression(e, context));
-            visit_assign_target(&assign.target, is_top_level, context);
-        }
-        Stmt::Return(_) | Stmt::Delete(_) | Stmt::Raise(_) => {
-            // Statements that only contains expressions, use Visit<Expr>
-            stmt.visit(&mut |e| visit_expression(e, context));
-        }
-        Stmt::For(for_stmt) => {
-            visit_expression(&for_stmt.iter, context);
-            visit_expression(&for_stmt.target, context);
-            visit_statements(for_stmt.body.iter(), is_top_level, context);
-            visit_statements(for_stmt.orelse.iter(), is_top_level, context);
-        }
-        Stmt::While(while_stmt) => {
-            visit_expression(&while_stmt.test, context);
-            visit_statements(while_stmt.body.iter(), is_top_level, context);
-            visit_statements(while_stmt.orelse.iter(), is_top_level, context);
-        }
-        Stmt::If(if_stmt) => {
-            visit_expression(&if_stmt.test, context);
-            visit_statements(if_stmt.body.iter(), is_top_level, context);
-            for elif_else_clause in &if_stmt.elif_else_clauses {
-                if let Some(test) = &elif_else_clause.test {
-                    visit_expression(test, context);
-                }
-                visit_statements(elif_else_clause.body.iter(), is_top_level, context);
-            }
-        }
-        Stmt::With(with_stmt) => {
-            for item in &with_stmt.items {
-                visit_expression(&item.context_expr, context);
-                visit_expressions(item.optional_vars.iter().map(|x| &**x), context);
-            }
-            visit_statements(with_stmt.body.iter(), is_top_level, context);
-        }
-        Stmt::Match(match_stmt) => {
-            visit_expression(&match_stmt.subject, context);
-            for case in &match_stmt.cases {
-                if let Some(guard) = &case.guard {
-                    visit_expression(guard, context);
-                }
-                visit_statements(case.body.iter(), is_top_level, context);
-            }
-        }
-        Stmt::Try(try_stmt) => {
-            visit_statements(try_stmt.body.iter(), is_top_level, context);
-            visit_statements(try_stmt.orelse.iter(), is_top_level, context);
-            visit_statements(try_stmt.finalbody.iter(), is_top_level, context);
-            for ruff_python_ast::ExceptHandler::ExceptHandler(except_handler) in &try_stmt.handlers
+            let key = KeyClass(ShortIdentifier::new(&class_def.name));
+            if let Some(idx) = module_context
+                .bindings
+                .key_to_idx_hashed_opt(Hashed::new(&key))
             {
-                if let Some(annotation) = &except_handler.type_ {
-                    visit_expression(annotation, context);
+                let class = module_context
+                    .answers
+                    .get_idx(idx)
+                    .unwrap()
+                    .0
+                    .dupe()
+                    .unwrap();
+                scopes.stack.push(Scope::ExportedClass {
+                    class_id: ClassId::from_class(&class),
+                    class_name: class_def.name.id().clone(),
+                    location: class_def.identifier().range(),
+                    class,
+                });
+            } else {
+                scopes.stack.push(Scope::NonExportedClass {
+                    class_name: class_def.name.id().clone(),
+                    location: class_def.identifier().range(),
+                });
+            }
+            visitor.enter_class_scope(class_def, scopes);
+
+            scopes.stack.push(Scope::ClassDecorators);
+            class_def
+                .decorator_list
+                .recurse(&mut |e| visit_expression(e, visitor, scopes));
+            scopes.stack.pop();
+
+            scopes.stack.push(Scope::ClassTypeParams);
+            class_def.type_params.recurse(&mut |e| {
+                visit_expression(e, visitor, scopes);
+            });
+            scopes.stack.pop();
+
+            scopes.stack.push(Scope::ClassArguments);
+            class_def.arguments.recurse(&mut |e| {
+                visit_expression(e, visitor, scopes);
+            });
+            scopes.stack.pop();
+
+            for stmt in &class_def.body {
+                visit_statement(stmt, visitor, scopes, module_context);
+            }
+
+            visitor.exit_class_scope(class_def, scopes);
+            scopes.stack.pop();
+        }
+        _ => {
+            // Use the ruff python ast visitor to find the first reachable statements and expressions from this statement.
+            // By overriding visit_stmt and visit_expr, the visitor doesn't automatically visit nested statements/expressions.
+            struct X<'a, V> {
+                visitor: &'a mut V,
+                scopes: &'a mut Scopes,
+                module_context: &'a ModuleContext<'a>,
+            }
+            impl<'v, 'e, V: AstScopedVisitor>
+                ruff_python_ast::visitor::source_order::SourceOrderVisitor<'e> for X<'v, V>
+            {
+                fn visit_stmt(&mut self, stmt: &'e Stmt) {
+                    visit_statement(stmt, self.visitor, self.scopes, self.module_context);
                 }
-                visit_statements(except_handler.body.iter(), is_top_level, context);
+                fn visit_expr(&mut self, expr: &'e Expr) {
+                    visit_expression(expr, self.visitor, self.scopes);
+                }
             }
-        }
-        Stmt::Assert(assert_stmt) => {
-            visit_expression(&assert_stmt.test, context);
-            if let Some(msg) = &assert_stmt.msg {
-                visit_expression(msg, context);
-            }
-        }
-        Stmt::TypeAlias(_)
-        | Stmt::Import(_)
-        | Stmt::ImportFrom(_)
-        | Stmt::Global(_)
-        | Stmt::Nonlocal(_)
-        | Stmt::Pass(_)
-        | Stmt::Break(_)
-        | Stmt::Continue(_)
-        | Stmt::IpyEscapeCommand(_) => {
-            // do nothing.
+            ruff_python_ast::visitor::source_order::walk_stmt(
+                &mut X {
+                    visitor,
+                    scopes,
+                    module_context,
+                },
+                stmt,
+            );
         }
     }
 }
 
-fn visit_expressions<'a>(
-    expressions: impl Iterator<Item = &'a Expr>,
-    context: &mut VisitorContext,
-) {
-    for expr in expressions {
-        visit_expression(expr, context);
-    }
-}
-
-fn visit_statements<'a>(
-    statements: impl Iterator<Item = &'a Stmt>,
-    is_top_level: bool,
-    context: &mut VisitorContext,
-) {
-    for stmt in statements {
-        visit_statement(stmt, is_top_level, context);
-    }
-}
-
-pub fn visit_module_ast(context: &ModuleContext) -> ModuleAstVisitorResult {
-    let mut type_of_expression = HashMap::new();
-    let mut global_variables = HashMap::new();
-    let mut visitor_context = VisitorContext {
-        module_context: context,
-        type_of_expression: &mut type_of_expression,
-        global_variables: &mut global_variables,
+pub fn visit_module_ast<V: AstScopedVisitor>(
+    visitor: &mut V,
+    module_context: &ModuleContext,
+) -> Scopes {
+    let mut scopes = Scopes {
+        stack: vec![Scope::TopLevel],
     };
-
-    for stmt in &context.ast.body {
-        visit_statement(stmt, /* is_top_level */ true, &mut visitor_context);
+    visitor.enter_toplevel_scope(&module_context.ast, &scopes);
+    for stmt in &module_context.ast.body {
+        visit_statement(stmt, visitor, &mut scopes, module_context);
     }
-
-    ModuleAstVisitorResult {
-        type_of_expression,
-        global_variables,
-    }
+    visitor.exit_toplevel_scope(&module_context.ast, &scopes);
+    scopes
 }

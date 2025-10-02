@@ -16,7 +16,10 @@ use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use tracing::debug;
+use tracing::info;
 
+use crate::buck::query::BxlArgs;
 use crate::buck::query::Include;
 use crate::buck::query::PythonLibraryManifest;
 use crate::buck::query::TargetManifestDatabase;
@@ -57,14 +60,16 @@ pub struct BuckSourceDatabase {
     /// The directory that will be passed into the sourcedb query shell-out. Should
     /// be the same as the directory containing the config this sourcedb is a part of.
     cwd: PathBuf,
+    bxl_args: BxlArgs,
 }
 
 impl BuckSourceDatabase {
-    pub fn new(cwd: PathBuf) -> Self {
+    pub fn new(cwd: PathBuf, bxl_args: BxlArgs) -> Self {
         BuckSourceDatabase {
             cwd,
             inner: RwLock::new(Inner::new()),
             includes: Mutex::new(SmallSet::new()),
+            bxl_args,
         }
     }
 
@@ -72,6 +77,7 @@ impl BuckSourceDatabase {
         let new_db = raw_db.produce_map();
         let read = self.inner.read();
         if new_db == read.db {
+            debug!("No source DB changes from Buck query");
             return false;
         }
         drop(read);
@@ -88,6 +94,7 @@ impl BuckSourceDatabase {
             }
         }
         write.db = new_db;
+        debug!("Finished updating source DB with Buck response");
         true
     }
 }
@@ -151,11 +158,27 @@ impl SourceDatabase for BuckSourceDatabase {
         let new_includes = files.into_iter().map(Include::path).collect();
         let mut includes = self.includes.lock();
         if *includes == new_includes {
+            debug!("Not querying Buck source DB, since no inputs have changed");
             return Ok(false);
         }
         *includes = new_includes;
-        let raw_db = query_source_db(includes.iter(), &self.cwd)?;
+        info!("Querying Buck for source DB");
+        let raw_db = query_source_db(includes.iter(), &self.cwd, &self.bxl_args)?;
+        info!("Finished querying Buck for source DB");
         Ok(self.update_with_target_manifest(raw_db))
+    }
+
+    fn get_critical_files(&self) -> SmallSet<PathBuf> {
+        let read = self.inner.read();
+        read.db
+            .values()
+            .map(|m| m.buildfile_path.to_path_buf())
+            .chain(
+                read.db
+                    .values()
+                    .flat_map(|m| m.srcs.values().flatten().map(|p| p.to_path_buf())),
+            )
+            .collect()
     }
 }
 
@@ -186,6 +209,7 @@ mod tests {
                         .collect(),
                 ),
                 cwd: PathBuf::new(),
+                bxl_args: Default::default(),
             };
             new.update_with_target_manifest(raw_db);
             new
@@ -320,6 +344,7 @@ mod tests {
                         ),
                         ],
                         &[],
+                        "colorama/BUCK",
                     ),
                     Target::from_string("//pyre/client/log:log".to_owned()) => TargetManifest::lib(
                         &[
@@ -338,6 +363,7 @@ mod tests {
                         ),
                         ],
                         &[],
+                        "pyre/client/log/BUCK",
                     ),
             },
             root.clone(),

@@ -1015,7 +1015,7 @@ import typing
 typing.assert_type(0, str)  # E: assert_type(Literal[0], str) failed
 # Make sure that calling by bare name without importing performs the assertion, as this is very convenient for debugging.
 # It's fine if a name error is also generated.
-assert_type(0, str)  # E: assert_type(Literal[0], str) failed  # E: Could not find name `assert_type`
+assert_type(0, str)  # E: assert_type(Literal[0], str) failed  # E: `assert_type` must be imported from `typing` for runtime usage
     "#,
 );
 
@@ -1027,7 +1027,7 @@ import typing
 typing.reveal_type(0)  # E: revealed type: Literal[0]
 # Make sure that calling by bare name without importing reveals the type, as this is very convenient for debugging.
 # It's fine if a name error is also generated.
-reveal_type(0)  # E: revealed type: Literal[0]  # E: Could not find name `reveal_type`
+reveal_type(0)  # E: revealed type: Literal[0]  # E: `reveal_type` must be imported from `typing` for runtime usage
     "#,
 );
 
@@ -1805,5 +1805,12 @@ class A:
     x: Annotated[ClassVar[int], 'also ok']
 Y = Annotated[ClassVar[int], 'wrong context']  # E: `ClassVar` is not allowed in this context
 Z = Annotated[0, 'not a type']  # E: Expected a type form, got instance of `Literal[0]`
+    "#,
+);
+
+testcase!(
+    test_starred_empty_tuple_no_panic,
+    r#"
+(),*()
     "#,
 );

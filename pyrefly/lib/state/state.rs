@@ -47,7 +47,6 @@ use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::locked_map::LockedMap;
 use pyrefly_util::no_hash::BuildNoHash;
-use pyrefly_util::recurser::Recurser;
 use pyrefly_util::small_set1::SmallSet1;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
@@ -98,6 +97,7 @@ use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::module::finder::find_import_prefixes;
 use crate::module::typeshed::BundledTypeshed;
+use crate::solver::solver::VarRecurser;
 use crate::state::dirty::Dirty;
 use crate::state::epoch::Epoch;
 use crate::state::epoch::Epochs;
@@ -1197,7 +1197,7 @@ impl<'a> Transaction<'a> {
         let errors = &steps.load.as_ref()?.errors;
         let (bindings, answers) = steps.answers.as_deref().as_ref()?;
         let stdlib = self.get_stdlib(handle);
-        let recurser = Recurser::new();
+        let recurser = VarRecurser::new();
         let thread_state = ThreadState::new();
         let solver = AnswersSolver::new(
             &lookup,
@@ -1303,10 +1303,14 @@ impl<'a> Transaction<'a> {
 
     /// Called if the `find` portion of loading might have changed for specific configs,
     /// without wanting to fully reload all configs (and pay the performance penalty of
-    /// requerying a build system).
+    /// requerying a build system). If `configs` is empty, we short circuit.
     /// E.g. a file was opened or closed, changing the set of 'open' build system targets,
     /// and affecting how a go-to-definition or hover result would be produced.
     pub fn invalidate_find_for_configs(&mut self, configs: SmallSet<ArcId<ConfigFile>>) {
+        if configs.is_empty() {
+            return;
+        }
+
         // First do the work of clearing out the loaders for our config, but preserve all the other
         // loaders.
         let new_loaders = LockedMap::new();

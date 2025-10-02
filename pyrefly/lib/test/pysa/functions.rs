@@ -8,6 +8,7 @@
 use pretty_assertions::assert_eq;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::types::Type;
+use ruff_python_ast::name::Name;
 
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionBaseDefinition;
@@ -34,7 +35,7 @@ fn create_function_definition(
 ) -> FunctionDefinition {
     FunctionDefinition {
         base: FunctionBaseDefinition {
-            name: name.to_owned(),
+            name: Name::from(name),
             parent,
             is_overload: false,
             is_staticmethod: false,
@@ -133,7 +134,7 @@ def foo(x: int) -> str:
             /* overloads */
             vec![create_simple_signature(
                 vec![FunctionParameter::Pos {
-                    name: "x".to_owned(),
+                    name: "x".into(),
                     annotation: PysaType::from_class_type(context.stdlib.int(), context),
                     required: true,
                 }],
@@ -157,26 +158,26 @@ def complex_function(pos_arg: int, /, pos_or_kw: str, *args: float, kw_only: boo
             vec![create_simple_signature(
                 vec![
                     FunctionParameter::PosOnly {
-                        name: Some("pos_arg".to_owned()),
+                        name: Some("pos_arg".into()),
                         annotation: PysaType::from_class_type(context.stdlib.int(), context),
                         required: true,
                     },
                     FunctionParameter::Pos {
-                        name: "pos_or_kw".to_owned(),
+                        name: "pos_or_kw".into(),
                         annotation: PysaType::from_class_type(context.stdlib.str(), context),
                         required: true,
                     },
                     FunctionParameter::VarArg {
-                        name: Some("args".to_owned()),
+                        name: Some("args".into()),
                         annotation: PysaType::from_class_type(context.stdlib.float(), context),
                     },
                     FunctionParameter::KwOnly {
-                        name: "kw_only".to_owned(),
+                        name: "kw_only".into(),
                         annotation: PysaType::from_class_type(context.stdlib.bool(), context),
                         required: true,
                     },
                     FunctionParameter::Kwargs {
-                        name: Some("kwargs".to_owned()),
+                        name: Some("kwargs".into()),
                         annotation: PysaType::from_class_type(context.stdlib.int(), context),
                     },
                 ],
@@ -202,7 +203,7 @@ class MyClass:
             /* overloads */
             vec![create_simple_signature(
                 vec![FunctionParameter::Pos {
-                    name: "self".to_owned(),
+                    name: "self".into(),
                     annotation: PysaType::from_class(
                         &get_class("test", "MyClass", context),
                         context,
@@ -233,7 +234,7 @@ class MyClass:
             /* overloads */
             vec![create_simple_signature(
                 vec![FunctionParameter::Pos {
-                    name: "x".to_owned(),
+                    name: "x".into(),
                     annotation: PysaType::from_class_type(context.stdlib.int(), context),
                     required: true,
                 }],
@@ -262,7 +263,7 @@ class MyClass:
             /* overloads */
             vec![create_simple_signature(
                 vec![FunctionParameter::Pos {
-                    name: "cls".to_owned(),
+                    name: "cls".into(),
                     annotation: PysaType::from_type(
                         &Type::Type(Box::new(Type::ClassType(ClassType::new(
                             get_class("test", "MyClass", context),
@@ -301,7 +302,7 @@ def foo(x: str | int) -> str | int:
             vec![
                 create_simple_signature(
                     vec![FunctionParameter::Pos {
-                        name: "x".to_owned(),
+                        name: "x".into(),
                         annotation: PysaType::from_class_type(context.stdlib.int(), context),
                         required: true,
                     }],
@@ -309,7 +310,7 @@ def foo(x: str | int) -> str | int:
                 ),
                 create_simple_signature(
                     vec![FunctionParameter::Pos {
-                        name: "x".to_owned(),
+                        name: "x".into(),
                         annotation: PysaType::from_class_type(context.stdlib.str(), context),
                         required: true,
                     }],
@@ -358,7 +359,7 @@ class MyClass:
                 /* overloads */
                 vec![create_simple_signature(
                     vec![FunctionParameter::Pos {
-                        name: "self".to_owned(),
+                        name: "self".into(),
                         annotation: PysaType::from_class(
                             &get_class("test", "MyClass", context),
                             context,
@@ -379,7 +380,7 @@ class MyClass:
                 vec![create_simple_signature(
                     vec![
                         FunctionParameter::Pos {
-                            name: "self".to_owned(),
+                            name: "self".into(),
                             annotation: PysaType::from_class(
                                 &get_class("test", "MyClass", context),
                                 context,
@@ -387,7 +388,7 @@ class MyClass:
                             required: true,
                         },
                         FunctionParameter::Pos {
-                            name: "value".to_owned(),
+                            name: "value".into(),
                             annotation: PysaType::from_class_type(context.stdlib.int(), context),
                             required: true,
                         },

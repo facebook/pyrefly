@@ -207,12 +207,23 @@ impl ConfigFinder {
         self.errors.lock().extend(errors);
     }
 
-    /// Get the config file associated with a directory.
+    /// Get the config file associated with a (non-Python) file. If no config exists
+    /// on disk, return `None`.
+    ///
+    /// When searching for a config for a Python file, prefer [`Self::python_file`],
+    /// which will construct a synthetic config.
+    pub fn file(&self, file: &Path) -> Option<ArcId<ConfigFile>> {
+        self.directory(file.parent()?)
+    }
+
+    /// Get the config file associated with a directory. If no config exists on disk,
+    /// returns `None`.
     pub fn directory(&self, dir: &Path) -> Option<ArcId<ConfigFile>> {
         self.search.directory(dir)
     }
 
-    /// Get the config file given a Python file.
+    /// Get the config file given a Python file. If no config exists on disk, one will be
+    /// constructed.
     pub fn python_file(&self, name: ModuleName, path: &ModulePath) -> ArcId<ConfigFile> {
         match (self.before)(name, path) {
             Ok(Some(x)) => return x,

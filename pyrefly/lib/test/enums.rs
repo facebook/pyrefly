@@ -117,7 +117,6 @@ Color = Enum("C", 'RED', 'GREEN', 'BLUE')  # E: Expected string literal "Color"
 );
 
 testcase!(
-    bug = "Enums with multiple inheritance are not iterable. Maybe a MRO / metaclass resolution issue?",
     test_iterate,
     r#"
 from typing import assert_type
@@ -134,9 +133,9 @@ class E3(StrEnum):
 
 for e in E1:
     assert_type(e, E1)
-for e in E2: # E: Type `type[E2]` is not iterable
+for e in E2:
     assert_type(e, E2)
-for e in E3: # E: Type `type[E3]` is not iterable
+for e in E3:
     assert_type(e, E3)
 
     "#,
@@ -537,7 +536,6 @@ assert_type(Foo.Y, list[Foo])
 );
 
 testcase!(
-    bug = "The RED = ... in pyi should be fine",
     test_enum_value_dots_pyi,
     env_enum_dots(),
     r#"

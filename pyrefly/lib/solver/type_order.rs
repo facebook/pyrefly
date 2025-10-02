@@ -69,12 +69,10 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
 
     pub fn has_metaclass(self, cls: &Class, metaclass: &ClassType) -> bool {
         let metadata = self.0.get_metadata_for_class(cls);
-        match metadata.metaclass() {
-            Some(m) => {
-                self.0.as_superclass(m, metaclass.class_object()).as_ref() == Some(metaclass)
-            }
-            None => metaclass == self.stdlib().builtins_type(),
-        }
+        self.0
+            .as_superclass(metadata.metaclass(self.stdlib()), metaclass.class_object())
+            .as_ref()
+            == Some(metaclass)
     }
 
     pub fn is_protocol(self, cls: &Class) -> bool {

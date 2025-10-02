@@ -25,7 +25,6 @@
 #![deny(clippy::trivially_copy_pass_by_ref)]
 #![feature(const_type_name)]
 #![feature(if_let_guard)]
-#![feature(let_chains)]
 
 //! Utility functions that are not specific to the things Pyre does.
 
@@ -60,6 +59,7 @@ pub mod uniques;
 pub mod upgrade_lock;
 pub mod upward_search;
 pub mod visit;
+pub mod watch_pattern;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod watcher;
 pub mod with_hash;

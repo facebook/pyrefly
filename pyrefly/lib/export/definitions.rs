@@ -78,10 +78,10 @@ pub enum DefinitionStyle {
 
 #[derive(Debug, Clone)]
 pub struct Definition {
-    /// A location where the definition is defined, there is no guarantee it is the first/last or otherwise.
-    pub range: TextRange,
     /// If the definition occurs multiple times, the lowest `DefinitionStyle` is used (e.g. prefer `Local`).
     pub style: DefinitionStyle,
+    /// A location where the name is defined. Always matches the source of `self.style`.
+    pub range: TextRange,
     /// Does this definition require an `Anywhere` binding at binding time? Typically yes if there
     /// are multiple definitions, but mutable captures and `del` both require special handling.
     pub needs_anywhere: bool,
@@ -98,9 +98,12 @@ impl Definition {
         }
     }
 
-    fn merge(&mut self, other: DefinitionStyle) {
+    fn merge(&mut self, other: DefinitionStyle, range: TextRange) {
+        // To ensure binding code cannot produce invalid lookups, we ensure that
+        // `self.style` and `self.range` always match.
         if other < self.style {
             self.style = other;
+            self.range = range;
         }
         // If we've merged a Definition, then there are multiple definition sites.
         //
@@ -300,7 +303,7 @@ impl<'a> DefinitionsBuilder<'a> {
     ) {
         match self.inner.definitions.entry(x.clone()) {
             Entry::Occupied(mut e) => {
-                e.get_mut().merge(style);
+                e.get_mut().merge(style, range);
             }
             Entry::Vacant(e) => {
                 e.insert(Definition {

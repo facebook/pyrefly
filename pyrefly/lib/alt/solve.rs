@@ -6,6 +6,7 @@
  */
 
 use std::iter;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -73,6 +74,7 @@ use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyExport;
+use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LinkedKey;
@@ -92,6 +94,7 @@ use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::style::ErrorStyle;
+use crate::graph::index::Idx;
 use crate::solver::solver::SubsetError;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
@@ -276,7 +279,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             keywords,
             decorators,
             is_new_type,
-            pydantic_metadata,
+            pydantic_config_dict,
         } = binding;
         let metadata = match &self.get_idx(*k).0 {
             None => ClassMetadata::recursive(),
@@ -286,7 +289,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 keywords,
                 decorators,
                 *is_new_type,
-                pydantic_metadata,
+                pydantic_config_dict,
                 errors,
             ),
         };
@@ -658,7 +661,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 vec![Iterable::FixedLen(elts.clone())]
             }
             Type::Tuple(Tuple::Concrete(elts)) => vec![Iterable::FixedLen(elts.clone())],
-            Type::Var(v) if let Some(_guard) = self.recurser.recurse(*v) => {
+            Type::Var(v) if let Some(_guard) = self.recurse(*v) => {
                 self.iterate(&self.solver().force_var(*v), range, errors)
             }
             Type::Union(ts) => ts
@@ -703,7 +706,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Vec<Iterable> {
         match iterable {
-            Type::Var(v) if let Some(_guard) = self.recurser.recurse(*v) => {
+            Type::Var(v) if let Some(_guard) = self.recurse(*v) => {
                 self.async_iterate(&self.solver().force_var(*v), range, errors)
             }
             _ => {
@@ -1004,18 +1007,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// `type_params` refers specifically to the elements of the tuple literal passed to the `TypeAliasType` constructor
+    /// `typealiastype_tparams` refers specifically to the elements of the tuple literal passed to the `TypeAliasType` constructor
     /// For all other kinds of type aliases, it should be `None`.
     ///
     /// When present, we visit those types first to determine the `TParams` for this alias, and any
     /// type variables when we subsequently visit the aliased type are considered out of scope.
+    ///
+    /// `legacy_tparams` refers to the type parameters collected in the bindings phase. It is only populated if we know for sure
+    /// that this is actually a type alias, like when a variable assignment is annotated with `TypeAlias`
     fn as_type_alias(
         &self,
         name: &Name,
         style: TypeAliasStyle,
         ty: Type,
         expr: &Expr,
-        type_params: Option<Vec<Expr>>,
+        typealiastype_tparams: Option<Vec<Expr>>,
+        legacy_tparams: &Option<Box<[Idx<KeyLegacyTypeParam>]>>,
         errors: &ErrorCollector,
     ) -> Type {
         let range = expr.range();
@@ -1044,7 +1051,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut seen_param_specs = SmallMap::new();
         let mut tparams = Vec::new();
         let mut tparams_for_type_alias_type = None;
-        if let Some(type_params) = &type_params {
+        if let Some(type_params) = &typealiastype_tparams {
             self.tvars_to_tparams_for_type_alias_type(
                 type_params,
                 &mut seen_type_vars,
@@ -1055,13 +1062,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             tparams_for_type_alias_type = Some(tparams.len());
         }
-        self.tvars_to_tparams_for_type_alias(
-            &mut ty,
-            &mut seen_type_vars,
-            &mut seen_type_var_tuples,
-            &mut seen_param_specs,
-            &mut tparams,
-        );
+        if let Some(legacy_tparams) = legacy_tparams {
+            tparams = legacy_tparams
+                .iter()
+                .filter_map(|key| self.get_idx(*key).deref().parameter().cloned())
+                .collect();
+        } else {
+            self.tvars_to_tparams_for_type_alias(
+                &mut ty,
+                &mut seen_type_vars,
+                &mut seen_type_var_tuples,
+                &mut seen_param_specs,
+                &mut tparams,
+            );
+        }
         if let Some(n) = tparams_for_type_alias_type {
             for extra_tparam in tparams.iter().skip(n) {
                 errors.add(
@@ -1339,7 +1353,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let mut type_info = self.binding_to_type_info(binding, errors);
         type_info.visit_mut(&mut |ty| {
-            if !matches!(binding, Binding::NameAssign(..) | Binding::PinUpstream(..)) {
+            if !matches!(
+                binding,
+                Binding::NameAssign(..) | Binding::PartialTypeWithUpstreamsCompleted(..)
+            ) {
                 self.pin_all_placeholder_types(ty);
             }
             self.expand_type_mut(ty);
@@ -1617,6 +1634,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     fields = fields.combine(new_fields);
                 }
                 if let Some(new_fields) = self.get_total_ordering_synthesized_fields(errors, cls) {
+                    fields = fields.combine(new_fields);
+                }
+                if let Some(new_fields) = self.get_django_enum_synthesized_fields(cls) {
                     fields = fields.combine(new_fields);
                 }
                 fields
@@ -2298,7 +2318,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
             }
-            Binding::Pin(unpinned_idx, first_use) => {
+            Binding::CompletedPartialType(unpinned_idx, first_use) => {
                 // Calculate the first use for its side-effects (it might pin `Var`s)
                 match first_use {
                     FirstUse::UsedBy(idx) => {
@@ -2308,7 +2328,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 self.get_idx(*unpinned_idx).arc_clone().into_ty()
             }
-            Binding::PinUpstream(raw_idx, first_used_by) => {
+            Binding::PartialTypeWithUpstreamsCompleted(raw_idx, first_used_by) => {
                 // Force all of the upstream `Pin`s for which was the first use. This ensures
                 // that any `Var` in the result originated directly from `raw_idx`.
                 for idx in first_used_by {
@@ -2469,7 +2489,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.attr_infer(&binding, &attr.id, attr.range, errors, None)
                     .into_ty()
             }
-            Binding::NameAssign(name, annot_key, expr) => {
+            Binding::NameAssign(name, annot_key, expr, legacy_tparams) => {
                 let (has_type_alias_qualifier, ty) = match annot_key.as_ref() {
                     // First infer the type as a normal value
                     Some((style, k)) => {
@@ -2517,6 +2537,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ty,
                         expr,
                         None,
+                        legacy_tparams,
                         errors,
                     ),
                     None if Self::may_be_implicit_type_alias(&ty)
@@ -2528,6 +2549,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ty,
                             expr,
                             None,
+                            legacy_tparams,
                             errors,
                         )
                     }
@@ -3054,7 +3076,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Binding::ScopedTypeAlias(name, params, expr) => {
                 let ty = self.expr_infer(expr, errors);
-                let ta = self.as_type_alias(name, TypeAliasStyle::Scoped, ty, expr, None, errors);
+                let ta =
+                    self.as_type_alias(name, TypeAliasStyle::Scoped, ty, expr, None, &None, errors);
                 match ta {
                     Type::Forall(..) => self.error(
                         errors,
@@ -3087,6 +3110,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ty,
                     &expr,
                     Some(type_param_exprs),
+                    &None,
                     errors,
                 );
                 if let Some(k) = ann
@@ -3345,7 +3369,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Some(self.unions(ts))
             }
-            Type::Var(v) if let Some(_guard) = self.recurser.recurse(v) => {
+            Type::Var(v) if let Some(_guard) = self.recurse(v) => {
                 self.untype_opt(self.solver().force_var(v), range)
             }
             ty @ (Type::TypeVar(_)
@@ -3361,7 +3385,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             t @ Type::Unpack(
                 box Type::Tuple(_) | box Type::TypeVarTuple(_) | box Type::Quantified(_),
             ) => Some(t),
-            Type::Unpack(box Type::Var(v)) if let Some(_guard) = self.recurser.recurse(v) => {
+            Type::Unpack(box Type::Var(v)) if let Some(_guard) = self.recurse(v) => {
                 self.untype_opt(Type::Unpack(Box::new(self.solver().force_var(v))), range)
             }
             Type::QuantifiedValue(q) => Some(q.to_type()),
@@ -3398,13 +3422,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::TypeAlias(ta) => self.type_of(ta.as_type()),
             Type::Any(style) => Type::type_form(style.propagate()),
-            Type::ClassDef(cls) => {
-                if let Some(meta) = self.get_metadata_for_class(&cls).metaclass() {
-                    Type::type_form(Type::ClassType(meta.clone()))
-                } else {
-                    Type::ClassDef(self.stdlib.builtins_type().class_object().clone())
-                }
-            }
+            Type::ClassDef(cls) => Type::type_form(Type::ClassType(
+                self.get_metadata_for_class(&cls)
+                    .metaclass(self.stdlib)
+                    .clone(),
+            )),
             _ => self.stdlib.builtins_type().clone().to_type(),
         }
     }

@@ -18,7 +18,6 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::lock::Mutex;
-use pyrefly_util::recurser::Recurser;
 use pyrefly_util::uniques::UniqueFactory;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
@@ -47,6 +46,7 @@ use crate::graph::index::Idx;
 use crate::graph::index_map::IndexMap;
 use crate::module::module_info::ModuleInfo;
 use crate::solver::solver::Solver;
+use crate::solver::solver::VarRecurser;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::key_to_intermediate_definition;
 use crate::table;
@@ -429,7 +429,7 @@ impl Answers {
                 }
             }
         }
-        let recurser = &Recurser::new();
+        let recurser = &VarRecurser::new();
         let thread_state = &ThreadState::new();
         let answers_solver = AnswersSolver::new(
             answers,
@@ -521,7 +521,7 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        let recurser = &Recurser::new();
+        let recurser = &VarRecurser::new();
         let solver = AnswersSolver::new(
             answers,
             self,
@@ -682,10 +682,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } in self.completions(base.clone(), Some(attribute_name), false)
             {
                 match definition {
-                    Some(AttrDefinition::FullyResolved {
-                        definition_range: TextRangeWithModule { module, range },
-                        docstring_range: _,
-                    }) => {
+                    Some(AttrDefinition::FullyResolved(TextRangeWithModule { module, range })) => {
                         if module.path() != self.bindings().module().path() {
                             index
                                 .lock()

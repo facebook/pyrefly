@@ -253,8 +253,9 @@ testcase!(
     test_super_in_base_classes,
     r#"
 import types
+from typing import Iterable
 class Alias(types.GenericAlias):
-    def __mro_entries__(self, bases: tuple[type, ...]) -> tuple[type]:
+    def __mro_entries__(self, bases: Iterable[object], /) -> tuple[type, ...]:
         class C(*super().__mro_entries__(bases)): # E:
             pass
         return (C,)

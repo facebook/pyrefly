@@ -13,6 +13,7 @@ use crate::report::pysa::call_graph::CallGraphs;
 use crate::report::pysa::call_graph::CallTarget;
 use crate::report::pysa::call_graph::ExpressionCallees;
 use crate::report::pysa::call_graph::IdentifierCallees;
+use crate::report::pysa::call_graph::ImplicitReceiver;
 use crate::report::pysa::call_graph::build_call_graphs_for_module;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionRef;
@@ -24,7 +25,7 @@ use crate::test::pysa::utils::create_state;
 use crate::test::pysa::utils::get_class_ref;
 use crate::test::pysa::utils::get_handle_for_module_name;
 
-// Omit fields from `DefinitionRef` so that we can easily write the expected results
+// Omit fields from `FunctionRef` so that we can easily write the expected results
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 struct DefinitionRefForTest {
     module_name: String,
@@ -44,7 +45,7 @@ impl DefinitionRefForTest {
     fn from_definition_ref(definition_ref: &FunctionRef) -> Self {
         Self {
             module_name: definition_ref.module_name.to_string(),
-            identifier: definition_ref.identifier.clone(),
+            identifier: definition_ref.function_name.to_string(),
         }
     }
 
@@ -76,7 +77,7 @@ impl<Target> CallTarget<Target> {
 fn create_call_target(target: &str) -> CallTarget<DefinitionRefForTest> {
     CallTarget {
         target: DefinitionRefForTest::from_string(target),
-        implicit_receiver: false,
+        implicit_receiver: ImplicitReceiver::False,
         receiver_class: None,
     }
 }
@@ -235,7 +236,7 @@ def foo(c: C):
 "#,
     &|context: &ModuleContext| {
         let call_target = vec![
-            create_call_target("test.m").with_implicit_receiver(true).with_receiver_class("test.C".to_owned(), context)
+            create_call_target("test.m").with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context)
         ];
         vec![(
             TEST_DEFINITION_NAME.to_owned(),
@@ -302,16 +303,19 @@ class C:
 def foo(c: Optional[C]):
   c.m()
 "#,
-    &|_context: &ModuleContext| {
+    &|context: &ModuleContext| {
+        let call_target = vec![
+            create_call_target("test.m").with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context)
+        ];
         vec![(
             TEST_DEFINITION_NAME.to_owned(),
             vec![
                 (
                     "7:3-7:8".to_owned(),
-                    call_callees_from_expected(vec![create_call_target("test.m").with_implicit_receiver(true)])),
+                    call_callees_from_expected(call_target.clone())),
                 (
                     "7:3-7:6".to_owned(),
-                    attribute_access_callees_from_expected(vec![create_call_target("test.m").with_implicit_receiver(true)]),
+                    attribute_access_callees_from_expected(call_target.clone()),
                 )
             ],
         )]
@@ -336,13 +340,56 @@ def foo(c: C):
 "#,
     &|context: &ModuleContext| {
         let call_target = vec![
-            create_call_target("test.m").with_implicit_receiver(true).with_receiver_class("test.C".to_owned(), context)
+            create_call_target("test.m").with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context)
         ];
         vec![(
             TEST_DEFINITION_NAME.to_owned(),
             vec![
                 ("12:3-12:8".to_owned(), call_callees_from_expected(call_target.clone())),
                 ("12:3-12:6".to_owned(), attribute_access_callees_from_expected(call_target.clone()))
+            ],
+        )]
+    },
+}
+
+call_graph_testcase! {
+    test_class_method,
+    TEST_MODULE_NAME,
+    r#"
+class C:
+  @classmethod
+  def f(cls) -> int: ...
+  def g(self) -> int: ...
+def foo(c: C):
+  C.f()  # implicit receiver
+  c.f()  # implicit receiver
+  C.g(c) # no implicit receiver
+  c.g()  # implicit receiver
+"#,
+    &|context: &ModuleContext| {
+        let class_method_target = vec![
+            create_call_target("test.f").with_implicit_receiver(ImplicitReceiver::TrueWithClassReceiver).with_receiver_class("test.C".to_owned(), context)
+        ];
+        let class_method_target_2 = vec![
+            create_call_target("test.f").with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context)
+        ];
+        let method_target = vec![
+            create_call_target("test.g").with_implicit_receiver(ImplicitReceiver::False)
+        ];
+        let method_target_2 = vec![
+            create_call_target("test.g").with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context)
+        ];
+        vec![(
+            TEST_DEFINITION_NAME.to_owned(),
+            vec![
+                ("7:3-7:8".to_owned(), call_callees_from_expected(class_method_target.clone())),
+                ("7:3-7:6".to_owned(), attribute_access_callees_from_expected(class_method_target.clone())),
+                ("8:3-8:8".to_owned(), call_callees_from_expected(class_method_target_2.clone())),
+                ("8:3-8:6".to_owned(), attribute_access_callees_from_expected(class_method_target_2.clone())),
+                ("9:3-9:9".to_owned(), call_callees_from_expected(method_target.clone())),
+                ("9:3-9:6".to_owned(), attribute_access_callees_from_expected(method_target.clone())),
+                ("10:3-10:8".to_owned(), call_callees_from_expected(method_target_2.clone())),
+                ("10:3-10:6".to_owned(), attribute_access_callees_from_expected(method_target_2.clone())),
             ],
         )]
     },

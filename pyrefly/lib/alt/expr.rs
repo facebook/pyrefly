@@ -432,7 +432,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             match ty {
                                 Type::Tuple(Tuple::Concrete(elts)) => {
                                     if unbounded.is_empty() {
-                                        hint_ts_iter.nth(elts.len() - 1);
+                                        if !elts.is_empty() {
+                                            hint_ts_iter.nth(elts.len() - 1);
+                                        }
                                         prefix.extend(elts);
                                     } else {
                                         suffix.extend(elts)

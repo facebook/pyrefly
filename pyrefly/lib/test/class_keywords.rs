@@ -43,7 +43,7 @@ fn get_class_keywords(
 
 fn get_metaclass(class_name: &str, handle: &Handle, state: &State) -> Option<ClassType> {
     get_class_metadata(class_name, handle, state)
-        .metaclass()
+        .custom_metaclass()
         .cloned()
 }
 

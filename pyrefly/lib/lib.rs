@@ -27,7 +27,6 @@
 #![feature(box_patterns)]
 #![feature(closure_lifetime_binder)]
 #![feature(if_let_guard)]
-#![feature(let_chains)]
 
 mod alt;
 mod binding;

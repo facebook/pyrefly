@@ -71,8 +71,8 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
         match bindings.get(current_idx) {
             Binding::Forward(k)
             | Binding::Narrow(k, _, _)
-            | Binding::Pin(k, ..)
-            | Binding::PinUpstream(k, ..)
+            | Binding::CompletedPartialType(k, ..)
+            | Binding::PartialTypeWithUpstreamsCompleted(k, ..)
             | Binding::Default(k, ..) => {
                 current_idx = *k;
             }

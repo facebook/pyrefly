@@ -49,5 +49,6 @@ jobs:
         TYPESHED_ROOT: ${{ github.workspace }}/crates/pyrefly_bundled/third_party
         JQ: jq
         TEST_PY: ${{ github.workspace }}/test.py
+        PYREFLY_PY: ${{ github.workspace }}/pyrefly/python
       run: scrut test test
       if: ${{ matrix.os != 'windows-latest' }}

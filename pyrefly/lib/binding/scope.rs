@@ -56,7 +56,7 @@ use crate::binding::binding::MethodThatSetsAttr;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
-use crate::binding::bindings::InitializedInFlow;
+use crate::binding::bindings::UninitializedInFlow;
 use crate::binding::expr::Usage;
 use crate::binding::function::SelfAssignments;
 use crate::binding::narrow::NarrowOps;
@@ -83,7 +83,7 @@ pub enum NameReadInfo {
     /// flow such that I am not defined in at least one branch.
     Flow {
         idx: Idx<Key>,
-        is_initialized: InitializedInFlow,
+        uninitialized: UninitializedInFlow,
     },
     /// The name is an anywhere-style lookup. If it came from a non-barrier scope
     /// relative to the current one, this means it is uninitialized; otherwise we
@@ -91,7 +91,7 @@ pub enum NameReadInfo {
     /// below it) and treat the read as initialized.
     Anywhere {
         key: Key,
-        is_initialized: InitializedInFlow,
+        uninitialized: UninitializedInFlow,
     },
     /// No such name is defined in the current scope stack.
     NotFound,
@@ -418,6 +418,127 @@ pub struct Flow {
     has_terminated: bool,
 }
 
+impl Flow {
+    fn get_info(&self, name: &Name) -> Option<&FlowInfo> {
+        self.info.get(name)
+    }
+
+    fn get_info_hashed(&self, name: Hashed<&Name>) -> Option<&FlowInfo> {
+        self.info.get_hashed(name)
+    }
+
+    fn get_value(&self, name: &Name) -> Option<&FlowValue> {
+        self.get_info(name)?.value()
+    }
+
+    fn get_value_hashed(&self, name: Hashed<&Name>) -> Option<&FlowValue> {
+        self.get_info_hashed(name)?.value()
+    }
+
+    fn get_value_mut(&mut self, name: &Name) -> Option<&mut FlowValue> {
+        self.info.get_mut(name)?.value_mut()
+    }
+}
+
+/// Flow information about a name. At least one of `narrow` and `value` will always
+/// be non-None (although in some cases the value may have FlowStyle::Uninitialized,
+/// meaning we track a type but are aware that the name is not bound at this point,
+/// e.g. after a `del`)
+#[derive(Debug, Clone)]
+struct FlowInfo {
+    /// The most recent value bound to this name, if any.
+    value: Option<FlowValue>,
+    /// The most recent narrow for this name, if any. Always set to `None` when
+    /// `value` is re-bound.
+    narrow: Option<FlowNarrow>,
+    /// The loop default - used to wrap loop Phi with our guess at the type above the loop.
+    /// - Always set to our current inferred type when a flow info is created
+    /// - Updated whenever we update the inferred type outside of all loops, but not inside
+    default: Idx<Key>,
+}
+
+/// The most recent value for a name. Used in several cases:
+/// - Actual runtime assignments
+/// - Certain cases where we track a type for unbound locals, such as after a bare
+///   annotation like `x: int` or `del x` - these cases use `FlowStyle::Uninitialized`
+/// - Loop recursion bindings in cases where a name was narrowed above a loop; we
+///   don't know whether the name might be assigned in the loop so we have to assume
+///   so; in that case we use `FlowStyle::LoopRecursion`
+#[derive(Debug, Clone)]
+struct FlowValue {
+    idx: Idx<Key>,
+    style: FlowStyle,
+}
+
+/// The most recent narrow for a name.
+#[derive(Debug, Clone)]
+struct FlowNarrow {
+    idx: Idx<Key>,
+}
+
+impl FlowInfo {
+    fn new_value(idx: Idx<Key>, style: FlowStyle) -> Self {
+        Self {
+            value: Some(FlowValue { idx, style }),
+            narrow: None,
+            default: idx,
+        }
+    }
+
+    fn new_narrow(idx: Idx<Key>) -> Self {
+        Self {
+            value: None,
+            narrow: Some(FlowNarrow { idx }),
+            default: idx,
+        }
+    }
+
+    fn updated_value(&self, idx: Idx<Key>, style: FlowStyle, in_loop: bool) -> Self {
+        Self {
+            value: Some(FlowValue { idx, style }),
+            // Note that any existing narrow is wiped when a new value is bound.
+            narrow: None,
+            default: if in_loop { self.default } else { idx },
+        }
+    }
+
+    fn updated_narrow(&self, idx: Idx<Key>, in_loop: bool) -> Self {
+        Self {
+            value: self.value.clone(),
+            narrow: Some(FlowNarrow { idx }),
+            default: if in_loop { self.default } else { idx },
+        }
+    }
+
+    fn idx(&self) -> Idx<Key> {
+        match (&self.narrow, &self.value) {
+            (Some(FlowNarrow { idx, .. }), _) => *idx,
+            (None, Some(FlowValue { idx, .. })) => *idx,
+            (None, None) => unreachable!("A FlowInfo always has at least one of a narrow or value"),
+        }
+    }
+
+    fn value(&self) -> Option<&FlowValue> {
+        self.value.as_ref()
+    }
+
+    fn value_mut(&mut self) -> Option<&mut FlowValue> {
+        self.value.as_mut()
+    }
+
+    fn uninitialized(&self) -> UninitializedInFlow {
+        self.value()
+            .map_or(UninitializedInFlow::No, |v| match v.style {
+                FlowStyle::Uninitialized
+                | FlowStyle::ClassField {
+                    initial_value: None,
+                } => UninitializedInFlow::Yes,
+                FlowStyle::PossiblyUninitialized => UninitializedInFlow::Conditionally,
+                _ => UninitializedInFlow::No,
+            })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum FlowStyle {
     /// Not one of the styles below.
@@ -447,13 +568,17 @@ pub enum FlowStyle {
     PossiblyUninitialized,
     /// The name was in an annotated declaration like `x: int` but not initialized
     Uninitialized,
+    /// I'm a speculative binding for a name that was narrowed but not assigned above
+    /// a loop. Because we don't yet know whether the name will be assigned, we have
+    /// to assume it might be, so the loop recursion binding is treated as a `FlowValue`
+    /// with this style.
+    LoopRecursion,
 }
 
 impl FlowStyle {
-    fn merged(styles: Vec<FlowStyle>) -> FlowStyle {
-        let mut it = styles.into_iter();
-        let mut merged = it.next().unwrap_or(FlowStyle::Other);
-        for x in it {
+    fn merged(mut styles: impl Iterator<Item = FlowStyle>) -> FlowStyle {
+        let mut merged = styles.next().unwrap_or(FlowStyle::Other);
+        for x in styles {
             match (&merged, x) {
                 // If they're identical, keep it
                 (l, r) if l == &r => {}
@@ -471,37 +596,6 @@ impl FlowStyle {
             }
         }
         merged
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct FlowInfo {
-    /// The key to use if you need the value of this name.
-    pub idx: Idx<Key>,
-    /// The default value - used to create Default bindings inside loops.
-    /// - Always set to `key` when a flow is first created.
-    /// - Set to `key` whenever a flow is updated outside of loops, but not inside.
-    pub default: Idx<Key>,
-    /// The style of this binding.
-    pub style: FlowStyle,
-}
-
-impl FlowInfo {
-    fn new(idx: Idx<Key>, style: Option<FlowStyle>) -> Self {
-        Self {
-            idx,
-            default: idx,
-            style: style.unwrap_or(FlowStyle::Other),
-        }
-    }
-
-    /// Create a new FlowInfo after an update.
-    fn updated(&self, idx: Idx<Key>, style: Option<FlowStyle>, in_loop: bool) -> Self {
-        Self {
-            idx,
-            default: if in_loop { self.default } else { idx },
-            style: style.unwrap_or_else(|| self.style.clone()),
-        }
     }
 }
 
@@ -802,7 +896,9 @@ impl ScopeTreeNode {
         }
         if !barrier {
             for info in self.scope.flow.info.values() {
-                visitor(info.idx);
+                if let Some(value) = info.value() {
+                    visitor(value.idx);
+                }
             }
         }
         for (name, info) in &self.scope.stat.0 {
@@ -902,10 +998,10 @@ impl Scopes {
         &self,
         name: &Name,
     ) -> Option<(Idx<Key>, Idx<KeyDecoratedFunction>)> {
-        if let Some(flow) = self.current().flow.info.get(name)
-            && let FlowStyle::FunctionDef(fidx, _) = flow.style
+        if let Some(value) = self.current().flow.get_value(name)
+            && let FlowStyle::FunctionDef(fidx, _) = value.style
         {
-            return Some((flow.idx, fidx));
+            return Some((value.idx, fidx));
         }
         None
     }
@@ -1050,31 +1146,20 @@ impl Scopes {
         self.current().loops.len()
     }
 
-    /// Set the flow info to bind `name` to `key`, maybe with `FlowStyle` `style`
-    ///
-    /// - If `style` is `None`, then:
-    ///   - Preserve the existing style, when updating an existing name.
-    ///   - Use `FlowStyle::Other`, when inserting a new name.
-    ///
-    /// TODO(grievejia): Properly separate out `FlowStyle` from the indices
-    fn upsert_flow_info(&mut self, name: Hashed<&Name>, idx: Idx<Key>, style: Option<FlowStyle>) {
-        let in_loop = self.loop_depth() != 0;
-        match self.current_mut().flow.info.entry_hashed(name.cloned()) {
-            Entry::Vacant(e) => {
-                e.insert(FlowInfo::new(idx, style));
-            }
-            Entry::Occupied(mut e) => {
-                *e.get_mut() = e.get().updated(idx, style, in_loop);
-            }
-        }
-    }
-
     /// Track a narrow for a name in the current flow. This should result from options
     /// that only narrow an existing value, not operations that assign a new value at runtime.
     ///
     /// A caller of this function promises to create a binding for `idx`.
     pub fn narrow_in_current_flow(&mut self, name: Hashed<&Name>, idx: Idx<Key>) {
-        self.upsert_flow_info(name, idx, None)
+        let in_loop = self.loop_depth() != 0;
+        match self.current_mut().flow.info.entry_hashed(name.cloned()) {
+            Entry::Vacant(e) => {
+                e.insert(FlowInfo::new_narrow(idx));
+            }
+            Entry::Occupied(mut e) => {
+                *e.get_mut() = e.get().updated_narrow(idx, in_loop);
+            }
+        }
     }
 
     /// Track the binding from assigning a name in the current flow. Here "define" means:
@@ -1093,7 +1178,15 @@ impl Scopes {
         idx: Idx<Key>,
         style: FlowStyle,
     ) -> Option<NameWriteInfo> {
-        self.upsert_flow_info(name, idx, Some(style));
+        let in_loop = self.loop_depth() != 0;
+        match self.current_mut().flow.info.entry_hashed(name.cloned()) {
+            Entry::Vacant(e) => {
+                e.insert(FlowInfo::new_value(idx, style));
+            }
+            Entry::Occupied(mut e) => {
+                *e.get_mut() = e.get().updated_value(idx, style, in_loop);
+            }
+        }
         let static_info = self.current().stat.0.get_hashed(name)?;
         Some(static_info.as_name_write_info())
     }
@@ -1103,15 +1196,15 @@ impl Scopes {
     /// Don't change the type if one is present - downstream we'll emit
     /// uninitialized local errors but keep using our best guess for the type.
     pub fn mark_as_deleted(&mut self, name: &Name) {
-        if let Some(info) = self.current_mut().flow.info.get_mut(name) {
-            info.style = FlowStyle::Uninitialized;
+        if let Some(value) = self.current_mut().flow.get_value_mut(name) {
+            value.style = FlowStyle::Uninitialized;
         }
     }
 
     fn get_flow_info(&self, name: &Name) -> Option<&FlowInfo> {
         let name = Hashed::new(name);
         for scope in self.iter_rev() {
-            if let Some(flow) = scope.flow.info.get_hashed(name) {
+            if let Some(flow) = scope.flow.get_info_hashed(name) {
                 return Some(flow);
             }
         }
@@ -1123,7 +1216,7 @@ impl Scopes {
     /// Returns `None` if there is no current flow (which may mean the
     /// name is uninitialized in the current scope, or is not in scope at all).
     pub fn current_flow_style(&self, name: &Name) -> Option<FlowStyle> {
-        Some(self.current().flow.info.get(name)?.style.clone())
+        Some(self.current().flow.get_info(name)?.value()?.style.clone())
     }
 
     // This helper handles re-exported symbols during special export lookups
@@ -1172,8 +1265,8 @@ impl Scopes {
         if let Some(base_name) = base_name {
             // Check to see whether there's an imported module `base_name` such that `base_name.name`
             // is a special export.
-            let flow = self.get_flow_info(base_name)?;
-            match &flow.style {
+            let value = self.get_flow_info(base_name)?.value()?;
+            match &value.style {
                 FlowStyle::MergeableImport(m) | FlowStyle::ImportAs(m) => {
                     self.lookup_special_export(name.clone(), *m, lookup)
                 }
@@ -1185,8 +1278,8 @@ impl Scopes {
         } else {
             // Check to see whether `name` is a special export; either it must be
             // defined in the current module, or be an imported name from some other module.
-            let flow = self.get_flow_info(name)?;
-            match &flow.style {
+            let value = self.get_flow_info(name)?.value()?;
+            match &value.style {
                 FlowStyle::MergeableImport(m) | FlowStyle::ImportAs(m) => {
                     self.lookup_special_export(name.clone(), *m, lookup)
                 }
@@ -1392,12 +1485,14 @@ impl Scopes {
             }
         };
         self.pop(); // Also pop the annotation scope that wrapped the class body.
-        class_body.flow.info.iter_hashed().for_each(
-            |(name, flow_info)| {
-            if let Some(static_info) = class_body.stat.0.get_hashed(name) {
-                let definition = match &flow_info.style {
+        class_body.stat.0.iter_hashed().for_each(
+            |(name, static_info)| {
+            if matches!(static_info.style, StaticStyle::MutableCapture(..)) {
+                // Mutable captures are not actually owned by the class scope, and do not become attributes.
+            } else if let Some(value) = class_body.flow.get_info_hashed(name).and_then(|flow| flow.value()) {
+                let definition = match &value.style {
                     FlowStyle::FunctionDef(_, has_return_annotation) => ClassFieldDefinition::MethodLike {
-                        definition: flow_info.idx,
+                        definition: value.idx,
                         has_return_annotation: *has_return_annotation,
                     },
                     FlowStyle::ClassField {
@@ -1414,7 +1509,7 @@ impl Scopes {
                         ),
                     },
                     _ => ClassFieldDefinition::DefinedWithoutAssign {
-                        definition: flow_info.idx,
+                        definition: value.idx,
                     },
                 };
                 field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
@@ -1485,10 +1580,8 @@ impl Scopes {
     /// the same root (like `import foo.bar; import foo.baz`) are that the sub-modules
     /// will be added as attributes of `foo`.
     pub fn existing_module_import_at(&self, module_name: &Name) -> Option<Idx<Key>> {
-        match self.current().flow.info.get(module_name) {
-            Some(flow_info) if matches!(flow_info.style, FlowStyle::MergeableImport(..)) => {
-                Some(flow_info.idx)
-            }
+        match self.current().flow.get_value(module_name) {
+            Some(value) if matches!(value.style, FlowStyle::MergeableImport(..)) => Some(value.idx),
             _ => None,
         }
     }
@@ -1513,29 +1606,18 @@ impl Scopes {
                 continue;
             }
 
-            if let Some(flow_info) = scope.flow.info.get_hashed(name)
+            if let Some(flow_info) = scope.flow.get_info_hashed(name)
                 && !barrier
             {
+                let uninitialized = flow_info.uninitialized();
                 // Because class body scopes are dynamic, if we know that the the name is
                 // definitely not initialized in the flow, we should skip it.
-                if is_class
-                    && matches!(
-                        flow_info.style,
-                        FlowStyle::Uninitialized
-                            | FlowStyle::ClassField {
-                                initial_value: None
-                            }
-                    )
-                {
+                if is_class && matches!(uninitialized, UninitializedInFlow::Yes) {
                     continue;
                 }
                 return NameReadInfo::Flow {
-                    idx: flow_info.idx,
-                    is_initialized: match flow_info.style {
-                        FlowStyle::Uninitialized => InitializedInFlow::No,
-                        FlowStyle::PossiblyUninitialized => InitializedInFlow::Maybe,
-                        _ => InitializedInFlow::Yes,
-                    },
+                    idx: flow_info.idx(),
+                    uninitialized,
                 };
             }
             // Class body scopes are dynamic, not static, so if we don't find a name in the
@@ -1551,12 +1633,12 @@ impl Scopes {
                     // exception because they are synthesized scope entries that don't exist at all
                     // in the runtime; we treat them as always initialized to avoid false positives
                     // for uninitialized local checks in class bodies.
-                    is_initialized: if barrier
+                    uninitialized: if barrier
                         || matches!(static_info.style, StaticStyle::PossibleLegacyTParam)
                     {
-                        InitializedInFlow::Yes
+                        UninitializedInFlow::No
                     } else {
-                        InitializedInFlow::No
+                        UninitializedInFlow::Yes
                     },
                 };
             }
@@ -1622,7 +1704,7 @@ impl Scopes {
         name: Hashed<&Name>,
         kind: MutableCaptureKind,
     ) -> Result<Key, MutableCaptureError> {
-        if self.current().flow.info.get_hashed(name).is_some() {
+        if self.current().flow.get_info_hashed(name).is_some() {
             return match kind {
                 MutableCaptureKind::Global => Err(MutableCaptureError::AssignedBeforeGlobal),
                 MutableCaptureKind::Nonlocal => Err(MutableCaptureError::AssignedBeforeNonlocal),
@@ -1650,8 +1732,8 @@ impl ScopeTrace {
         let mut exportables = SmallMap::new();
         let scope = self.toplevel_scope();
         for (name, static_info) in scope.stat.0.iter_hashed() {
-            let exportable = match scope.flow.info.get_hashed(name) {
-                Some(FlowInfo { idx: key, .. }) => {
+            let exportable = match scope.flow.get_value_hashed(name) {
+                Some(FlowValue { idx: key, .. }) => {
                     if let Some(ann) = static_info.annotation() {
                         Exportable::Initialized(*key, Some(ann))
                     } else {
@@ -1698,58 +1780,26 @@ impl ScopeTrace {
     }
 }
 
-// Represents a name we need to handle when merging flows.
-struct MergeItem {
-    // The key at which we will bind the result of the merge. Unlike all other keys
-    // in our data structure, this one does not refer to a pre-existing binding coming
-    // from upstream but rather the *output* of the merge.
-    phi_idx: Idx<Key>,
-    // Key of the default binding. This is only used in loops, where it is used
-    // to say that when in doubt, the loop recursive Phi should solve to either
-    // the binding lives at the top of the loop (if any) or the first assignment
-    // in the first branch we encountered.
-    default: Idx<Key>,
-    // The set of bindings live at the end of each branch. This will not include
-    // `merged_key` itself (which might be live if a branch of a loop does not
-    // modify anything).
-    branch_idxs: SmallSet<Idx<Key>>,
-    // The flow styles from each branch in the merge
-    flow_styles: Vec<FlowStyle>,
+struct MergeItems(SmallMap<Name, Vec<FlowInfo>>);
+
+impl MergeItems {
+    pub fn new(presize_to: usize) -> Self {
+        Self(SmallMap::with_capacity(presize_to))
+    }
+
+    pub fn add_flow_info(&mut self, name: Hashed<Name>, flow_info: FlowInfo, n_branches: usize) {
+        match self.0.entry_hashed(name) {
+            Entry::Vacant(e) => {
+                let mut flow_infos = Vec::with_capacity(n_branches);
+                flow_infos.push(flow_info);
+                e.insert(flow_infos);
+            }
+            Entry::Occupied(mut e) => e.get_mut().push(flow_info),
+        }
+    }
 }
 
-impl MergeItem {
-    fn new(
-        name: Name,
-        range: TextRange,
-        info: FlowInfo,
-        n_branches: usize,
-        idx_for_promise: impl FnOnce(Key) -> Idx<Key>,
-    ) -> Self {
-        // We are promising to bind this key at the end of the merge (see `merged_flow_info`).
-        //
-        // Note that in loops, the speculative phi logic may have already inserted this key,
-        // in which case `idx_for_promise` will just give us back the idx we already created.
-        let phi_idx = idx_for_promise(Key::Phi(name, range));
-        let mut myself = Self {
-            phi_idx,
-            default: info.default,
-            branch_idxs: SmallSet::new(),
-            flow_styles: Vec::with_capacity(n_branches),
-        };
-        myself.add_branch(info);
-        myself
-    }
-
-    /// Add the flow info at the end of a branch to our merge item.
-    fn add_branch(&mut self, info: FlowInfo) {
-        if info.idx != self.phi_idx {
-            // Optimization: instead of x = phi(x, ...), we can skip the x.
-            // Avoids a recursive solving step later.
-            self.branch_idxs.insert(info.idx);
-        }
-        self.flow_styles.push(info.style);
-    }
-
+impl<'a> BindingsBuilder<'a> {
     /// Get the flow info for an item in the merged flow, which is a combination
     /// of the `phi_key` that will have the merged type information and the merged
     /// flow styles.
@@ -1762,50 +1812,124 @@ impl MergeItem {
     /// current merge. If so, we preserve the existing default; if not, the
     /// merged phi is the new default used for downstream loops.
     fn merged_flow_info(
-        self,
+        &mut self,
+        flow_infos: Vec<FlowInfo>,
         current_is_loop: bool,
-        contained_in_loop: bool,
-        insert_binding_idx: impl FnOnce(Idx<Key>, Binding),
+        phi_idx: Idx<Key>,
     ) -> FlowInfo {
+        let contained_in_loop = self.scopes.loop_depth() > 0;
+        // In a loop, an invariant is that if a name was defined above the loop, the
+        // default may be taken from any of the Flows and will not differ.
+        //
+        // If a name is first defined inside a loop, the defaults might
+        // differ but for valid code it won't matter because the phi won't appear
+        // recursively. Invalid code where assignment tries to use an
+        // uninitialized local can produce a cycle through Anywhere, but that's
+        // true even for straight-line control flow.
+        let default = flow_infos.first().unwrap().default;
+        // Collect the idxs.
+        //
+        // Skip over all branches whose value is the phi - this is only possible
+        // in loops, and it benefits us by:
+        // - Allowing us to skip over branches that either don't change the binding
+        //   at all or only perform narrow operations. In many cases, this can
+        //   allow us to avoid the loop recursion altogether.
+        // - Ensuring that even if we cannot eliminate the Phi, it won't be directly
+        //   recursive in itself (which just makes more work in the solver).
+        //
+        // Note that because the flow above the loop flows into the Phi, this
+        // can never result in empty `branch_idxs`.
+        //
+        // We keep track separately of `value_idxs` and `branch_idxs` so that
+        // we know whether to treat the Phi binding as a value or a narrow - it's
+        // a narrow only when all the value idxs are the same.
+        let mut value_idxs = SmallSet::with_capacity(flow_infos.len());
+        let mut branch_idxs = SmallSet::with_capacity(flow_infos.len());
+        let mut styles = Vec::with_capacity(flow_infos.len());
+        for flow_info in flow_infos.into_iter() {
+            let branch_idx = flow_info.idx();
+            if let Some(v) = flow_info.value {
+                if v.idx == phi_idx {
+                    continue;
+                }
+                if value_idxs.insert(v.idx) {
+                    // An invariant in Pyrefly is that we only set style when we
+                    // set a value, so duplicate value_idxs always have the same style.
+                    styles.push(v.style);
+                }
+            }
+            branch_idxs.insert(branch_idx);
+        }
         let downstream_idx = {
-            if self.branch_idxs.len() == 1 {
-                // There is only one key no matter the branch. Use a forward for the
-                // phi idx (which might be unused, but because of speculative phi if this
-                // is a loop we may have to put something at the phi) and use the original
-                // idx downstream.
-                let upstream_idx = self.branch_idxs.into_iter().next().unwrap();
-                insert_binding_idx(self.phi_idx, Binding::Forward(upstream_idx));
+            if branch_idxs.len() == 1 {
+                // We hit this case if no branch assigned or narrowed the name.
+                //
+                // In the case of loops, it depends on the removal of `phi_idx` above.
+                let upstream_idx = *branch_idxs.first().unwrap();
+                self.insert_binding_idx(phi_idx, Binding::Forward(upstream_idx));
                 upstream_idx
             } else if current_is_loop {
-                insert_binding_idx(
-                    self.phi_idx,
-                    Binding::Default(self.default, Box::new(Binding::Phi(self.branch_idxs))),
+                self.insert_binding_idx(
+                    phi_idx,
+                    Binding::Default(default, Box::new(Binding::Phi(branch_idxs))),
                 );
-                self.phi_idx
+                phi_idx
             } else {
-                insert_binding_idx(self.phi_idx, Binding::Phi(self.branch_idxs));
-                self.phi_idx
+                self.insert_binding_idx(phi_idx, Binding::Phi(branch_idxs));
+                phi_idx
             }
         };
-        FlowInfo {
-            idx: downstream_idx,
-            default: if contained_in_loop {
-                self.default
-            } else {
-                downstream_idx
+        let default = if contained_in_loop {
+            default
+        } else {
+            downstream_idx
+        };
+        match value_idxs.len() {
+            // If there are no values, then this name isn't assigned at all
+            // and is only narrowed (it's most likely a capture, but could be
+            // a local if the code we're analyzing is buggy)
+            0 => FlowInfo {
+                value: None,
+                narrow: Some(FlowNarrow {
+                    idx: downstream_idx,
+                }),
+                default,
             },
-            style: FlowStyle::merged(self.flow_styles),
+            // If there is exactly one value (after discarding the phi itself,
+            // for a loop), then the phi should be treated as a narrow, not a
+            // value, and the value should continue to point at upstream.
+            1 => FlowInfo {
+                value: Some(FlowValue {
+                    idx: *value_idxs.first().unwrap(),
+                    style: FlowStyle::merged(styles.into_iter()),
+                }),
+                narrow: Some(FlowNarrow {
+                    idx: downstream_idx,
+                }),
+                default,
+            },
+            // If there are multiple values, then the phi should be treated
+            // as a value (it may still include narrowed type information,
+            // but it is not reducible to just narrows).
+            _ => FlowInfo {
+                value: Some(FlowValue {
+                    idx: downstream_idx,
+                    style: FlowStyle::merged(styles.into_iter()),
+                }),
+                narrow: None,
+                default,
+            },
         }
     }
-}
 
-impl<'a> BindingsBuilder<'a> {
     fn merge_flow(&mut self, mut flows: Vec<Flow>, range: TextRange, is_loop: bool) -> Flow {
-        // Short circuit in the one case we know we safely can.
+        // Short circuit when there is only one flow.
         //
-        // Note that it is impossible to hit this in a loop, which is essential because we
-        // could panic due to unbound speculative Phi keys if we try to short circuit a loop.
-        if flows.len() == 1 && flows[0].has_terminated {
+        // Note that there are always at least two flows in a loop (some may
+        // have terminated, but this check happens prior to pruning terminated
+        // branches), which is essential because an early exit here could lead
+        // to us never creating bindings for speculative Phi keys.
+        if flows.len() == 1 {
             return flows.pop().unwrap();
         }
 
@@ -1823,37 +1947,25 @@ impl<'a> BindingsBuilder<'a> {
         };
 
         // Collect all the branches into a `MergeItem` per name we need to merge
-        let mut merge_items: SmallMap<Name, MergeItem> =
-            SmallMap::with_capacity(branches.first().map_or(0, |flow| flow.info.len()));
+        let mut merge_items = MergeItems::new(branches.first().unwrap().info.len());
         let n_branches = branches.len();
         for flow in branches {
             for (name, info) in flow.info.into_iter_hashed() {
-                match merge_items.entry_hashed(name) {
-                    Entry::Occupied(mut merge_item_entry) => {
-                        merge_item_entry.get_mut().add_branch(info)
-                    }
-                    Entry::Vacant(e) => {
-                        let name = e.key().clone();
-                        e.insert(MergeItem::new(name, range, info, n_branches, |key| {
-                            self.idx_for_promise(key)
-                        }));
-                    }
-                };
+                merge_items.add_flow_info(name, info, n_branches)
             }
         }
 
         // For each name and merge item, produce the merged FlowInfo for our new Flow
-        let mut res = SmallMap::with_capacity(merge_items.len());
-        for (name, merge_item) in merge_items.into_iter_hashed() {
-            res.insert_hashed(
-                name,
-                merge_item.merged_flow_info(is_loop, self.scopes.loop_depth() > 0, |key, value| {
-                    self.insert_binding_idx(key, value);
-                }),
-            );
+        let mut merged_flow_infos = SmallMap::with_capacity(merge_items.0.len());
+        for (name, flow_infos) in merge_items.0.into_iter_hashed() {
+            let phi_idx = self.idx_for_promise(Key::Phi(name.key().clone(), range));
+            merged_flow_infos
+                .insert_hashed(name, self.merged_flow_info(flow_infos, is_loop, phi_idx));
         }
+
+        // The resulting flow has terminated only if all branches had terminated.
         Flow {
-            info: res,
+            info: merged_flow_infos,
             has_terminated,
         }
     }
@@ -1879,8 +1991,22 @@ impl<'a> BindingsBuilder<'a> {
     /// Helper for loops, inserts a phi key for every name in the given flow.
     fn insert_phi_keys(&mut self, mut flow: Flow, range: TextRange) -> Flow {
         for (name, info) in flow.info.iter_mut() {
-            // The promise is that we will insert a Phi binding when the control flow merges.
-            info.idx = self.idx_for_promise(Key::Phi(name.clone(), range));
+            // We are promising to insert a bidning for this key when we merge the flow
+            let phi_idx = self.idx_for_promise(Key::Phi(name.clone(), range));
+            match &mut info.value {
+                Some(value) => {
+                    value.idx = phi_idx;
+                }
+                None => {
+                    // Because we don't yet know whether the name might be assigned, we have to
+                    // treat the phi as a value rather than a narrow here.
+                    info.value = Some(FlowValue {
+                        idx: phi_idx,
+                        style: FlowStyle::LoopRecursion,
+                    });
+                    info.narrow = None;
+                }
+            }
         }
         flow
     }

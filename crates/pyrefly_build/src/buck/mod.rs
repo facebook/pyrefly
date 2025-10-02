@@ -7,4 +7,4 @@
 
 pub mod buck_check;
 pub mod bxl;
-mod query;
+pub mod query;

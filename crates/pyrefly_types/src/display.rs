@@ -448,7 +448,13 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Forall(box Forall {
                 tparams,
                 body: Forallable::TypeAlias(ta),
-            }) => ta.fmt_with_type(f, &|t| self.display_internal(t), Some(tparams)),
+            }) => {
+                if is_toplevel {
+                    ta.fmt_with_type(f, &|t| self.display_internal(t), Some(tparams))
+                } else {
+                    write!(f, "{}", *ta.name)
+                }
+            }
             Type::Type(ty) => write!(f, "type[{}]", self.display_internal(ty)),
             Type::TypeGuard(ty) => write!(f, "TypeGuard[{}]", self.display_internal(ty)),
             Type::TypeIs(ty) => write!(f, "TypeIs[{}]", self.display_internal(ty)),
@@ -483,7 +489,13 @@ impl<'a> TypeDisplayContext<'a> {
                 AnyStyle::Explicit => write!(f, "Any"),
                 AnyStyle::Implicit | AnyStyle::Error => write!(f, "Unknown"),
             },
-            Type::TypeAlias(ta) => ta.fmt_with_type(f, &|t| self.display_internal(t), None),
+            Type::TypeAlias(ta) => {
+                if is_toplevel {
+                    ta.fmt_with_type(f, &|t| self.display_internal(t), None)
+                } else {
+                    write!(f, "{}", *ta.name)
+                }
+            }
             Type::SuperInstance(box (cls, obj)) => {
                 write!(f, "super[")?;
                 self.fmt_qname(cls.qname(), f)?;
@@ -569,6 +581,8 @@ pub mod tests {
     use crate::types::BoundMethodType;
     use crate::types::TParam;
     use crate::types::TParams;
+    use crate::types::TypeAlias;
+    use crate::types::TypeAliasStyle;
 
     pub fn fake_class(name: &str, module: &str, range: u32) -> Class {
         let mi = Module::new(
@@ -1026,6 +1040,27 @@ pub mod tests {
             ctx.display(&tuple).to_string(),
             "tuple[(hello: None, *, world: None) -> None]"
         );
+    }
+
+    #[test]
+    fn test_display_type_alias() {
+        let alias = Type::TypeAlias(TypeAlias::new(
+            Name::new_static("MyAlias"),
+            Type::None,
+            TypeAliasStyle::LegacyImplicit,
+        ));
+        let wrapped = Type::tuple(vec![alias.clone()]);
+        let type_of = Type::type_form(alias.clone());
+        let mut ctx = TypeDisplayContext::new(&[]);
+        // regular display
+        assert_eq!(ctx.display(&alias).to_string(), "None");
+        assert_eq!(ctx.display(&wrapped).to_string(), "tuple[MyAlias]");
+        assert_eq!(ctx.display(&type_of).to_string(), "type[MyAlias]");
+        // hover display
+        ctx.set_display_mode_to_hover();
+        assert_eq!(ctx.display(&alias).to_string(), "None");
+        assert_eq!(ctx.display(&wrapped).to_string(), "tuple[MyAlias]");
+        assert_eq!(ctx.display(&type_of).to_string(), "type[MyAlias]");
     }
 
     #[test]

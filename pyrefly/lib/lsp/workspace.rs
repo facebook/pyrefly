@@ -10,11 +10,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dupe::Dupe;
-use itertools::Itertools;
 use lsp_types::Url;
 use lsp_types::WorkspaceFoldersChangeEvent;
-use pyrefly_python::COMPILED_FILE_SUFFIXES;
-use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::arc_id::WeakArcId;
 use pyrefly_util::lock::Mutex;
@@ -27,7 +24,6 @@ use tracing::error;
 
 use crate::commands::config_finder::standard_config_finder;
 use crate::config::config::ConfigFile;
-use crate::config::config::ConfigSource;
 use crate::config::environment::environment::PythonEnvironment;
 use crate::config::finder::ConfigFinder;
 use crate::state::lsp::DisplayTypeErrors;
@@ -97,41 +93,6 @@ impl WeakConfigCache {
             eprintln!("Cleared {purged_config_count} dropped configs from config cache");
         }
         SmallSet::from_iter(configs.iter().filter_map(|c| c.upgrade()))
-    }
-
-    /// Given an [`ArcId<ConfigFile>`], get glob patterns that should be watched by a file watcher.
-    /// We return a tuple of root (non-pattern part of the path) and a pattern.
-    pub fn get_loaded_config_paths_to_watch(config: ArcId<ConfigFile>) -> Vec<(PathBuf, String)> {
-        let mut result = Vec::new();
-        let config_root = if let ConfigSource::File(config_path) = &config.source
-            && let Some(root) = config_path.parent()
-        {
-            Some(root)
-        } else {
-            config.source.root()
-        };
-        if let Some(config_root) = config_root {
-            ConfigFile::CONFIG_FILE_NAMES.iter().for_each(|config| {
-                result.push((config_root.to_path_buf(), format!("**/{config}")));
-            });
-        }
-        config
-            .search_path()
-            .chain(config.site_package_path())
-            .cartesian_product(PYTHON_EXTENSIONS.iter().chain(COMPILED_FILE_SUFFIXES))
-            .for_each(|(s, suffix)| {
-                result.push((s.to_owned(), format!("**/*.{suffix}")));
-            });
-        result
-    }
-
-    /// Get glob patterns to watch all Python files under [`ConfigFile::search_path`] and
-    /// [`ConfigFile::site_package_path`], clearing out any removed [`ConfigFile`]s as we go.
-    pub fn get_patterns_for_cached_configs(&self) -> Vec<(PathBuf, String)> {
-        self.clean_and_get_configs()
-            .into_iter()
-            .flat_map(Self::get_loaded_config_paths_to_watch)
-            .collect::<Vec<_>>()
     }
 }
 
@@ -222,7 +183,7 @@ impl Workspaces {
 
     pub fn config_finder(workspaces: &Arc<Workspaces>) -> ConfigFinder {
         let workspaces = workspaces.dupe();
-        standard_config_finder(Arc::new(move |dir, mut config| {
+        standard_config_finder(Arc::new(move |dir, mut config, config_errors| {
             if let Some(dir) = dir {
                 workspaces.get_with(dir.to_owned(), |w| {
                     if let Some(search_path) = w.search_path.clone() {
@@ -246,7 +207,7 @@ impl Workspaces {
 
             // we print the errors here instead of returning them since
             // it gives the most immediate feedback for config loading errors
-            for error in config.configure() {
+            for error in config_errors.into_iter().chain(config.configure()) {
                 error.print();
             }
             let config = ArcId::new(config);

@@ -1024,10 +1024,10 @@ impl<'a> Transaction<'a> {
         preference: &FindPreference,
     ) -> Option<(TextRangeWithModule, Option<TextRange>)> {
         match definition {
-            AttrDefinition::FullyResolved {
-                definition_range: text_range_with_module_info,
-                docstring_range,
-            } => Some((text_range_with_module_info, docstring_range)),
+            AttrDefinition::FullyResolved(text_range_with_module_info) => {
+                // TODO(kylei): attribute docstrings
+                Some((text_range_with_module_info, None))
+            }
             AttrDefinition::PartiallyResolvedImportedModuleAttribute { module_name } => {
                 let (handle, export) =
                     self.resolve_named_import(handle, module_name, attr_name.clone(), preference)?;
@@ -2350,7 +2350,7 @@ impl<'a> Transaction<'a> {
                 key @ Key::Definition(_) if containers => {
                     if let Some(ty) = self.get_type(handle, key) {
                         let e = match bindings.get(idx) {
-                            Binding::NameAssign(_, None, e) => match &**e {
+                            Binding::NameAssign(_, None, e, _) => match &**e {
                                 Expr::List(ExprList { elts, .. }) => {
                                     if elts.is_empty() {
                                         Some(&**e)
@@ -2443,7 +2443,7 @@ impl<'a> Transaction<'a> {
                         && let Some(ty) = self.get_type(handle, key) =>
                 {
                     let e = match bindings.get(idx) {
-                        Binding::NameAssign(_, None, e) => Some(&**e),
+                        Binding::NameAssign(_, None, e, _) => Some(&**e),
                         Binding::Expr(None, e) => Some(e),
                         _ => None,
                     };

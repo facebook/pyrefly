@@ -459,7 +459,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn as_class_info(&self, ty: Type) -> Vec<Type> {
         fn f<'a, Ans: LookupAnswer>(me: &AnswersSolver<'a, Ans>, t: Type, res: &mut Vec<Type>) {
             match t {
-                Type::Var(v) if let Some(_guard) = me.recurser.recurse(v) => {
+                Type::Var(v) if let Some(_guard) = me.recurse(v) => {
                     f(me, me.solver().force_var(v), res)
                 }
                 Type::ClassType(ref c)

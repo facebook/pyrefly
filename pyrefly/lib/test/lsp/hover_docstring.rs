@@ -166,6 +166,7 @@ Docstring Result: `Test docstring`
     );
 }
 
+// TODO(kylei): attribute docstrings
 #[test]
 fn method_test() {
     let code = r#"
@@ -181,13 +182,14 @@ print(Foo().f())
 # main.py
 5 | print(Foo().f())
                 ^
-Docstring Result: `Test docstring`
+Docstring Result: None
 "#
         .trim(),
         report.trim(),
     );
 }
 
+// TODO(kylei): attribute docstrings
 #[test]
 fn attribute_test() {
     let code = r#"
@@ -203,7 +205,7 @@ print(Foo.f())
 # main.py
 5 | print(Foo.f())
               ^
-Docstring Result: `Test docstring`
+Docstring Result: None
 "#
         .trim(),
         report.trim(),
@@ -240,6 +242,7 @@ Docstring Result: `Test docstring`
     );
 }
 
+// TODO(kylei): attribute docstrings
 #[test]
 fn cross_module_method_test() {
     let lib = r#"
@@ -261,7 +264,7 @@ print(Foo().f())
 # main.py
 3 | print(Foo().f())
                 ^
-Docstring Result: `Test docstring`
+Docstring Result: None
 
 
 # lib.py

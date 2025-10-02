@@ -17,7 +17,6 @@ use pyrefly_python::dunder;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Params;
 use pyrefly_types::simplify::unions;
-use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
@@ -84,7 +83,7 @@ use crate::types::types::Type;
 
 /// The result of looking up an attribute access on a class (either as an instance or a
 /// class access, and possibly through a special case lookup such as a type var with a bound).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ClassAttribute {
     /// A read-write attribute with a closed form type for both get and set actions.
     ReadWrite(Type),
@@ -957,19 +956,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn handle_django_enum_member_value(&self, ty: Type) -> Type {
-        // At runtime, Django uses only the first element of the tuple as the enum value,
-        // whereas the second value is assigned to the label
-        // so we should mimic the runtime behavior by extracting the first element of the tuple as the value
-        match &ty {
-            Type::Tuple(Tuple::Concrete(elts)) if !elts.is_empty() => match &elts[0] {
-                Type::Literal(lit) => Type::ClassType(lit.general_class_type(self.stdlib).clone()),
-                other => other.clone(),
-            },
-            _ => ty.clone(),
-        }
-    }
-
     pub fn calculate_class_field(
         &self,
         class: &Class,
@@ -1347,15 +1333,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 self.check_enum_value_annotation(&ty, &enum_value_ty, name, range, errors);
             }
-            let enum_ty = if enum_.is_django {
-                self.handle_django_enum_member_value(ty)
-            } else {
-                ty.clone()
-            };
             Type::Literal(Lit::Enum(Box::new(LitEnum {
                 class: enum_.cls.clone(),
                 member: name.clone(),
-                ty: enum_ty,
+                ty: ty.clone(),
             })))
         } else {
             ty
@@ -1761,10 +1742,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return;
         }
 
-        // TODO(zeina): skip private properties and dunder methods for now. This will need some special casing.
-        if (field_name.starts_with('_') && field_name.ends_with('_'))
-            || (field_name.starts_with("__") && !field_name.ends_with("__"))
-        {
+        // Object construction (`__new__` and `__init__`) should not participate in override checks
+        if field_name == &dunder::NEW || field_name == &dunder::INIT {
+            return;
+        }
+
+        // TODO(grievejia): In principle we should not really skip `__call__`. But the reality is that
+        // there are too many classes on typeshed whose `__call__` are marked as follows:
+        // ```
+        // def __call__(self, *args: Any, **kwds: Any) -> Any: ...
+        // ```
+        // If we follow our pre-existing subtyping rule, this kind of signature would be non-overridable
+        // -- any overrider must be able to take ANY arguments which can't be practical. We need to either
+        // special-case typeshed or special-case callable subtyping to make `__call__` override check more usable.
+        if field_name == &dunder::CALL {
+            return;
+        }
+
+        // Private attributes should not participate in overrload checks
+        if field_name.starts_with("__") && !field_name.ends_with("__") {
+            return;
+        }
+
+        // TODO: This should only be ignored when `cls` is a dataclass
+        if field_name == &dunder::POST_INIT {
+            return;
+        }
+
+        // TODO: This should only be ignored when `_ignore_` is defined on enums
+        if field_name.as_str() == "_ignore_" {
             return;
         }
 
@@ -2262,7 +2268,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Get the metaclass `__call__` method
     pub fn get_metaclass_dunder_call(&self, cls: &ClassType) -> Option<Type> {
         let metadata = self.get_metadata_for_class(cls.class_object());
-        let metaclass = metadata.metaclass()?;
+        let metaclass = metadata.custom_metaclass()?;
         let attr = self.get_class_member(metaclass.class_object(), &dunder::CALL)?;
         if attr.defined_on("builtins", "type") {
             // The behavior of `type.__call__` is already baked into our implementation of constructors,

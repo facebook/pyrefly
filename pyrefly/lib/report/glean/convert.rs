@@ -667,7 +667,7 @@ impl GleanState<'_> {
             self.make_fq_name_for_declaration(&param.name, &context.container, ScopeType::Local);
         decl_infos.push(self.variable_info(
             fqname,
-            param.range(),
+            param.name.range(),
             type_info.clone(),
             None,
             context,

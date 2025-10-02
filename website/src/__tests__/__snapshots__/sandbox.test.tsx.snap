@@ -17,6 +17,11 @@ exports[`Sandbox Component render sandbox correctly 1`] = `
         </button>
       </div>
       <div>
+        <button>
+          pyrefly.toml
+        </button>
+      </div>
+      <div>
         <button
           disabled=""
           title="Cannot delete sandbox.py"
@@ -118,54 +123,6 @@ reveal_type(test(42))
             ⚠️ Report Issue
           </span>
         </button>
-        <div>
-          <select
-            aria-label="Select Python version"
-          >
-            <option
-              value="3.8"
-            >
-              Python 
-              3.8
-            </option>
-            <option
-              value="3.9"
-            >
-              Python 
-              3.9
-            </option>
-            <option
-              value="3.10"
-            >
-              Python 
-              3.10
-            </option>
-            <option
-              value="3.11"
-            >
-              Python 
-              3.11
-            </option>
-            <option
-              value="3.12"
-            >
-              Python 
-              3.12
-            </option>
-            <option
-              value="3.13"
-            >
-              Python 
-              3.13
-            </option>
-            <option
-              value="3.14"
-            >
-              Python 
-              3.14
-            </option>
-          </select>
-        </div>
       </div>
     </div>
     <div
