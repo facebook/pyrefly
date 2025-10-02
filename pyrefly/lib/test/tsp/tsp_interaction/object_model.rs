@@ -159,6 +159,25 @@ impl TestTspServer {
         }));
     }
 
+    pub fn did_change_watched_files(&self, file: &'static str, change_type: &str) {
+        let path = self.get_root_or_panic().join(file);
+        let file_change_type = match change_type {
+            "created" => 1, // FileChangeType::CREATED
+            "changed" => 2, // FileChangeType::CHANGED  
+            "deleted" => 3, // FileChangeType::DELETED
+            _ => 2, // Default to changed
+        };
+        self.send_message(Message::Notification(Notification {
+            method: "workspace/didChangeWatchedFiles".to_owned(),
+            params: serde_json::json!({
+                "changes": [{
+                    "uri": Url::from_file_path(&path).unwrap().to_string(),
+                    "type": file_change_type
+                }]
+            }),
+        }));
+    }
+
     pub fn get_initialize_params(&self, settings: &InitializeSettings) -> Value {
         let mut params: Value = serde_json::json!({
             "rootPath": "/",
@@ -306,7 +325,7 @@ impl TspInteraction {
         let (language_server_sender, language_server_receiver) = bounded::<Message>(0);
 
         let args = TspArgs {
-            indexing_mode: IndexingMode::None,
+            indexing_mode: IndexingMode::LazyBlocking,
             workspace_indexing_limit: 0,
         };
         let connection = Connection {

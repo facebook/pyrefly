@@ -44,14 +44,14 @@ pub fn run_tsp(connection: Arc<Connection>, args: TspArgs) -> anyhow::Result<()>
     let lsp_queue = LspQueue::new();
     let lsp_server = Box::new(crate::lsp::server::Server::new(
         connection.dupe(),
-        lsp_queue,
+        lsp_queue.dupe(),
         initialization_params.clone(),
         args.indexing_mode,
         args.workspace_indexing_limit,
     ));
 
     // Reuse the existing lsp_loop but with TSP initialization
-    tsp_loop(lsp_server, connection, initialization_params)?;
+    tsp_loop(lsp_server, connection, initialization_params, lsp_queue)?;
     Ok(())
 }
 

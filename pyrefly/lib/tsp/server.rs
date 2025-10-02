@@ -38,7 +38,7 @@ impl TspServer {
     pub fn new(lsp_server: Box<dyn TspInterface>) -> Self {
         Self {
             inner: lsp_server,
-            current_snapshot: Arc::new(Mutex::new(-1)), // -1 indicates invalid.
+            current_snapshot: Arc::new(Mutex::new(0)), // Start at 0, increments on RecheckFinished
         }
     }
 
@@ -49,16 +49,18 @@ impl TspServer {
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent> {
-        // Handle TSP-specific logic for RecheckFinished to track snapshot updates
-        if let LspEvent::RecheckFinished = event {
-            // Update our snapshot when global state changes
-            if let Ok(mut current) = self.current_snapshot.lock()
-            {
-                *current = *current + 1;
-                eprintln!("TSP: Updated snapshot to {*current}");
-            }
-            // Continue to let the inner server handle RecheckFinished as well
-        }
+
+        // Remember if this event should increment the snapshot after processing
+        let should_increment_snapshot = match &event {
+            LspEvent::RecheckFinished => true,
+            // Increment on DidChange since it affects type checker state via synchronous validation
+            LspEvent::DidChangeTextDocument(_) => true,
+            // Don't increment on DidChangeWatchedFiles directly since it triggers RecheckFinished
+            // LspEvent::DidChangeWatchedFiles(_) => true,
+            // Don't increment on DidOpen since it triggers RecheckFinished events that will increment
+            // LspEvent::DidOpenTextDocument(_) => true,
+            _ => false,
+        };
 
         // For TSP requests, handle them specially
         if let LspEvent::LspRequest(ref request) = event {
@@ -75,12 +77,21 @@ impl TspServer {
         }
 
         // For all other events (notifications, responses, etc.), delegate to inner server
-        self.inner.process_event(
+        let result = self.inner.process_event(
             ide_transaction_manager,
             canceled_requests,
             subsequent_mutation,
             event,
-        )
+        )?;
+
+        // Increment snapshot after the inner server has processed the event
+        if should_increment_snapshot {
+            if let Ok(mut current) = self.current_snapshot.lock() {
+                *current += 1;
+            }
+        }
+
+        Ok(result)
     }
 
     fn handle_tsp_request<'a>(
@@ -129,10 +140,10 @@ pub fn tsp_loop(
     lsp_server: Box<dyn TspInterface>,
     connection: Arc<Connection>,
     _initialization_params: InitializeParams,
+    lsp_queue: LspQueue,
 ) -> anyhow::Result<()> {
     eprintln!("Reading TSP messages");
     let connection_for_dispatcher = connection.dupe();
-    let lsp_queue = LspQueue::new();
 
     let server = TspServer::new(lsp_server);
 
