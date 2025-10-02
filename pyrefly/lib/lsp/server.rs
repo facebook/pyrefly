@@ -224,6 +224,9 @@ pub trait TspInterface {
     /// Get access to the state for creating transactions
     fn state(&self) -> &Arc<State>;
 
+    /// Get access to the recheck queue for async task processing
+    fn recheck_queue(&self) -> &HeavyTaskQueue;
+
     /// Process an LSP event and return the next step
     fn process_event<'a>(
         &'a self,
@@ -2064,6 +2067,10 @@ impl TspInterface for Server {
 
     fn state(&self) -> &Arc<State> {
         &self.state
+    }
+
+    fn recheck_queue(&self) -> &HeavyTaskQueue {
+        &self.recheck_queue
     }
 
     fn process_event<'a>(

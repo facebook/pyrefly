@@ -147,6 +147,12 @@ pub fn tsp_loop(
 
     let server = TspServer::new(lsp_server);
 
+    // Start the recheck queue thread to process async tasks
+    let recheck_queue = server.inner.recheck_queue().dupe();
+    std::thread::spawn(move || {
+        recheck_queue.run_until_stopped();
+    });
+
     let lsp_queue2 = lsp_queue.dupe();
     std::thread::spawn(move || {
         dispatch_lsp_events(&connection_for_dispatcher, lsp_queue2);

@@ -61,9 +61,8 @@ version = "1.0.0"
 
 #[test]
 fn test_tsp_snapshot_updates_on_file_change() {
-    // Test that DidChangeWatchedFiles events are properly received and processed
-    // Note: In test environment, async recheck tasks don't execute, so snapshot doesn't increment
-    // but we verify that the mechanism is correctly triggered
+    // Test that DidChangeWatchedFiles events trigger async recheck and update snapshots
+    // With the recheck queue thread running, async tasks should execute and generate RecheckFinished events
     let temp_dir = TempDir::new().unwrap();
     let test_file_path = temp_dir.path().join("changing_test.py");
 
@@ -115,15 +114,16 @@ y = "hello"
     // Simulate the LSP DidChangeWatchedFiles notification for the file change
     tsp.server.did_change_watched_files("changing_test.py", "changed");
 
-    // Get snapshot immediately after DidChangeWatchedFiles 
-    // Note: In test environment, async recheck tasks don't execute, so snapshot remains at 2
-    // In real environment, this would trigger invalidate() -> async task -> RecheckFinished -> snapshot increment
+    // Wait for the async RecheckFinished event to be processed
+    tsp.client.expect_any_message();
+
+    // Get snapshot after async recheck completes
     tsp.server.get_snapshot();
 
-    // Expect snapshot to remain at 1 in test environment (async task doesn't execute)
+    // Expect snapshot to be incremented to 2 after RecheckFinished from file change
     tsp.client.expect_response(Response {
         id: RequestId::from(3),
-        result: Some(serde_json::json!(1)), // Remains 1 because async recheck doesn't execute in tests
+        result: Some(serde_json::json!(2)), // Should be 2 after RecheckFinished from file change
         error: None,
     });
 
