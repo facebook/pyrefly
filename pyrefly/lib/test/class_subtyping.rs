@@ -261,3 +261,16 @@ class B(type(A)):  # E: Invalid expression form for base class: `type(A)`
 assert_type(B.x, Any)
     "#,
 );
+
+testcase!(
+    test_multiple_inheritance_incompatible_field,
+    r#"
+class Foo:
+    p: int
+class Bar:
+    p: str
+
+class Both(Foo, Bar): # E: Inconsistent types for field `p` inherited from multiple base classes: `int` from `Foo`, `str` from `Bar`
+    ...
+"#,
+);
