@@ -311,15 +311,28 @@ impl<'a> TypeDisplayContext<'a> {
                 }
             }
             Type::Overload(overload) => {
-                write!(
-                    f,
-                    "Overload[{}",
-                    self.display_internal(&overload.signatures.first().as_type())
-                )?;
-                for sig in overload.signatures.iter().skip(1) {
-                    write!(f, ", {}", self.display_internal(&sig.as_type()))?;
+                if self.hover && is_toplevel {
+                    let func_name = overload.metadata.kind.as_func_id().func;
+                    write!(
+                        f,
+                        "@overload\ndef {func_name}{}",
+                        self.display_internal(&overload.signatures.first().as_type())
+                    )?;
+                    for sig in overload.signatures.iter().skip(1) {
+                        write!(f, "\ndef {func_name}{}", self.display(&sig.as_type()))?;
+                    }
+                    Ok(())
+                } else {
+                    write!(
+                        f,
+                        "Overload[{}",
+                        self.display_internal(&overload.signatures.first().as_type())
+                    )?;
+                    for sig in overload.signatures.iter().skip(1) {
+                        write!(f, ", {}", self.display_internal(&sig.as_type()))?;
+                    }
+                    write!(f, "]")
                 }
-                write!(f, "]")
             }
             Type::ParamSpecValue(x) => {
                 write!(f, "[")?;
@@ -554,15 +567,18 @@ pub mod tests {
 
     use dupe::Dupe;
     use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::nesting_context::NestingContext;
     use pyrefly_util::uniques::UniqueFactory;
     use ruff_python_ast::Identifier;
     use ruff_text_size::TextSize;
+    use vec1::vec1;
 
     use super::*;
     use crate::callable::Callable;
     use crate::callable::FuncMetadata;
+    use crate::callable::Function;
     use crate::callable::Param;
     use crate::callable::ParamList;
     use crate::callable::Required;
@@ -579,6 +595,8 @@ pub mod tests {
     use crate::type_var::TypeVar;
     use crate::typed_dict::TypedDict;
     use crate::types::BoundMethodType;
+    use crate::types::Overload;
+    use crate::types::OverloadType;
     use crate::types::TParam;
     use crate::types::TParams;
     use crate::types::TypeAlias;
@@ -1206,6 +1224,76 @@ pub mod tests {
             ctx.display(&bound_method).to_string(),
             r#"def foo[T](
     self: Any,
+    x: Any,
+    y: Any
+) -> None"#
+        );
+    }
+
+    #[test]
+    fn test_display_overload() {
+        let sig1 = Function {
+            signature: Callable::list(
+                ParamList::new(vec![Param::Pos(
+                    Name::new_static("x"),
+                    Type::any_explicit(),
+                    Required::Required,
+                )]),
+                Type::None,
+            ),
+            metadata: FuncMetadata::def(
+                ModuleName::from_str("test"),
+                Name::new_static("TestClass"),
+                Name::new_static("overloaded_func"),
+            ),
+        };
+
+        let sig2 = Function {
+            signature: Callable::list(
+                ParamList::new(vec![
+                    Param::Pos(
+                        Name::new_static("x"),
+                        Type::any_explicit(),
+                        Required::Required,
+                    ),
+                    Param::Pos(
+                        Name::new_static("y"),
+                        Type::any_explicit(),
+                        Required::Required,
+                    ),
+                ]),
+                Type::None,
+            ),
+            metadata: FuncMetadata::def(
+                ModuleName::from_str("test"),
+                Name::new_static("TestClass"),
+                Name::new_static("overloaded_func"),
+            ),
+        };
+
+        let overload = Type::Overload(Overload {
+            signatures: vec1![
+                OverloadType::Function(sig1.clone()),
+                OverloadType::Function(sig2.clone())
+            ],
+            metadata: Box::new(sig1.metadata),
+        });
+
+        // Test compact display mode (non-hover)
+        let ctx = TypeDisplayContext::new(&[&overload]);
+        assert_eq!(
+            ctx.display(&overload).to_string(),
+            "Overload[(x: Any) -> None, (x: Any, y: Any) -> None]"
+        );
+
+        // Test hover display mode (with @overload decorators)
+        let mut hover_ctx = TypeDisplayContext::new(&[&overload]);
+        hover_ctx.set_display_mode_to_hover();
+        assert_eq!(
+            hover_ctx.display(&overload).to_string(),
+            r#"@overload
+def overloaded_func(x: Any) -> None
+def overloaded_func(
     x: Any,
     y: Any
 ) -> None"#
