@@ -1002,11 +1002,23 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             {
                 self.is_subset_eq(&got, want)
             }
-            (Type::ClassType(got), Type::SelfType(want)) => ok_or(
-                self.type_order
-                    .has_superclass(got.class_object(), want.class_object()),
-                SubsetError::Other,
-            ),
+            (Type::ClassType(got), Type::SelfType(want)) => {
+                let has_superclass = self.type_order
+                    .has_superclass(got.class_object(), want.class_object());
+                // Only apply the finality check when:
+                // 1. The classes are the same
+                // 2. Both have no type arguments (i.e., they're the exact same bare type)
+                // This ensures NonFinalClass is not assignable to Self@NonFinalClass,
+                // but allows partial[int, str] to be assignable to Self@partial
+                let is_same_bare_class = got.class_object() == want.class_object()
+                    && got.targs().is_empty()
+                    && want.targs().is_empty();
+                let is_final = self.type_order.is_final(got.class_object());
+                ok_or(
+                    has_superclass && (!is_same_bare_class || is_final),
+                    SubsetError::Other,
+                )
+            },
             (Type::Type(box Type::ClassType(got)), Type::SelfType(want)) => ok_or(
                 self.type_order.has_metaclass(got.class_object(), want),
                 SubsetError::Other,

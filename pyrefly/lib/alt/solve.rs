@@ -2679,27 +2679,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             &|| TypeCheckContext::of_kind(TypeCheckKind::TypeGuardReturn);
                         self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors)
                     } else {
-                        if let Some(Type::SelfType(want_class)) = hint.as_ref()
-                            && !self.type_order().is_final(want_class.class_object())
-                        {
-                            let expr_type = self.expr(expr, None, errors);
-                            if let Type::ClassType(got_class) = &expr_type
-                                && got_class.class_object() == want_class.class_object()
-                            {
-                                self.error(
-                                            errors,
-                                            expr.range(),
-                                            ErrorInfo::Kind(ErrorKind::BadReturn),
-                                            format!(
-                                                "Returned type `{}` is not assignable to declared return type `Self@{}`",
-                                                got_class.class_object().name(),
-                                                want_class.class_object().name()
-                                            ),
-                                        );
-                            }
-                            return expr_type;
-                        }
-
                         let tcc: &dyn Fn() -> TypeCheckContext =
                             &|| TypeCheckContext::of_kind(TypeCheckKind::ExplicitFunctionReturn);
                         self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors)
