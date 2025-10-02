@@ -49,7 +49,6 @@ impl TspServer {
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent> {
-
         // Remember if this event should increment the snapshot after processing
         let should_increment_snapshot = match &event {
             LspEvent::RecheckFinished => true,

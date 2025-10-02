@@ -52,7 +52,7 @@ version = "1.0.0"
     // Expect snapshot response with integer (should increment after RecheckFinished from indexing)
     tsp.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!(1)), 
+        result: Some(serde_json::json!(1)),
         error: None,
     });
 
@@ -99,7 +99,7 @@ version = "1.0.0"
     // Expect first snapshot response
     tsp.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!(1)), 
+        result: Some(serde_json::json!(1)),
         error: None,
     });
 
@@ -112,7 +112,8 @@ y = "hello"
     std::fs::write(&test_file_path, updated_content).unwrap();
 
     // Simulate the LSP DidChangeWatchedFiles notification for the file change
-    tsp.server.did_change_watched_files("changing_test.py", "changed");
+    tsp.server
+        .did_change_watched_files("changing_test.py", "changed");
 
     // Wait for the async RecheckFinished event to be processed
     tsp.client.expect_any_message();
@@ -185,7 +186,7 @@ y = 'updated'
 
     // Get updated snapshot
     tsp.server.get_snapshot();
-    
+
     // Expect second snapshot response - should be incremented due to didChange
     tsp.client.expect_response(Response {
         id: RequestId::from(3),

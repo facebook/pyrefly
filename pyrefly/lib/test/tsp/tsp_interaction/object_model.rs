@@ -163,9 +163,9 @@ impl TestTspServer {
         let path = self.get_root_or_panic().join(file);
         let file_change_type = match change_type {
             "created" => 1, // FileChangeType::CREATED
-            "changed" => 2, // FileChangeType::CHANGED  
+            "changed" => 2, // FileChangeType::CHANGED
             "deleted" => 3, // FileChangeType::DELETED
-            _ => 2, // Default to changed
+            _ => 2,         // Default to changed
         };
         self.send_message(Message::Notification(Notification {
             method: "workspace/didChangeWatchedFiles".to_owned(),
