@@ -12,11 +12,13 @@ use std::os::unix::fs::PermissionsExt;
 
 use lsp_server::Message;
 use lsp_server::Notification;
+use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeWorkspaceFolders;
 use lsp_types::notification::Notification as _;
+use pyrefly_util::fs_anyhow::write;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
