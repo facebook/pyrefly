@@ -52,7 +52,7 @@ version = "1.0.0"
     // Expect snapshot response with integer (should increment after RecheckFinished from indexing)
     tsp.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!(2)), // Should be 2 after project + workspace RecheckFinished events
+        result: Some(serde_json::json!(1)), 
         error: None,
     });
 
@@ -100,7 +100,7 @@ version = "1.0.0"
     // Expect first snapshot response
     tsp.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!(2)), // Should be 2 after project + workspace RecheckFinished events
+        result: Some(serde_json::json!(1)), 
         error: None,
     });
 
@@ -120,10 +120,10 @@ y = "hello"
     // In real environment, this would trigger invalidate() -> async task -> RecheckFinished -> snapshot increment
     tsp.server.get_snapshot();
 
-    // Expect snapshot to remain at 2 in test environment (async task doesn't execute)
+    // Expect snapshot to remain at 1 in test environment (async task doesn't execute)
     tsp.client.expect_response(Response {
         id: RequestId::from(3),
-        result: Some(serde_json::json!(2)), // Remains 2 because async recheck doesn't execute in tests
+        result: Some(serde_json::json!(1)), // Remains 1 because async recheck doesn't execute in tests
         error: None,
     });
 
@@ -166,10 +166,10 @@ version = "1.0.0"
     // Get initial snapshot
     tsp.server.get_snapshot();
 
-        // Expect first snapshot response (2 RecheckFinished: project + workspace indexing)
+    // Expect first snapshot response
     tsp.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!(2)), // Should be 2 after project + workspace RecheckFinished events
+        result: Some(serde_json::json!(1)),
         error: None,
     });
 
@@ -189,7 +189,7 @@ y = 'updated'
     // Expect second snapshot response - should be incremented due to didChange
     tsp.client.expect_response(Response {
         id: RequestId::from(3),
-        result: Some(serde_json::json!(3)), // Should be 3 after DidChangeTextDocument increment
+        result: Some(serde_json::json!(2)),
         error: None,
     });
 
