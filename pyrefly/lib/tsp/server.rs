@@ -38,7 +38,7 @@ impl TspServer {
     pub fn new(lsp_server: Box<dyn TspInterface>) -> Self {
         Self {
             inner: lsp_server,
-            current_snapshot: Arc::new(Mutex::new(0)), // Initialize with epoch 0
+            current_snapshot: Arc::new(Mutex::new(-1)), // -1 indicates invalid.
         }
     }
 
@@ -52,14 +52,10 @@ impl TspServer {
         // Handle TSP-specific logic for RecheckFinished to track snapshot updates
         if let LspEvent::RecheckFinished = event {
             // Update our snapshot when global state changes
-            let transaction =
-                ide_transaction_manager.non_committable_transaction(self.inner.state());
-            let new_snapshot = transaction.current_epoch().as_u32() as i32;
             if let Ok(mut current) = self.current_snapshot.lock()
-                && *current != new_snapshot
             {
-                *current = new_snapshot;
-                eprintln!("TSP: Updated snapshot to {new_snapshot}");
+                *current = *current + 1;
+                eprintln!("TSP: Updated snapshot to {*current}");
             }
             // Continue to let the inner server handle RecheckFinished as well
         }

@@ -91,10 +91,65 @@ y = "hello"
     // Get updated snapshot - snapshot tracking works automatically via RecheckFinished
     tsp.server.get_snapshot();
 
+    // Expect second snapshot response (value may be same or different)
+    tsp.client.expect_response(Response {
+        id: RequestId::from(3),
+        result: Some(serde_json::json!(3)),
+        error: None,
+    });
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_tsp_snapshot_updates_on_did_change() {
+    // Test that didChange events cause snapshot to update
+    let temp_dir = TempDir::new().unwrap();
+    let test_file_path = temp_dir.path().join("change_test.py");
+
+    let initial_content = r#"# Initial content
+x = 1
+"#;
+
+    std::fs::write(&test_file_path, initial_content).unwrap();
+
+    let mut tsp = TspInteraction::new();
+    tsp.set_root(temp_dir.path().to_path_buf());
+    tsp.initialize(Default::default());
+
+    // Open the test file
+    tsp.server.did_open("change_test.py");
+
+    // Wait for any diagnostics/RecheckFinished events from opening
+    tsp.client.expect_any_message();
+
+    // Get initial snapshot
+    tsp.server.get_snapshot();
+
     // Expect second snapshot response (value may be same since file watching is complex)
     tsp.client.expect_response(Response {
         id: RequestId::from(3),
-        result: Some(serde_json::json!(0)), // May still be 0 without proper file watching
+        result: Some(serde_json::json!(1)),
+        error: None,
+    });
+
+    // Send a didChange notification with updated content
+    let changed_content = r#"# Changed content
+x = 2
+y = 'updated'
+"#;
+    tsp.server.did_change("change_test.py", changed_content, 2);
+
+    // Wait for any RecheckFinished events triggered by the change
+    tsp.client.expect_any_message();
+
+    // Get updated snapshot - should potentially be incremented due to RecheckFinished
+    tsp.server.get_snapshot();
+    
+    // Expect second snapshot response (value may be same since file watching is complex)
+    tsp.client.expect_response(Response {
+        id: RequestId::from(3),
+        result: Some(serde_json::json!(2)), 
         error: None,
     });
 

@@ -143,6 +143,22 @@ impl TestTspServer {
         }));
     }
 
+    pub fn did_change(&self, file: &'static str, content: &str, version: i32) {
+        let path = self.get_root_or_panic().join(file);
+        self.send_message(Message::Notification(Notification {
+            method: "textDocument/didChange".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&path).unwrap().to_string(),
+                    "version": version
+                },
+                "contentChanges": [{
+                    "text": content
+                }]
+            }),
+        }));
+    }
+
     pub fn get_initialize_params(&self, settings: &InitializeSettings) -> Value {
         let mut params: Value = serde_json::json!({
             "rootPath": "/",
@@ -251,6 +267,21 @@ impl TestTspClient {
         match self.receiver.recv_timeout(self.timeout) {
             Ok(msg) => {
                 eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                panic!("Timeout waiting for response");
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                panic!("Channel disconnected");
+            }
+        }
+    }
+
+    pub fn receive_any_message(&self) -> Message {
+        match self.receiver.recv_timeout(self.timeout) {
+            Ok(msg) => {
+                eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
+                msg
             }
             Err(RecvTimeoutError::Timeout) => {
                 panic!("Timeout waiting for response");

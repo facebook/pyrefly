@@ -18,11 +18,6 @@ impl Epoch {
     pub fn next(&mut self) {
         self.0 += 1;
     }
-
-    /// Get the epoch value as an integer
-    pub fn as_u32(self) -> u32 {
-        self.0
-    }
 }
 
 /// Invariant: checked >= computed >= changed

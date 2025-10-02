@@ -295,11 +295,6 @@ impl<'a> Transaction<'a> {
         self.data.subscriber = subscriber;
     }
 
-    /// Get the current epoch of this transaction
-    pub fn current_epoch(&self) -> Epoch {
-        self.data.now
-    }
-
     pub fn get_solutions(&self, handle: &Handle) -> Option<Arc<Solutions>> {
         self.with_module_inner(handle, |x| x.steps.solutions.dupe())
     }
