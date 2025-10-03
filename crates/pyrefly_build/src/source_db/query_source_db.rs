@@ -20,12 +20,12 @@ use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::info;
 
-use crate::buck::query::BxlArgs;
-use crate::buck::query::Include;
-use crate::buck::query::PythonLibraryManifest;
-use crate::buck::query::TargetManifestDatabase;
-use crate::buck::query::query_source_db;
 use crate::handle::Handle;
+use crate::query::buck::BxlArgs;
+use crate::query::buck::Include;
+use crate::query::buck::PythonLibraryManifest;
+use crate::query::buck::TargetManifestDatabase;
+use crate::query::buck::query_source_db;
 use crate::source_db::SourceDatabase;
 use crate::source_db::Target;
 
@@ -52,7 +52,7 @@ impl Inner {
 }
 
 #[derive(Debug)]
-pub struct BuckSourceDatabase {
+pub struct QuerySourceDatabase {
     inner: RwLock<Inner>,
     /// The set of items the sourcedb has been queried for. Not all of the targets
     /// or files listed here will necessarily appear in the sourcedb, for example,
@@ -64,9 +64,9 @@ pub struct BuckSourceDatabase {
     bxl_args: BxlArgs,
 }
 
-impl BuckSourceDatabase {
+impl QuerySourceDatabase {
     pub fn new(cwd: PathBuf, bxl_args: BxlArgs) -> Self {
-        BuckSourceDatabase {
+        QuerySourceDatabase {
             cwd,
             inner: RwLock::new(Inner::new()),
             includes: Mutex::new(SmallSet::new()),
@@ -100,7 +100,7 @@ impl BuckSourceDatabase {
     }
 }
 
-impl SourceDatabase for BuckSourceDatabase {
+impl SourceDatabase for QuerySourceDatabase {
     fn modules_to_check(&self) -> Vec<crate::handle::Handle> {
         // TODO(connernilsen): implement modules_to_check
         vec![]
@@ -206,9 +206,9 @@ mod tests {
     use starlark_map::smallset;
 
     use super::*;
-    use crate::buck::query::TargetManifest;
+    use crate::query::buck::TargetManifest;
 
-    impl BuckSourceDatabase {
+    impl QuerySourceDatabase {
         fn from_target_manifest_db(
             raw_db: TargetManifestDatabase,
             files: &SmallSet<PathBuf>,
@@ -229,7 +229,7 @@ mod tests {
         }
     }
 
-    fn get_db() -> (BuckSourceDatabase, PathBuf) {
+    fn get_db() -> (QuerySourceDatabase, PathBuf) {
         let raw_db = TargetManifestDatabase::get_test_database();
         let root = raw_db.root.to_path_buf();
         let files = smallset! {
@@ -238,7 +238,7 @@ mod tests {
         };
 
         (
-            BuckSourceDatabase::from_target_manifest_db(raw_db, &files),
+            QuerySourceDatabase::from_target_manifest_db(raw_db, &files),
             root,
         )
     }

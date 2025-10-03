@@ -18,7 +18,7 @@ use anstream::ColorChoice;
 use anyhow::anyhow;
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
-use pyrefly_build::map_db::MapDatabase;
+use pyrefly_build::source_db::map_db::MapDatabase;
 use pyrefly_config::error::ErrorDisplayConfig;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;

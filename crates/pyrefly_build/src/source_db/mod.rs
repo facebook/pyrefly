@@ -24,6 +24,10 @@ use static_interner::Interner;
 
 use crate::handle::Handle;
 
+pub mod buck_check;
+pub mod map_db;
+pub(crate) mod query_source_db;
+
 // We're interning `Target`s, since they'll be duplicated all over the place,
 // and it would be nice to have something that implements `Copy`.
 // We choose Interning over `Arc`, since we want to make sure all `Target`s
