@@ -6,6 +6,7 @@
  */
 
 use std::ffi::OsStr;
+use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -41,6 +42,14 @@ impl Include {
             Include::Path(path) => [OsStr::new("--file"), path.as_os_str()].into_iter(),
         }
     }
+}
+
+pub(crate) trait SourceDbQuerier: Send + Sync + fmt::Debug {
+    fn query_source_db(
+        &self,
+        files: &SmallSet<Include>,
+        cwd: &Path,
+    ) -> anyhow::Result<TargetManifestDatabase>;
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]

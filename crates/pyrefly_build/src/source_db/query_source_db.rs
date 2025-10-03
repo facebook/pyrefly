@@ -8,6 +8,7 @@
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
@@ -23,9 +24,8 @@ use tracing::info;
 use crate::handle::Handle;
 use crate::query::Include;
 use crate::query::PythonLibraryManifest;
+use crate::query::SourceDbQuerier;
 use crate::query::TargetManifestDatabase;
-use crate::query::buck::BxlArgs;
-use crate::query::buck::query_source_db;
 use crate::source_db::SourceDatabase;
 use crate::source_db::Target;
 
@@ -61,16 +61,16 @@ pub struct QuerySourceDatabase {
     /// The directory that will be passed into the sourcedb query shell-out. Should
     /// be the same as the directory containing the config this sourcedb is a part of.
     cwd: PathBuf,
-    bxl_args: BxlArgs,
+    querier: Arc<dyn SourceDbQuerier>,
 }
 
 impl QuerySourceDatabase {
-    pub fn new(cwd: PathBuf, bxl_args: BxlArgs) -> Self {
+    pub fn new(cwd: PathBuf, querier: Arc<dyn SourceDbQuerier>) -> Self {
         QuerySourceDatabase {
             cwd,
             inner: RwLock::new(Inner::new()),
             includes: Mutex::new(SmallSet::new()),
-            bxl_args,
+            querier,
         }
     }
 
@@ -176,7 +176,7 @@ impl SourceDatabase for QuerySourceDatabase {
         }
         *includes = new_includes;
         info!("Querying Buck for source DB");
-        let raw_db = query_source_db(includes.iter(), &self.cwd, &self.bxl_args)?;
+        let raw_db = self.querier.query_source_db(&includes, &self.cwd)?;
         info!("Finished querying Buck for source DB");
         Ok(self.update_with_target_manifest(raw_db))
     }
@@ -208,6 +208,19 @@ mod tests {
     use super::*;
     use crate::query::TargetManifest;
 
+    #[derive(Debug)]
+    struct DummyQuerier {}
+
+    impl SourceDbQuerier for DummyQuerier {
+        fn query_source_db(
+            &self,
+            _: &SmallSet<Include>,
+            _: &Path,
+        ) -> anyhow::Result<TargetManifestDatabase> {
+            Ok(TargetManifestDatabase::get_test_database())
+        }
+    }
+
     impl QuerySourceDatabase {
         fn from_target_manifest_db(
             raw_db: TargetManifestDatabase,
@@ -222,7 +235,7 @@ mod tests {
                         .collect(),
                 ),
                 cwd: PathBuf::new(),
-                bxl_args: Default::default(),
+                querier: Arc::new(DummyQuerier {}),
             };
             new.update_with_target_manifest(raw_db);
             new
