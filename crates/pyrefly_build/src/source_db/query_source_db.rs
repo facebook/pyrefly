@@ -21,10 +21,10 @@ use tracing::debug;
 use tracing::info;
 
 use crate::handle::Handle;
+use crate::query::Include;
+use crate::query::PythonLibraryManifest;
+use crate::query::TargetManifestDatabase;
 use crate::query::buck::BxlArgs;
-use crate::query::buck::Include;
-use crate::query::buck::PythonLibraryManifest;
-use crate::query::buck::TargetManifestDatabase;
 use crate::query::buck::query_source_db;
 use crate::source_db::SourceDatabase;
 use crate::source_db::Target;
@@ -206,7 +206,7 @@ mod tests {
     use starlark_map::smallset;
 
     use super::*;
-    use crate::query::buck::TargetManifest;
+    use crate::query::TargetManifest;
 
     impl QuerySourceDatabase {
         fn from_target_manifest_db(
