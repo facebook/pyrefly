@@ -27,6 +27,7 @@
 #![feature(if_let_guard)]
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -37,6 +38,7 @@ pub use source_db::SourceDatabase;
 mod query;
 
 use crate::query::buck::BxlArgs;
+use crate::query::buck::BxlQuerier;
 use crate::source_db::query_source_db::QuerySourceDatabase;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -51,7 +53,10 @@ impl BuildSystem {
         config_root: PathBuf,
     ) -> Box<dyn source_db::SourceDatabase + 'static> {
         match &self {
-            Self::Buck(args) => Box::new(QuerySourceDatabase::new(config_root, args.clone())),
+            Self::Buck(args) => Box::new(QuerySourceDatabase::new(
+                config_root,
+                Arc::new(BxlQuerier::new(args.clone())),
+            )),
         }
     }
 }
