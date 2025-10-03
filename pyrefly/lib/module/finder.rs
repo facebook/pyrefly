@@ -52,6 +52,14 @@ impl FindResult {
         }
     }
 
+    fn style(&self) -> Option<ModuleStyle> {
+        match self {
+            Self::SingleFilePyiModule(_) => Some(ModuleStyle::Interface),
+            Self::SingleFilePyModule(_) => Some(ModuleStyle::Executable),
+            _ => None,
+        }
+    }
+
     /// Compares the given `FindResult`s, taking the variant with the highest priority,
     /// and preferring variant `a` (the 'earlier' variant). The contents of the variants
     /// are not compared.
@@ -110,8 +118,8 @@ fn find_one_part_in_root(
         if candidate_path.exists() {
             let result = FindResult::single_file(candidate_path.clone(), candidate_file_suffix);
             if let Some(filter) = style_filter {
-                if let Ok(module_path) = result.clone().module_path()
-                    && module_path.style() == filter
+                if let Some(style) = result.style()
+                    && style == filter
                 {
                     return Some(result);
                 }
