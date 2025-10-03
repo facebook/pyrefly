@@ -661,6 +661,56 @@ def f(x: str | int | None):
 );
 
 testcase!(
+    test_truthiness_known_builtins_constructors,
+    r#"
+from typing import assert_type
+
+def g1():
+    if list():
+        y = "bad"
+    else:
+        y = 42
+    assert_type(y, int)
+
+    if dict():
+        a = "bad"
+    else:
+        a = 1
+    assert_type(a, int)
+
+    if set():
+        b = "bad"
+    else:
+        b = 3
+    assert_type(b, int)
+
+    if tuple():
+        c = "bad"
+    else:
+        c = 4
+    assert_type(c, int)
+
+    if str():
+        d = "bad"
+    else:
+        d = 5
+    assert_type(d, int)
+
+    if int():
+        e = "bad"
+    else:
+        e = 6
+    assert_type(e, int)
+
+    if object():
+        f = 7
+    else:
+        f = "bad"
+    assert_type(f, int)
+    "#,
+);
+
+testcase!(
     test_isinstance_of_tuple,
     r#"
 from typing import assert_type

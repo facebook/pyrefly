@@ -346,10 +346,69 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .into_ty();
                 self.check_dunder_bool_is_callable(&condition_type, x.range(), errors);
                 self.check_redundant_condition(&condition_type, x.range(), errors);
-                match self.as_bool(&condition_type, x.test.range(), errors) {
-                    Some(true) => body_type,
-                    Some(false) => orelse_type,
-                    None => self.union(body_type, orelse_type),
+                // Special-case truthiness of certain built-in constructors with no arguments.
+                // E.g., list(), dict(), set(), tuple(), str(), int() are all falsy; object() is truthy.
+                let constructor_truthiness = if let Expr::Call(call) = &*x.test {
+                    if call.arguments.args.is_empty() && call.arguments.keywords.is_empty() {
+                        // Prefer a fast syntactic check for common builtins, then fall back to type-based check.
+                        if let Expr::Name(func_name) = &*call.func {
+                            match func_name.id.as_str() {
+                                "object" => Some(true),
+                                "list" | "dict" | "set" | "tuple" | "str" | "int" | "bool" => Some(false),
+                                _ => None,
+                            }
+                        } else {
+                            let func_ty = self.expr_infer(&call.func, errors);
+                            match &func_ty {
+                            Type::ClassType(cls) => {
+                                if cls.is_builtin("object") {
+                                    Some(true)
+                                } else if cls.is_builtin("list")
+                                    || cls.is_builtin("dict")
+                                    || cls.is_builtin("set")
+                                    || cls.is_builtin("tuple")
+                                    || cls.is_builtin("str")
+                                    || cls.is_builtin("int")
+                                    || cls.is_builtin("bool")
+                                {
+                                    Some(false)
+                                } else {
+                                    None
+                                }
+                            }
+                            Type::ClassDef(c) => {
+                                if c.is_builtin("object") {
+                                    Some(true)
+                                } else if c.is_builtin("list")
+                                    || c.is_builtin("dict")
+                                    || c.is_builtin("set")
+                                    || c.is_builtin("tuple")
+                                    || c.is_builtin("str")
+                                    || c.is_builtin("int")
+                                    || c.is_builtin("bool")
+                                {
+                                    Some(false)
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        }
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                match constructor_truthiness {
+                    Some(true) => body_type.promote_literals(self.stdlib),
+                    Some(false) => orelse_type.promote_literals(self.stdlib),
+                    None => match self.as_bool(&condition_type, x.test.range(), errors) {
+                        Some(true) => body_type,
+                        Some(false) => orelse_type,
+                        None => self.union(body_type, orelse_type),
+                    },
                 }
             }
             Expr::BoolOp(x) => self.boolop(&x.values, x.op, hint, errors),
