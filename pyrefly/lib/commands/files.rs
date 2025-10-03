@@ -21,6 +21,7 @@ use pyrefly_util::includes::Includes;
 use tracing::debug;
 use tracing::info;
 
+use crate::commands::config_finder::ConfigConfigurer;
 use crate::commands::config_finder::standard_config_finder;
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
@@ -55,12 +56,23 @@ pub struct FilesArgs {
     config: Option<PathBuf>,
 }
 
+struct FilesConfigConfigurer(ConfigOverrideArgs);
+
+impl ConfigConfigurer for FilesConfigConfigurer {
+    fn configure(
+        &self,
+        _: Option<&Path>,
+        config: ConfigFile,
+        mut errors: Vec<ConfigError>,
+    ) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
+        let (c, mut configure_errors) = self.0.override_config(config);
+        errors.append(&mut configure_errors);
+        (c, errors)
+    }
+}
+
 fn config_finder(args: ConfigOverrideArgs) -> ConfigFinder {
-    standard_config_finder(Arc::new(move |_, x, mut config_errors| {
-        let (c, mut configure_errors) = args.override_config(x);
-        config_errors.append(&mut configure_errors);
-        (c, config_errors)
-    }))
+    standard_config_finder(Arc::new(FilesConfigConfigurer(args)))
 }
 
 fn absolutize(globs: Globs) -> Globs {

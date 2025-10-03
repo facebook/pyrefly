@@ -64,6 +64,7 @@ pub mod library {
                 pub use crate::commands::all::Command;
                 pub use crate::commands::check::CheckArgs;
                 pub use crate::commands::check::FullCheckArgs;
+                pub use crate::commands::config_finder::DefaultConfigConfigurer;
                 pub use crate::commands::config_finder::standard_config_finder;
                 pub use crate::commands::util;
             }
