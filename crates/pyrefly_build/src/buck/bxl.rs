@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use starlark_map::small_map::SmallMap;
@@ -105,7 +106,12 @@ impl SourceDatabase for BuckSourceDatabase {
         vec![]
     }
 
-    fn lookup(&self, module: &ModuleName, origin: Option<&Path>) -> Option<ModulePath> {
+    fn lookup(
+        &self,
+        module: &ModuleName,
+        origin: Option<&Path>,
+        style_filter: Option<ModuleStyle>,
+    ) -> Option<ModulePath> {
         let origin = origin?;
         let read = self.inner.read();
         let start_target = read.path_lookup.get(&origin.to_path_buf())?;
@@ -122,8 +128,15 @@ impl SourceDatabase for BuckSourceDatabase {
             };
 
             if let Some(paths) = manifest.srcs.get(module) {
-                // TODO(connernilsen): for now, just take the first item on the path, but we
-                // should respect preferences at some point
+                // Since the sourcedb contains the full set of reachable files, if we find a
+                // result, we know a module path matching the style filter would exist in `paths`.
+                // Therefore, if it's not there, we can immediately fall back to whatever's
+                // available instead of re-performing the search like we normally do in module
+                // finding.
+                let style = style_filter.unwrap_or(ModuleStyle::Interface);
+                if let Some(result) = paths.iter().find(|p| ModuleStyle::of_path(p) == style) {
+                    return Some(ModulePath::filesystem(result.to_path_buf()));
+                }
                 return Some(ModulePath::filesystem(paths.first().to_path_buf()));
             }
 
@@ -258,41 +271,82 @@ mod tests {
     fn test_sourcedb_lookup() {
         let (db, root) = get_db();
 
-        let assert_lookup = |name, path, expected: Option<&str>| {
+        let assert_lookup = |name, path, style_filter, expected: Option<&str>| {
             assert_eq!(
-                db.lookup(&ModuleName::from_str(name), Some(&root.join(path))),
+                db.lookup(
+                    &ModuleName::from_str(name),
+                    Some(&root.join(path)),
+                    style_filter
+                ),
                 expected.map(|p| ModulePath::filesystem(root.join(p))),
-                "got result for {name} {path}, expected {expected:?}"
+                "got result for {name} {path} {style_filter:?}, expected {expected:?}"
             );
         };
 
-        assert_eq!(db.lookup(&ModuleName::from_str("log.log"), None), None,);
-        assert_lookup("does_not_exist", "pyre/client/log/__init__.py", None);
+        assert_eq!(
+            db.lookup(&ModuleName::from_str("log.log"), None, None),
+            None
+        );
+        assert_lookup("does_not_exist", "pyre/client/log/__init__.py", None, None);
         // can't be found, since the path's target only has `pyre.client.log.log` as reachable
-        assert_lookup("log.log", "pyre/client/log/__init__.py", None);
+        assert_lookup("log.log", "pyre/client/log/__init__.py", None, None);
         assert_lookup(
             "pyre.client.log.log",
             "pyre/client/log/__init__.py",
+            None,
+            Some("pyre/client/log/log.pyi"),
+        );
+        assert_lookup(
+            "pyre.client.log.log",
+            "pyre/client/log/__init__.py",
+            Some(ModuleStyle::Interface),
+            Some("pyre/client/log/log.pyi"),
+        );
+        assert_lookup(
+            "pyre.client.log.log",
+            "pyre/client/log/__init__.py",
+            Some(ModuleStyle::Executable),
             Some("pyre/client/log/log.py"),
+        );
+        assert_lookup(
+            "pyre.client.log",
+            "pyre/client/log/__init__.py",
+            None,
+            Some("pyre/client/log/__init__.py"),
+        );
+        assert_lookup(
+            "pyre.client.log",
+            "pyre/client/log/__init__.py",
+            Some(ModuleStyle::Interface),
+            Some("pyre/client/log/__init__.py"),
+        );
+        assert_lookup(
+            "pyre.client.log",
+            "pyre/client/log/__init__.py",
+            Some(ModuleStyle::Executable),
+            Some("pyre/client/log/__init__.py"),
         );
         assert_lookup(
             "click",
             "pyre/client/log/__init__.py",
+            None,
             Some("click/__init__.pyi"),
         );
         assert_lookup(
             "colorama",
             "pyre/client/log/__init__.py",
-            Some("colorama/__init__.py"),
+            None,
+            Some("colorama/__init__.pyi"),
         );
         assert_lookup(
             "colorama",
             "click/__init__.pyi",
-            Some("colorama/__init__.py"),
+            None,
+            Some("colorama/__init__.pyi"),
         );
-        assert_lookup("log.log", "click/__init__.pyi", None);
-        assert_lookup("log.log", "colorama/__init__.pyi", None);
-        assert_lookup("pyre.client.log.log", "click/__init__.py", None);
+        assert_lookup("log.log", "click/__init__.pyi", None, None);
+        assert_lookup("log.log", "colorama/__init__.pyi", None, None);
+        assert_lookup("pyre.client.log.log", "click/__init__.py", None, None);
     }
 
     #[test]

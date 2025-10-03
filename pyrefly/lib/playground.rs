@@ -18,6 +18,7 @@ use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
@@ -63,7 +64,12 @@ impl SourceDatabase for PlaygroundSourceDatabase {
             .collect()
     }
 
-    fn lookup(&self, module_name: &ModuleName, _: Option<&Path>) -> Option<ModulePath> {
+    fn lookup(
+        &self,
+        module_name: &ModuleName,
+        _: Option<&Path>,
+        _: Option<ModuleStyle>,
+    ) -> Option<ModulePath> {
         self.module_mappings.get(module_name).cloned()
     }
 

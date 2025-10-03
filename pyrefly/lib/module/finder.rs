@@ -422,7 +422,7 @@ pub fn find_import_filtered(
     if module != ModuleName::builtins() && config.replace_imports_with_any(origin, module) {
         Err(FindError::Ignored)
     } else if let Some(sourcedb) = config.source_db.as_ref()
-        && let Some(path) = sourcedb.lookup(&module, origin)
+        && let Some(path) = sourcedb.lookup(&module, origin, style_filter)
     {
         Ok(path.clone())
     } else if let Some(path) = find_module(module, config.search_path(), true, style_filter)? {

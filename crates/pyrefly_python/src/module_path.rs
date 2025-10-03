@@ -30,6 +30,16 @@ pub enum ModuleStyle {
     Interface,
 }
 
+impl ModuleStyle {
+    pub fn of_path(path: &Path) -> Self {
+        if path.extension() == Some("pyi".as_ref()) {
+            ModuleStyle::Interface
+        } else {
+            ModuleStyle::Executable
+        }
+    }
+}
+
 /// Store information about where a module is sourced from.
 #[derive(Debug, Clone, Dupe, PartialEq, Eq, Hash)]
 pub struct ModulePath(Arc<WithHash<ModulePathDetails>>);
@@ -67,16 +77,6 @@ impl Ord for ModulePath {
 
 fn is_path_init(path: &Path) -> bool {
     path.file_stem() == Some(dunder::INIT.as_str().as_ref())
-}
-
-impl ModuleStyle {
-    fn of_path(path: &Path) -> Self {
-        if path.extension() == Some("pyi".as_ref()) {
-            ModuleStyle::Interface
-        } else {
-            ModuleStyle::Executable
-        }
-    }
 }
 
 impl Display for ModulePath {
