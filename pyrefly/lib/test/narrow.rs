@@ -1756,7 +1756,6 @@ def test4(x: int | None) -> None:
     "#,
 );
 
-
 testcase!(
     test_truthy_falsy_builtins,
     r#"
