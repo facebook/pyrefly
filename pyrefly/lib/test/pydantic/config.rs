@@ -37,6 +37,36 @@ m.x = 10 # E: Cannot set field `x`
 );
 
 pydantic_testcase!(
+    test_model_config_dict_func,
+    r#"
+from pydantic import BaseModel
+
+class Model(BaseModel):
+    model_config = dict(frozen=True)
+
+    x: int = 42
+
+m = Model()
+m.x = 10 # E: Cannot set field `x`
+"#,
+);
+
+pydantic_testcase!(
+    test_model_config_dict_display,
+    r#"
+from pydantic import BaseModel
+
+class Model(BaseModel):
+    model_config = {'frozen': True}
+
+    x: int = 42
+
+m = Model()
+m.x = 10 # E: Cannot set field `x`
+"#,
+);
+
+pydantic_testcase!(
     test_not_a_pydantic_model,
     r#"
 from pydantic import ConfigDict
