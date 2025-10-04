@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use dupe::Dupe;
 use lsp_server::Connection;
@@ -29,11 +30,16 @@ use crate::lsp::transaction_manager::TransactionManager;
 /// TSP server that delegates to LSP server infrastructure while handling only TSP requests
 pub struct TspServer {
     pub inner: Box<dyn TspInterface>,
+    /// Current snapshot version, updated on RecheckFinished events
+    pub(crate) current_snapshot: Arc<Mutex<i32>>,
 }
 
 impl TspServer {
     pub fn new(lsp_server: Box<dyn TspInterface>) -> Self {
-        Self { inner: lsp_server }
+        Self {
+            inner: lsp_server,
+            current_snapshot: Arc::new(Mutex::new(0)), // Start at 0, increments on RecheckFinished
+        }
     }
 
     pub fn process_event<'a>(
@@ -43,6 +49,18 @@ impl TspServer {
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent> {
+        // Remember if this event should increment the snapshot after processing
+        let should_increment_snapshot = match &event {
+            LspEvent::RecheckFinished => true,
+            // Increment on DidChange since it affects type checker state via synchronous validation
+            LspEvent::DidChangeTextDocument(_) => true,
+            // Don't increment on DidChangeWatchedFiles directly since it triggers RecheckFinished
+            // LspEvent::DidChangeWatchedFiles(_) => true,
+            // Don't increment on DidOpen since it triggers RecheckFinished events that will increment
+            // LspEvent::DidOpenTextDocument(_) => true,
+            _ => false,
+        };
+
         // For TSP requests, handle them specially
         if let LspEvent::LspRequest(ref request) = event {
             if self.handle_tsp_request(ide_transaction_manager, request)? {
@@ -58,12 +76,19 @@ impl TspServer {
         }
 
         // For all other events (notifications, responses, etc.), delegate to inner server
-        self.inner.process_event(
+        let result = self.inner.process_event(
             ide_transaction_manager,
             canceled_requests,
             subsequent_mutation,
             event,
-        )
+        )?;
+
+        // Increment snapshot after the inner server has processed the event
+        if should_increment_snapshot && let Ok(mut current) = self.current_snapshot.lock() {
+            *current += 1;
+        }
+
+        Ok(result)
     }
 
     fn handle_tsp_request<'a>(
@@ -94,6 +119,12 @@ impl TspServer {
                 ide_transaction_manager.save(transaction);
                 Ok(true)
             }
+            TSPRequests::GetSnapshotRequest { .. } => {
+                // Get snapshot doesn't need a transaction since it just returns the cached value
+                self.inner
+                    .send_response(new_response(request.id.clone(), Ok(self.get_snapshot())));
+                Ok(true)
+            }
             _ => {
                 // Other TSP requests not yet implemented
                 Ok(false)
@@ -106,12 +137,18 @@ pub fn tsp_loop(
     lsp_server: Box<dyn TspInterface>,
     connection: Arc<Connection>,
     _initialization_params: InitializeParams,
+    lsp_queue: LspQueue,
 ) -> anyhow::Result<()> {
     eprintln!("Reading TSP messages");
     let connection_for_dispatcher = connection.dupe();
-    let lsp_queue = LspQueue::new();
 
     let server = TspServer::new(lsp_server);
+
+    // Start the recheck queue thread to process async tasks
+    let recheck_queue = server.inner.recheck_queue().dupe();
+    std::thread::spawn(move || {
+        recheck_queue.run_until_stopped();
+    });
 
     let lsp_queue2 = lsp_queue.dupe();
     std::thread::spawn(move || {
