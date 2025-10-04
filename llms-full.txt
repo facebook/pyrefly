@@ -3300,7 +3300,7 @@ description: Pyrefly experimental support for Pydantic.
 
 Pyrefly includes **experimental support** for [Pydantic](https://pydantic.dev/), a popular Python library for data validation and parsing. This feature aims to provide improved static type checking and IDE integration for Pydantic models.
 
-> **Note:** This support is experimental and actively evolving. The design may change based on feedback and development.
+> **Note:** This support is experimental and actively evolving. The design may change based on feedback and development. Please note that we are supporting Pydantic v2 and above, which means that deprecated v1 features are not included.
 
 ### Feedback
 
