@@ -42,7 +42,7 @@ pydantic_testcase!(
 from pydantic import BaseModel
 
 class Model(BaseModel):
-    model_config = dict(frozen=True)
+    model_config = dict(frozen=True) # E: `dict[str, bool]` is not assignable to attribute `model_config` with type `TypedDict[ConfigDict]`
 
     x: int = 42
 
