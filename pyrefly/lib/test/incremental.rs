@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
-use pyrefly_build::map_db::MapDatabase;
+use pyrefly_build::source_db::map_db::MapDatabase;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::SysInfo;

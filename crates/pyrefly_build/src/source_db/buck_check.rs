@@ -14,6 +14,7 @@ use anyhow::Context as _;
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::fs_anyhow;
@@ -139,7 +140,12 @@ impl SourceDatabase for BuckCheckSourceDatabase {
             .collect()
     }
 
-    fn lookup(&self, module: &ModuleName, _: Option<&Path>) -> Option<ModulePath> {
+    fn lookup(
+        &self,
+        module: &ModuleName,
+        _: Option<&Path>,
+        _: Option<ModuleStyle>,
+    ) -> Option<ModulePath> {
         self.sources
             .get(module)
             .or_else(|| self.dependencies.get(module))

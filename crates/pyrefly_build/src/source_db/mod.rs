@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -22,6 +23,10 @@ use static_interner::Intern;
 use static_interner::Interner;
 
 use crate::handle::Handle;
+
+pub mod buck_check;
+pub mod map_db;
+pub(crate) mod query_source_db;
 
 // We're interning `Target`s, since they'll be duplicated all over the place,
 // and it would be nice to have something that implements `Copy`.
@@ -68,7 +73,12 @@ pub trait SourceDatabase: Send + Sync + fmt::Debug {
     /// specified with the sourcedb.
     fn modules_to_check(&self) -> Vec<Handle>;
     /// Find the given module in the sourcedb, given the module it's originating from.
-    fn lookup(&self, module: &ModuleName, origin: Option<&Path>) -> Option<ModulePath>;
+    fn lookup(
+        &self,
+        module: &ModuleName,
+        origin: Option<&Path>,
+        style_filter: Option<ModuleStyle>,
+    ) -> Option<ModulePath>;
     /// Get the handle for the given module path, including its Python platform and version
     /// settings.
     fn handle_from_module_path(&self, module_path: ModulePath) -> Option<Handle>;
