@@ -140,6 +140,8 @@ pub enum ErrorKind {
     /// An error related to the import machinery.
     /// e.g. failed to import a module.
     ImportError,
+    /// An inconsistency between inherited fields or methods form multiple base classes.
+    InconsistentInheritance,
     /// An inconsistency between the signature of a function overload and the implementation.
     InconsistentOverload,
     /// Attempting to access a container with an incorrect index.

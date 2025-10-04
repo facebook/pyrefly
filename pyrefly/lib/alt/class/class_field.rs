@@ -1992,7 +1992,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         cls.range(),
-                        ErrorInfo::Kind(ErrorKind::InconsistentOverload),
+                        ErrorInfo::Kind(ErrorKind::InconsistentInheritance),
                         format!(
                             "Inconsistent types for field `{field_name}` inherited from multiple base classes: {class_and_types_str}",
                         ),

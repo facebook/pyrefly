@@ -9988,7 +9988,7 @@
       "concise_description": "Inconsistent types for field `x` inherited from multiple base classes: `int` from `X2`, `str` from `Y2`",
       "description": "Inconsistent types for field `x` inherited from multiple base classes: `int` from `X2`, `str` from `Y2`",
       "line": 65,
-      "name": "inconsistent-overload",
+      "name": "inconsistent-inheritance",
       "stop_column": 11,
       "stop_line": 65
     }
