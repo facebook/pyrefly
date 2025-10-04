@@ -262,14 +262,14 @@ def f(x: str | None, y: int | None):
 testcase!(
     test_not,
     r#"
-from typing import assert_type
+from typing import assert_type, Literal
 def f(x: str | None):
     if not x is None:
         assert_type(x, str)
     else:
         assert_type(x, None)
     if not x:
-        assert_type(x, str | None)
+        assert_type(x, None | Literal[""])
     else:
         assert_type(x, str)
     "#,
@@ -1753,5 +1753,33 @@ def test4(x: int | None) -> None:
     if x is not None and foo():
         return
     assert_type(x, int | None) 
+    "#,
+);
+
+
+testcase!(
+    test_truthy_falsy_builtins,
+    r#"
+from typing import assert_type, Literal
+def test(a: int, b: str):
+    if not a:
+        assert_type(a, Literal[0])
+    else:
+        assert_type(a, int)
+
+    if not b:
+        assert_type(b, Literal[""])
+    else:
+        assert_type(b, str)
+
+    if a:
+        assert_type(a, int)
+    else:
+        assert_type(a, Literal[0])
+
+    if b:
+        assert_type(b, str)
+    else:
+        assert_type(b, Literal[""])
     "#,
 );
