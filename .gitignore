@@ -1,3 +1,5 @@
 debug.json
 debug.js
 target/
+.cargo/
+.rustup/

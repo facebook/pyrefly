@@ -32,16 +32,19 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::buck::query::BxlArgs;
+use crate::script::QueryScript;
 
 pub mod buck;
 pub mod handle;
 pub mod map_db;
+pub mod script;
 pub mod source_db;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", tag = "type")]
 pub enum BuildSystem {
     Buck(BxlArgs),
+    QueryScript(QueryScript),
 }
 
 impl BuildSystem {
@@ -53,6 +56,10 @@ impl BuildSystem {
             Self::Buck(args) => Box::new(buck::bxl::BuckSourceDatabase::new(
                 config_root,
                 args.clone(),
+            )),
+            Self::QueryScript(script) => Box::new(script::ScriptSourceDatabase::new(
+                config_root,
+                script.clone(),
             )),
         }
     }

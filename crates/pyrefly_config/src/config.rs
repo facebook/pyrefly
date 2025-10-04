@@ -1690,4 +1690,35 @@ mod tests {
             ModuleName::from_str("example.path.b")
         ));
     }
+
+    #[test]
+    fn test_config_with_query_script_build_system() -> anyhow::Result<()> {
+        let config_text = r#"
+project-includes = ["src/**/*.py"]
+build-system = { type = "query-script", command = "python3", args = ["tools/pyrefly_bazel_query.py", "--"] }
+"#;
+
+        let mut config: ConfigFile = toml::from_str(config_text)?;
+        let tmp = tempfile::tempdir()?;
+        let config_path = tmp.path().join("pyrefly.toml");
+        config.source = ConfigSource::File(config_path);
+
+        let errors = config.configure();
+        assert!(errors.is_empty());
+
+        match config.build_system {
+            Some(BuildSystem::QueryScript(ref script)) => {
+                assert_eq!(script.command, "python3");
+                assert_eq!(
+                    script.args,
+                    vec!["tools/pyrefly_bazel_query.py".to_owned(), "--".to_owned()]
+                );
+            }
+            other => panic!("unexpected build system: {:?}", other),
+        }
+
+        assert!(config.source_db.is_some());
+
+        Ok(())
+    }
 }
