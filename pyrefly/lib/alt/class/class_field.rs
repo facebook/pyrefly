@@ -11,6 +11,7 @@ use std::iter;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use itertools::Itertools;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
@@ -1954,6 +1955,50 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         field_name,
                     ),
                 );
+        }
+    }
+
+    /// For classes with multiple inheritance, check that fields inherited from multiple base classes are consistent.
+    pub fn check_consistent_multiple_inheritance(&self, cls: &Class, errors: &ErrorCollector) {
+        // Maps field from inherited class
+        let mro = self.get_mro_for_class(cls);
+        let mut inherited_fields: SmallMap<&Name, Vec<(&Name, Type)>> = SmallMap::new();
+
+        for parent_cls in mro.ancestors_no_object().iter() {
+            let class_fields = parent_cls.class_object().fields();
+            for field in class_fields {
+                let key = KeyClassField(parent_cls.class_object().index(), field.clone());
+                let field_entry = self.get_from_class(cls, &key);
+                if let Some(field_entry) = field_entry.as_ref() {
+                    inherited_fields
+                        .entry(field)
+                        .or_default()
+                        .push((parent_cls.name(), field_entry.ty()));
+                }
+            }
+        }
+
+        for (field_name, class_and_types) in inherited_fields.iter() {
+            if class_and_types.len() > 1 {
+                let types: Vec<Type> = class_and_types.iter().map(|(_, ty)| ty.clone()).collect();
+                let intersect = self.intersects(&types);
+                if matches!(intersect, Type::Never(_)) {
+                    let class_and_types_str = class_and_types
+                        .iter()
+                        .map(|(cls, ty)| {
+                            format!("`{}` from `{}`", self.for_display(ty.clone()), cls)
+                        })
+                        .join(", ");
+                    self.error(
+                        errors,
+                        cls.range(),
+                        ErrorInfo::Kind(ErrorKind::InconsistentOverload),
+                        format!(
+                            "Inconsistent types for field `{field_name}` inherited from multiple base classes: {class_and_types_str}",
+                        ),
+                    );
+                }
+            }
         }
     }
 

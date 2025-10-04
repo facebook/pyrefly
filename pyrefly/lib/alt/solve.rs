@@ -10,7 +10,6 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use dupe::Dupe;
-use itertools::Itertools;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -75,7 +74,6 @@ use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
-use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
@@ -1563,47 +1561,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If we are inheriting from multiple base types, we should
             // check whether the multiple inheritance is consistent
             if class_bases.as_ref().base_type_count() > 1 {
-                // Maps field from inherited class
-                let mro = self.get_mro_for_class(cls);
-                let mut inherited_fields: SmallMap<&Name, Vec<(&Name, Type)>> = SmallMap::new();
-
-                for parent_cls in mro.ancestors_no_object().iter() {
-                    let class_fields = parent_cls.class_object().fields();
-                    for field in class_fields {
-                        let key = KeyClassField(parent_cls.class_object().index(), field.clone());
-                        let field_entry = self.get_from_class(cls, &key);
-                        if let Some(field_entry) = field_entry.as_ref() {
-                            inherited_fields
-                                .entry(field)
-                                .or_default()
-                                .push((parent_cls.name(), field_entry.ty()));
-                        }
-                    }
-                }
-
-                for (field_name, class_and_types) in inherited_fields.iter() {
-                    if class_and_types.len() > 1 {
-                        let types: Vec<Type> =
-                            class_and_types.iter().map(|(_, ty)| ty.clone()).collect();
-                        let intersect = self.intersects(&types);
-                        if matches!(intersect, Type::Never(_)) {
-                            let class_and_types_str = class_and_types
-                                .iter()
-                                .map(|(cls, ty)| {
-                                    format!("`{}` from `{}`", self.for_display(ty.clone()), cls)
-                                })
-                                .join(", ");
-                            self.error(
-                                errors,
-                                cls.range(),
-                                ErrorInfo::Kind(ErrorKind::InconsistentOverload),
-                                format!(
-                                    "Inconsistent types for field `{field_name}` inherited from multiple base classes: {class_and_types_str}",
-                                ),
-                            );
-                        }
-                    }
-                }
+                self.check_consistent_multiple_inheritance(cls, errors);
             }
         }
         Arc::new(EmptyAnswer)
