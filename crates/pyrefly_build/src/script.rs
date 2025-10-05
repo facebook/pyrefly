@@ -303,6 +303,7 @@ mod tests {
     use super::*;
 
     fn sample_manifest_json(root: &Path) -> String {
+        let root = root.to_string_lossy().replace('\\', "\\\\");
         format!(
             r#"{{
   "db": {{
@@ -319,7 +320,7 @@ mod tests {
   }},
   "root": "{}"
 }}"#,
-            root.display()
+            root
         )
     }
 
