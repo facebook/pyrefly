@@ -116,6 +116,27 @@ Providing `-c`/`--config` in single-file checking mode disables the upward file 
 files. All options are read from the provided config file except `project-includes` and
 `project-excludes`, which are ignored.
 
+## Build System Integrations
+
+Pyrefly can connect to external build tooling to discover modules and their
+dependencies at type-check time.
+
+### Query Script Build System
+
+The `query-script` build system lets Pyrefly call a custom command whenever it
+needs build metadata (ideal for Bazel or bespoke repositories). Configure it in
+`pyrefly.toml` with the command that returns the manifest information:
+
+```toml
+build-system = { type = "query-script", command = "python3", args = ["build_query.py", "--"] }
+```
+
+Pyrefly will run the command from the directory containing the active
+configuration and append a `--file <path>` argument for each source file it needs
+to resolve. Refer to [Build systems](./build-systems.mdx) for the full script
+contract, JSON schema, and example output (including a Bazel sample
+implementation).
+
 ## Configuration Options
 
 The following section lists all recognized options that can be specified in a config

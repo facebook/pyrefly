@@ -33,7 +33,7 @@ const docsSidebar = [
         label: 'Getting Started',
         description: "Never used a type system before or just new to Pyrefly? Start here!",
         collapsed: false,
-        items: ['installation', 'configuration'],
+        items: ['installation', 'configuration', 'build-systems'],
     },
     {
         type: 'category' as const,

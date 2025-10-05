@@ -1,0 +1,101 @@
+---
+title: Build Systems
+slug: /build-systems
+
+description: Configure Pyrefly to query external build systems and scripts for dependency metadata
+---
+
+# Build Systems
+
+Pyrefly can query build metadata from external tools so that the type checker knows
+which source files belong to each module, which targets depend on each other, and
+which Python interpreter settings should apply. Configure this behavior with the
+`build-system` option in your `pyrefly.toml` (or `[tool.pyrefly]` section of
+`pyproject.toml`).
+
+```toml
+build-system = { type = "buck", root = "/path/to/repo", target = "//pkg:lib" }
+```
+
+Each build system implementation produces the same internal manifest format, so you
+can switch between them without changing the rest of your configuration.
+
+## Supported build systems
+
+### Buck (`type = "buck"`)
+
+The Buck integration is the default option. Pyrefly uses an internal Buck `bxl`
+script to read target manifests directly from your Buck repository. See
+`conformance/buck/README.md` in the repository for setup instructions.
+
+### Query script (`type = "query-script"`)
+
+The query script integration lets you plug in an arbitrary command that emits the
+manifest data in JSON. This is useful for repositories that use Bazel or any other
+build system that can export dependency information.
+
+#### Configuration
+
+Add the script definition to your config file. Pyrefly runs the command from the
+configuration directory, and it appends `--file <path>` for every source path that
+triggers a re-query.
+
+```toml
+build-system = { type = "query-script", command = "python3", args = ["build_query.py", "--"] }
+```
+
+- `command`: executable to invoke. Provide an absolute path or a binary available on
+  `PATH`.
+- `args`: optional list of arguments inserted before Pyrefly adds the `--file`
+  flag/argument pairs.
+
+For a working Bazel example, see the
+[pyrefly_bazel_sample repository](https://github.com/lolpack/pyrefly_bazel_sample).
+
+#### Script invocation contract
+
+Pyrefly enforces the following contract when it runs your script:
+
+- Working directory: the folder that contains the active Pyrefly configuration.
+- Arguments: the configured `command` and `args`, followed by `--file <path>` for
+each file that caused the query. Paths are absolute when available.
+- Output: the script must write UTF-8 JSON to stdout and exit with status code `0`.
+  Anything written to stderr is surfaced back to the user if execution fails.
+
+#### Expected JSON output
+
+The stdout payload must deserialize to the following structure:
+
+- `ScriptManifestDatabase`
+  - `root` (string): base directory used to resolve relative source and build file paths.
+  - `db` (object): map of target identifiers to `ScriptManifest` objects.
+- `ScriptManifest`
+  - `deps` (array of strings, optional): other targets this target depends on.
+  - `srcs` (object): keys are dotted module names; values are non-empty lists of
+    file paths for that module.
+  - `python_version` (string): interpreter version, e.g. `"3.11"`.
+  - `python_platform` (string): platform string such as `"linux"` or `"darwin"`.
+  - `buildfile_path` (string, optional): path to the build definition; if absent,
+    Pyrefly infers one from the first source file.
+
+All file paths may be absolute or relative to `root`.
+
+Example output:
+
+```json
+{
+  "db": {
+    "//pkg:lib": {
+      "deps": [],
+      "srcs": {
+        "pkg": ["pkg/__init__.py"],
+        "pkg.module": ["pkg/module.py"]
+      },
+      "python_version": "3.11",
+      "python_platform": "linux",
+      "buildfile_path": "pkg/BUILD"
+    }
+  },
+  "root": "/path/to/workspace"
+}
+```
