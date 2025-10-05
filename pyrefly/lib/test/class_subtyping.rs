@@ -274,3 +274,39 @@ class Both(Foo, Bar): # E: Field `p` has inconsistent types inherited from multi
     ...
 "#,
 );
+
+testcase!(
+    test_nested_multiple_inheritance_incompatible_field_without_override,
+    r#"
+class A:
+    x: int
+class B:
+    x: str
+class C(A, B): # E: Field `x` has inconsistent types inherited from multiple base classes
+    pass
+class D:
+    x: int
+
+# Here we repeat the error on E, despite the error already being reported in C.
+class E(C, D): # E: Field `x` has inconsistent types inherited from multiple base classes
+    pass
+"#,
+);
+
+testcase!(
+    test_nested_multiple_inheritance_incompatible_field_with_override,
+    r#"
+class A:
+    x: int
+class B:
+    x: str
+class C(A, B): # E: Field `x` has inconsistent types inherited from multiple base classes
+    x: int # E: Class member `C.x` overrides parent class `B` in an inconsistent manner
+class D:
+    x: int
+
+# Here we still report the error on E, despite the field being overridden in C.
+class E(C, D): # E: Field `x` has inconsistent types inherited from multiple base classes
+    pass
+"#,
+);
