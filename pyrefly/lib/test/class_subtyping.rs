@@ -270,7 +270,7 @@ class Foo:
 class Bar:
     p: str
 
-class Both(Foo, Bar): # E: Inconsistent types for field `p` inherited from multiple base classes: `int` from `Foo`, `str` from `Bar`
+class Both(Foo, Bar): # E: Field `p` has inconsistent types inherited from multiple base classes
     ...
 "#,
 );

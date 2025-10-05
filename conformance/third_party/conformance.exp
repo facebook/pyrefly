@@ -9985,8 +9985,8 @@
     {
       "code": -2,
       "column": 7,
-      "concise_description": "Inconsistent types for field `x` inherited from multiple base classes: `int` from `X2`, `str` from `Y2`",
-      "description": "Inconsistent types for field `x` inherited from multiple base classes: `int` from `X2`, `str` from `Y2`",
+      "concise_description": "Field `x` has inconsistent types inherited from multiple base classes",
+      "description": "Field `x` has inconsistent types inherited from multiple base classes\n  Inherited types include:\n    `int` from `X2`\n    `str` from `Y2`",
       "line": 65,
       "name": "inconsistent-inheritance",
       "stop_column": 11,

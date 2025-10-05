@@ -11,7 +11,6 @@ use std::iter;
 use std::sync::Arc;
 
 use dupe::Dupe;
-use itertools::Itertools;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
@@ -1983,19 +1982,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let types: Vec<Type> = class_and_types.iter().map(|(_, ty)| ty.clone()).collect();
                 let intersect = self.intersects(&types);
                 if matches!(intersect, Type::Never(_)) {
-                    let class_and_types_str = class_and_types
-                        .iter()
-                        .map(|(cls, ty)| {
-                            format!("`{}` from `{}`", self.for_display(ty.clone()), cls)
-                        })
-                        .join(", ");
-                    self.error(
-                        errors,
+                    let mut error_msg = vec1![
+                        format!(
+                            "Field `{field_name}` has inconsistent types inherited from multiple base classes"
+                        ),
+                        "Inherited types include:".to_owned()
+                    ];
+                    for (cls, ty) in class_and_types.iter() {
+                        error_msg.push(format!(
+                            "  `{}` from `{}`",
+                            self.for_display(ty.clone()),
+                            cls
+                        ));
+                    }
+                    errors.add(
                         cls.range(),
                         ErrorInfo::Kind(ErrorKind::InconsistentInheritance),
-                        format!(
-                            "Inconsistent types for field `{field_name}` inherited from multiple base classes: {class_and_types_str}",
-                        ),
+                        error_msg,
                     );
                 }
             }
