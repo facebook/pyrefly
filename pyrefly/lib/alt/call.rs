@@ -692,13 +692,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
                 // Only promote for user-defined methods
                 if let FunctionKind::Def(func_id) = &metadata.kind {
-                    result = self.promote_literal_string_method_return(
+                    if self.should_return_literal_string(
                         &func_id.func,
                         &obj_for_helper,
                         args,
                         keywords,
-                        result,
-                    );
+                        &result,
+                    ) {
+                        result = Type::LiteralString;
+                    } else if result.is_literal_string() {
+                        // Demote from LiteralString to str (e.g., when starred args present)
+                        result = Type::ClassType(self.stdlib.str().clone());
+                    }
                 }
 
                 result
@@ -761,13 +766,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
                 // Only promote for user-defined methods
                 if let FunctionKind::Def(func_id) = &meta.kind {
-                    result = self.promote_literal_string_method_return(
+                    if self.should_return_literal_string(
                         &func_id.func,
                         &obj_for_helper,
                         args,
                         keywords,
-                        result,
-                    );
+                        &result,
+                    ) {
+                        result = Type::LiteralString;
+                    } else if result.is_literal_string() {
+                        // Demote from LiteralString to str (e.g., when starred args present)
+                        result = Type::ClassType(self.stdlib.str().clone());
+                    }
                 }
 
                 result
@@ -1193,58 +1203,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// Promote the return type of certain string methods to LiteralString when all arguments
-    /// are LiteralString, per PEP 675. This handles format(), join(), and replace().
-    fn promote_literal_string_method_return(
+    /// Returns true if the given string method call should return LiteralString
+    /// instead of str, per PEP 675. Only applies when the receiver is LiteralString,
+    /// all arguments are LiteralString, and the original return type is plain str.
+    fn should_return_literal_string(
         &self,
         method_name: &Name,
         self_obj: &Type,
         args: &[CallArg],
         keywords: &[CallKeyword],
-        return_ty: Type,
-    ) -> Type {
-        // Check for starred args or **kwargs first - these prevent promotion
-        // even if the overload selected returns LiteralString
+        return_ty: &Type,
+    ) -> bool {
+        // 1. Receiver must be LiteralString
+        if !self_obj.is_literal_string() {
+            return false;
+        }
+
+        // 2. Reject starred args or **kwargs first (must check before accepting existing LiteralString)
         for arg in args {
             if matches!(arg, CallArg::Star(..)) {
-                // Starred args mean we can't statically verify all args are literal strings
-                return if return_ty.is_literal_string() {
-                    // Demote from LiteralString to str
-                    Type::ClassType(self.stdlib.str().clone())
-                } else {
-                    return_ty
-                };
+                return false;
             }
         }
         for kw in keywords {
             if kw.arg.is_none() {
-                // **kwargs unpack
-                return if return_ty.is_literal_string() {
-                    // Demote from LiteralString to str
-                    Type::ClassType(self.stdlib.str().clone())
-                } else {
-                    return_ty
-                };
+                return false; // **kwargs
             }
         }
 
-        // Early returns for cases where promotion doesn't apply
+        // 3. Check return type (after starred args check, so we demote LiteralString if needed)
         if return_ty.is_literal_string() {
-            return return_ty;
+            return true; // Already literal, can keep it
         }
-        if !self_obj.is_literal_string() {
-            return return_ty;
-        }
-        if !matches!(return_ty, Type::ClassType(ref cls) if cls.is_builtin("str")) {
-            return return_ty;
+        if !matches!(return_ty, Type::ClassType(cls) if cls.is_builtin("str")) {
+            return false; // Not str, don't promote
         }
 
-        // Error collector for re-inferring (never extended to main errors)
         let error_swallower = self.error_collector();
 
+        // 4. Method-specific logic
         match method_name.as_str() {
-            "format" => {
-                // Check all positional args (star args already checked above)
+            "format" | "replace" => {
+                // Shared logic: all positional and keyword args must be LiteralString
                 for arg in args {
                     if let CallArg::Arg(type_or_expr) = arg {
                         let ty = match type_or_expr {
@@ -1252,126 +1252,80 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             TypeOrExpr::Expr(expr) => self.expr_infer(expr, &error_swallower),
                         };
                         if !self.is_subset_eq(&ty, &Type::LiteralString) {
-                            return return_ty;
+                            return false;
                         }
                     }
                 }
-
-                // Check all keyword args (**kwargs already checked above)
                 for kw in keywords {
                     let ty = match &kw.value {
                         TypeOrExpr::Type(ty, _) => (*ty).clone(),
                         TypeOrExpr::Expr(expr) => self.expr_infer(expr, &error_swallower),
                     };
                     if !self.is_subset_eq(&ty, &Type::LiteralString) {
-                        return return_ty;
+                        return false;
                     }
                 }
 
-                Type::LiteralString
-            }
-            "join" => {
-                // Require exactly 1 positional arg, no keywords (star args already checked above)
-                if args.len() != 1 || !keywords.is_empty() {
-                    return return_ty;
+                // For replace, additionally verify both "old" and "new" are present
+                if method_name.as_str() == "replace" {
+                    let mut old_present = args.get(0).is_some();
+                    let mut new_present = args.get(1).is_some();
+
+                    if !old_present {
+                        old_present = keywords
+                            .iter()
+                            .any(|kw| kw.arg.as_ref().map(|id| id.id.as_str()) == Some("old"));
+                    }
+                    if !new_present {
+                        new_present = keywords
+                            .iter()
+                            .any(|kw| kw.arg.as_ref().map(|id| id.id.as_str()) == Some("new"));
+                    }
+
+                    if !old_present || !new_present {
+                        return false;
+                    }
                 }
 
-                // Get the iterable argument
+                true
+            }
+            "join" => {
+                // Must have exactly one positional arg, no keywords
+                if args.len() != 1 || !keywords.is_empty() {
+                    return false;
+                }
+
                 let (iterable_ty, range) = if let CallArg::Arg(type_or_expr) = &args[0] {
                     let ty = match type_or_expr {
                         TypeOrExpr::Type(ty, _) => (*ty).clone(),
                         TypeOrExpr::Expr(expr) => self.expr_infer(expr, &error_swallower),
                     };
-                    let range = type_or_expr.range();
-                    (ty, range)
+                    (ty, type_or_expr.range())
                 } else {
-                    // Should be unreachable due to check above, but be safe
-                    return return_ty;
+                    return false; // Starred arg already caught above, but be explicit
                 };
 
-                // Check all iterable branches
                 let iterables = self.iterate(&iterable_ty, range, &error_swallower);
                 for iterable in iterables {
                     match iterable {
                         Iterable::OfType(ty) => {
                             if !self.is_subset_eq(&ty, &Type::LiteralString) {
-                                return return_ty;
+                                return false;
                             }
                         }
                         Iterable::FixedLen(elts) => {
                             for elt in elts {
                                 if !self.is_subset_eq(&elt, &Type::LiteralString) {
-                                    return return_ty;
+                                    return false;
                                 }
                             }
                         }
                     }
                 }
 
-                Type::LiteralString
+                true
             }
-            "replace" => {
-                // Accept 2-3 args, handle positional/keyword mixes (star args already checked above)
-                let mut old_ty: Option<Type> = None;
-                let mut new_ty: Option<Type> = None;
-
-                // Get old from first positional or keyword
-                if let Some(arg) = args.get(0) {
-                    if let CallArg::Arg(type_or_expr) = arg {
-                        old_ty = Some(match type_or_expr {
-                            TypeOrExpr::Type(ty, _) => (*ty).clone(),
-                            TypeOrExpr::Expr(expr) => self.expr_infer(expr, &error_swallower),
-                        });
-                    }
-                }
-                if old_ty.is_none() {
-                    if let Some(kw) = keywords
-                        .iter()
-                        .find(|kw| kw.arg.as_ref().map(|id| id.id.as_str()) == Some("old"))
-                    {
-                        old_ty = Some(match &kw.value {
-                            TypeOrExpr::Type(ty, _) => (*ty).clone(),
-                            TypeOrExpr::Expr(expr) => self.expr_infer(expr, &error_swallower),
-                        });
-                    }
-                }
-
-                // Get new from second positional or keyword
-                if let Some(arg) = args.get(1) {
-                    if let CallArg::Arg(type_or_expr) = arg {
-                        new_ty = Some(match type_or_expr {
-                            TypeOrExpr::Type(ty, _) => (*ty).clone(),
-                            TypeOrExpr::Expr(expr) => self.expr_infer(expr, &error_swallower),
-                        });
-                    }
-                }
-                if new_ty.is_none() {
-                    if let Some(kw) = keywords
-                        .iter()
-                        .find(|kw| kw.arg.as_ref().map(|id| id.id.as_str()) == Some("new"))
-                    {
-                        new_ty = Some(match &kw.value {
-                            TypeOrExpr::Type(ty, _) => (*ty).clone(),
-                            TypeOrExpr::Expr(expr) => self.expr_infer(expr, &error_swallower),
-                        });
-                    }
-                }
-
-                // Both must be present and literal strings
-                match (old_ty, new_ty) {
-                    (Some(old), Some(new)) => {
-                        if self.is_subset_eq(&old, &Type::LiteralString)
-                            && self.is_subset_eq(&new, &Type::LiteralString)
-                        {
-                            Type::LiteralString
-                        } else {
-                            return_ty
-                        }
-                    }
-                    _ => return_ty,
-                }
-            }
-            _ => return_ty,
+            _ => false,
         }
     }
 }
