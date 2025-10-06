@@ -37,14 +37,18 @@ pub mod source_db;
 pub use source_db::SourceDatabase;
 mod query;
 
+use crate::query::SourceDbQuerier;
 use crate::query::buck::BxlArgs;
 use crate::query::buck::BxlQuerier;
+use crate::query::custom::CustomQuerier;
+use crate::query::custom::CustomQueryArgs;
 use crate::source_db::query_source_db::QuerySourceDatabase;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", tag = "type")]
 pub enum BuildSystem {
     Buck(BxlArgs),
+    Custom(CustomQueryArgs),
 }
 
 impl BuildSystem {
@@ -52,11 +56,10 @@ impl BuildSystem {
         &self,
         config_root: PathBuf,
     ) -> Box<dyn source_db::SourceDatabase + 'static> {
-        match &self {
-            Self::Buck(args) => Box::new(QuerySourceDatabase::new(
-                config_root,
-                Arc::new(BxlQuerier::new(args.clone())),
-            )),
-        }
+        let querier: Arc<dyn SourceDbQuerier> = match &self {
+            Self::Buck(args) => Arc::new(BxlQuerier::new(args.clone())),
+            Self::Custom(args) => Arc::new(CustomQuerier::new(args.clone())),
+        };
+        Box::new(QuerySourceDatabase::new(config_root, querier))
     }
 }
