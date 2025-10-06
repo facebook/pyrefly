@@ -336,11 +336,18 @@ where
 /// an `Ok(None)` indicates the module wasn't found here, but could be found in another
 /// search location (`search_path`, `typeshed`, ...).
 ///
+/// If the result is a [`FindResult::NamespacePackage`], we instead add its entries to
+/// `namespaces_found`, since this can be overridden by a higher-priority [`FindResult`]
+/// variant later. It is the calling function's responsibility to recognize that
+/// `namespaces_found` might hold the final result if no `Ok(Some(_))` values are
+/// returned from this function.
+///
 /// If `style_filter` is provided, only modules matching that style will be returned.
 /// Returns the first module found that matches the style, or `None` if no matching module is found.
 fn find_module<'a, I>(
     module: ModuleName,
     include: I,
+    namespaces_found: &mut Vec<PathBuf>,
     ignore_missing_source: bool,
     style_filter: Option<ModuleStyle>,
 ) -> Result<Option<ModulePath>, FindError>
@@ -355,7 +362,12 @@ where
             let stub_result =
                 find_module_components(&stub_first, rest, include.clone(), style_filter);
             if ignore_missing_source && let Some(stub_result) = stub_result {
-                return Ok(Some(stub_result.module_path()?));
+                if let FindResult::NamespacePackage(namespaces) = stub_result {
+                    namespaces_found.append(&mut namespaces.into_vec());
+                    return Ok(None);
+                } else {
+                    return Ok(Some(stub_result.module_path()?));
+                }
             }
             //
             // If we couldn't find it in a `-stubs` module or we want to check for missing stubs, look normally.
@@ -364,6 +376,10 @@ where
             match (normal_result, stub_result) {
                 (None, Some(_)) if !ignore_missing_source => Err(FindError::NoSource(module)),
                 (Some(_), Some(stub_result)) => Ok(Some(stub_result.module_path()?)),
+                (Some(FindResult::NamespacePackage(namespaces)), _) => {
+                    namespaces_found.append(&mut namespaces.into_vec());
+                    Ok(None)
+                }
                 (Some(normal_result), _) => Ok(Some(normal_result.module_path()?)),
                 (None, _) => Ok(None),
             }
@@ -419,12 +435,15 @@ fn find_module_prefixes<'a>(
     results.iter().map(|(_, name)| *name).collect::<Vec<_>>()
 }
 
+// TODO(connernilsen): refactor/clean this up so that we can have filtering and module priority
+// stuff up at this level too.
 pub fn find_import_filtered(
     config: &ConfigFile,
     module: ModuleName,
     origin: Option<&ModulePath>,
     style_filter: Option<ModuleStyle>,
 ) -> Result<ModulePath, FindError> {
+    let mut namespaces_found = vec![];
     let origin = origin.map(|p| p.as_path());
     if module != ModuleName::builtins() && config.replace_imports_with_any(origin, module) {
         Err(FindError::Ignored)
@@ -432,12 +451,19 @@ pub fn find_import_filtered(
         && let Some(path) = sourcedb.lookup(&module, origin, style_filter)
     {
         Ok(path.clone())
-    } else if let Some(path) = find_module(module, config.search_path(), true, style_filter)? {
+    } else if let Some(path) = find_module(
+        module,
+        config.search_path(),
+        &mut namespaces_found,
+        true,
+        style_filter,
+    )? {
         Ok(path)
     } else if let Some(custom_typeshed_path) = &config.typeshed_path
         && let Some(path) = find_module(
             module,
             std::iter::once(&custom_typeshed_path.join("stdlib")),
+            &mut namespaces_found,
             true,
             style_filter,
         )?
@@ -453,6 +479,7 @@ pub fn find_import_filtered(
         && let Some(path) = find_module(
             module,
             config.fallback_search_path.iter(),
+            &mut namespaces_found,
             true,
             style_filter,
         )?
@@ -461,10 +488,13 @@ pub fn find_import_filtered(
     } else if let Some(path) = find_module(
         module,
         config.site_package_path(),
+        &mut namespaces_found,
         config.ignore_missing_source,
         style_filter,
     )? {
         Ok(path)
+    } else if let Some(namespace) = namespaces_found.into_iter().next() {
+        Ok(ModulePath::namespace(namespace))
     } else if config.ignore_missing_imports(origin, module) {
         Err(FindError::Ignored)
     } else {
@@ -510,6 +540,8 @@ pub fn find_import_prefixes(config: &ConfigFile, module: ModuleName) -> Vec<Modu
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_config::environment::environment::PythonEnvironment;
+    use pyrefly_config::environment::interpreters::Interpreters;
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
@@ -533,6 +565,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 None,
             )
@@ -543,6 +576,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 None,
             )
@@ -553,6 +587,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.qux"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 None,
             )
@@ -580,6 +615,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 None,
             )
@@ -590,6 +626,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 None,
             )
@@ -617,6 +654,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 None,
             )
@@ -644,6 +682,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 None,
             )
@@ -659,33 +698,59 @@ mod tests {
         TestPath::setup_test_directory(
             root,
             vec![
-                TestPath::dir("a", vec![]),
-                TestPath::dir("b", vec![TestPath::dir("c", vec![])]),
-                TestPath::dir("c", vec![TestPath::dir("d", vec![TestPath::file("e.py")])]),
+                TestPath::dir(
+                    "first",
+                    vec![
+                        TestPath::dir("a", vec![]),
+                        TestPath::dir("b", vec![TestPath::dir("c", vec![])]),
+                        TestPath::dir("c", vec![TestPath::dir("d", vec![TestPath::file("e.py")])]),
+                    ],
+                ),
+                TestPath::dir(
+                    "second",
+                    vec![
+                        TestPath::dir("a", vec![]),
+                        TestPath::dir("b", vec![TestPath::dir("c", vec![])]),
+                        TestPath::dir("c", vec![TestPath::dir("d", vec![TestPath::file("e.py")])]),
+                    ],
+                ),
             ],
         );
-        let search_roots = [root.to_path_buf()];
-        assert_eq!(
-            find_module(ModuleName::from_str("a"), search_roots.iter(), true, None).unwrap(),
-            Some(ModulePath::namespace(root.join("a")))
-        );
-        assert_eq!(
-            find_module(ModuleName::from_str("b"), search_roots.iter(), true, None).unwrap(),
-            Some(ModulePath::namespace(root.join("b")))
-        );
-        assert_eq!(
-            find_module(ModuleName::from_str("c.d"), search_roots.iter(), true, None).unwrap(),
-            Some(ModulePath::namespace(root.join("c/d")))
-        );
+        let search_roots = [root.join("first"), root.join("second")];
+        let assert_namespace = |name, expected: &str| {
+            let mut namespaces = vec![];
+            assert!(
+                find_module(
+                    ModuleName::from_str(name),
+                    search_roots.iter(),
+                    &mut namespaces,
+                    true,
+                    None
+                )
+                .unwrap()
+                .is_none()
+            );
+            assert_eq!(
+                namespaces,
+                vec![
+                    root.join(format!("first/{expected}")),
+                    root.join(format!("second/{expected}"))
+                ]
+            );
+        };
+        assert_namespace("a", "a");
+        assert_namespace("b", "b");
+        assert_namespace("c.d", "c/d");
         assert_eq!(
             find_module(
                 ModuleName::from_str("c.d.e"),
                 search_roots.iter(),
+                &mut vec![],
                 true,
                 None
             )
             .unwrap(),
-            Some(ModulePath::filesystem(root.join("c/d/e.py")))
+            Some(ModulePath::filesystem(root.join("first/c/d/e.py")))
         );
     }
 
@@ -716,6 +781,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.c"),
                 [root.join("search_root0"), root.join("search_root1")].iter(),
+                &mut vec![],
                 true,
                 None,
             )
@@ -736,25 +802,50 @@ mod tests {
             vec![
                 TestPath::dir(
                     "search_root0",
-                    vec![TestPath::dir("a", vec![TestPath::file("b.py")])],
+                    vec![
+                        TestPath::dir("a", vec![TestPath::file("b.py")]),
+                        TestPath::dir("spp_priority", vec![]),
+                    ],
                 ),
                 TestPath::dir(
                     "search_root1",
                     vec![TestPath::dir("a", vec![TestPath::file("c.py")])],
                 ),
+                TestPath::dir(
+                    "site_package_path",
+                    vec![TestPath::dir(
+                        "spp_priority",
+                        vec![TestPath::file("__init__.py")],
+                    )],
+                ),
             ],
         );
+
+        let mut interpreters = Interpreters::default();
+        interpreters.skip_interpreter_query = true;
+        let mut config = ConfigFile {
+            search_path_from_file: vec![root.join("search_root0"), root.join("search_root1")],
+            interpreters,
+            python_environment: PythonEnvironment {
+                site_package_path: Some(vec![root.join("site_package_path")]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
         assert_eq!(
-            find_module(
-                ModuleName::from_str("a.c"),
-                [root.join("search_root0"), root.join("search_root1")].iter(),
-                true,
-                None,
-            )
-            .unwrap(),
+            find_import_filtered(&config, ModuleName::from_str("a.c"), None, None).unwrap(),
             // We will find `a.c` because `a` is a namespace package whose search roots
             // include both `search_root0/a/` and `search_root1/a/`.
-            Some(ModulePath::filesystem(root.join("search_root1/a/c.py")))
+            ModulePath::filesystem(root.join("search_root1/a/c.py"))
+        );
+        assert_eq!(
+            find_import_filtered(&config, ModuleName::from_str("spp_priority"), None, None)
+                .unwrap(),
+            // We will find `spp_priority` in `site_package_path`, even though it's
+            // in a later module find component, because we continue searching for
+            // a better option when we find a namespace package
+            ModulePath::filesystem(root.join("site_package_path/spp_priority/__init__.py"))
         );
     }
 
@@ -877,6 +968,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 false,
                 None,
             )
@@ -888,6 +980,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 false,
                 None,
             )
@@ -899,6 +992,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.qux"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 false,
                 None,
             )
@@ -926,6 +1020,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 false,
                 None,
             )
@@ -937,6 +1032,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 false,
                 None,
             )
@@ -948,6 +1044,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.qux"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 false,
                 None,
             ),
@@ -980,6 +1077,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 false,
                 None,
             )
@@ -991,6 +1089,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 false,
                 None,
             )
@@ -1002,6 +1101,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.qux"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 false,
                 None,
             )
@@ -1030,6 +1130,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 false,
                 None,
             )
@@ -1041,6 +1142,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 false,
                 None,
             )
@@ -1052,6 +1154,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.qux"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 false,
                 None,
             )
@@ -1088,6 +1191,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 false,
                 None,
             )
@@ -1097,6 +1201,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 None,
             )
@@ -1108,6 +1213,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("baz.qux"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 false,
                 None,
             )
@@ -1257,21 +1363,24 @@ mod tests {
             ],
         );
 
-        assert_eq!(
+        let mut namespaces = vec![];
+        assert!(
             find_module(
                 ModuleName::from_str("namespace"),
                 [root.to_path_buf()].iter(),
+                &mut namespaces,
                 true,
                 None,
             )
             .unwrap()
-            .unwrap(),
-            ModulePath::namespace(root.join("namespace"))
+            .is_none()
         );
+        assert_eq!(namespaces, vec![root.join("namespace")]);
         assert_eq!(
             find_module(
                 ModuleName::from_str("namespace.a"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 None,
             )
@@ -1283,6 +1392,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("namespace.b"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 None,
             )
@@ -1300,6 +1410,7 @@ mod tests {
         let find_compiled_result = find_module(
             ModuleName::from_str("compiled_module"),
             [root.to_path_buf()].iter(),
+            &mut vec![],
             true,
             None,
         );
@@ -1308,6 +1419,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("compiled_module.nested"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 None,
             )
@@ -1329,6 +1441,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 None,
             )
@@ -1355,6 +1468,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("subdir.nested_import"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 None,
             )
@@ -1364,6 +1478,7 @@ mod tests {
         let find_compiled_result = find_module(
             ModuleName::from_str("subdir.another_compiled_module"),
             [root.to_path_buf()].iter(),
+            &mut vec![],
             true,
             None,
         );
@@ -1496,6 +1611,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("bar"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 Some(ModuleStyle::Executable),
             )
@@ -1507,6 +1623,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("bar"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 Some(ModuleStyle::Interface),
             )
@@ -1528,6 +1645,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("bar"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 Some(ModuleStyle::Executable),
             ),
@@ -1537,6 +1655,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("bar"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 Some(ModuleStyle::Interface),
             )
@@ -1561,6 +1680,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("baz.bar"),
                 [root.to_path_buf()].iter(),
+                &mut vec![],
                 true,
                 Some(ModuleStyle::Executable),
             )
@@ -1593,6 +1713,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("standalone"),
                 search_roots.iter(),
+                &mut vec![],
                 true,
                 Some(ModuleStyle::Executable),
             )
@@ -1605,6 +1726,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("standalone"),
                 search_roots.iter(),
+                &mut vec![],
                 true,
                 Some(ModuleStyle::Interface),
             )
@@ -1618,6 +1740,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("standalone2"),
                 search_roots.iter(),
+                &mut vec![],
                 true,
                 Some(ModuleStyle::Interface),
             )
@@ -1628,6 +1751,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("standalone2"),
                 search_roots.iter(),
+                &mut vec![],
                 true,
                 Some(ModuleStyle::Executable),
             )
