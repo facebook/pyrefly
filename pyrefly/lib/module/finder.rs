@@ -306,7 +306,7 @@ fn find_module_components<'a, I>(
     components_rest: &[Name],
     include: I,
     style_filter: Option<ModuleStyle>,
-) -> Option<Result<ModulePath, FindError>>
+) -> Option<FindResult>
 where
     I: Iterator<Item = &'a PathBuf> + Clone,
 {
@@ -316,7 +316,7 @@ where
     let current_result =
         continue_find_module(first_component_result, components_rest, style_filter)?;
 
-    let final_result = match current_result {
+    match current_result {
         FindResult::SingleFilePyiModule(_) | FindResult::RegularPackage(..) => Some(current_result),
         _ => Some(
             fallback_search
@@ -327,9 +327,7 @@ where
                 })
                 .fold(current_result, FindResult::best_result),
         ),
-    };
-
-    final_result.map(|r| r.module_path())
+    }
 }
 
 /// Search for the given [`ModuleName`] in the given `include`, which is
@@ -356,17 +354,18 @@ where
             let stub_first = Name::new(format!("{first}-stubs"));
             let stub_result =
                 find_module_components(&stub_first, rest, include.clone(), style_filter);
-            if ignore_missing_source && let Some(Ok(stub_result)) = stub_result {
-                return Ok(Some(stub_result));
+            if ignore_missing_source && let Some(stub_result) = stub_result {
+                return Ok(Some(stub_result.module_path()?));
             }
-
+            //
             // If we couldn't find it in a `-stubs` module or we want to check for missing stubs, look normally.
             let normal_result = find_module_components(first, rest, include, style_filter);
 
             match (normal_result, stub_result) {
-                (None, Some(Ok(_))) if !ignore_missing_source => Err(FindError::NoSource(module)),
-                (Some(_), Some(Ok(stub_result))) => Ok(Some(stub_result)),
-                (normal_result, _) => normal_result.transpose(),
+                (None, Some(_)) if !ignore_missing_source => Err(FindError::NoSource(module)),
+                (Some(_), Some(stub_result)) => Ok(Some(stub_result.module_path()?)),
+                (Some(normal_result), _) => Ok(Some(normal_result.module_path()?)),
+                (None, _) => Ok(None),
             }
         }
     }
@@ -811,10 +810,8 @@ mod tests {
             Some(FindResult::SingleFilePyiModule(root.join("foo/baz.py")))
         );
         assert_eq!(
-            find_module_components(&Name::new("baz"), &[], roots.iter(), None)
-                .unwrap()
-                .unwrap(),
-            ModulePath::filesystem(root.join("bar/baz.pyi"))
+            find_module_components(&Name::new("baz"), &[], roots.iter(), None).unwrap(),
+            FindResult::SingleFilePyiModule(root.join("bar/baz.pyi")),
         );
 
         // py preferred over pyc
@@ -847,9 +844,8 @@ mod tests {
                 roots.iter(),
                 None
             )
-            .unwrap()
             .unwrap(),
-            ModulePath::filesystem(root.join("bar/compiled/a.py"))
+            FindResult::SingleFilePyModule(root.join("bar/compiled/a.py"))
         );
     }
 
@@ -1444,25 +1440,24 @@ mod tests {
             )],
         );
         let first = Name::new("subdir");
-        let module_path = find_module_components(
+        let find_result = find_module_components(
             &first,
             &[Name::new("nested_module")],
             [root.to_path_buf()].iter(),
             None,
         )
         .unwrap();
-        assert!(matches!(module_path, Err(FindError::Ignored)));
+        assert!(matches!(find_result.module_path(), Err(FindError::Ignored)));
         let module_path = find_module_components(
             &first,
             &[Name::new("another_nested_module")],
             [root.to_path_buf()].iter(),
             None,
         )
-        .unwrap()
         .unwrap();
         assert_eq!(
             module_path,
-            ModulePath::filesystem(root.join("subdir/another_nested_module.py"))
+            FindResult::SingleFilePyModule(root.join("subdir/another_nested_module.py"))
         );
     }
 
