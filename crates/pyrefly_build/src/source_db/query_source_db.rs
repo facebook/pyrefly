@@ -219,6 +219,10 @@ mod tests {
         ) -> anyhow::Result<TargetManifestDatabase> {
             Ok(TargetManifestDatabase::get_test_database())
         }
+
+        fn construct_command(&self) -> std::process::Command {
+            panic!("We shouldn't be calling this...");
+        }
     }
 
     impl QuerySourceDatabase {

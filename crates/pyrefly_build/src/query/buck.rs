@@ -5,22 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::ffi::OsString;
 use std::fmt::Debug;
-use std::io::Write;
-use std::path::Path;
 use std::process::Command;
 
-use anyhow::Context as _;
 use serde::Deserialize;
 use serde::Serialize;
-use starlark_map::small_map::SmallMap;
-use starlark_map::small_set::SmallSet;
-use tempfile::NamedTempFile;
 
-use crate::query::Include;
 use crate::query::SourceDbQuerier;
-use crate::query::TargetManifestDatabase;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -39,31 +30,7 @@ impl BxlQuerier {
 }
 
 impl SourceDbQuerier for BxlQuerier {
-    fn query_source_db(
-        &self,
-        files: &SmallSet<Include>,
-        cwd: &Path,
-    ) -> anyhow::Result<TargetManifestDatabase> {
-        if files.is_empty() {
-            return Ok(TargetManifestDatabase {
-                db: SmallMap::new(),
-                root: cwd.to_path_buf(),
-            });
-        }
-
-        let mut argfile = NamedTempFile::with_prefix("pyrefly_buck_query_")
-            .with_context(|| "Failed to create temporary argfile for querying Buck".to_owned())?;
-        let mut argfile_args = OsString::from("--");
-        files.iter().flat_map(Include::to_cli_arg).for_each(|arg| {
-            argfile_args.push("\n");
-            argfile_args.push(arg);
-        });
-
-        argfile
-            .as_file_mut()
-            .write_all(argfile_args.as_encoded_bytes())
-            .with_context(|| "Could not write to argfile when querying Buck".to_owned())?;
-
+    fn construct_command(&self) -> Command {
         let mut cmd = Command::new("buck2");
         if let Some(isolation_dir) = &self.0.isolation_dir {
             cmd.arg("--isolation-dir");
@@ -75,25 +42,6 @@ impl SourceDbQuerier for BxlQuerier {
             cmd.args(metadata);
         }
         cmd.arg("prelude//python/sourcedb/pyrefly.bxl:main");
-        cmd.arg(format!("@{}", argfile.path().display()));
-        cmd.current_dir(cwd);
-
-        let result = cmd.output()?;
-        if !result.status.success() {
-            let stdout = String::from_utf8(result.stdout).unwrap_or_else(|_| {
-                "<Failed to parse stdout from Buck source db query>".to_owned()
-            });
-            let stderr = String::from_utf8(result.stderr).unwrap_or_else(|_| {
-                "<Failed to parse stderr from Buck source db query>".to_owned()
-            });
-
-            return Err(anyhow::anyhow!(
-                "Buck source db query failed...\nSTDOUT: {stdout}\nSTDERR: {stderr}"
-            ));
-        }
-
-        serde_json::from_slice(&result.stdout).with_context(|| {
-            "Failed to construct valid `TargetManifestDatabase` from BXL query result".to_owned()
-        })
+        cmd
     }
 }

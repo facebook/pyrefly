@@ -6,21 +6,27 @@
  */
 
 use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::fmt;
+use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 
+use anyhow::Context as _;
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::sys_info::SysInfo;
 use serde::Deserialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use tempfile::NamedTempFile;
 use vec1::Vec1;
 
 use crate::source_db::Target;
 
 pub mod buck;
+pub mod custom;
 
 /// An enum representing something that has been included by the build system, and
 /// which the build system should query for when building the sourcedb.
@@ -44,12 +50,60 @@ impl Include {
     }
 }
 
-pub(crate) trait SourceDbQuerier: Send + Sync + fmt::Debug {
+pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
     fn query_source_db(
         &self,
         files: &SmallSet<Include>,
         cwd: &Path,
-    ) -> anyhow::Result<TargetManifestDatabase>;
+    ) -> anyhow::Result<TargetManifestDatabase> {
+        if files.is_empty() {
+            return Ok(TargetManifestDatabase {
+                db: SmallMap::new(),
+                root: cwd.to_path_buf(),
+            });
+        }
+
+        let mut argfile =
+            NamedTempFile::with_prefix("pyrefly_build_query_").with_context(|| {
+                "Failed to create temporary argfile for querying source DB".to_owned()
+            })?;
+        let mut argfile_args = OsString::from("--");
+        files.iter().flat_map(Include::to_cli_arg).for_each(|arg| {
+            argfile_args.push("\n");
+            argfile_args.push(arg);
+        });
+
+        argfile
+            .as_file_mut()
+            .write_all(argfile_args.as_encoded_bytes())
+            .with_context(|| "Could not write to argfile when querying source DB".to_owned())?;
+
+        let mut cmd = self.construct_command();
+        cmd.arg(format!("@{}", argfile.path().display()));
+        cmd.current_dir(cwd);
+
+        let result = cmd.output()?;
+        if !result.status.success() {
+            let stdout = String::from_utf8(result.stdout)
+                .unwrap_or_else(|_| "<Failed to parse stdout from source DB query>".to_owned());
+            let stderr = String::from_utf8(result.stderr).unwrap_or_else(|_| {
+                "<Failed to parse stderr from Buck source DB query>".to_owned()
+            });
+
+            return Err(anyhow::anyhow!(
+                "Source DB query failed...\nSTDOUT: {stdout}\nSTDERR: {stderr}"
+            ));
+        }
+
+        serde_json::from_slice(&result.stdout).with_context(|| {
+            format!(
+                "Failed to construct valid `TargetManifestDatabase` from querier result. Command run: `{}`",
+                cmd.get_program().display(),
+            )
+        })
+    }
+
+    fn construct_command(&self) -> Command;
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
