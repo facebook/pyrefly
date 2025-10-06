@@ -2460,9 +2460,11 @@ async def bar():
 ---
 title: Pyrefly Error Suppressions
 
-description: Learn how to suppress type check errors in Pyrefly with code comments.
+description: Learn how to suppress type check errors in Pyrefly with code comments and baseline files.
 ---
 import CodeSnippet from '@site/src/sandbox/CodeSnippet'
+
+## Error Suppression Comments
 
 The Python type system allows you to suppress errors with a comment. This feature can be helpful in many scenarios. For example, after enabling a type checker, suppressions can allow you to get a clean type check signal without having to stop and fix every pre-existing error in your code.
 
@@ -2517,8 +2519,34 @@ def bar() -> int:
   />
 </pre>
 
+Pyrefly can automatically suppress all type errors in your project if you run:
 
-----
+```
+pyrefly check --suppress-errors
+```
+
+## Baseline Files (Experimental)
+
+Pyrefly also supports storing errors in a baseline file. Any errors matching the baseline will be ignored and only new errors will be reported.
+This is useful when introducing type checking to a project for the first time, or when rolling out changes that require many suppression comments.
+This feature is inspired by tools like [basedpyright](https://docs.basedpyright.com/latest/benefits-over-pyright/baseline/) and [Android Studio](https://developer.android.com/studio/write/lint#snapshot).
+
+To generate (or re-generate) the baseline file:
+
+```
+pyrefly check --baseline="<path to baseline file>" --update-baseline
+```
+
+To check your project using a baseline file and report only newly-introduced errors:
+
+```
+pyrefly check --baseline="<path to baseline file>"
+```
+
+Errors are matched with the baseline by looking at file, error code, and column number.
+Right now, errors suppressed by the baseline file are still shown in the IDE and the baseline file can only be passed as a command line argument, but both are expected to change in the future.
+This feature is experimental, so please submit any feedback or requests you have on our Github repo.
+
 ## Upgrading Pyrefly (And other changes that introduce new type errors)
 
 Upgrading the version of Pyrefly you're using, or a third party library you depend on can surface new type errors in your code. Fixing them all at once is often not realistic. We've written scripts to help you temporarily silence them.
