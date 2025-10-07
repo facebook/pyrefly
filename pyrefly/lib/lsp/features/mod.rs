@@ -6,3 +6,4 @@
  */
 
 pub mod hover;
+pub mod provide_type;
