@@ -1980,6 +1980,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for (field_name, class_and_types) in inherited_fields.iter() {
             if class_and_types.len() > 1 {
                 let types: Vec<Type> = class_and_types.iter().map(|(_, ty)| ty.clone()).collect();
+                if types
+                    .iter()
+                    .any(|ty| matches!(ty, Type::BoundMethod(..) | Type::Function(..)))
+                {
+                    // TODO(fangyizhou): Handle bound methods and funtions properly.
+                    // This is a leftover from https://github.com/facebook/pyrefly/pull/1196
+                    continue;
+                }
                 let intersect = self.intersects(&types);
                 if matches!(intersect, Type::Never(_)) {
                     let mut error_msg = vec1![
