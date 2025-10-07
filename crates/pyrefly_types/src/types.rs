@@ -393,7 +393,9 @@ pub enum CalleeKind {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct BoundMethod {
+    /// Type of the self/cls argument,
     pub obj: Type,
+    /// Type of the function.
     pub func: BoundMethodType,
 }
 
@@ -608,8 +610,7 @@ pub enum Type {
     /// A function declared using the `def` keyword.
     /// Note that the FunctionKind metadata doesn't participate in subtyping, and thus two types with distinct metadata are still subtypes.
     Function(Box<Function>),
-    /// A method of a class. The first `Box<Type>` is the self/cls argument,
-    /// and the second is the function.
+    /// A method of a class.
     BoundMethod(Box<BoundMethod>),
     /// An overloaded function.
     Overload(Overload),
