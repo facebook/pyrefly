@@ -310,3 +310,17 @@ class E(C, D): # E: Field `x` has inconsistent types inherited from multiple bas
     pass
 "#,
 );
+
+testcase!(
+    bug = "This is currently not handled",
+    test_multiple_inheritance_incompatible_methods,
+    r#"
+class Foo:
+    def foo(self) -> int: ...
+class Bar:
+    def foo(self) -> str: ...
+
+class Both(Foo, Bar): # Expect error here
+    ...
+"#,
+);
