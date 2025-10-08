@@ -134,7 +134,7 @@ async function overridePythonPath(
     }
     let scopeUri = configurationItems[index].scopeUri;
     return await pythonExtension.environments.getActiveEnvironmentPath(
-      scopeUri === undefined ? undefined : vscode.Uri.file(scopeUri),
+      scopeUri === undefined ? undefined : vscode.Uri.parse(scopeUri),
     ).path;
   };
   const newResult = await Promise.all(
@@ -153,7 +153,9 @@ async function overridePythonPath(
 export async function activate(context: ExtensionContext) {
   // Initialize the output channel if it doesn't exist
   if (!outputChannel) {
-    outputChannel = vscode.window.createOutputChannel('Pyrefly language server');
+    outputChannel = vscode.window.createOutputChannel(
+      'Pyrefly language server',
+    );
   }
 
   const path: string = requireSetting('pyrefly.lspPath');
