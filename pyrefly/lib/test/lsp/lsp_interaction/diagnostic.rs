@@ -52,3 +52,86 @@ fn test_unexpected_keyword_range() {
 
     interaction.shutdown();
 }
+
+#[test]
+fn test_error_documentation_links() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(None),
+        ..Default::default()
+    });
+
+    interaction.server.did_change_configuration();
+
+    interaction.client.expect_configuration_request(2, None);
+    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
+
+    interaction.server.did_open("error_docs_test.py");
+    interaction.server.diagnostic("error_docs_test.py");
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
+        result: Some(serde_json::json!({
+            "items": [
+                {
+                    "code": "bad-assignment",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
+                    },
+                    "message": "`Literal['']` is not assignable to `int`",
+                    "range": {
+                        "end": {"character": 11, "line": 9},
+                        "start": {"character": 9, "line": 9}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                },
+                {
+                    "code": "bad-context-manager",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-context-manager"
+                    },
+                    "message": "Cannot use `A` as a context manager\n  Object of class `A` has no attribute `__enter__`",
+                    "range": {
+                        "end": {"character": 8, "line": 15},
+                        "start": {"character": 5, "line": 15}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                },
+                {
+                    "code": "bad-context-manager",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-context-manager"
+                    },
+                    "message": "Cannot use `A` as a context manager\n  Object of class `A` has no attribute `__exit__`",
+                    "range": {
+                        "end": {"character": 8, "line": 15},
+                        "start": {"character": 5, "line": 15}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                },
+                {
+                    "code": "missing-attribute",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#missing-attribute"
+                    },
+                    "message": "Object of class `object` has no attribute `nonexistent_method`",
+                    "range": {
+                        "end": {"character": 22, "line": 20},
+                        "start": {"character": 0, "line": 20}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        })),
+        error: None,
+    });
+
+    interaction.shutdown();
+}

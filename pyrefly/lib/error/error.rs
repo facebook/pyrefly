@@ -12,7 +12,9 @@ use std::io::Write;
 use std::path::Path;
 
 use itertools::Itertools;
+use lsp_types::CodeDescription;
 use lsp_types::Diagnostic;
+use lsp_types::Url;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::number_thousands;
@@ -168,6 +170,13 @@ impl Error {
 
     /// Create a diagnostic suitable for use in LSP.
     pub fn to_diagnostic(&self) -> Diagnostic {
+        let code = self.error_kind().to_name().to_owned();
+        let code_description = Url::parse(&format!(
+            "{}",
+            self.error_kind().docs_url()
+        ))
+        .ok()
+        .map(|href| CodeDescription { href });
         Diagnostic {
             range: self.lined_buffer().to_lsp_range(self.range()),
             severity: Some(match self.severity() {
@@ -179,9 +188,8 @@ impl Error {
             }),
             source: Some("Pyrefly".to_owned()),
             message: self.msg().to_owned(),
-            code: Some(lsp_types::NumberOrString::String(
-                self.error_kind().to_name().to_owned(),
-            )),
+            code: Some(lsp_types::NumberOrString::String(code)),
+            code_description,
             ..Default::default()
         }
     }

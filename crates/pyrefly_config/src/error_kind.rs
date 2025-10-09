@@ -273,6 +273,15 @@ impl ErrorKind {
             _ => Severity::Error,
         }
     }
+
+    /// Returns the public documentation URL for this error kind.
+    /// Example: https://pyrefly.org/en/docs/error-kinds/#bad-context-manager
+    pub fn docs_url(self) -> String {
+        format!(
+            "https://pyrefly.org/en/docs/error-kinds/#{}",
+            self.to_name()
+        )
+    }
 }
 
 #[cfg(test)]
