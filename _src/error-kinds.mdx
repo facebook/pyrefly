@@ -381,6 +381,19 @@ An error related to the import mechanism, such as when a module cannot be found.
 The error message will include which paths were searched, such as the site package paths.
 You may be missing a dependency, or you may need to inform Pyrefly where the module lives. See [Configuration](configuration.mdx) for further information.
 
+## inconsistent-inheritance
+
+When a class inherits from multiple base classes, the inherited fields must be consistent.
+
+Example:
+```python
+class A:
+    f: str
+class B:
+    f: int
+class C(A, B): ...  # error, the field `f` is inconsistent
+```
+
 ## inconsistent-overload
 
 The signature of a function overload is inconsistent with the implementation.
