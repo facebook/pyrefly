@@ -3865,6 +3865,8 @@ Static analyzers can often _infer_ types from your code—no annotations require
 <CodeSnippet
   sampleFilename="basic_inference.py"
   codeSample={`# Basic Inference
+from typing import reveal_type
+
 answer = 42
 reveal_type(answer) # hover to reveal type
 

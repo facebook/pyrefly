@@ -34,8 +34,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.409aac25.css">
-<script src="/assets/js/runtime~main.10b60f19.js" defer="defer"></script>
-<script src="/assets/js/main.8b806c15.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.e82e3d34.js" defer="defer"></script>
+<script src="/assets/js/main.27e4fc07.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -53,6 +53,8 @@
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="types-with-inference">Types with Inference<a href="#types-with-inference" class="hash-link" aria-label="Direct link to Types with Inference" title="Direct link to Types with Inference">​</a></h3>
 <p>Static analyzers can often <em>infer</em> types from your code—no annotations required. Pyrefly takes this a step further.</p>
 <div class="x1717udv x1ghz6dp"><div class="xh8yej3 x5yr21d x126k92a xysyzu8 x1tamke2 x1ybsatz x1sp1r08"><div class="xb3r6kr x1n2onr6 xif65rj x1iwq0vh"># Basic Inference
+from typing import reveal_type
+
 answer = 42
 reveal_type(answer) # hover to reveal type
 
