@@ -1830,3 +1830,26 @@ async def main() -> None:
     assert_type(a, list[int])
     "#,
 );
+
+testcase!(
+    test_nonfinal_class_self_return_type,
+    r#"
+from typing import Self
+
+class NonFinalClass:
+    def test(self) -> Self:
+        return NonFinalClass()  # E: Returned type `NonFinalClass` is not assignable to declared return type `Self@NonFinalClass`
+    "#,
+);
+
+testcase!(
+    test_final_class_self_return_type,
+    r#"
+from typing import Self, final
+
+@final
+class FinalClass:
+    def test(self) -> Self:
+        return FinalClass() 
+    "#,
+);
