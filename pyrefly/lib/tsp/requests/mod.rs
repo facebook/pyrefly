@@ -7,4 +7,5 @@
 
 //! TSP request implementations
 
+pub mod get_snapshot;
 pub mod get_supported_protocol_version;
