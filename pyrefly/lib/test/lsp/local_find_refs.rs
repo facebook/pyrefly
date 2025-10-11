@@ -299,7 +299,6 @@ References:
     );
 }
 
-// todo(kylei): references on renames should find lhs of assignment
 #[test]
 fn reassigned_local() {
     let code = r#"
@@ -317,7 +316,62 @@ References:
 2 | xy = 5
     ^^
 4 | xy = xy + 1
+    ^^
+4 | xy = xy + 1
          ^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn reassigned_local_out_of_scope() {
+    let code = r#"
+xy = 5
+#^
+def increment_xy():
+    xy = xy + 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | xy = 5
+     ^
+References:
+2 | xy = 5
+    ^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn reassigned_global() {
+    let code = r#"
+xy = 5
+#^
+def increment_xy():
+    global xy
+    xy = xy + 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | xy = 5
+     ^
+References:
+2 | xy = 5
+    ^^
+5 |     global xy
+               ^^
+6 |     xy = xy + 1
+        ^^
+6 |     xy = xy + 1
+             ^^
 "#
         .trim(),
         report.trim(),
