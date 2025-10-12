@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+pub mod baseline;
 pub mod collector;
 pub mod context;
 pub mod display;

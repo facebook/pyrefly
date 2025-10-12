@@ -175,12 +175,12 @@ export default function Sandbox({
     // Rename a file
     const renameFile = useCallback((oldName: string, newName: string) => {
         if (!newName.trim() || models.has(newName)) return false;
-        // Allow renaming to `pyrefly.toml` specifically; otherwise only allow `.py`
+        // Allow renaming to `pyrefly.toml` specifically; otherwise only allow `.py` and `.pyi`
         let finalName: string;
         const trimmedNew = newName.trim();
         if (trimmedNew === 'pyrefly.toml' || trimmedNew.endsWith('/pyrefly.toml')) {
             finalName = 'pyrefly.toml';
-        } else if (trimmedNew.endsWith('.py')) {
+        } else if (trimmedNew.endsWith('.py') || trimmedNew.endsWith('.pyi')) {
             finalName = trimmedNew;
         } else {
             return false;
@@ -233,7 +233,7 @@ export default function Sandbox({
         }
 
         const finalName = inputValue.trim();
-        if (!finalName.endsWith('.py') && finalName !== 'pyrefly.toml') {
+        if (!finalName.endsWith('.py') && !finalName.endsWith('.pyi') && finalName !== 'pyrefly.toml') {
             return false;
         }
 
@@ -907,20 +907,7 @@ function getPyreflyEditor(
                 defaultValue={codeSample}
                 defaultLanguage="python"
                 theme={editorTheme}
-                onChange={(value) => {
-                    forceRecheck();
-                    if (typeof value === 'string' && !isCodeSnippet) {
-                        const allFiles: Record<string, string> = {};
-                        models.forEach((model, filename) => {
-                            if (filename === activeFileName) {
-                                allFiles[filename] = value;
-                            } else {
-                                allFiles[filename] = model.getValue();
-                            }
-                        });
-                        updateURL(allFiles, activeFileName);
-                    }
-                }}
+                onChange={forceRecheck}
                 onMount={onEditorMount}
                 keepCurrentModel={true}
                 height={sandboxHeight}
@@ -966,7 +953,7 @@ function getMonacoButtons(
                 pyodideStatus,
                 setPyodideStatus
             ),
-            getShareUrlButton(),
+            getShareUrlButton(models, activeFileName),
             getResetButton(model, forceRecheck, codeSample, isCodeSnippet, models, activeFileName),
             getGitHubIssuesButton(model, pythonVersion),
         ];
@@ -986,11 +973,21 @@ function getMonacoButtons(
 }
 
 // Monaco Editor Buttons
-function getShareUrlButton(): React.ReactElement {
+function getShareUrlButton(
+    models: Map<string, editor.ITextModel>,
+    activeFileName: string
+): React.ReactElement {
     return (
         <MonacoEditorButton
             id="share-url-button"
             onClick={() => {
+                // Update URL with current state before copying
+                const allFiles: Record<string, string> = {};
+                models.forEach((model, filename) => {
+                    allFiles[filename] = model.getValue();
+                });
+                updateURL(allFiles, activeFileName);
+
                 const currentURL = window.location.href;
                 return navigator.clipboard.writeText(currentURL);
             }}
@@ -1132,17 +1129,6 @@ function getResetButton(
             onClick={async () => {
                 if (model) {
                     model.setValue(codeSample);
-                    if (!isCodeSnippet) {
-                        const allFiles: Record<string, string> = {};
-                        models.forEach((model, filename) => {
-                            if (filename === activeFileName) {
-                                allFiles[filename] = codeSample;
-                            } else {
-                                allFiles[filename] = model.getValue();
-                            }
-                        });
-                        updateURL(allFiles, activeFileName);
-                    }
                     forceRecheck();
                 }
             }}

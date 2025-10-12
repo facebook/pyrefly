@@ -16,8 +16,10 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::SourceDatabase;
+use pyrefly_build::source_db::Target;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
@@ -63,7 +65,12 @@ impl SourceDatabase for PlaygroundSourceDatabase {
             .collect()
     }
 
-    fn lookup(&self, module_name: &ModuleName, _: Option<&Path>) -> Option<ModulePath> {
+    fn lookup(
+        &self,
+        module_name: &ModuleName,
+        _: Option<&Path>,
+        _: Option<ModuleStyle>,
+    ) -> Option<ModulePath> {
         self.module_mappings.get(module_name).cloned()
     }
 
@@ -83,6 +90,10 @@ impl SourceDatabase for PlaygroundSourceDatabase {
             .values()
             .map(|p| p.as_path().to_path_buf())
             .collect()
+    }
+
+    fn get_target(&self, _: Option<&Path>) -> Option<Target> {
+        None
     }
 }
 
@@ -278,16 +289,21 @@ impl Playground {
         config.python_environment.python_version = Some(self.sys_info.version());
         config.python_environment.python_platform = Some(desired_platform);
 
-        // Build source DB from .py files only
+        // Build source DB from .py and .pyi files only
         let mut file_contents = Vec::new();
         let mut module_mappings = SmallMap::new();
         for (filename, content) in &files {
-            if !filename.ends_with(".py") {
+            if !filename.ends_with(".py") && !filename.ends_with(".pyi") {
                 continue;
             }
+            let suffix = if filename.ends_with(".pyi") {
+                ".pyi"
+            } else {
+                ".py"
+            };
             let module_name =
-                ModuleName::from_str(filename.strip_suffix(".py").unwrap_or(filename));
-            let module_path = PathBuf::from(format!("{}.py", module_name.as_str()));
+                ModuleName::from_str(filename.strip_suffix(suffix).unwrap_or(filename));
+            let module_path = PathBuf::from(filename.clone());
             let memory_path = ModulePath::memory(module_path.clone());
 
             module_mappings.insert(module_name, memory_path.dupe());
@@ -519,7 +535,10 @@ mod tests {
             "Could not find import of `t`",
             "Parse error: Expected 'import', found newline",
         ];
-        let expected_details = &["  No search path or site package path", ""];
+        let expected_details = &[
+            "  Looked in these locations:\n  Build system source database",
+            "",
+        ];
         let expected_error_kinds = &[ErrorKind::ImportError, ErrorKind::ParseError];
 
         assert_eq!(
@@ -566,8 +585,8 @@ mod tests {
         for error in &errors {
             assert!(!error.filename.is_empty(), "Error should include filename");
             assert!(
-                error.filename.ends_with(".py"),
-                "Filename should end with .py"
+                error.filename.ends_with(".py") || error.filename.ends_with(".pyi"),
+                "Filename should end with .py or .pyi"
             );
         }
     }
@@ -684,5 +703,76 @@ mod tests {
         for error in &errors_after_update {
             assert!(!error.filename.is_empty(), "Error should include filename");
         }
+    }
+
+    #[test]
+    fn test_pyi_stub_file_support() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+
+        // Create a .pyi stub file
+        files.insert(
+            "mymodule.pyi".to_owned(),
+            "def greet(name: str) -> str: ...".to_owned(),
+        );
+
+        // Create a .py file that uses the stub
+        files.insert(
+            "main.py".to_owned(),
+            "from mymodule import greet\nresult: int = greet(\"test\")".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+        state.set_active_file("main.py");
+
+        let errors = state.get_errors();
+
+        // Should have a type error: greet returns str, not int
+        let type_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| {
+                e.message_header.contains("not assignable")
+                    || e.message_header.contains("incompatible")
+            })
+            .collect();
+
+        assert!(
+            !type_errors.is_empty(),
+            "Should detect type mismatch when using .pyi stub file"
+        );
+
+        // Verify that .pyi files are processed
+        assert!(
+            state.handles.contains_key("mymodule.pyi"),
+            ".pyi file should be in handles"
+        );
+    }
+
+    #[test]
+    fn test_mixed_py_and_pyi_files() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+
+        // Both .py and .pyi files should be accepted
+        files.insert("module1.py".to_owned(), "x: int = 1".to_owned());
+        files.insert("module2.pyi".to_owned(), "y: str".to_owned());
+        files.insert(
+            "pyrefly.toml".to_owned(),
+            "python-version = \"3.12\"".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+
+        assert_eq!(
+            state.handles.len(),
+            2,
+            "Should have 2 module handles (.py and .pyi)"
+        );
+        assert!(state.handles.contains_key("module1.py"));
+        assert!(state.handles.contains_key("module2.pyi"));
+        assert!(
+            !state.handles.contains_key("pyrefly.toml"),
+            "Config file should not be a module"
+        );
     }
 }

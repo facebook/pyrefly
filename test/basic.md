@@ -26,6 +26,14 @@ $ $PYREFLY check $TEST_PY
 [0]
 ```
 
+## No errors on our Python code
+
+```scrut {output_stream: stderr}
+$ $PYREFLY check $PYREFLY_PY
+ INFO 0 errors
+[0]
+```
+
 ## Text output on stdout
 
 ```scrut

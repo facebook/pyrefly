@@ -140,9 +140,15 @@ fn dump_config(
                 break;
             }
         }
-        for path_part in config.structured_import_lookup_path() {
+        println!("  Resolving imports from:");
+        let origin = if files.len() == 1 {
+            files.first().map(|p| p.as_path())
+        } else {
+            None
+        };
+        for path_part in config.structured_import_lookup_path(origin) {
             if !path_part.is_empty() {
-                println!("  {path_part}");
+                println!("    {path_part}");
             }
         }
     }

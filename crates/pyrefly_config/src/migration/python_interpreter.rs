@@ -32,10 +32,11 @@ impl ConfigOptionMigrater for PythonInterpreter {
             return Err(anyhow::anyhow!("No python_executable found in mypy config"));
         }
 
-        let python_interpreter = python_executable.unwrap();
-        pyrefly_cfg.interpreters.python_interpreter = PathBuf::from_str(&python_interpreter)
-            .ok()
-            .map(ConfigOrigin::config);
+        let python_interpreter_path = python_executable.unwrap();
+        pyrefly_cfg.interpreters.python_interpreter_path =
+            PathBuf::from_str(&python_interpreter_path)
+                .ok()
+                .map(ConfigOrigin::config);
         Ok(())
     }
 
@@ -45,7 +46,7 @@ impl ConfigOptionMigrater for PythonInterpreter {
         _pyrefly_cfg: &mut ConfigFile,
     ) -> anyhow::Result<()> {
         Err(anyhow::anyhow!(
-            "Pyright does not have a direct equivalent for python_interpreter"
+            "Pyright does not have a direct equivalent for python_interpreter_path"
         ))
     }
 }
@@ -66,11 +67,11 @@ mod tests {
 
         let mut pyrefly_cfg = ConfigFile::default();
 
-        let python_interpreter = PythonInterpreter;
-        let _ = python_interpreter.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+        let python_interpreter_path = PythonInterpreter;
+        let _ = python_interpreter_path.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
         assert_eq!(
-            pyrefly_cfg.interpreters.python_interpreter,
+            pyrefly_cfg.interpreters.python_interpreter_path,
             Some(ConfigOrigin::config(PathBuf::from("/usr/bin/python3")))
         );
     }
@@ -80,13 +81,13 @@ mod tests {
         let mypy_cfg = Ini::new();
 
         let mut pyrefly_cfg = ConfigFile::default();
-        let default_interpreter = pyrefly_cfg.interpreters.python_interpreter.clone();
+        let default_interpreter = pyrefly_cfg.interpreters.python_interpreter_path.clone();
 
-        let python_interpreter = PythonInterpreter;
-        let _ = python_interpreter.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+        let python_interpreter_path = PythonInterpreter;
+        let _ = python_interpreter_path.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
         assert_eq!(
-            pyrefly_cfg.interpreters.python_interpreter,
+            pyrefly_cfg.interpreters.python_interpreter_path,
             default_interpreter
         );
     }
@@ -95,14 +96,14 @@ mod tests {
     fn test_migrate_from_pyright() {
         let pyright_cfg = default_pyright_config();
         let mut pyrefly_cfg = ConfigFile::default();
-        let default_interpreter = pyrefly_cfg.interpreters.python_interpreter.clone();
+        let default_interpreter = pyrefly_cfg.interpreters.python_interpreter_path.clone();
 
-        let python_interpreter = PythonInterpreter;
-        let result = python_interpreter.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let python_interpreter_path = PythonInterpreter;
+        let result = python_interpreter_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
 
         assert!(result.is_err());
         assert_eq!(
-            pyrefly_cfg.interpreters.python_interpreter,
+            pyrefly_cfg.interpreters.python_interpreter_path,
             default_interpreter
         );
     }

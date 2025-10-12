@@ -46,6 +46,7 @@ use starlark_map::small_set::SmallSet;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::VarianceMap;
 use crate::alt::solve::TypeFormContext;
+use crate::alt::types::abstract_class::AbstractClassMembers;
 use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
@@ -86,6 +87,7 @@ assert_bytes!(KeyClassSynthesizedFields, 4);
 assert_bytes!(KeyAnnotation, 12);
 assert_bytes!(KeyClassMetadata, 4);
 assert_bytes!(KeyClassMro, 4);
+assert_bytes!(KeyAbstractClassCheck, 4);
 assert_words!(KeyLegacyTypeParam, 1);
 assert_words!(KeyYield, 1);
 assert_words!(KeyYieldFrom, 1);
@@ -100,6 +102,7 @@ assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 8);
 assert_bytes!(BindingClassMro, 4);
+assert_bytes!(BindingAbstractClassCheck, 4);
 assert_words!(BindingClassField, 21);
 assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 16);
@@ -125,6 +128,7 @@ pub enum AnyIdx {
     KeyAnnotation(Idx<KeyAnnotation>),
     KeyClassMetadata(Idx<KeyClassMetadata>),
     KeyClassMro(Idx<KeyClassMro>),
+    KeyAbstractClassCheck(Idx<KeyAbstractClassCheck>),
     KeyLegacyTypeParam(Idx<KeyLegacyTypeParam>),
     KeyYield(Idx<KeyYield>),
     KeyYieldFrom(Idx<KeyYieldFrom>),
@@ -148,6 +152,7 @@ impl DisplayWith<Bindings> for AnyIdx {
             Self::KeyAnnotation(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassMetadata(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassMro(idx) => write!(f, "{}", ctx.display(*idx)),
+            Self::KeyAbstractClassCheck(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyLegacyTypeParam(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyYield(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyYieldFrom(idx) => write!(f, "{}", ctx.display(*idx)),
@@ -288,6 +293,15 @@ impl Keyed for KeyClassMro {
     }
 }
 impl Exported for KeyClassMro {}
+impl Keyed for KeyAbstractClassCheck {
+    const EXPORTED: bool = true;
+    type Value = BindingAbstractClassCheck;
+    type Answer = AbstractClassMembers;
+    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
+        AnyIdx::KeyAbstractClassCheck(idx)
+    }
+}
+impl Exported for KeyAbstractClassCheck {}
 impl Keyed for KeyLegacyTypeParam {
     type Value = BindingLegacyTypeParam;
     type Answer = LegacyTypeParameterLookup;
@@ -842,6 +856,21 @@ impl DisplayWith<ModuleInfo> for KeyClassMro {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyAbstractClassCheck(pub ClassDefIndex);
+
+impl Ranged for KeyAbstractClassCheck {
+    fn range(&self) -> TextRange {
+        TextRange::default()
+    }
+}
+
+impl DisplayWith<ModuleInfo> for KeyAbstractClassCheck {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
+        write!(f, "KeyAbstractClassCheck(class{})", self.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyLegacyTypeParam(pub ShortIdentifier);
 
 impl Ranged for KeyLegacyTypeParam {
@@ -1213,9 +1242,10 @@ pub enum Binding {
     Forward(Idx<Key>),
     /// A phi node, representing the union of several alternative keys.
     Phi(SmallSet<Idx<Key>>),
-    /// Used if the binding ends up being recursive, instead of defaulting to `Any`, should
-    /// default to the given type.
-    Default(Idx<Key>, Box<Binding>),
+    /// A phi node for a name that was defined above a loop. This can involve recursion
+    /// due to reassingment in the loop, so we provide a default binding that is used
+    /// if the resulting Cyclic var is forced.
+    LoopPhi(Idx<Key>, SmallSet<Idx<Key>>),
     /// A narrowed type.
     Narrow(Idx<Key>, Box<NarrowOp>, TextRange),
     /// An import of a module.
@@ -1232,6 +1262,7 @@ pub enum Binding {
         Name,
         Option<(AnnotationStyle, Idx<KeyAnnotation>)>,
         Box<Expr>,
+        Option<Box<[Idx<KeyLegacyTypeParam>]>>,
     ),
     /// A type alias declared with the `type` soft keyword
     ScopedTypeAlias(Name, Option<TypeParams>, Box<Expr>),
@@ -1428,8 +1459,13 @@ impl DisplayWith<Bindings> for Binding {
                     intersperse_iter("; ", || xs.iter().map(|x| ctx.display(*x)))
                 )
             }
-            Self::Default(k, x) => {
-                write!(f, "Default({}, {})", ctx.display(*k), x.display_with(ctx))
+            Self::LoopPhi(k, xs) => {
+                write!(
+                    f,
+                    "LoopPhi({}, {})",
+                    ctx.display(*k),
+                    intersperse_iter("; ", || xs.iter().map(|x| ctx.display(*x)))
+                )
             }
             Self::Narrow(k, op, _) => {
                 write!(
@@ -1439,10 +1475,10 @@ impl DisplayWith<Bindings> for Binding {
                     op.display_with(ctx.module())
                 )
             }
-            Self::NameAssign(name, None, expr) => {
+            Self::NameAssign(name, None, expr, _) => {
                 write!(f, "NameAssign({name}, None, {})", m.display(expr))
             }
-            Self::NameAssign(name, Some((style, annot)), expr) => {
+            Self::NameAssign(name, Some((style, annot)), expr, _) => {
                 write!(
                     f,
                     "NameAssign({name}, {style:?}, {}, {})",
@@ -1589,10 +1625,10 @@ impl Binding {
             Binding::ScopedTypeAlias(_, _, _) | Binding::TypeAliasType(_, _, _) => {
                 Some(SymbolKind::TypeAlias)
             }
-            Binding::NameAssign(name, _, _) if name.as_str() == name.to_uppercase() => {
+            Binding::NameAssign(name, _, _, _) if name.as_str() == name.to_uppercase() => {
                 Some(SymbolKind::Constant)
             }
-            Binding::NameAssign(name, _, _) => {
+            Binding::NameAssign(name, _, _, _) => {
                 if name.as_str().chars().all(|c| c.is_uppercase() || c == '_') {
                     Some(SymbolKind::Constant)
                 } else {
@@ -1616,7 +1652,7 @@ impl Binding {
             | Binding::Type(_)
             | Binding::Forward(_)
             | Binding::Phi(_)
-            | Binding::Default(_, _)
+            | Binding::LoopPhi(_, _)
             | Binding::Narrow(_, _, _)
             | Binding::PatternMatchMapping(_, _)
             | Binding::PatternMatchClassPositional(_, _, _, _)
@@ -2010,6 +2046,21 @@ pub struct BindingClassMro {
 impl DisplayWith<Bindings> for BindingClassMro {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         write!(f, "BindingClassMro({}, ..)", ctx.display(self.class_idx))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct BindingAbstractClassCheck {
+    pub class_idx: Idx<KeyClass>,
+}
+
+impl DisplayWith<Bindings> for BindingAbstractClassCheck {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
+        write!(
+            f,
+            "BindingAbstractClassCheck({})",
+            ctx.display(self.class_idx)
+        )
     }
 }
 

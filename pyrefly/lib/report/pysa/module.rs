@@ -14,6 +14,8 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use serde::Serialize;
 
+use crate::report::pysa::step_logger::StepLogger;
+
 /// Represents a unique identifier for a module
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 pub struct ModuleId(u32);
@@ -53,6 +55,8 @@ impl ModuleIds {
     /// Multiple python files can map to the same module name (e.g, `foo.bar`).
     /// This creates a unique and deterministic identifier for each handle.
     pub fn new(handles: &[Handle]) -> ModuleIds {
+        let step = StepLogger::start("Building unique module ids", "Built unique module ids");
+
         let mut modules = handles
             .iter()
             .map(ModuleKey::from_handle)
@@ -68,6 +72,8 @@ impl ModuleIds {
             );
             current_id += 1;
         }
+
+        step.finish();
         ModuleIds(result)
     }
 

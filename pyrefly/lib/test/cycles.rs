@@ -307,23 +307,6 @@ assert_type(fy, Callable[..., int])
 );
 */
 
-testcase!(
-    bug = "This cycle is deterministic but ill-behaved. Both speculative Phi and narrowing pinning Var are contributing",
-    test_inconsistent_types_from_cycle_in_loop,
-    r#"
-from typing import Iterable, Iterator, cast
-
-def iterate[T](*items: T | Iterable[T]) -> Iterator[T]:
-    for item in items:  # E: `Iterable[T] | str | T` is not assignable to `Iterable[T] | T` (caused by inconsistent types when breaking cycles)
-        if isinstance(item, str):
-            yield cast(T, item)
-        elif isinstance(item, Iterable):
-            yield from item
-        else:
-            yield item
-"#,
-);
-
 // This pair of tests failed until we separated Mro out from ClassMetadata - parsing base
 // types depends on the metadata but not the Mro, which was leading to patterns where a base
 // class in the cycle is generic over a class in the cycle to incorrectly fail to resolve
@@ -358,6 +341,20 @@ class B(A):
     pass
 assert_type(A().x, B)
 assert_type(B().x, B)
+"#,
+);
+
+testcase!(
+    potential_cycle_through_generic_base_union,
+    r#"
+type A = Child | int
+class Base[T]:
+    def __init__(self, value: T) -> None:
+        ...
+class Child(Base[A]):  # Note how the Base targ is a union of `Child` and another class
+    pass
+
+Child("abc")  # E: not assignable to parameter `value` with type `Child | int`
 "#,
 );
 

@@ -25,23 +25,30 @@
 #![deny(clippy::trivially_copy_pass_by_ref)]
 #![feature(const_type_name)]
 #![feature(if_let_guard)]
-#![feature(let_chains)]
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use dupe::Dupe;
 use serde::Deserialize;
 use serde::Serialize;
 
-pub mod buck;
 pub mod handle;
-pub mod map_db;
 pub mod source_db;
+pub use source_db::SourceDatabase;
+mod query;
 
-#[derive(Debug, Clone, Dupe, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
+use crate::query::SourceDbQuerier;
+use crate::query::buck::BxlArgs;
+use crate::query::buck::BxlQuerier;
+use crate::query::custom::CustomQuerier;
+use crate::query::custom::CustomQueryArgs;
+use crate::source_db::query_source_db::QuerySourceDatabase;
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", tag = "type")]
 pub enum BuildSystem {
-    Buck,
+    Buck(BxlArgs),
+    Custom(CustomQueryArgs),
 }
 
 impl BuildSystem {
@@ -49,8 +56,10 @@ impl BuildSystem {
         &self,
         config_root: PathBuf,
     ) -> Box<dyn source_db::SourceDatabase + 'static> {
-        match &self {
-            Self::Buck => Box::new(buck::bxl::BuckSourceDatabase::new(config_root)),
-        }
+        let querier: Arc<dyn SourceDbQuerier> = match &self {
+            Self::Buck(args) => Arc::new(BxlQuerier::new(args.clone())),
+            Self::Custom(args) => Arc::new(CustomQuerier::new(args.clone())),
+        };
+        Box::new(QuerySourceDatabase::new(config_root, querier))
     }
 }

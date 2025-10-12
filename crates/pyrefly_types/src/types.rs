@@ -393,7 +393,9 @@ pub enum CalleeKind {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct BoundMethod {
+    /// Type of the self/cls argument,
     pub obj: Type,
+    /// Type of the function.
     pub func: BoundMethodType,
 }
 
@@ -491,7 +493,7 @@ pub enum OverloadType {
 impl OverloadType {
     pub fn as_type(&self) -> Type {
         match self {
-            Self::Function(f) => Type::Callable(Box::new(f.signature.clone())),
+            Self::Function(f) => Type::Function(Box::new(f.clone())),
             Self::Forall(forall) => {
                 Forallable::Function(forall.body.clone()).forall(forall.tparams.clone())
             }
@@ -608,8 +610,7 @@ pub enum Type {
     /// A function declared using the `def` keyword.
     /// Note that the FunctionKind metadata doesn't participate in subtyping, and thus two types with distinct metadata are still subtypes.
     Function(Box<Function>),
-    /// A method of a class. The first `Box<Type>` is the self/cls argument,
-    /// and the second is the function.
+    /// A method of a class.
     BoundMethod(Box<BoundMethod>),
     /// An overloaded function.
     Overload(Overload),
@@ -694,6 +695,14 @@ pub enum Type {
     /// Wraps the result of a function call whose keyword arguments have typing effects, like
     /// `typing.dataclass_transform(...)`.
     KwCall(Box<KwCall>),
+    /// All possible materializations of Any. A subset check with Type::Materialization succeeds
+    /// only if it would succeed with any type. This behaves like top (`object`) in one direction
+    /// and bottom (`Never`) in the other:
+    /// * `Materialization` <: `T` succeeds iff `object` <: `T` would succeed
+    /// * `T` <: `Materialization` succeeds iff `T` <: `Never` would succeed
+    ///
+    /// See https://typing.python.org/en/latest/spec/glossary.html#term-materialize.
+    Materialization,
     None,
 }
 
@@ -739,7 +748,7 @@ impl Visit for Type {
             Type::SuperInstance(x) => x.visit(f),
             Type::SelfType(x) => x.visit(f),
             Type::KwCall(x) => x.visit(f),
-            Type::None => {}
+            Type::Materialization | Type::None => {}
         }
     }
 }
@@ -786,7 +795,7 @@ impl VisitMut for Type {
             Type::SuperInstance(x) => x.visit_mut(f),
             Type::SelfType(x) => x.visit_mut(f),
             Type::KwCall(x) => x.visit_mut(f),
-            Type::None => {}
+            Type::Materialization | Type::None => {}
         }
     }
 }
@@ -1468,6 +1477,27 @@ impl Type {
             Type::Overload(o) => Some(o.metadata.kind.as_func_id()),
             _ => None,
         }
+    }
+
+    pub fn materialize(&self) -> Self {
+        self.clone().transform(&mut |ty| {
+            if ty.is_any() {
+                *ty = Type::Materialization;
+            }
+            ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
+                if matches!(callable.params, Params::Ellipsis) {
+                    callable.params = Params::Materialization;
+                }
+            })
+        })
+    }
+
+    /// Is this an instance of `warnings.deprecated` or its backport `typing_extensions.deprecated`?
+    pub fn is_deprecation_marker(&self) -> bool {
+        let Type::ClassType(cls) = self else {
+            return false;
+        };
+        cls.has_qname("warnings", "deprecated") || cls.has_qname("typing_extensions", "deprecated")
     }
 }
 

@@ -47,6 +47,7 @@ pub struct ClassMetadata {
     enum_metadata: Option<EnumMetadata>,
     protocol_metadata: Option<ProtocolMetadata>,
     dataclass_metadata: Option<DataclassMetadata>,
+    extends_abc: bool,
     bases: Vec<Class>,
     has_generic_base_class: bool,
     has_base_any: bool,
@@ -58,6 +59,7 @@ pub struct ClassMetadata {
     /// that were passed to the `dataclass_transform` call.
     dataclass_transform_metadata: Option<DataclassTransformKeywords>,
     pydantic_model_kind: Option<PydanticModelKind>,
+    is_django_model: bool,
 }
 
 impl VisitMut<Type> for ClassMetadata {
@@ -83,6 +85,7 @@ impl ClassMetadata {
         enum_metadata: Option<EnumMetadata>,
         protocol_metadata: Option<ProtocolMetadata>,
         dataclass_metadata: Option<DataclassMetadata>,
+        extends_abc: bool,
         has_generic_base_class: bool,
         has_base_any: bool,
         is_new_type: bool,
@@ -91,6 +94,7 @@ impl ClassMetadata {
         total_ordering_metadata: Option<TotalOrderingMetadata>,
         dataclass_transform_metadata: Option<DataclassTransformKeywords>,
         pydantic_model_kind: Option<PydanticModelKind>,
+        is_django_model: bool,
     ) -> ClassMetadata {
         ClassMetadata {
             metaclass: Metaclass(metaclass),
@@ -100,6 +104,7 @@ impl ClassMetadata {
             enum_metadata,
             protocol_metadata,
             dataclass_metadata,
+            extends_abc,
             bases,
             has_generic_base_class,
             has_base_any,
@@ -109,6 +114,7 @@ impl ClassMetadata {
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
+            is_django_model,
         }
     }
 
@@ -121,6 +127,7 @@ impl ClassMetadata {
             enum_metadata: None,
             protocol_metadata: None,
             dataclass_metadata: None,
+            extends_abc: false,
             bases: Vec::new(),
             has_generic_base_class: false,
             has_base_any: false,
@@ -130,11 +137,19 @@ impl ClassMetadata {
             total_ordering_metadata: None,
             dataclass_transform_metadata: None,
             pydantic_model_kind: None,
+            is_django_model: false,
         }
     }
 
-    pub fn metaclass(&self) -> Option<&ClassType> {
+    /// The class's custom (non-`type`) metaclass, if it has one.
+    pub fn custom_metaclass(&self) -> Option<&ClassType> {
         self.metaclass.0.as_ref()
+    }
+
+    /// The class's metaclass.
+    pub fn metaclass<'a>(&'a self, stdlib: &'a Stdlib) -> &'a ClassType {
+        self.custom_metaclass()
+            .unwrap_or_else(|| stdlib.builtins_type())
     }
 
     #[allow(dead_code)] // This is used in tests now, and will be needed later in production.
@@ -150,12 +165,20 @@ impl ClassMetadata {
         self.pydantic_model_kind.is_some()
     }
 
+    pub fn is_django_model(&self) -> bool {
+        self.is_django_model
+    }
+
     pub fn pydantic_model_kind(&self) -> Option<PydanticModelKind> {
         self.pydantic_model_kind.clone()
     }
 
     pub fn is_final(&self) -> bool {
         self.is_final
+    }
+
+    pub fn extends_abc(&self) -> bool {
+        self.extends_abc
     }
 
     pub fn is_deprecated(&self) -> bool {
@@ -225,6 +248,10 @@ impl ClassMetadata {
     }
 }
 
+/// A field that we synthesize and add to a class. Note that if a non-synthesized field already
+/// exists on the class, it will take precedence over the synthesized field in attribute lookup.
+/// If you want to modify the type of a non-synthesized field, see
+/// AnswersSolver::get_special_class_field_type() in class_field.rs.
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct ClassSynthesizedField {
     pub inner: Arc<ClassField>,
@@ -352,10 +379,21 @@ pub struct NamedTupleMetadata {
     pub elements: SmallSet<Name>,
 }
 
+/// Defaults for `init_by_name` and `init_by_default`, per-field flags that control the name of
+/// a field's corresponding `__init__` parameter. See DataclassFieldKeywords for more information.
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
-pub struct ClassValidationFlags {
-    pub validate_by_name: bool,
-    pub validate_by_alias: bool,
+pub struct InitDefaults {
+    pub init_by_name: bool,
+    pub init_by_alias: bool,
+}
+
+impl Default for InitDefaults {
+    fn default() -> Self {
+        Self {
+            init_by_name: false,
+            init_by_alias: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
@@ -365,9 +403,8 @@ pub struct DataclassMetadata {
     pub kws: DataclassKeywords,
     pub field_specifiers: Vec<CalleeKind>,
     pub alias_keyword: Name,
-    // a tuple to indicate whether we should validate by name or alias
-    pub class_validation_flags: ClassValidationFlags,
-    // Whether a default can be passed positionally to field specifier calls
+    pub init_defaults: InitDefaults,
+    /// Whether a default can be passed positionally to field specifier calls
     pub default_can_be_positional: bool,
 }
 
@@ -401,7 +438,7 @@ pub struct TotalOrderingMetadata {
 /// If a class is present in multiple places of the inheritance tree (and is
 /// linearizable using C3 linearization), it is possible it appears with
 /// different type arguments. The type arguments computed here will always be
-/// those coming from the instance that was selected during lineariation.
+/// those coming from the instance that was selected during linearization.
 #[derive(Clone, Debug, VisitMut, TypeEq, PartialEq, Eq)]
 pub enum ClassMro {
     Resolved(Vec<ClassType>),

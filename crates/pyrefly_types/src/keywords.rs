@@ -124,8 +124,10 @@ pub struct DataclassFieldKeywords {
     pub default: bool,
     /// None means that kw_only was not explicitly set
     pub kw_only: Option<bool>,
-    /// Alias that is used in `__init__` rather than the field name. None means no alias
-    pub alias: Option<Name>,
+    /// Whether this field should have a corresponding parameter in `__init__` with the field name.
+    pub init_by_name: bool,
+    /// If non-None, this field should have a corresponding parameter in `__init__` with the given alias.
+    pub init_by_alias: Option<Name>,
     /// gt and lt specify the range of values that the field can take. None means no constraint
     pub lt: Option<Type>,
     pub gt: Option<Type>,
@@ -153,7 +155,8 @@ impl DataclassFieldKeywords {
             init: true,
             default: false,
             kw_only: None,
-            alias: None,
+            init_by_name: true,
+            init_by_alias: None,
             lt: None,
             gt: None,
             ge: None,
@@ -180,8 +183,12 @@ pub struct DataclassKeywords {
     pub eq: bool,
     pub unsafe_hash: bool,
     pub slots: bool,
-    // are extra fields allowed? appears as an actual keyword in pydantic models, while implicitly false in dataclasses
+    /// are extra fields allowed? appears as an actual keyword in pydantic models, while implicitly false in dataclasses
     pub extra: bool,
+    /// Are field types strictly enforced? Pydantic models have "lax" and "strict" modes that determine whether type
+    /// coercion (e.g., allowing `'0'` for an int field and coercing it to `0`) is allowed. `strict` is always true
+    /// for non-Pydantic dataclasses.
+    pub strict: bool,
 }
 
 impl DataclassKeywords {
@@ -209,6 +216,7 @@ impl DataclassKeywords {
             unsafe_hash: map.get_bool(&Self::UNSAFE_HASH).unwrap_or(false),
             slots: map.get_bool(&Self::SLOTS).unwrap_or(false),
             extra: false,
+            strict: true,
         }
     }
 

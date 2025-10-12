@@ -712,7 +712,7 @@ match x:
     case [a] | a: # E: name capture `a` makes remaining patterns unreachable
         assert_type(a, list[int] | int)
     case [b] | _:
-        assert_type(b, int)
+        assert_type(b, int)  # E: `b` may be uninitialized
 
 match x:
     case _ | _:  # E: Only the last subpattern in MatchOr may be irrefutable
@@ -831,7 +831,6 @@ def test2() -> int:  # E: Function declared to return `int` but is missing an ex
 );
 
 testcase!(
-    bug = "Merge flow is lax about possibly-undefined locals, so we don't catch that `x` may be uninitialized.",
     test_if_defines_variable_in_one_side,
     r#"
 from typing import assert_type, Literal
@@ -840,21 +839,63 @@ if condition():
     x = 1
 else:
     pass
-assert_type(x, Literal[1])  # Here, we did not catch that `x` may not be initialized
+assert_type(x, Literal[1])  # E: `x` may be uninitialized
     "#,
 );
 
 testcase!(
-    bug = "Merge flow is lax about possibly-undefined locals, so we don't catch that `z` may be uninitialized.",
+    test_while_true_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    while True:
+        x = "a"
+        break
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+testcase!(
+    test_while_true_redefines_and_narrows_variable,
+    r#"
+from typing import assert_type, Literal
+def get_new_y() -> int | None: ...
+def foo():
+    y = None
+    while True:
+        if (y := get_new_y()):
+            break
+    assert_type(y, int)
+    "#,
+);
+
+testcase!(
+    test_nested_if_sometimes_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def condition() -> bool: ...
+if condition():
+    if condition():
+        x = "x"
+else:
+    x = "x"
+print(x)  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
     test_named_inside_boolean_op,
     r#"
 from typing import assert_type, Literal
 b: bool = True
 y = 5
 x0 = True or (y := b) and False
-assert_type(y, Literal[5, True])  # this is as expected
+assert_type(y, Literal[5] | bool)  # this is as expected
 x0 = True or (z := b) and False
-assert_type(z, bool)  # here, we did not catch that `z` may not be initialized
+# This is an intended false negative uninitialized local check: because we can't
+# distinguish different downstream uses fully, we disable uninitialized local
+# checks for names defined in bool ops.
+assert_type(z, bool)
 "#,
 );
 
@@ -958,16 +999,49 @@ def f():
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/77
 testcase!(
-    bug = "Loop recursion is causing problems, see https://github.com/facebook/pyrefly/issues/778",
     loop_with_sized_operation,
     r#"
 intList: list[int] = [5, 6, 7, 8]
 for j in [1, 2, 3, 4]:
-    for i in range(len(intList)):  # E: `Sized | list[int]` is not assignable to `list[int]` (caused by inconsistent types when breaking cycles)
+    for i in range(len(intList)):
         intList[i] *= 42
-print([value for value in intList])  # E: Type `Sized` is not iterable
+print([value for value in intList])
 "#,
+);
+
+testcase!(
+    bug = "For now, we disabled uninitialized local check for walrus in bool op, see #1251",
+    test_walrus_names_in_bool_op_straight_line,
+    r#"
+def condition() -> bool: ...
+def f_and():
+    b = (z := condition()) and (y := condition())
+    print(z)
+    print(y)  # Intended false negative
+def f_or():
+    b = (z := condition()) or (y := condition())
+    print(z)
+    print(y)  # Intended false negative
+
+    "#,
+);
+
+testcase!(
+    bug = "For now, we disabled uninitialized local check for walrus in bool op, see #1251",
+    test_walrus_names_in_bool_op_as_guard,
+    r#"
+def condition() -> bool: ...
+def f_and():
+    if (z := condition()) or (y := condition()):
+        print(z)
+        print(y)  # Intended false negative
+def f_or():
+    if (z := condition()) and (y := condition()):
+        print(z)
+        print(y)  # Note this is *not* a false negative
+    "#,
 );
 
 testcase!(
@@ -979,6 +1053,23 @@ def f():
         idx = i
         d[idx] = (x := idx)
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/528
+testcase!(
+    test_narrow_in_branch_contained_in_loop,
+    r#"
+from typing import Iterable, Iterator, cast
+
+def iterate[T](*items: T | Iterable[T]) -> Iterator[T]:
+    for item in items:
+        if isinstance(item, str):
+            yield cast(T, item)
+        elif isinstance(item, Iterable):
+            yield from item
+        else:
+            yield item
+"#,
 );
 
 testcase!(
@@ -993,13 +1084,26 @@ def f():
 );
 
 testcase!(
+    bug = "We approximate flow for tests in a lossy way - the first test actually runs in the base flow",
+    test_walrus_on_first_branch_of_if,
+    r#"
+def condition() -> bool: ...
+def f() -> bool:
+    if (b := condition()):
+        pass
+    # In our approximation, `b` is defined in the branch but actually the test always evaluates
+    return b  # E: `b` may be uninitialized
+    "#,
+);
+
+testcase!(
     test_false_and_walrus,
     r#"
 def f(v):
     if False and (value := v):
         print(value)
     else:
-        print(value)
+        print(value)  # E: `value` is uninitialized
     "#,
 );
 
@@ -1012,6 +1116,42 @@ def f() -> int:
     finally:
         pass
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/683
+testcase!(
+    test_loop_with_sized_in_inner_iteration,
+    r#"
+def f(xs: list[list]):
+    for x in xs:
+        for i in range(len(x)):
+            x[i] = 1
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/812
+testcase!(
+    test_loop_with_set_and_len,
+    r#"
+def f(my_set: set[int]):
+    while True:
+        start_size = len(my_set)
+        my_set.update([])
+        if len(my_set) == start_size:
+            return
+"#,
+);
+
+// Regression test: at one point, excessive loop recursion caused the reveal type to be `Unknown`
+testcase!(
+    test_loop_with_dict_get,
+    r#"
+from typing import reveal_type
+def f(keys: list[str]):
+    counters: dict[str, int] = {}
+    for k in keys:
+        counters[k] = reveal_type(counters.get(k, 0))  # E: revealed type: int
+"#,
 );
 
 testcase!(

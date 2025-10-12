@@ -28,6 +28,7 @@ fn snapshot_test() {
     use std::env;
     use std::fs;
 
+    use crate::state::require::Require;
     use crate::test::util::mk_multi_file_state_assert_no_errors;
 
     // Helper function to sort JSON for deterministic comparison
@@ -168,7 +169,7 @@ print(b"world")
         ("return_types", return_types),
         ("calls", calls),
     ];
-    let (handles, state) = mk_multi_file_state_assert_no_errors(&files);
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Everything);
     let transaction = state.transaction();
 
     let update_snapshots = env::var("GLEAN_SNAPSHOTS_WRITE_PATH").is_ok();

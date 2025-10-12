@@ -408,7 +408,7 @@ from typing import reveal_type
 class A:
     def __init__(self, x: int) -> None:
         self.x = x
-    def __eq__(self, other: "A") -> bool:
+    def __eq__(self, other: "A") -> bool:  # E: `A.__eq__` overrides parent class `object` in an inconsistent manner
         return self.x == other.x
     def __lt__(self, other: "A") -> bool:
         return self.x < other.x
@@ -471,7 +471,7 @@ from typing import reveal_type
 class A:
     def __init__(self, x: int) -> None:
         self.x = x
-    def __eq__(self, other: "A") -> bool:
+    def __eq__(self, other: "A") -> bool:  # E: `A.__eq__` overrides parent class `object` in an inconsistent manner
         return self.x == other.x
     def __lt__(self, other: "A") -> bool:
         return self.x < other.x

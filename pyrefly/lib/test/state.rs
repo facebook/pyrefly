@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
-use pyrefly_build::map_db::MapDatabase;
+use pyrefly_build::source_db::map_db::MapDatabase;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::PythonPlatform;
@@ -235,7 +235,7 @@ fn test_sequential_committable_transactions() {
         let initial_value = {
             let mut lock = counter.lock();
             let v = *lock;
-            assert!(v % 2 == 0);
+            assert!(v.is_multiple_of(2));
             *lock += 1;
             v
         };

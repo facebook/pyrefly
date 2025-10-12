@@ -32,9 +32,10 @@ u_bad: Foo[int, int] = Foo[float, int]()  # E:
 testcase!(
     test_covariance_inference_class,
     r#"
-from typing import Sequence
+from typing import Sequence, Any
 class ShouldBeCovariant[T](Sequence[T]):
-    pass
+    def __getitem__(self, *args, **kwargs) -> Any: ...
+    def __len__(self) -> int: ...
 
 vco2_1: ShouldBeCovariant[float] = ShouldBeCovariant[int]()
 vco2_2: ShouldBeCovariant[int] = ShouldBeCovariant[float]()  # E:
@@ -55,10 +56,10 @@ class ClassA[T1, T2, T3](list[T1]):
 
 def func_a(p1: ClassA[float, int, int], p2: ClassA[int, float, float]):
     v1: ClassA[int, int, int] = p1  # E:
-    v2: ClassA[float, float, int] = p1 # E: 
+    v2: ClassA[float, float, int] = p1 # E:
     v3: ClassA[float, int, float] = p1
 
-    v4: ClassA[int, int, int] = p2 # E: 
+    v4: ClassA[int, int, int] = p2 # E:
     v5: ClassA[int, int, float] = p2
 "#,
 );
@@ -122,7 +123,7 @@ class ShouldBeCovariant3[U]:
         ...
 
 vco3_1: ShouldBeCovariant3[float] = ShouldBeCovariant3[int]()  # OK
-vco3_2: ShouldBeCovariant3[int] = ShouldBeCovariant3[float]()  # E: 
+vco3_2: ShouldBeCovariant3[int] = ShouldBeCovariant3[float]()  # E:
 
 "#,
 );

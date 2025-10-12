@@ -9,6 +9,7 @@ use std::ffi::OsString;
 use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use dupe::Dupe;
 use starlark_map::small_map::Entry;
@@ -65,7 +66,7 @@ pub struct UpwardSearch<T> {
     /// and the search continues.
     filegroups: Vec<FileGroup<T>>,
     /// The cached state, with previously found entries.
-    state: RwLock<SmallMap<PathBuf, Option<T>>>,
+    state: RwLock<SmallMap<PathBuf, (Option<T>, Arc<PathBuf>)>>,
     /// Given a config file that exists on disk, load it.
     load: Box<dyn Fn(&Path) -> T + Send + Sync>,
 }
@@ -119,17 +120,17 @@ impl<T: Dupe + Debug> UpwardSearch<T> {
         // 3. Fill in all the results (write lock).
         const FULL_PATH: usize = 100; // If we want to hit everything in the path
 
-        let mut cache_answer = None; // The (index, result) further up
+        let mut cache_answer = None; // The (index, result, path) further up
         let mut found_answer = None;
 
         let lock = self.state.read();
         for (i, x) in dir.ancestors().enumerate() {
-            if let Some(res) = lock.get(x) {
+            if let Some((res, path)) = lock.get(x) {
                 if i == 0 {
                     // We found a perfect hit
                     return res.dupe();
                 } else {
-                    cache_answer = Some((i, res.dupe()));
+                    cache_answer = Some((i, res.dupe(), path.dupe()));
                     break;
                 }
             }
@@ -146,7 +147,7 @@ impl<T: Dupe + Debug> UpwardSearch<T> {
                     if buffer.exists() {
                         let c = (self.load)(&buffer);
                         if (filegroup.predicate)(&c) {
-                            found_answer = Some((i + 1, Some(c)));
+                            found_answer = Some((i + 1, Some(c), Arc::new(buffer)));
                             break 'outer;
                         }
                     }
@@ -158,11 +159,18 @@ impl<T: Dupe + Debug> UpwardSearch<T> {
                     break;
                 }
             }
+            if let Some((i, Some(c), cache_path)) = &cache_answer
+                && filegroup.filenames.iter().any(|n| cache_path.ends_with(n))
+                && (filegroup.predicate)(c)
+            {
+                found_answer = Some((i + 1, Some(c.dupe()), cache_path.dupe()));
+                break 'outer;
+            }
         }
 
-        let (applicable, result) = found_answer
+        let (applicable, result, path) = found_answer
             .or(cache_answer)
-            .unwrap_or_else(|| (FULL_PATH, None));
+            .unwrap_or_else(|| (FULL_PATH, None, Arc::new(PathBuf::from("/"))));
 
         let mut lock = self.state.write();
         for (i, x) in dir.ancestors().take(applicable).enumerate() {
@@ -170,14 +178,14 @@ impl<T: Dupe + Debug> UpwardSearch<T> {
                 Entry::Occupied(e) => {
                     if i == 0 {
                         // Race condition and someone else won on the leaf, so use their result
-                        return e.get().dupe();
+                        return e.get().0.dupe();
                     } else {
                         // Someone else filled in some of our prefix, so ours just applies further down
                         return result;
                     }
                 }
                 Entry::Vacant(e) => {
-                    e.insert(result.dupe());
+                    e.insert((result.dupe(), path.dupe()));
                 }
             }
         }
@@ -460,6 +468,35 @@ mod tests {
             upward_search(not_empty())
                 .directory_absolute(&root.path().join("a"))
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn test_cached_value_takes_priority_if_group_priority() {
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("b")).unwrap();
+        fs::write(root.path().join("b/pyproject.toml"), "").unwrap();
+        fs::write(root.path().join("pyrefly.toml"), "").unwrap();
+
+        let pred = |b| -> Box<dyn Fn(&Arc<PathBuf>) -> bool + Send + Sync + 'static> {
+            Box::new(move |_| b)
+        };
+        let groups = vec![
+            FileGroup::new(vec![OsString::from("pyrefly.toml")], pred(true)),
+            FileGroup::new(vec![OsString::from("pyproject.toml")], pred(true)),
+        ];
+        let upward_search = UpwardSearch::new_grouped(groups, |p| Arc::new(p.to_path_buf()));
+
+        assert_eq!(
+            *upward_search.directory(root.path()).unwrap(),
+            root.path().join("pyrefly.toml")
+        );
+
+        // we should still find pyrefly.toml, since it has a higher group priority,
+        // even if pyrefly.toml is cached for a higher directory's result
+        assert_eq!(
+            *upward_search.directory(&root.path().join("b")).unwrap(),
+            root.path().join("pyrefly.toml"),
         );
     }
 }

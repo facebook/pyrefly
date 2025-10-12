@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -23,6 +24,10 @@ use static_interner::Interner;
 
 use crate::handle::Handle;
 
+pub mod buck_check;
+pub mod map_db;
+pub(crate) mod query_source_db;
+
 // We're interning `Target`s, since they'll be duplicated all over the place,
 // and it would be nice to have something that implements `Copy`.
 // We choose Interning over `Arc`, since we want to make sure all `Target`s
@@ -30,7 +35,7 @@ use crate::handle::Handle;
 static TARGET_INTERNER: Interner<String> = Interner::new();
 
 #[derive(Debug, Clone, Dupe, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct Target(Intern<String>);
+pub struct Target(Intern<String>);
 impl Serialize for Target {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.0)
@@ -68,7 +73,12 @@ pub trait SourceDatabase: Send + Sync + fmt::Debug {
     /// specified with the sourcedb.
     fn modules_to_check(&self) -> Vec<Handle>;
     /// Find the given module in the sourcedb, given the module it's originating from.
-    fn lookup(&self, module: &ModuleName, origin: Option<&Path>) -> Option<ModulePath>;
+    fn lookup(
+        &self,
+        module: &ModuleName,
+        origin: Option<&Path>,
+        style_filter: Option<ModuleStyle>,
+    ) -> Option<ModulePath>;
     /// Get the handle for the given module path, including its Python platform and version
     /// settings.
     fn handle_from_module_path(&self, module_path: ModulePath) -> Option<Handle>;
@@ -82,4 +92,6 @@ pub trait SourceDatabase: Send + Sync + fmt::Debug {
     /// changes on. Changes to one of these returned watchfiles should force
     /// a sourcedb rebuild.
     fn get_critical_files(&self) -> SmallSet<PathBuf>;
+    /// Get the target for the given [`ModulePath`], if one exists.
+    fn get_target(&self, origin: Option<&Path>) -> Option<Target>;
 }

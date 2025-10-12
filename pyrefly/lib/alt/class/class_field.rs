@@ -7,10 +7,10 @@
 
 use std::fmt;
 use std::fmt::Display;
+use std::iter;
 use std::sync::Arc;
 
 use dupe::Dupe;
-use itertools::Itertools;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
@@ -42,7 +42,6 @@ use crate::alt::callable::CallArg;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
-use crate::alt::types::class_metadata::EnumMetadata;
 use crate::binding::binding::Binding;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
@@ -66,9 +65,9 @@ use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::literal::Lit;
-use crate::types::literal::LitEnum;
 use crate::types::quantified::Quantified;
 use crate::types::read_only::ReadOnlyReason;
+use crate::types::stdlib::Stdlib;
 use crate::types::typed_dict::TypedDict;
 use crate::types::typed_dict::TypedDictField;
 use crate::types::types::BoundMethod;
@@ -83,7 +82,7 @@ use crate::types::types::Type;
 
 /// The result of looking up an attribute access on a class (either as an instance or a
 /// class access, and possibly through a special case lookup such as a type var with a bound).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ClassAttribute {
     /// A read-write attribute with a closed form type for both get and set actions.
     ReadWrite(Type),
@@ -265,6 +264,8 @@ enum ClassFieldInner {
         /// If this is a descriptor, data derived from `ty`.
         descriptor: Option<Descriptor>,
         is_function_without_return_annotation: bool,
+        /// Whether this field is an abstract method
+        is_abstract: bool,
     },
 }
 
@@ -296,6 +297,7 @@ impl ClassField {
         read_only_reason: Option<ReadOnlyReason>,
         descriptor: Option<Descriptor>,
         is_function_without_return_annotation: bool,
+        is_abstract: bool,
         is_inherited: IsInherited,
     ) -> Self {
         Self(
@@ -306,6 +308,7 @@ impl ClassField {
                 read_only_reason,
                 descriptor,
                 is_function_without_return_annotation,
+                is_abstract,
             },
             is_inherited,
         )
@@ -328,6 +331,7 @@ impl ClassField {
                 read_only_reason: None,
                 descriptor: None,
                 is_function_without_return_annotation: false,
+                is_abstract: false,
             },
             IsInherited::Maybe,
         )
@@ -342,6 +346,7 @@ impl ClassField {
                 read_only_reason: None,
                 descriptor: None,
                 is_function_without_return_annotation: false,
+                is_abstract: false,
             },
             IsInherited::Maybe,
         )
@@ -362,6 +367,7 @@ impl ClassField {
                 read_only_reason,
                 descriptor,
                 is_function_without_return_annotation,
+                is_abstract,
             } => {
                 let mut ty = ty.clone();
                 f(&mut ty);
@@ -379,6 +385,7 @@ impl ClassField {
                         descriptor,
                         is_function_without_return_annotation:
                             *is_function_without_return_annotation,
+                        is_abstract: *is_abstract,
                     },
                     self.1.clone(),
                 )
@@ -526,9 +533,26 @@ impl ClassField {
             .and_then(|ty| make_bound_method(instance.to_type(), ty).ok())
     }
 
+    pub fn is_simple_instance_attribute(&self) -> bool {
+        matches!(
+            &self.0,
+            ClassFieldInner::Simple {
+                descriptor: None,
+                is_function_without_return_annotation: false,
+                ..
+            }
+        )
+    }
+
     pub fn ty(&self) -> Type {
         match &self.0 {
             ClassFieldInner::Simple { ty, .. } => ty.clone(),
+        }
+    }
+
+    pub fn is_abstract(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Simple { is_abstract, .. } => *is_abstract,
         }
     }
 
@@ -675,6 +699,7 @@ enum InstanceKind {
     SelfType,
     Protocol(Type),
     Metaclass(ClassBase),
+    LiteralString,
 }
 
 /// Wrapper to hold a specialized instance of a class , unifying ClassType and TypedDict.
@@ -686,6 +711,14 @@ struct Instance<'a> {
 }
 
 impl<'a> Instance<'a> {
+    fn literal_string(stdlib: &'a Stdlib) -> Self {
+        Self {
+            kind: InstanceKind::LiteralString,
+            class: stdlib.str().class_object(),
+            targs: stdlib.str().targs(),
+        }
+    }
+
     fn of_class(cls: &'a ClassType) -> Self {
         Self {
             kind: InstanceKind::ClassType,
@@ -754,6 +787,7 @@ impl<'a> Instance<'a> {
             }
             InstanceKind::Protocol(self_type) => self_type.clone(),
             InstanceKind::Metaclass(cls) => cls.clone().to_type(),
+            InstanceKind::LiteralString => Type::LiteralString,
         }
     }
 
@@ -781,7 +815,8 @@ impl<'a> Instance<'a> {
             | InstanceKind::SelfType
             | InstanceKind::Protocol(..)
             | InstanceKind::Metaclass(..)
-            | InstanceKind::TypeVar(..) => Some(DescriptorBase::Instance(ClassType::new(
+            | InstanceKind::TypeVar(..)
+            | InstanceKind::LiteralString => Some(DescriptorBase::Instance(ClassType::new(
                 self.class.dupe(),
                 self.targs.clone(),
             ))),
@@ -922,40 +957,6 @@ pub enum DataclassMember {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    fn check_enum_value_annotation(
-        &self,
-        mut value: &Type,
-        annotation: &Type,
-        member: &Name,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) {
-        if matches!(value, Type::Tuple(_)) {
-            // TODO: check tuple values against constructor signature
-            // see https://typing.python.org/en/latest/spec/enums.html#member-values
-            return;
-        }
-        if matches!(value, Type::ClassType(cls) if cls.has_qname("enum", "auto")) {
-            return;
-        }
-        if let Type::ClassType(cls) = value
-            && cls.has_qname("enum", "member")
-            && let [member_targ] = cls.targs().as_slice()
-        {
-            value = member_targ;
-        }
-        if !self.is_subset_eq(value, annotation) {
-            self.error(
-                errors, range, ErrorInfo::Kind(ErrorKind::BadAssignment),
-                format!(
-                    "Enum member `{member}` has type `{}`, must match the `_value_` attribute annotation of `{}`",
-                    self.for_display(value.clone()),
-                    self.for_display(annotation.clone()),
-                ),
-            );
-        }
-    }
-
     pub fn calculate_class_field(
         &self,
         class: &Class,
@@ -1070,6 +1071,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.expr_infer(e, errors)
                 };
                 self.expand_type_mut(&mut ty);
+
                 (ty, inherited_annot)
             }
             ExprOrBinding::Binding(b) => (
@@ -1078,6 +1080,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ),
         };
         let metadata = self.get_metadata_for_class(class);
+
         let magically_initialized = {
             // We consider fields to be always-initialized if it's defined within stub files.
             // See https://github.com/python/typeshed/pull/13875 for reasoning.
@@ -1305,39 +1308,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             _ => {}
         };
 
-        // Enum handling:
-        // - Check whether the field is a member (which depends only on its type and name)
-        // - Validate that a member should not have an annotation, and should respect any explicit annotation on `_value_`
-        //
-        // TODO(stroxler, yangdanny): We currently operate on promoted types, which means we do not infer `Literal[...]`
-        // types for the `.value` / `._value_` attributes of literals. This is permitted in the spec although not optimal
-        // for most cases; we are handling it this way in part because generic enum behavior is not yet well-specified.
-        //
-        // We currently skip the check for `_value_` if the class defines `__new__`, since that can
-        // change the value of the enum member. https://docs.python.org/3/howto/enum.html#when-to-use-new-vs-init
-        let ty = if descriptor.is_none()
-            && let Some(enum_) = metadata.enum_metadata()
-            && self.is_valid_enum_member(name, &ty, &initialization)
-        {
-            if direct_annotation.is_some() {
-                self.error(
-                    errors, range,ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
-                    format!("Enum member `{name}` may not be annotated directly. Instead, annotate the `_value_` attribute."),
-                );
-            }
-            if enum_.has_value
-                && let Some(enum_value_ty) = self.type_of_enum_value(enum_)
-                && !class.fields().contains(&dunder::NEW)
-                && (!matches!(value, ExprOrBinding::Expr(Expr::EllipsisLiteral(_)))
-                    || !self.module().path().is_interface())
-            {
-                self.check_enum_value_annotation(&ty, &enum_value_ty, name, range, errors);
-            }
-            Type::Literal(Lit::Enum(Box::new(LitEnum {
-                class: enum_.cls.clone(),
-                member: name.clone(),
-                ty: ty.clone(),
-            })))
+        let ty = if let Some(special_ty) = self.get_special_class_field_type(
+            class,
+            name,
+            direct_annotation.as_ref(),
+            &ty,
+            &initialization,
+            descriptor.is_some(),
+            range,
+            errors,
+        ) {
+            // Don't use the descriptor, since we've set a custom type instead.
+            descriptor = None;
+            special_ty
         } else {
             ty
         };
@@ -1349,6 +1332,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // first-use based inference we use with assignments, to get more useful types here.
         let ty = self.solver().deep_force(ty);
 
+        // Check if this field is an abstract method
+        let is_abstract = match &ty {
+            Type::Function(f) => f.metadata.flags.is_abstract_method,
+            Type::Overload(o) => {
+                // Check if any signature in the overload is abstract
+                o.signatures.iter().any(|sig| match sig {
+                    OverloadType::Function(f) => f.metadata.flags.is_abstract_method,
+                    OverloadType::Forall(forall) => forall.body.metadata.flags.is_abstract_method,
+                })
+            }
+            _ => false,
+        };
+
         // Create the resulting field and check for override inconsistencies before returning
         let class_field = ClassField::new(
             ty,
@@ -1357,6 +1353,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             read_only_reason,
             descriptor,
             is_function_without_return_annotation,
+            is_abstract,
             is_inherited,
         );
         if let RawClassFieldInitialization::Method(MethodThatSetsAttr {
@@ -1390,6 +1387,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.validate_post_init(class, dm, post_init, range, errors);
         }
         class_field
+    }
+
+    /// Apply any class-specific logic for postprocessing the type of a class field. Hook into this
+    /// function if you need to modify the type of an existing field. If you need to add a new
+    /// field, see ClassSynthesizedField instead.
+    fn get_special_class_field_type(
+        &self,
+        class: &Class,
+        name: &Name,
+        direct_annotation: Option<&Annotation>,
+        ty: &Type,
+        initialization: &ClassFieldInitialization,
+        is_descriptor: bool,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        self.get_enum_class_field_type(
+            class,
+            name,
+            direct_annotation,
+            ty,
+            initialization,
+            is_descriptor,
+            range,
+            errors,
+        )
+        .or_else(|| self.get_pydantic_root_model_class_field_type(class, name))
+        .or_else(|| self.get_django_field_type(ty, class))
     }
 
     fn determine_read_only_reason(
@@ -1742,8 +1767,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return;
         }
 
-        // Object construction (`__new__` and `__init__`) should not participate in override checks
-        if field_name == &dunder::NEW || field_name == &dunder::INIT {
+        // Object construction (`__new__`, `__init__`, `__init_subclass__`) should not participate in override checks
+        if field_name == &dunder::NEW
+            || field_name == &dunder::INIT
+            || field_name == &dunder::INIT_SUBCLASS
+        {
+            return;
+        }
+
+        // `__hash__` is often overridden to `None` to signal hashability
+        if field_name == &dunder::HASH {
             return;
         }
 
@@ -1765,7 +1798,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         // TODO: This should only be ignored when `cls` is a dataclass
-        if field_name.as_str() == "__post_init__" {
+        if field_name == &dunder::POST_INIT {
             return;
         }
 
@@ -1786,7 +1819,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let is_typed_dict_field =
             self.is_typed_dict_field(&self.get_metadata_for_class(cls), field_name);
 
-        for parent in bases.iter() {
+        let bases_to_check: Box<dyn Iterator<Item = &ClassType>> = if bases.is_empty() {
+            // If the class doesn't have any base type, we should just use `object` as base to ensure
+            // the inconsistent override check is not skipped
+            Box::new(iter::once(self.stdlib.object()))
+        } else {
+            Box::new(bases.iter())
+        };
+
+        for parent in bases_to_check {
             let parent_cls = parent.class_object();
             let parent_metadata = self.get_metadata_for_class(parent_cls);
             parent_has_any = parent_has_any || parent_metadata.has_base_any();
@@ -1920,6 +1961,67 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         field_name,
                     ),
                 );
+        }
+    }
+
+    /// For classes with multiple inheritance, check that fields inherited from multiple base classes are consistent.
+    pub fn check_consistent_multiple_inheritance(&self, cls: &Class, errors: &ErrorCollector) {
+        // Maps field from inherited class
+        let mro = self.get_mro_for_class(cls);
+        let mut inherited_fields: SmallMap<&Name, Vec<(&Name, Type)>> = SmallMap::new();
+
+        for parent_cls in mro.ancestors_no_object().iter() {
+            let class_fields = parent_cls.class_object().fields();
+            for field in class_fields {
+                let key = KeyClassField(parent_cls.class_object().index(), field.clone());
+                let field_entry = self.get_from_class(cls, &key);
+                if let Some(field_entry) = field_entry.as_ref() {
+                    inherited_fields
+                        .entry(field)
+                        .or_default()
+                        .push((parent_cls.name(), field_entry.ty()));
+                }
+            }
+        }
+
+        for (field_name, class_and_types) in inherited_fields.iter() {
+            if class_and_types.len() > 1 {
+                let types: Vec<Type> = class_and_types.iter().map(|(_, ty)| ty.clone()).collect();
+                if types.iter().any(|ty| {
+                    matches!(
+                        ty,
+                        Type::BoundMethod(..)
+                            | Type::Function(..)
+                            | Type::Forall(_)
+                            | Type::Overload(_)
+                    )
+                }) {
+                    // TODO(fangyizhou): Handle bound methods and functions properly.
+                    // This is a leftover from https://github.com/facebook/pyrefly/pull/1196
+                    continue;
+                }
+                let intersect = self.intersects(&types);
+                if matches!(intersect, Type::Never(_)) {
+                    let mut error_msg = vec1![
+                        format!(
+                            "Field `{field_name}` has inconsistent types inherited from multiple base classes"
+                        ),
+                        "Inherited types include:".to_owned()
+                    ];
+                    for (cls, ty) in class_and_types.iter() {
+                        error_msg.push(format!(
+                            "  `{}` from `{}`",
+                            self.for_display(ty.clone()),
+                            cls
+                        ));
+                    }
+                    errors.add(
+                        cls.range(),
+                        ErrorInfo::Kind(ErrorKind::InconsistentInheritance),
+                        error_msg,
+                    );
+                }
+            }
         }
     }
 
@@ -2106,6 +2208,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
     }
 
+    // When we're accessing the attribute of a string literal, we bind methods to
+    // `LiteralString` instead of `str`, so that overload selection works correctly
+    // for `LiteralString`-specific overloads defined in `str`.
+    pub fn get_literal_string_attribute(&self, name: &Name) -> Option<ClassAttribute> {
+        self.get_class_member(self.stdlib.str().class_object(), name)
+            .map(|member| {
+                self.as_instance_attribute(&member.value, &Instance::literal_string(self.stdlib))
+            })
+    }
+
     pub fn get_bounded_quantified_attribute(
         &self,
         quantified: Quantified,
@@ -2214,18 +2326,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
     }
 
-    pub fn field_is_inherited_from_object(&self, cls: &Class, name: &Name) -> bool {
-        let member = self.get_class_member(cls, name);
+    pub fn field_is_inherited_from(
+        &self,
+        cls: &Class,
+        field: &Name,
+        ancestor: (&str, &str),
+    ) -> bool {
+        let member = self.get_class_member(cls, field);
         match member {
-            Some(member) => member.defined_on("builtins", "object"),
-            None => false,
-        }
-    }
-
-    pub fn field_is_inherited_from_enum(&self, cls: &Class, name: &Name) -> bool {
-        let member = self.get_class_member(cls, name);
-        match member {
-            Some(member) => member.defined_on("enum", "Enum"),
+            Some(member) => member.defined_on(ancestor.0, ancestor.1),
             None => false,
         }
     }
@@ -2268,7 +2377,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Get the metaclass `__call__` method
     pub fn get_metaclass_dunder_call(&self, cls: &ClassType) -> Option<Type> {
         let metadata = self.get_metadata_for_class(cls.class_object());
-        let metaclass = metadata.metaclass()?;
+        let metaclass = metadata.custom_metaclass()?;
         let attr = self.get_class_member(metaclass.class_object(), &dunder::CALL)?;
         if attr.defined_on("builtins", "type") {
             // The behavior of `type.__call__` is already baked into our implementation of constructors,
@@ -2300,28 +2409,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 is_function_without_return_annotation: false,
                 ..
             } => Some(ty),
-            _ => None,
-        }
-    }
-
-    /// Look up the `_value_` attribute of an enum class. This field has to be a plain instance
-    /// attribute annotated in the class body; it is used to validate enum member values, which are
-    /// supposed to all share this type.
-    ///
-    /// TODO(stroxler): We don't currently enforce in this function that it is
-    /// an instance attribute annotated in the class body. Should we? It is unclear; this helper
-    /// is only used to validate enum members, not to produce errors on invalid `_value_`
-    fn type_of_enum_value(&self, enum_: &EnumMetadata) -> Option<Type> {
-        let field = self
-            .get_class_member(enum_.cls.class_object(), &Name::new_static("_value_"))?
-            .value;
-        match &field.0 {
-            ClassFieldInner::Simple {
-                ty,
-                descriptor: None,
-                is_function_without_return_annotation: false,
-                ..
-            } => Some(ty.clone()),
             _ => None,
         }
     }

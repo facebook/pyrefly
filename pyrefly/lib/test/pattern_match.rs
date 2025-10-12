@@ -15,8 +15,7 @@ match 42:
         pass
     case y:
         pass
-# Eventually, this should be an uninitialized-local error.
-print(y)
+print(y)  # E: `y` may be uninitialized
     "#,
 );
 
@@ -58,5 +57,45 @@ def my_func(x: dict[MyEnumType, int]) -> int:
             return a + b
         case _:
             return 0
+"#,
+);
+
+testcase!(
+    test_non_exhaustive_flow_merging,
+    r#"
+from typing import assert_type, Literal
+def foo(x: Literal['A'] | Literal['B']):
+    match x:
+        case 'A':
+            raise ValueError()
+    assert_type(x, Literal['B'])
+    "#,
+);
+
+testcase!(
+    test_negation_of_guarded_pattern,
+    r#"
+from typing import assert_type, Literal
+def condition() -> bool: ...
+def foo(x: Literal['A'] | Literal['B']):
+    match x:
+        case 'A' if condition():
+            raise ValueError()
+    assert_type(x, Literal['A', 'B'])
+    "#,
+);
+
+testcase!(
+    bug = "We currently never negate class matches; ideally we would be smarter about when the match is exhaustive",
+    test_negated_exhaustive_class_match,
+    r#"
+from typing import assert_type
+
+def f0(x: int | str):
+    match x:
+        case int():
+            pass
+        case _:
+            assert_type(x, str)  # E: assert_type(int | str, str)
 "#,
 );

@@ -21,6 +21,7 @@ use tracing::error;
 use crate::commands::check;
 use crate::commands::check::Handles;
 use crate::commands::files::FilesArgs;
+use crate::commands::files::get_project_config_for_current_dir;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::ErrorKind;
 use crate::lsp::module_helpers::handle_from_module_path;
@@ -40,16 +41,36 @@ use crate::types::types::Type;
 pub struct InferFlags {
     // Default should be false for all of them and then we can override to easily customize
     /// Whether to add type annotations to container types like lists and dictionaries
-    #[arg(long, value_parser = clap::value_parser!(bool))]
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
     pub containers: Option<bool>,
     /// Whether to add return type annotations to functions
-    #[arg(long, value_parser = clap::value_parser!(bool))]
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
     pub return_types: Option<bool>,
     /// Whether to add type annotations to function parameters
-    #[arg(long, value_parser = clap::value_parser!(bool))]
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
     pub parameter_types: Option<bool>,
     /// Whether to automatically add imports for types used in annotations
-    #[arg(long, value_parser = clap::value_parser!(bool))]
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
     pub imports: Option<bool>,
 }
 
@@ -250,7 +271,8 @@ impl InferArgs {
         }
         // Add imports, if needed
         let check_args = check::CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
-        let (_, config_finder) = FilesArgs::get(Vec::new(), None, &check_args.config_override)?;
+        let current_dir_config = get_project_config_for_current_dir(&check_args.config_override)?.0;
+        let config_finder = ConfigFinder::new_constant(current_dir_config);
         let state = holder.as_ref();
         match check_args.run_once(files_to_check, config_finder) {
             Ok((_, errors)) => {

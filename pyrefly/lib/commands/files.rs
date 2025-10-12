@@ -21,6 +21,7 @@ use pyrefly_util::includes::Includes;
 use tracing::debug;
 use tracing::info;
 
+use crate::commands::config_finder::ConfigConfigurer;
 use crate::commands::config_finder::standard_config_finder;
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
@@ -55,8 +56,23 @@ pub struct FilesArgs {
     config: Option<PathBuf>,
 }
 
+struct FilesConfigConfigurer(ConfigOverrideArgs);
+
+impl ConfigConfigurer for FilesConfigConfigurer {
+    fn configure(
+        &self,
+        _: Option<&Path>,
+        config: ConfigFile,
+        mut errors: Vec<ConfigError>,
+    ) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
+        let (c, mut configure_errors) = self.0.override_config(config);
+        errors.append(&mut configure_errors);
+        (c, errors)
+    }
+}
+
 fn config_finder(args: ConfigOverrideArgs) -> ConfigFinder {
-    standard_config_finder(Arc::new(move |_, x| args.override_config(x)))
+    standard_config_finder(Arc::new(FilesConfigConfigurer(args)))
 }
 
 fn absolutize(globs: Globs) -> Globs {
@@ -87,6 +103,31 @@ fn add_config_errors(config_finder: &ConfigFinder, errors: Vec<ConfigError>) -> 
     }
 }
 
+/// Gets a project config for the current directory, overriding with the given
+/// [`ConfigOverrideArgs`].
+///
+/// This does not do any glob processing like
+/// [`get_globs_and_config_for_project`], which can use the given `args` and found
+/// config to determine the right globs to check. It also does not block the use of
+/// a config with a build system in project type checking mode, but should be done
+/// by [`FilesArgs::resolve`].
+pub fn get_project_config_for_current_dir(
+    args: &ConfigOverrideArgs,
+) -> anyhow::Result<(ArcId<ConfigFile>, Vec<ConfigError>)> {
+    let current_dir = std::env::current_dir().context("cannot identify current dir")?;
+    let config_finder = config_finder(args.clone());
+    let config = config_finder.directory(&current_dir).unwrap_or_else(|| {
+        let (config, errors) = args.override_config(ConfigFile::init_at_root(
+            &current_dir,
+            &ProjectLayout::new(&current_dir),
+        ));
+        // Since this is a config we generated, these are likely internal errors.
+        debug_log(errors);
+        config
+    });
+    Ok((config, config_finder.errors()))
+}
+
 /// Get inputs for a full-project check. We will look for a config file and type-check the project it defines.
 fn get_globs_and_config_for_project(
     config: Option<PathBuf>,
@@ -95,20 +136,7 @@ fn get_globs_and_config_for_project(
 ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder)> {
     let (config, mut errors) = match config {
         Some(explicit) => get_explicit_config(&explicit, args),
-        None => {
-            let current_dir = std::env::current_dir().context("cannot identify current dir")?;
-            let config_finder = config_finder(args.clone());
-            let config = config_finder.directory(&current_dir).unwrap_or_else(|| {
-                let (config, errors) = args.override_config(ConfigFile::init_at_root(
-                    &current_dir,
-                    &ProjectLayout::new(&current_dir),
-                ));
-                // Since this is a config we generated, these are likely internal errors.
-                debug_log(errors);
-                config
-            });
-            (config, config_finder.errors())
-        }
+        None => get_project_config_for_current_dir(args)?,
     };
     match &config.source {
         ConfigSource::File(path) => {

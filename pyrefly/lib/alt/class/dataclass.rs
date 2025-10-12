@@ -27,12 +27,10 @@ use crate::alt::class::class_field::DataclassMember;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
-use crate::alt::types::class_metadata::ClassValidationFlags;
 use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::binding::pydantic::GE;
 use crate::binding::pydantic::GT;
 use crate::binding::pydantic::LT;
-use crate::binding::pydantic::ROOT;
 use crate::binding::pydantic::STRICT;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -85,19 +83,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let dataclass = metadata.dataclass_metadata()?;
         let mut fields = SmallMap::new();
 
-        let optional_positional_arg = self.get_pydantic_root_model_type_via_mro(cls, &metadata);
-
         if dataclass.kws.init {
-            fields.insert(
-                dunder::INIT,
-                self.get_dataclass_init(
-                    cls,
-                    dataclass,
-                    !metadata.is_pydantic_base_model(),
-                    optional_positional_arg,
-                    errors,
-                ),
-            );
+            let init_method = if let Some(root_model_type) =
+                self.get_pydantic_root_model_type_via_mro(cls, &metadata)
+            {
+                self.get_pydantic_root_model_init(cls, root_model_type)
+            } else {
+                self.get_dataclass_init(cls, dataclass, dataclass.kws.strict, errors)
+            };
+            fields.insert(dunder::INIT, init_method);
         }
         let dataclass_fields_type = self.stdlib.dict(
             self.stdlib.str().clone().to_type(),
@@ -239,7 +233,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let mut kw_only = map.get_bool(&DataclassFieldKeywords::KW_ONLY);
 
-        let mut alias = if dataclass_metadata.class_validation_flags.validate_by_alias {
+        let mut alias = if dataclass_metadata.init_defaults.init_by_alias {
             map.get_string(alias_keyword)
                 .or_else(|| map.get_string(&DataclassFieldKeywords::ALIAS))
                 .map(Name::new)
@@ -264,8 +258,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 func,
                 args,
                 errors,
-                alias_keyword,
-                dataclass_metadata.class_validation_flags.clone(),
+                if dataclass_metadata.init_defaults.init_by_alias {
+                    Some(alias_keyword)
+                } else {
+                    None
+                },
                 &mut init,
                 &mut kw_only,
                 &mut alias,
@@ -276,7 +273,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             init: init.unwrap_or(true),
             default,
             kw_only,
-            alias,
+            init_by_name: dataclass_metadata.init_defaults.init_by_name || alias.is_none(),
+            init_by_alias: alias,
             lt,
             gt,
             ge,
@@ -291,8 +289,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         func: &Type,
         args: &Arguments,
         errors: &ErrorCollector,
-        alias_key_to_use: &Name,
-        validation_flags: ClassValidationFlags,
+        // The name of the function parameter from which to fill in an alias keyword value
+        alias_keyword: Option<&Name>,
         init: &mut Option<bool>,
         kw_only: &mut Option<bool>,
         alias: &mut Option<Name>,
@@ -350,8 +348,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if name == &DataclassFieldKeywords::KW_ONLY {
                     self.fill_in_literal(kw_only, ty, default_ty, |ty| ty.as_bool());
                 }
-                if validation_flags.validate_by_alias && alias.is_none() && name == alias_key_to_use
-                {
+                if alias.is_none() && Some(name) == alias_keyword {
                     self.fill_in_literal(alias, ty, default_ty, |ty| match ty {
                         Type::Literal(Lit::Str(s)) => Some(Name::new(s)),
                         _ => None,
@@ -456,71 +453,60 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         dataclass: &DataclassMetadata,
         strict_default: bool,
-        optional_pos: Option<Type>,
         errors: &ErrorCollector,
     ) -> ClassSynthesizedField {
         let mut params = vec![self.class_self_param(cls, false)];
-        if let Some(ty) = optional_pos {
-            params.push(Param::Pos(ROOT, ty, Required::Optional(None)));
-        } else {
-            let mut has_seen_default = false;
-            for (name, field, field_flags) in self.iter_fields(cls, dataclass, true) {
-                let strict = field_flags.strict.unwrap_or(strict_default);
-                if field_flags.init {
-                    let has_default = field_flags.default
-                        || (dataclass.class_validation_flags.validate_by_name
-                            && dataclass.class_validation_flags.validate_by_alias);
-                    let is_kw_only = field_flags.is_kw_only();
-                    if !is_kw_only {
-                        if !has_default
-                            && has_seen_default
-                            && let Some(range) = cls.field_decl_range(&name)
-                        {
-                            self.error(
-                                errors,
-                                range,
-                                ErrorInfo::Kind(ErrorKind::BadClassDefinition),
-                                format!(
-                                    "Dataclass field `{name}` without a default may not follow dataclass field with a default"
-                                ),
-                            );
-                        }
-                        if has_default {
-                            has_seen_default = true;
-                        }
-                    }
-                    if dataclass.class_validation_flags.validate_by_name
-                        || (dataclass.class_validation_flags.validate_by_alias
-                            && field_flags.alias.is_none())
+        let mut has_seen_default = false;
+        for (name, field, field_flags) in self.iter_fields(cls, dataclass, true) {
+            let strict = field_flags.strict.unwrap_or(strict_default);
+            if field_flags.init {
+                let has_default = field_flags.default
+                    || (field_flags.init_by_name && field_flags.init_by_alias.is_some());
+                let is_kw_only = field_flags.is_kw_only();
+                if !is_kw_only {
+                    if !has_default
+                        && has_seen_default
+                        && let Some(range) = cls.field_decl_range(&name)
                     {
-                        params.push(self.as_param(
-                            &field,
-                            &name,
-                            has_default,
-                            is_kw_only,
-                            strict,
-                            field_flags.converter_param.clone(),
+                        self.error(
                             errors,
-                        ));
+                            range,
+                            ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                            format!(
+                                "Dataclass field `{name}` without a default may not follow dataclass field with a default"
+                            ),
+                        );
                     }
-                    if let Some(alias) = &field_flags.alias
-                        && dataclass.class_validation_flags.validate_by_alias
-                    {
-                        params.push(self.as_param(
-                            &field,
-                            alias,
-                            has_default,
-                            is_kw_only,
-                            strict,
-                            field_flags.converter_param.clone(),
-                            errors,
-                        ));
+                    if has_default {
+                        has_seen_default = true;
                     }
                 }
+                if field_flags.init_by_name {
+                    params.push(self.as_param(
+                        &field,
+                        &name,
+                        has_default,
+                        is_kw_only,
+                        strict,
+                        field_flags.converter_param.clone(),
+                        errors,
+                    ));
+                }
+                if let Some(alias) = &field_flags.init_by_alias {
+                    params.push(self.as_param(
+                        &field,
+                        alias,
+                        has_default,
+                        is_kw_only,
+                        strict,
+                        field_flags.converter_param.clone(),
+                        errors,
+                    ));
+                }
             }
-            if dataclass.kws.extra {
-                params.push(Param::Kwargs(None, Type::Any(AnyStyle::Implicit)));
-            }
+        }
+        if dataclass.kws.extra {
+            params.push(Param::Kwargs(None, Type::Any(AnyStyle::Implicit)));
         }
 
         let ty = Type::Function(Box::new(Function {

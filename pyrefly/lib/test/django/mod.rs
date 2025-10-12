@@ -9,4 +9,5 @@
 mod config;
 mod enums;
 mod model;
+mod util;
 mod view;

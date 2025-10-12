@@ -18,6 +18,7 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::types::Type;
 use pyrefly_util::display::DisplayWithCtx;
+use pyrefly_util::gas::Gas;
 use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::AnyParameterRef;
 use ruff_python_ast::Expr;
@@ -1138,12 +1139,11 @@ impl<'a> BindingsBuilder<'a> {
         // Follow Forwards to get to the actual original binding.
         // Short circuit if there are too many forwards - it may mean there's a cycle.
         let mut original_binding = self.table.types.1.get(original_idx);
-        let mut counter = 0;
+        let mut gas = Gas::new(100);
         while let Some(Binding::Forward(fwd_idx)) = original_binding {
-            if counter > 100 {
+            if gas.stop() {
                 return None;
             } else {
-                counter += 1;
                 original_idx = *fwd_idx;
                 original_binding = self.table.types.1.get(original_idx);
             }

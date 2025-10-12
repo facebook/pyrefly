@@ -872,7 +872,7 @@ from typing import assert_type
 
 class Foo:
     def __getattr__(self, name: int) -> int: ...
-    def __setattr__(self, name: int, value: int) -> None: ...
+    def __setattr__(self, name: int, value: int) -> None: ...  # E: `Foo.__setattr__` overrides parent class `object` in an inconsistent manner
 
 def test(foo: Foo) -> None:
     foo.x = 1  # E: Argument `Literal['x']` is not assignable to parameter `name` with type `int`

@@ -88,7 +88,7 @@ class Base4(tuple[str, int]): ...
 class Child1(Base1, Base2): ...
 class Child2(Base1, Base3): ...
 class Child3(Base3, Base4): ...  # E: Cannot extend multiple incompatible tuples
-class Child4(Base2, Base3): ...  # E: Cannot extend multiple incompatible tuples 
+class Child4(Base2, Base3): ...  # E: Cannot extend multiple incompatible tuples
 "#,
 );
 
@@ -323,8 +323,10 @@ testcase!(
     test_unpacked_tuple_subtype,
     r#"
 from typing import Sequence
-def test(x: tuple[int, *tuple[str, ...]]) -> None:
-    y: Sequence[int | str] = x
+def test[*Ts](x1: tuple[int, *tuple[str, ...]], x2: tuple[*Ts]) -> None:
+    y1: Sequence[int | str] = x1
+    y2: tuple[int | str, ...] = x1
+    y3: tuple[object, ...] = x2
 "#,
 );
 
@@ -396,7 +398,6 @@ def test(x: tuple[int] | tuple[str]) -> None:
 );
 
 testcase!(
-    bug = "Pyrefly hangs on this example if we uncomment the second definition of f",
     test_unpack_tuple_with_double_def,
     r#"
 from typing import Unpack, Any

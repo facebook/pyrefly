@@ -17,7 +17,6 @@
 #![deny(clippy::string_to_string)]
 #![deny(clippy::trivially_copy_pass_by_ref)]
 #![feature(if_let_guard)]
-#![feature(let_chains)]
 
 pub mod ast;
 pub mod display;

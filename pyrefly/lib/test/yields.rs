@@ -291,9 +291,9 @@ assert_type(generator2(1), Generator[int, Any, Generator[int, None, None]])
 testcase!(
     test_await_simple,
     r#"
-from typing import Any, Awaitable, assert_type
+from typing import Any, Awaitable, assert_type, Generator
 class Foo(Awaitable[int]):
-    pass
+    def __await__(self) -> Generator[Any, Any, int]: ...
 async def bar() -> str: ...
 
 async def test() -> None:
@@ -305,9 +305,9 @@ async def test() -> None:
 testcase!(
     test_await_literal,
     r#"
-from typing import Awaitable, Literal
+from typing import Any, Awaitable, Literal, Generator
 class Foo(Awaitable[Literal[42]]):
-    pass
+    def __await__(self) -> Generator[Any, Any, Literal[42]]: ...
 async def test() -> Literal[42]:
     return await Foo()
 "#,

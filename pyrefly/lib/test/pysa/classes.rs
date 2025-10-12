@@ -11,19 +11,24 @@ use pretty_assertions::assert_eq;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::types::Type;
 
+use crate::report::pysa::call_graph::Target;
 use crate::report::pysa::class::ClassDefinition;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::PysaClassField;
+use crate::report::pysa::class::PysaClassFieldDeclaration;
 use crate::report::pysa::class::PysaClassMro;
 use crate::report::pysa::class::export_all_classes;
 use crate::report::pysa::context::ModuleContext;
+use crate::report::pysa::function::collect_function_base_definitions;
 use crate::report::pysa::module::ModuleIds;
+use crate::report::pysa::override_graph::WholeProgramReversedOverrideGraph;
 use crate::report::pysa::scope::ScopeParent;
 use crate::report::pysa::types::PysaType;
 use crate::test::pysa::utils::create_location;
 use crate::test::pysa::utils::create_state;
 use crate::test::pysa::utils::get_class;
 use crate::test::pysa::utils::get_class_ref;
+use crate::test::pysa::utils::get_function_ref;
 use crate::test::pysa::utils::get_handle_for_module_name;
 
 fn create_simple_class(name: &str, id: u32, parent: ScopeParent) -> ClassDefinition {
@@ -34,7 +39,11 @@ fn create_simple_class(name: &str, id: u32, parent: ScopeParent) -> ClassDefinit
         mro: PysaClassMro::Resolved(Vec::new()),
         parent,
         is_synthesized: false,
+        is_dataclass: false,
+        is_named_tuple: false,
+        is_typed_dict: false,
         fields: HashMap::new(),
+        decorator_callees: HashMap::new(),
     }
 }
 
@@ -50,11 +59,20 @@ fn test_exported_classes(
 
     let test_module_handle = get_handle_for_module_name(module_name, &transaction);
 
-    let context = ModuleContext::create(&test_module_handle, &transaction, &module_ids).unwrap();
+    let context = ModuleContext::create(test_module_handle, &transaction, &module_ids).unwrap();
 
     let expected_class_definitions = create_expected_class_definitions(&context);
 
-    let actual_class_definitions = export_all_classes(&context);
+    let reversed_override_graph = WholeProgramReversedOverrideGraph::new();
+    let actual_class_definitions = export_all_classes(
+        &collect_function_base_definitions(
+            &handles,
+            &transaction,
+            &module_ids,
+            &reversed_override_graph,
+        ),
+        &context,
+    );
 
     // Sort definitions by location.
     let mut actual_class_definitions = actual_class_definitions.into_iter().collect::<Vec<_>>();
@@ -208,6 +226,7 @@ class Foo:
                     ),
                     explicit_annotation: None,
                     location: Some(create_location(3, 11, 3, 14)),
+                    declaration_kind: Some(PysaClassFieldDeclaration::DefinedWithoutAssign),
                 },
             )])),
             create_simple_class(
@@ -270,6 +289,9 @@ Point = namedtuple('Point', ['x', 'y'])
             ]),
             parent: ScopeParent::TopLevel,
             is_synthesized: true,
+            is_dataclass: false,
+            is_named_tuple: true,
+            is_typed_dict: false,
             fields: HashMap::from([
                 (
                     "x".to_owned(),
@@ -277,6 +299,9 @@ Point = namedtuple('Point', ['x', 'y'])
                         type_: PysaType::any_implicit(),
                         explicit_annotation: None,
                         location: Some(create_location(3, 30, 3, 33)),
+                        declaration_kind: Some(
+                            PysaClassFieldDeclaration::DeclaredWithoutAnnotation,
+                        ),
                     },
                 ),
                 (
@@ -285,9 +310,13 @@ Point = namedtuple('Point', ['x', 'y'])
                         type_: PysaType::any_implicit(),
                         explicit_annotation: None,
                         location: Some(create_location(3, 35, 3, 38)),
+                        declaration_kind: Some(
+                            PysaClassFieldDeclaration::DeclaredWithoutAnnotation,
+                        ),
                     },
                 ),
             ]),
+            decorator_callees: HashMap::new(),
         }
     },
 );
@@ -309,6 +338,7 @@ class Foo:
                     type_: PysaType::from_class_type(context.stdlib.int(), context),
                     explicit_annotation: Some("int".to_owned()),
                     location: Some(create_location(4, 5, 4, 6)),
+                    declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
                 },
             ),
             (
@@ -317,6 +347,7 @@ class Foo:
                     type_: PysaType::from_class_type(context.stdlib.str(), context),
                     explicit_annotation: Some("str".to_owned()),
                     location: Some(create_location(5, 5, 5, 6)),
+                    declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
                 },
             ),
             (
@@ -327,6 +358,7 @@ class Foo:
                         "typing.Annotated[bool, \"annotation for z\"]".to_owned(),
                     ),
                     location: Some(create_location(6, 5, 6, 6)),
+                    declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
                 },
             ),
         ]))
@@ -351,6 +383,7 @@ class Foo:
                     type_: PysaType::from_class_type(context.stdlib.int(), context),
                     explicit_annotation: Some("int".to_owned()),
                     location: Some(create_location(5, 14, 5, 15)),
+                    declaration_kind: Some(PysaClassFieldDeclaration::DefinedInMethod),
                 },
             ),
             (
@@ -359,6 +392,7 @@ class Foo:
                     type_: PysaType::from_class_type(context.stdlib.str(), context),
                     explicit_annotation: Some("str".to_owned()),
                     location: Some(create_location(6, 14, 6, 15)),
+                    declaration_kind: Some(PysaClassFieldDeclaration::DefinedInMethod),
                 },
             ),
             (
@@ -369,6 +403,7 @@ class Foo:
                         "typing.Annotated[bool, \"annotation for z\"]".to_owned(),
                     ),
                     location: Some(create_location(7, 14, 7, 15)),
+                    declaration_kind: Some(PysaClassFieldDeclaration::DefinedInMethod),
                 },
             ),
         ]))
@@ -385,23 +420,105 @@ class Foo:
     y: str
 "#,
     &|context: &ModuleContext| {
-        create_simple_class("Foo", 0, ScopeParent::TopLevel).with_fields(HashMap::from([
-            (
-                "x".to_owned(),
-                PysaClassField {
-                    type_: PysaType::from_class_type(context.stdlib.int(), context),
-                    explicit_annotation: Some("int".to_owned()),
-                    location: Some(create_location(5, 5, 5, 6)),
-                },
-            ),
-            (
-                "y".to_owned(),
-                PysaClassField {
-                    type_: PysaType::from_class_type(context.stdlib.str(), context),
-                    explicit_annotation: Some("str".to_owned()),
-                    location: Some(create_location(6, 5, 6, 6)),
-                },
-            ),
-        ]))
+        create_simple_class("Foo", 0, ScopeParent::TopLevel)
+            .with_is_dataclass(true)
+            .with_fields(HashMap::from([
+                (
+                    "x".to_owned(),
+                    PysaClassField {
+                        type_: PysaType::from_class_type(context.stdlib.int(), context),
+                        explicit_annotation: Some("int".to_owned()),
+                        location: Some(create_location(5, 5, 5, 6)),
+                        declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
+                    },
+                ),
+                (
+                    "y".to_owned(),
+                    PysaClassField {
+                        type_: PysaType::from_class_type(context.stdlib.str(), context),
+                        explicit_annotation: Some("str".to_owned()),
+                        location: Some(create_location(6, 5, 6, 6)),
+                        declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
+                    },
+                ),
+            ]))
+    },
+);
+
+exported_class_testcase!(
+    test_export_class_decorator,
+    r#"
+def decorator(c):
+    return c
+
+@decorator
+class Foo:
+    pass
+"#,
+    &|context: &ModuleContext| {
+        create_simple_class("Foo", 0, ScopeParent::TopLevel).with_decorator_callees(HashMap::from(
+            [(
+                create_location(5, 2, 5, 11),
+                vec![Target::Function(get_function_ref(
+                    "test",
+                    "decorator",
+                    context,
+                ))],
+            )],
+        ))
+    },
+);
+
+exported_class_testcase!(
+    test_export_class_decorator_factory,
+    r#"
+def decorator(x):
+    return lambda f: f
+
+@decorator(1)
+class Foo:
+    pass
+"#,
+    &|context: &ModuleContext| {
+        create_simple_class("Foo", 0, ScopeParent::TopLevel).with_decorator_callees(HashMap::from(
+            [(
+                create_location(5, 2, 5, 11),
+                vec![Target::Function(get_function_ref(
+                    "test",
+                    "decorator",
+                    context,
+                ))],
+            )],
+        ))
+    },
+);
+
+exported_class_testcase!(
+    test_export_class_multiple_decorators,
+    r#"
+def d1(f):
+    return f
+
+def d2(f):
+    return f
+
+@d1
+@d2
+class Foo:
+    pass
+"#,
+    &|context: &ModuleContext| {
+        create_simple_class("Foo", 0, ScopeParent::TopLevel).with_decorator_callees(HashMap::from(
+            [
+                (
+                    create_location(8, 2, 8, 4),
+                    vec![Target::Function(get_function_ref("test", "d1", context))],
+                ),
+                (
+                    create_location(9, 2, 9, 4),
+                    vec![Target::Function(get_function_ref("test", "d2", context))],
+                ),
+            ],
+        ))
     },
 );

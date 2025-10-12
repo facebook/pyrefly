@@ -14,6 +14,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::VarianceMap;
+use crate::alt::types::abstract_class::AbstractClassMembers;
 use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
@@ -26,6 +27,7 @@ use crate::binding::binding::AnnAssignHasValue;
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::AnnotationWithTarget;
 use crate::binding::binding::Binding;
+use crate::binding::binding::BindingAbstractClassCheck;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassBaseType;
@@ -45,6 +47,7 @@ use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::EmptyAnswer;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyAbstractClassCheck;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassBaseType;
@@ -347,6 +350,24 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassMro {
 
     fn promote_recursive(_: Var) -> Self::Answer {
         ClassMro::recursive()
+    }
+}
+
+impl<Ans: LookupAnswer> Solve<Ans> for KeyAbstractClassCheck {
+    fn solve(
+        answers: &AnswersSolver<Ans>,
+        binding: &BindingAbstractClassCheck,
+        errors: &ErrorCollector,
+    ) -> Arc<AbstractClassMembers> {
+        if let Some(cls) = &answers.get_idx(binding.class_idx).0 {
+            answers.solve_abstract_members(cls, errors)
+        } else {
+            Arc::new(AbstractClassMembers::recursive())
+        }
+    }
+
+    fn promote_recursive(_: Var) -> Self::Answer {
+        AbstractClassMembers::recursive()
     }
 }
 

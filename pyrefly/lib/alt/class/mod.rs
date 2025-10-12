@@ -9,6 +9,7 @@ pub mod class_field;
 pub mod class_metadata;
 pub mod classdef;
 pub mod dataclass;
+pub mod django;
 pub mod enums;
 pub mod named_tuple;
 pub mod new_type;

@@ -127,7 +127,7 @@ class Foo:
     def __exit__(self, exc_type: int, exc_value: int, traceback: int) -> None:
         ...
 
-with Foo() as foo: # E: Argument `BaseException | None` is not assignable to parameter `exc_value` with type `int` # E: Argument `TracebackType | None` is not assignable to parameter `traceback` with type `int` # E: Argument `type[BaseException] | None` is not assignable to parameter `exc_type` with type `int`
+with Foo() as foo: # E: `__exit__` must be callable with the argument types (type[BaseException], BaseException, TracebackType) # E: `__exit__` must be callable with the argument types (None, None, None)
     pass
     "#,
 );
@@ -204,7 +204,7 @@ testcase!(
 class CM:
   def __enter__(self) -> None:
     pass
-  
+
   def __exit__(self, *args) -> bool:
     return False
 
@@ -223,7 +223,7 @@ from typing import Literal
 class CM:
   def __enter__(self) -> None:
     pass
-  
+
   def __exit__(self, *args) -> Literal[True]:
     return True
 
@@ -244,7 +244,7 @@ from typing import Literal
 class CM:
   def __enter__(self) -> None:
     pass
-  
+
   def __exit__(self, *args) -> Literal[False]:
     return False
 
@@ -281,5 +281,45 @@ def f() -> Iterator[str]:
 def g() -> bool:
     with f():
         return True
+    "#,
+);
+
+testcase!(
+    test_overloaded_exit_with,
+    r#"
+from typing import assert_type, overload
+from types import TracebackType
+class Foo:
+    def __enter__(self) -> int:
+        ...
+    @overload
+    def __exit__(
+        self,
+        exc_type: type[BaseException],
+        exc_value: BaseException,
+        traceback: TracebackType,
+        /
+    ) -> None:
+        ...
+    @overload
+    def __exit__(
+        self,
+        exc_type: None,
+        exc_value: None,
+        traceback: None,
+        /
+    ) -> None:
+        ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /
+    ) -> None:
+        ...
+
+with Foo() as foo:
+    assert_type(foo, int)
     "#,
 );

@@ -118,6 +118,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 AnyIdx::KeyAnnotation(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyClassMetadata(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyClassMro(idx) => self.show_binding_for_with(&bindings, idx),
+                AnyIdx::KeyAbstractClassCheck(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyLegacyTypeParam(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyYield(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyYieldFrom(idx) => self.show_binding_for_with(&bindings, idx),

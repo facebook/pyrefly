@@ -434,9 +434,9 @@ testcase!(
     r#"
 from typing import assert_type
 class A:
-    def __eq__(self, other) -> int:
-        return 1
-assert_type(A() == 42, int)
+    def __eq__(self, other) -> bool:
+        return True
+assert_type(A() == 42, bool)
     "#,
 );
 

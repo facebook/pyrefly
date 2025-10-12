@@ -14,6 +14,7 @@ use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_util::gas::Gas;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -73,7 +74,7 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             | Binding::Narrow(k, _, _)
             | Binding::CompletedPartialType(k, ..)
             | Binding::PartialTypeWithUpstreamsCompleted(k, ..)
-            | Binding::Default(k, ..) => {
+            | Binding::LoopPhi(k, ..) => {
                 current_idx = *k;
             }
             Binding::Phi(ks) if !ks.is_empty() => current_idx = *ks.iter().next().unwrap(),
@@ -206,7 +207,7 @@ pub fn insert_import_edit_with_forced_import_format(
     export_name: &str,
     use_absolute_import: bool,
 ) -> (TextSize, String) {
-    let position = if let Some(first_stmt) = ast.body.first() {
+    let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
         first_stmt.range().start()
     } else {
         ast.range.end()

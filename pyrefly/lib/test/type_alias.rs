@@ -542,10 +542,10 @@ from typing import *
 Ts = TypeVarTuple('Ts')
 P = ParamSpec('P')
 t1: TypeAlias = Unpack[TypedDict]  # E: `Unpack` is not allowed in this context # E: `TypedDict` is not allowed in this context
-t2: TypeAlias = P  # E: `ParamSpec[P]` is not allowed in this context
+t2: TypeAlias = P  # E: `ParamSpec` is not allowed in this context
 t3: TypeAlias = Unpack[Ts]  # E: `Unpack` is not allowed in this context
 t4: TypeAlias = Literal  # E: Expected a type argument for `Literal`
-t5: TypeAlias = Ts  # E: `TypeVarTuple` is not allowed in this context
+t5: TypeAlias = Ts  # E: `TypeVarTuple` must be unpacked
 t6: TypeAlias = Generic  # E: Expected a type argument for `Generic`
 t7: TypeAlias = Protocol  # E: Expected a type argument for `Protocol`
 t8: TypeAlias = Generic[int]  # E: `Generic` is not allowed in this context
@@ -655,8 +655,8 @@ testcase!(
 from typing import ParamSpec, TypeVarTuple, Unpack
 P = ParamSpec('P')
 Ts = TypeVarTuple('Ts')
-Error1 = type[P]  # E: `ParamSpec[P]` is not allowed
-Error2 = type[Ts]  # E: `TypeVarTuple` is not allowed
+Error1 = type[P]  # E: `ParamSpec` is not allowed
+Error2 = type[Ts]  # E: `TypeVarTuple` must be unpacked
 Error3 = type[Unpack[Ts]]  # E: `Unpack` is not allowed
     "#,
 );
@@ -710,7 +710,7 @@ U = TypeVar('U', bound=str)
 
 X: TypeAlias = list[T]
 Y: TypeAlias = X[S]
-Z: TypeAlias = X[U]  # E: `str` is not assignable to upper bound `int`
+Z: TypeAlias = X[U]  # E: `U` is not assignable to upper bound `int`
     "#,
 );
 
@@ -729,7 +729,7 @@ from typing import TypeAlias
 
 # Test that scoped type aliases cannot be used as base classes
 type X = int
-Y: TypeAlias = int  
+Y: TypeAlias = int
 Z = int
 
 class C1(X): pass  # E: Cannot use scoped type alias `X` as a base class
@@ -756,5 +756,54 @@ XA = type["A"]
 XB = Type["A"]
 class A:
     pass
+    "#,
+);
+
+testcase!(
+    test_generic_typealias_of_typealiastype,
+    r#"
+from typing import TypeAlias, TypeAliasType, TypeVar
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2", bound=str | bytes)
+
+Spam1 = TypeAliasType("Spam1", T2 | type[T1], type_params=(T1, T2))
+Spam2: TypeAlias = Spam1[T1, T2]
+
+x1: Spam1[int, str] = int
+x2: Spam2[int, str] = int
+    "#,
+);
+
+testcase!(
+    bug = "there shouldn't be an error here",
+    test_generic_typealias_of_scopedtypealias,
+    r#"
+from typing import TypeAlias, TypeAliasType, TypeVar
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2", bound=str | bytes)
+
+type Spam1[T1, T2] = T2 | type[T1]
+Spam2: TypeAlias = Spam1[T1, T2]
+
+x1: Spam1[int, str] = int
+x2: Spam2[int, str] = int # E: `TypeAlias[Spam2, type[T2 | type[T1]]]` is not subscriptable
+    "#,
+);
+
+testcase!(
+    test_generic_typealias_of_explicit_typealias,
+    r#"
+from typing import TypeAlias, TypeAliasType, TypeVar
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2", bound=str | bytes)
+
+Spam1: TypeAlias = type[T1] | T2
+Spam2: TypeAlias = Spam1[T1, T2]
+
+x1: Spam1[int, str] = int
+x2: Spam2[int, str] = int
     "#,
 );

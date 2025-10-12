@@ -8,10 +8,12 @@
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use starlark_map::small_map::SmallMap;
@@ -19,11 +21,11 @@ use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::info;
 
-use crate::buck::query::Include;
-use crate::buck::query::PythonLibraryManifest;
-use crate::buck::query::TargetManifestDatabase;
-use crate::buck::query::query_source_db;
 use crate::handle::Handle;
+use crate::query::Include;
+use crate::query::PythonLibraryManifest;
+use crate::query::SourceDbQuerier;
+use crate::query::TargetManifestDatabase;
 use crate::source_db::SourceDatabase;
 use crate::source_db::Target;
 
@@ -50,7 +52,7 @@ impl Inner {
 }
 
 #[derive(Debug)]
-pub struct BuckSourceDatabase {
+pub struct QuerySourceDatabase {
     inner: RwLock<Inner>,
     /// The set of items the sourcedb has been queried for. Not all of the targets
     /// or files listed here will necessarily appear in the sourcedb, for example,
@@ -59,14 +61,16 @@ pub struct BuckSourceDatabase {
     /// The directory that will be passed into the sourcedb query shell-out. Should
     /// be the same as the directory containing the config this sourcedb is a part of.
     cwd: PathBuf,
+    querier: Arc<dyn SourceDbQuerier>,
 }
 
-impl BuckSourceDatabase {
-    pub fn new(cwd: PathBuf) -> Self {
-        BuckSourceDatabase {
+impl QuerySourceDatabase {
+    pub fn new(cwd: PathBuf, querier: Arc<dyn SourceDbQuerier>) -> Self {
+        QuerySourceDatabase {
             cwd,
             inner: RwLock::new(Inner::new()),
             includes: Mutex::new(SmallSet::new()),
+            querier,
         }
     }
 
@@ -96,16 +100,21 @@ impl BuckSourceDatabase {
     }
 }
 
-impl SourceDatabase for BuckSourceDatabase {
+impl SourceDatabase for QuerySourceDatabase {
     fn modules_to_check(&self) -> Vec<crate::handle::Handle> {
         // TODO(connernilsen): implement modules_to_check
         vec![]
     }
 
-    fn lookup(&self, module: &ModuleName, origin: Option<&Path>) -> Option<ModulePath> {
+    fn lookup(
+        &self,
+        module: &ModuleName,
+        origin: Option<&Path>,
+        style_filter: Option<ModuleStyle>,
+    ) -> Option<ModulePath> {
         let origin = origin?;
         let read = self.inner.read();
-        let start_target = read.path_lookup.get(&origin.to_path_buf())?;
+        let start_target = read.path_lookup.get(origin)?;
         let mut queue = VecDeque::new();
         let mut visited = SmallSet::new();
         queue.push_front(start_target);
@@ -119,8 +128,15 @@ impl SourceDatabase for BuckSourceDatabase {
             };
 
             if let Some(paths) = manifest.srcs.get(module) {
-                // TODO(connernilsen): for now, just take the first item on the path, but we
-                // should respect preferences at some point
+                // Since the sourcedb contains the full set of reachable files, if we find a
+                // result, we know a module path matching the style filter would exist in `paths`.
+                // Therefore, if it's not there, we can immediately fall back to whatever's
+                // available instead of re-performing the search like we normally do in module
+                // finding.
+                let style = style_filter.unwrap_or(ModuleStyle::Interface);
+                if let Some(result) = paths.iter().find(|p| ModuleStyle::of_path(p) == style) {
+                    return Some(ModulePath::filesystem(result.to_path_buf()));
+                }
                 return Some(ModulePath::filesystem(paths.first().to_path_buf()));
             }
 
@@ -160,7 +176,7 @@ impl SourceDatabase for BuckSourceDatabase {
         }
         *includes = new_includes;
         info!("Querying Buck for source DB");
-        let raw_db = query_source_db(includes.iter(), &self.cwd)?;
+        let raw_db = self.querier.query_source_db(&includes, &self.cwd)?;
         info!("Finished querying Buck for source DB");
         Ok(self.update_with_target_manifest(raw_db))
     }
@@ -177,6 +193,12 @@ impl SourceDatabase for BuckSourceDatabase {
             )
             .collect()
     }
+
+    fn get_target(&self, origin: Option<&Path>) -> Option<Target> {
+        let origin = origin?;
+        let read = self.inner.read();
+        read.path_lookup.get(origin).copied()
+    }
 }
 
 #[cfg(test)]
@@ -190,9 +212,26 @@ mod tests {
     use starlark_map::smallset;
 
     use super::*;
-    use crate::buck::query::TargetManifest;
+    use crate::query::TargetManifest;
 
-    impl BuckSourceDatabase {
+    #[derive(Debug)]
+    struct DummyQuerier {}
+
+    impl SourceDbQuerier for DummyQuerier {
+        fn query_source_db(
+            &self,
+            _: &SmallSet<Include>,
+            _: &Path,
+        ) -> anyhow::Result<TargetManifestDatabase> {
+            Ok(TargetManifestDatabase::get_test_database())
+        }
+
+        fn construct_command(&self) -> std::process::Command {
+            panic!("We shouldn't be calling this...");
+        }
+    }
+
+    impl QuerySourceDatabase {
         fn from_target_manifest_db(
             raw_db: TargetManifestDatabase,
             files: &SmallSet<PathBuf>,
@@ -206,13 +245,14 @@ mod tests {
                         .collect(),
                 ),
                 cwd: PathBuf::new(),
+                querier: Arc::new(DummyQuerier {}),
             };
             new.update_with_target_manifest(raw_db);
             new
         }
     }
 
-    fn get_db() -> (BuckSourceDatabase, PathBuf) {
+    fn get_db() -> (QuerySourceDatabase, PathBuf) {
         let raw_db = TargetManifestDatabase::get_test_database();
         let root = raw_db.root.to_path_buf();
         let files = smallset! {
@@ -221,7 +261,7 @@ mod tests {
         };
 
         (
-            BuckSourceDatabase::from_target_manifest_db(raw_db, &files),
+            QuerySourceDatabase::from_target_manifest_db(raw_db, &files),
             root,
         )
     }
@@ -254,41 +294,82 @@ mod tests {
     fn test_sourcedb_lookup() {
         let (db, root) = get_db();
 
-        let assert_lookup = |name, path, expected: Option<&str>| {
+        let assert_lookup = |name, path, style_filter, expected: Option<&str>| {
             assert_eq!(
-                db.lookup(&ModuleName::from_str(name), Some(&root.join(path))),
+                db.lookup(
+                    &ModuleName::from_str(name),
+                    Some(&root.join(path)),
+                    style_filter
+                ),
                 expected.map(|p| ModulePath::filesystem(root.join(p))),
-                "got result for {name} {path}, expected {expected:?}"
+                "got result for {name} {path} {style_filter:?}, expected {expected:?}"
             );
         };
 
-        assert_eq!(db.lookup(&ModuleName::from_str("log.log"), None), None,);
-        assert_lookup("does_not_exist", "pyre/client/log/__init__.py", None);
+        assert_eq!(
+            db.lookup(&ModuleName::from_str("log.log"), None, None),
+            None
+        );
+        assert_lookup("does_not_exist", "pyre/client/log/__init__.py", None, None);
         // can't be found, since the path's target only has `pyre.client.log.log` as reachable
-        assert_lookup("log.log", "pyre/client/log/__init__.py", None);
+        assert_lookup("log.log", "pyre/client/log/__init__.py", None, None);
         assert_lookup(
             "pyre.client.log.log",
             "pyre/client/log/__init__.py",
+            None,
+            Some("pyre/client/log/log.pyi"),
+        );
+        assert_lookup(
+            "pyre.client.log.log",
+            "pyre/client/log/__init__.py",
+            Some(ModuleStyle::Interface),
+            Some("pyre/client/log/log.pyi"),
+        );
+        assert_lookup(
+            "pyre.client.log.log",
+            "pyre/client/log/__init__.py",
+            Some(ModuleStyle::Executable),
             Some("pyre/client/log/log.py"),
+        );
+        assert_lookup(
+            "pyre.client.log",
+            "pyre/client/log/__init__.py",
+            None,
+            Some("pyre/client/log/__init__.py"),
+        );
+        assert_lookup(
+            "pyre.client.log",
+            "pyre/client/log/__init__.py",
+            Some(ModuleStyle::Interface),
+            Some("pyre/client/log/__init__.py"),
+        );
+        assert_lookup(
+            "pyre.client.log",
+            "pyre/client/log/__init__.py",
+            Some(ModuleStyle::Executable),
+            Some("pyre/client/log/__init__.py"),
         );
         assert_lookup(
             "click",
             "pyre/client/log/__init__.py",
+            None,
             Some("click/__init__.pyi"),
         );
         assert_lookup(
             "colorama",
             "pyre/client/log/__init__.py",
-            Some("colorama/__init__.py"),
+            None,
+            Some("colorama/__init__.pyi"),
         );
         assert_lookup(
             "colorama",
             "click/__init__.pyi",
-            Some("colorama/__init__.py"),
+            None,
+            Some("colorama/__init__.pyi"),
         );
-        assert_lookup("log.log", "click/__init__.pyi", None);
-        assert_lookup("log.log", "colorama/__init__.pyi", None);
-        assert_lookup("pyre.client.log.log", "click/__init__.py", None);
+        assert_lookup("log.log", "click/__init__.pyi", None, None);
+        assert_lookup("log.log", "colorama/__init__.pyi", None, None);
+        assert_lookup("pyre.client.log.log", "click/__init__.py", None, None);
     }
 
     #[test]

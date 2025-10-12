@@ -44,7 +44,6 @@ use crate::binding::bindings::LegacyTParamId;
 use crate::binding::bindings::NameLookupResult;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::NarrowOps;
-use crate::binding::scope::Flow;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
@@ -419,25 +418,6 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    /// Helper to clean up an expression that does type narrowing. We merge flows for the narrowing
-    /// operation and its negation, so that narrowing is limited to the body of the expression but
-    /// newly defined names persist.
-    fn negate_and_merge_flow(
-        &mut self,
-        base: Flow,
-        ops: &NarrowOps,
-        orelse: Option<&mut Expr>,
-        range: TextRange,
-        usage: &mut Usage,
-    ) {
-        let if_branch = self.scopes.replace_current_flow(base);
-        self.bind_narrow_ops(&ops.negate(), range, usage);
-        self.ensure_expr_opt(orelse, usage);
-        // Swap them back again, to make sure that the merge order is if, then else
-        let else_branch = self.scopes.replace_current_flow(if_branch);
-        self.merge_branches_into_current(vec![else_branch], range);
-    }
-
     // We want to special-case `self.assertXXX()` methods in unit tests.
     // The logic is intentionally syntax-based as we want to avoid checking whether the base type
     // is `unittest.TestCase` on every single method invocation.
@@ -503,13 +483,18 @@ impl<'a> BindingsBuilder<'a> {
         match x {
             Expr::If(x) => {
                 // Ternary operation. We treat it like an if/else statement.
-                let base = self.scopes.clone_current_flow();
+                self.start_fork_and_branch(x.range);
                 self.ensure_expr(&mut x.test, &mut Usage::narrowing_from(usage));
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
                 self.bind_narrow_ops(&narrow_ops, x.body.range(), usage);
                 self.ensure_expr(&mut x.body, usage);
-                let range = x.range();
-                self.negate_and_merge_flow(base, &narrow_ops, Some(&mut x.orelse), range, usage);
+                // Negate the narrow ops for the `orelse`, then merge the Flows.
+                // TODO(stroxler): We eventually want to drop all narrows but merge values.
+                self.next_branch();
+                self.bind_narrow_ops(&narrow_ops.negate(), x.range, usage);
+                self.ensure_expr(&mut x.orelse, usage);
+                self.finish_branch();
+                self.finish_exhaustive_fork();
             }
             Expr::BoolOp(ExprBoolOp {
                 node_index: _,
@@ -517,24 +502,40 @@ impl<'a> BindingsBuilder<'a> {
                 op,
                 values,
             }) => {
-                let base = self.scopes.clone_current_flow();
-                let mut narrow_ops = NarrowOps::new();
-                for value in values {
-                    self.bind_narrow_ops(&narrow_ops, value.range(), usage);
-                    self.ensure_expr(value, &mut Usage::narrowing_from(usage));
-                    let new_narrow_ops = NarrowOps::from_expr(self, Some(value));
+                let mut values = values.iter_mut();
+                fn get_narrow_ops(myself: &BindingsBuilder, expr: &Expr, op: BoolOp) -> NarrowOps {
+                    let raw_narrow_ops = NarrowOps::from_expr(myself, Some(expr));
                     match op {
                         BoolOp::And => {
                             // Every subsequent value is evaluated only if all previous values were truthy.
-                            narrow_ops.and_all(new_narrow_ops);
+                            raw_narrow_ops
                         }
                         BoolOp::Or => {
                             // Every subsequent value is evaluated only if all previous values were falsy.
-                            narrow_ops.and_all(new_narrow_ops.negate());
+                            raw_narrow_ops.negate()
                         }
                     }
                 }
-                self.negate_and_merge_flow(base, &narrow_ops, None, *range, usage);
+                if let Some(value) = values.next() {
+                    // The first operation runs unconditionally, so any walrus-defined
+                    // names will be added to the base flow.
+                    self.ensure_expr(value, &mut Usage::narrowing_from(usage));
+                    self.start_fork_and_branch(*range);
+                    let mut narrow_ops = get_narrow_ops(self, value, *op);
+                    for value in values {
+                        self.bind_narrow_ops(&narrow_ops, value.range(), usage);
+                        self.ensure_expr(value, &mut Usage::narrowing_from(usage));
+                        let new_narrow_ops = get_narrow_ops(self, value, *op);
+                        narrow_ops.and_all(new_narrow_ops);
+                    }
+                    // Negate the narrow ops in the base flow and merge.
+                    // TODO(stroxler): We eventually want to drop all narrows but merge values.
+                    // Once we have a way to do that, the negation will be unnecessary.
+                    self.next_branch();
+                    self.bind_narrow_ops(&narrow_ops.negate(), *range, usage);
+                    self.finish_branch();
+                    self.finish_bool_op_fork();
+                }
             }
             Expr::Call(ExprCall {
                 node_index: _,

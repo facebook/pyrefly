@@ -357,6 +357,38 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         Ok(())
     }
 
+    fn is_subset_params(
+        &mut self,
+        l_params: &Params,
+        u_params: &Params,
+    ) -> Result<(), SubsetError> {
+        match (l_params, u_params) {
+            (Params::Ellipsis, Params::ParamSpec(_, pspec)) => {
+                self.is_subset_eq(&Type::Ellipsis, pspec)
+            }
+            (Params::ParamSpec(_, pspec), Params::Ellipsis) => {
+                self.is_subset_eq(pspec, &Type::Ellipsis)
+            }
+            (Params::Ellipsis, _) | (_, Params::Ellipsis) => Ok(()),
+            (Params::List(l_args), Params::List(u_args)) => {
+                self.is_subset_param_list(l_args.items(), u_args.items())
+            }
+            (Params::List(ls), Params::ParamSpec(args, pspec)) => {
+                self.is_paramlist_subset_of_paramspec(ls, args, pspec)
+            }
+            (Params::ParamSpec(args, pspec), Params::List(ls)) => {
+                self.is_paramspec_subset_of_paramlist(args, pspec, ls)
+            }
+            (Params::ParamSpec(ls, p1), Params::ParamSpec(us, p2)) => {
+                self.is_paramspec_subset_of_paramspec(ls, p1, us, p2)
+            }
+            (Params::Materialization, _) => Err(SubsetError::Other),
+            (_, Params::Materialization) => {
+                self.is_subset_params(l_params, &Params::List(ParamList::everything()))
+            }
+        }
+    }
+
     fn is_subset_protocol(&mut self, got: Type, protocol: ClassType) -> Result<(), SubsetError> {
         let recursive_check = (got.clone(), Type::ClassType(protocol.clone()));
         if !self.recursive_assumptions.insert(recursive_check) {
@@ -723,6 +755,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
     /// Implementation of subset equality for Type, other than Var.
     pub fn is_subset_eq_impl(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
+        if matches!(got, Type::Materialization) {
+            return self
+                .is_subset_eq_impl(&self.type_order.stdlib().object().clone().to_type(), want);
+        } else if matches!(want, Type::Materialization) {
+            return self.is_subset_eq_impl(got, &Type::never());
+        }
         match (got, want) {
             (Type::Any(_), _) => {
                 // Special case in Python, because we want `x: int = Any` to be valid,
@@ -756,6 +794,24 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         .all(|constraint| self.is_subset_eq(constraint, u).is_ok()) =>
             {
                 Ok(())
+            }
+            (Type::Quantified(q), u @ Type::Tuple(_)) if q.is_type_var_tuple() => self
+                .is_subset_eq(
+                    &Type::Tuple(Tuple::unbounded(
+                        self.type_order.stdlib().object().clone().to_type(),
+                    )),
+                    u,
+                ),
+            (Type::Quantified(q), Type::ClassType(cls))
+                if q.is_type_var_tuple()
+                    && let Some(want) = self.type_order.as_tuple_type(cls) =>
+            {
+                self.is_subset_eq(
+                    &Type::Tuple(Tuple::unbounded(
+                        self.type_order.stdlib().object().clone().to_type(),
+                    )),
+                    &want,
+                )
             }
             (t1, Type::Quantified(q)) => match q.restriction() {
                 // This only works for constraints and not bounds, because a TypeVar must resolve to exactly one of its constraints.
@@ -833,27 +889,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     metadata: _,
                 }),
             ) => {
-                match (&l.params, &u.params) {
-                    (Params::Ellipsis, Params::ParamSpec(_, pspec)) => {
-                        self.is_subset_eq(&Type::Ellipsis, pspec)?
-                    }
-                    (Params::ParamSpec(_, pspec), Params::Ellipsis) => {
-                        self.is_subset_eq(pspec, &Type::Ellipsis)?
-                    }
-                    (Params::Ellipsis, _) | (_, Params::Ellipsis) => {}
-                    (Params::List(l_args), Params::List(u_args)) => {
-                        self.is_subset_param_list(l_args.items(), u_args.items())?
-                    }
-                    (Params::List(ls), Params::ParamSpec(args, pspec)) => {
-                        self.is_paramlist_subset_of_paramspec(ls, args, pspec)?
-                    }
-                    (Params::ParamSpec(args, pspec), Params::List(ls)) => {
-                        self.is_paramspec_subset_of_paramlist(args, pspec, ls)?
-                    }
-                    (Params::ParamSpec(ls, p1), Params::ParamSpec(us, p2)) => {
-                        self.is_paramspec_subset_of_paramspec(ls, p1, us, p2)?
-                    }
-                }
+                self.is_subset_params(&l.params, &u.params)?;
                 self.is_subset_eq(&l.ret, &u.ret)
             }
             (Type::TypedDict(got), Type::TypedDict(want)) => self.is_subset_typed_dict(got, want),

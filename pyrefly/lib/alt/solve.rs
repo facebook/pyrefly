@@ -6,6 +6,7 @@
  */
 
 use std::iter;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -36,6 +37,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::VarianceMap;
+use crate::alt::types::abstract_class::AbstractClassMembers;
 use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
@@ -73,6 +75,7 @@ use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyExport;
+use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LinkedKey;
@@ -92,6 +95,7 @@ use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::style::ErrorStyle;
+use crate::graph::index::Idx;
 use crate::solver::solver::SubsetError;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
@@ -303,6 +307,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(cls) => self.calculate_class_mro(cls, errors),
         };
         Arc::new(mro)
+    }
+
+    pub fn solve_abstract_members(
+        &self,
+        cls: &Class,
+        _errors: &ErrorCollector,
+    ) -> Arc<AbstractClassMembers> {
+        let abstract_members = self.calculate_abstract_members(cls);
+        Arc::new(abstract_members)
     }
 
     pub fn solve_annotation(
@@ -1004,18 +1017,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// `type_params` refers specifically to the elements of the tuple literal passed to the `TypeAliasType` constructor
+    /// `typealiastype_tparams` refers specifically to the elements of the tuple literal passed to the `TypeAliasType` constructor
     /// For all other kinds of type aliases, it should be `None`.
     ///
     /// When present, we visit those types first to determine the `TParams` for this alias, and any
     /// type variables when we subsequently visit the aliased type are considered out of scope.
+    ///
+    /// `legacy_tparams` refers to the type parameters collected in the bindings phase. It is only populated if we know for sure
+    /// that this is actually a type alias, like when a variable assignment is annotated with `TypeAlias`
     fn as_type_alias(
         &self,
         name: &Name,
         style: TypeAliasStyle,
         ty: Type,
         expr: &Expr,
-        type_params: Option<Vec<Expr>>,
+        typealiastype_tparams: Option<Vec<Expr>>,
+        legacy_tparams: &Option<Box<[Idx<KeyLegacyTypeParam>]>>,
         errors: &ErrorCollector,
     ) -> Type {
         let range = expr.range();
@@ -1044,7 +1061,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut seen_param_specs = SmallMap::new();
         let mut tparams = Vec::new();
         let mut tparams_for_type_alias_type = None;
-        if let Some(type_params) = &type_params {
+        if let Some(type_params) = &typealiastype_tparams {
             self.tvars_to_tparams_for_type_alias_type(
                 type_params,
                 &mut seen_type_vars,
@@ -1055,13 +1072,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             tparams_for_type_alias_type = Some(tparams.len());
         }
-        self.tvars_to_tparams_for_type_alias(
-            &mut ty,
-            &mut seen_type_vars,
-            &mut seen_type_var_tuples,
-            &mut seen_param_specs,
-            &mut tparams,
-        );
+        if let Some(legacy_tparams) = legacy_tparams {
+            tparams = legacy_tparams
+                .iter()
+                .filter_map(|key| self.get_idx(*key).deref().parameter().cloned())
+                .collect();
+        } else {
+            self.tvars_to_tparams_for_type_alias(
+                &mut ty,
+                &mut seen_type_vars,
+                &mut seen_type_var_tuples,
+                &mut seen_param_specs,
+                &mut tparams,
+            );
+        }
         if let Some(n) = tparams_for_type_alias_type {
             for extra_tparam in tparams.iter().skip(n) {
                 errors.add(
@@ -1134,36 +1158,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Type {
-        let base_exception_class_type =
-            Type::type_form(self.stdlib.base_exception().clone().to_type());
-        let arg1 = Type::optional(base_exception_class_type);
-        let arg2 = Type::optional(self.stdlib.base_exception().clone().to_type());
-        let arg3 = Type::optional(self.stdlib.traceback_type().clone().to_type());
-        let exit_arg_types = [
-            CallArg::ty(&arg1, range),
-            CallArg::ty(&arg2, range),
-            CallArg::ty(&arg3, range),
-        ];
-        match kind {
+        // Call `__exit__` or `__aexit__` and unwrap the results if async, swallowing any errors from the call itself
+        let call_exit = |exit_arg_types, swallow_errors| match kind {
             IsAsync::Sync => self.call_method_or_error(
                 context_manager_type,
                 &kind.context_exit_dunder(),
                 range,
-                &exit_arg_types,
+                exit_arg_types,
                 &[],
-                errors,
+                swallow_errors,
                 context,
             ),
             IsAsync::Async => match self.unwrap_awaitable(&self.call_method_or_error(
                 context_manager_type,
                 &kind.context_exit_dunder(),
                 range,
-                &exit_arg_types,
+                exit_arg_types,
                 &[],
-                errors,
+                swallow_errors,
                 context,
             )) {
                 Some(ty) => ty,
+                // We emit this error directly, since it's different from type checking the arguments
                 None => self.error(
                     errors,
                     range,
@@ -1171,7 +1187,53 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     format!("Expected `{}` to be async", dunder::AEXIT),
                 ),
             },
+        };
+        let base_exception_class_type =
+            Type::type_form(self.stdlib.base_exception().clone().to_type());
+        let arg1 = base_exception_class_type;
+        let arg2 = self.stdlib.base_exception().clone().to_type();
+        let arg3 = self.stdlib.traceback_type().clone().to_type();
+        let exit_with_error_args = [
+            CallArg::ty(&arg1, range),
+            CallArg::ty(&arg2, range),
+            CallArg::ty(&arg3, range),
+        ];
+        let exit_ok_args = [
+            CallArg::ty(&Type::None, range),
+            CallArg::ty(&Type::None, range),
+            CallArg::ty(&Type::None, range),
+        ];
+        let exit_with_error_errors =
+            ErrorCollector::new(errors.module().clone(), ErrorStyle::Delayed);
+        let exit_with_ok_errors = ErrorCollector::new(errors.module().clone(), ErrorStyle::Delayed);
+        let error_args_result = call_exit(&exit_with_error_args, &exit_with_error_errors);
+        let ok_args_result = call_exit(&exit_ok_args, &exit_with_ok_errors);
+        // If the call only has one error we can directly forward it
+        // If there is more than one error, we emit a generic error instead of emitting one error for each mismatched argument
+        if exit_with_error_errors.len() <= 1 {
+            errors.extend(exit_with_error_errors);
+        } else {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::new(ErrorKind::BadContextManager, context),
+                format!("`{}` must be callable with the argument types (type[BaseException], BaseException, TracebackType)", kind.context_exit_dunder()),
+            );
         }
+        if exit_with_ok_errors.len() <= 1 {
+            errors.extend(exit_with_ok_errors);
+        } else {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::new(ErrorKind::BadContextManager, context),
+                format!(
+                    "`{}` must be callable with the argument types (None, None, None)",
+                    kind.context_exit_dunder()
+                ),
+            );
+        }
+        self.union(error_args_result, ok_args_result)
     }
 
     fn context_value(
@@ -1533,6 +1595,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     errors,
                 );
             }
+
+            // If we are inheriting from multiple base types, we should
+            // check whether the multiple inheritance is consistent
+            if class_bases.as_ref().base_type_count() > 1 {
+                self.check_consistent_multiple_inheritance(cls, errors);
+            }
         }
         Arc::new(EmptyAnswer)
     }
@@ -1892,10 +1960,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     TypeInfo::join(type_infos, &|ts| self.unions(ts))
                 }
             }
-            Binding::Default(default, binding) => {
+            Binding::LoopPhi(default, ks) => {
                 // We force the default first so that if we hit a recursive case it is already available
                 self.get_idx(*default);
-                self.binding_to_type_info(binding, errors)
+                // Then solve the phi like a regular Phi binding
+                if ks.len() == 1 {
+                    self.get_idx(*ks.first().unwrap()).arc_clone()
+                } else {
+                    let type_infos = ks
+                        .iter()
+                        .filter_map(|k| {
+                            let t: Arc<TypeInfo> = self.get_idx(*k);
+                            // Filter out all `@overload`-decorated types except the one that
+                            // accumulates all signatures into a Type::Overload.
+                            if matches!(t.ty(), Type::Overload(_)) || !t.ty().is_overload() {
+                                Some(t.arc_clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    TypeInfo::join(type_infos, &|ts| self.unions(ts))
+                }
             }
             Binding::AssignToAttribute(attr, got) => {
                 // NOTE: Deterministic pinning of placeholder types based on first use relies on an
@@ -2271,8 +2357,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn binding_to_type(&self, binding: &Binding, errors: &ErrorCollector) -> Type {
         match binding {
             Binding::Forward(..)
-            | Binding::Default(..)
             | Binding::Phi(..)
+            | Binding::LoopPhi(..)
             | Binding::Narrow(..)
             | Binding::AssignToAttribute(..)
             | Binding::AssignToSubscript(..)
@@ -2475,7 +2561,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.attr_infer(&binding, &attr.id, attr.range, errors, None)
                     .into_ty()
             }
-            Binding::NameAssign(name, annot_key, expr) => {
+            Binding::NameAssign(name, annot_key, expr, legacy_tparams) => {
                 let (has_type_alias_qualifier, ty) = match annot_key.as_ref() {
                     // First infer the type as a normal value
                     Some((style, k)) => {
@@ -2523,6 +2609,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ty,
                         expr,
                         None,
+                        legacy_tparams,
                         errors,
                     ),
                     None if Self::may_be_implicit_type_alias(&ty)
@@ -2534,6 +2621,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ty,
                             expr,
                             None,
+                            legacy_tparams,
                             errors,
                         )
                     }
@@ -3060,7 +3148,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Binding::ScopedTypeAlias(name, params, expr) => {
                 let ty = self.expr_infer(expr, errors);
-                let ta = self.as_type_alias(name, TypeAliasStyle::Scoped, ty, expr, None, errors);
+                let ta =
+                    self.as_type_alias(name, TypeAliasStyle::Scoped, ty, expr, None, &None, errors);
                 match ta {
                     Type::Forall(..) => self.error(
                         errors,
@@ -3093,6 +3182,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ty,
                     &expr,
                     Some(type_param_exprs),
+                    &None,
                     errors,
                 );
                 if let Some(k) = ann
@@ -3404,13 +3494,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::TypeAlias(ta) => self.type_of(ta.as_type()),
             Type::Any(style) => Type::type_form(style.propagate()),
-            Type::ClassDef(cls) => {
-                if let Some(meta) = self.get_metadata_for_class(&cls).metaclass() {
-                    Type::type_form(Type::ClassType(meta.clone()))
-                } else {
-                    Type::ClassDef(self.stdlib.builtins_type().class_object().clone())
-                }
-            }
+            Type::ClassDef(cls) => Type::type_form(Type::ClassType(
+                self.get_metadata_for_class(&cls)
+                    .metaclass(self.stdlib)
+                    .clone(),
+            )),
             _ => self.stdlib.builtins_type().clone().to_type(),
         }
     }

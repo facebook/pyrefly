@@ -84,6 +84,8 @@ pub struct ClassFieldProperties {
     // The field is initialized on the class (outside of a method)
     is_initialized_on_class: bool,
     range: TextRange,
+    // The range of the docstring following this field, if present
+    docstring_range: Option<TextRange>,
 }
 
 impl PartialEq for ClassFieldProperties {
@@ -102,16 +104,26 @@ impl TypeEq for ClassFieldProperties {}
 pub struct ClassDefIndex(pub u32);
 
 impl ClassFieldProperties {
-    pub fn new(is_annotated: bool, has_default_value: bool, range: TextRange) -> Self {
+    pub fn new(
+        is_annotated: bool,
+        has_default_value: bool,
+        range: TextRange,
+        docstring_range: Option<TextRange>,
+    ) -> Self {
         Self {
             is_annotated,
             is_initialized_on_class: has_default_value,
             range,
+            docstring_range,
         }
     }
 
     pub fn is_initialized_on_class(&self) -> bool {
         self.is_initialized_on_class
+    }
+
+    pub fn docstring_range(&self) -> Option<TextRange> {
+        self.docstring_range
     }
 }
 
@@ -264,6 +276,10 @@ impl Class {
 
     pub fn field_decl_range(&self, name: &Name) -> Option<TextRange> {
         Some(self.0.fields.get(name)?.range)
+    }
+
+    pub fn field_docstring_range(&self, name: &Name) -> Option<TextRange> {
+        self.0.fields.get(name)?.docstring_range
     }
 
     pub fn has_qname(&self, module: &str, parent: &NestingContext, name: &str) -> bool {

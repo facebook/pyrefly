@@ -17,6 +17,7 @@ mod hover;
 mod inlay_hint;
 mod io;
 mod object_model;
+mod provide_type;
 mod references;
 mod rename;
 mod type_definition;

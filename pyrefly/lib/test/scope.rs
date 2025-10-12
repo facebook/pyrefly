@@ -614,6 +614,29 @@ f()
 "#,
 );
 
+testcase!(
+    test_parameter_is_only_deleted_by_body,
+    r#"
+def fun(arg):
+    def inner():
+        arg  # The capture here makes sure we don't panic on a bad key lookup
+    del arg
+    return inner
+    "#,
+);
+
+testcase!(
+    test_parameter_is_declared_as_mutable_capture,
+    r#"
+x = 42
+def fun(x):
+    def inner():
+        x  # The capture here makes sure we don't panic on a bad key lookup
+    global x  # E: `x` was assigned in the current scope before the global declaration
+    return inner
+    "#,
+);
+
 // This does come up in practice - see https://github.com/facebook/pyrefly/issues/1146
 testcase!(
     test_class_scope_annotation_shadows_global,

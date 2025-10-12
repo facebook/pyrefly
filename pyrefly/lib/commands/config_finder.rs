@@ -24,20 +24,65 @@ use crate::config::finder::ConfigFinder;
 use crate::config::finder::debug_log;
 use crate::module::typeshed::BundledTypeshed;
 
-/// Create a standard `ConfigFinder`. The `configure` function is expected to set any additional options,
-/// then call `configure` and `validate`.
-/// The `path` to `configure` is a directory, either to the python file or the config file.
-/// In the case we can't find a config by walking up, we create a default config, setting the `search_path`
-/// to a sensible default if possible.
-///
-/// `configure` is a function that accepts a `Option<&Path>` representing the root of the project
-/// (the directory the config was found in), and the `ConfigFile` that was loaded/created. The root
-/// of the project may be `None` if it can't be found (no [`Path::parent()`]) or it's irrelevant (bundled typeshed).
-pub fn standard_config_finder(
-    configure: Arc<
-        dyn Fn(Option<&Path>, ConfigFile) -> (ArcId<ConfigFile>, Vec<ConfigError>) + Send + Sync,
-    >,
-) -> ConfigFinder {
+/// Finalizes a config before being returned by a [`ConfigFinder`].
+pub trait ConfigConfigurer: Send + Sync + 'static {
+    /// Sets additional options on, and calls configure to finalize and validate
+    /// [`ConfigFile`]s before being returned.
+    ///
+    /// `root` is the root of the project (directory the config/marker file was found in or
+    /// directory of the Python file we're loading this config for, if no config/marker).
+    /// This may be `None` if [`Path::parent()`] doesn't exist or if it's irrelevant
+    /// (bundled typeshed).
+    ///
+    /// `config` is the configuration loaded from disk or constructed by the
+    /// [`standard_config_finder`] when no config can be found.
+    ///
+    /// `errors` are any errors that occurred while parsing the config. Any
+    /// new errors that occur as a result of configuring should be added to `errors`
+    /// and handled in the same manner. In most cases, this means appending any
+    /// errors to `errors` then returning `errors`. Note:
+    /// - If `configure` handles outputting error information, it is recommended
+    ///   to [`Vec::clear()`] the errors to avoid duplicate error message output.
+    /// - If the `configure` function should handle outputting error information,
+    ///   ensure any pre-existing parse errors in `errors` are also output.
+    ///
+    /// Returns a tuple containing the completed [`ConfigFile`] and any [`ConfigError`]s
+    /// that occurred during parsing or configuring that weren't already output during
+    /// this [`Self::configure`] call.
+    fn configure(
+        &self,
+        root: Option<&Path>,
+        config: ConfigFile,
+        errors: Vec<ConfigError>,
+    ) -> (ArcId<ConfigFile>, Vec<ConfigError>);
+}
+
+/// A basic [`ConfigConfigurer`] implementation that only calls [`ConfigFile::configure()`]
+/// and returns the configured config. Any errors are ignored, and an empty [`Vec<ConfigError>`]
+/// is always returned.
+pub struct DefaultConfigConfigurer {}
+
+impl DefaultConfigConfigurer {
+    pub fn standard_config_finder() -> ConfigFinder {
+        standard_config_finder(Arc::new(Self {}))
+    }
+}
+
+impl ConfigConfigurer for DefaultConfigConfigurer {
+    fn configure(
+        &self,
+        _: Option<&std::path::Path>,
+        mut config: ConfigFile,
+        _: Vec<pyrefly_config::finder::ConfigError>,
+    ) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
+        config.configure();
+        (ArcId::new(config), Vec::new())
+    }
+}
+
+/// Create a standard `ConfigFinder`, using the provided [`ConfigConfigurer`] to finalize
+/// the config before caching/returning it.
+pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFinder {
     let configure2 = configure.dupe();
     let configure3 = configure.dupe();
 
@@ -58,7 +103,7 @@ pub fn standard_config_finder(
     };
 
     let empty = LazyLock::new(move || {
-        let (config, errors) = configure3(None, ConfigFile::default());
+        let (config, errors) = configure3.configure(None, ConfigFile::default(), vec![]);
         // Since this is a config we generated, these are likely internal errors.
         debug_log(errors);
         config
@@ -67,11 +112,9 @@ pub fn standard_config_finder(
     ConfigFinder::new(
         Box::new(move |file| {
             let (file_config, parse_errors) = ConfigFile::from_file(file);
-            let (config, validation_errors) = configure(file.parent(), file_config);
-            (
-                config,
-                parse_errors.into_iter().chain(validation_errors).collect(),
-            )
+            let (config, validation_errors) =
+                configure.configure(file.parent(), file_config, parse_errors);
+            (config, validation_errors)
         }),
         // Fall back to using a default config, but let's see if we can make the `search_path` somewhat useful
         // based on a few heuristics.
@@ -82,9 +125,10 @@ pub fn standard_config_finder(
                 .lock()
                 .entry(path.clone())
                 .or_insert_with(|| {
-                    let (config, errors) = configure2(
+                    let (config, errors) = configure2.configure(
                         path.parent(),
                         ConfigFile::init_at_root(&path, &ProjectLayout::Flat),
+                        vec![],
                     );
                     // Since this is a config we generated, these are likely internal errors.
                     debug_log(errors);
@@ -112,7 +156,7 @@ pub fn standard_config_finder(
                     .lock()
                     .entry(path.to_owned())
                     .or_insert_with(|| {
-                        let (config, errors) = configure2(
+                        let (config, errors) = configure2.configure(
                             path.parent(),
                             ConfigFile {
                                 // We use `fallback_search_path` because otherwise a user with `/sys` on their
@@ -124,6 +168,7 @@ pub fn standard_config_finder(
                                 root: ConfigBase::default_for_ide_without_config(),
                                 ..Default::default()
                             },
+                            vec![],
                         );
                         // Since this is a config we generated, these are likely internal errors.
                         debug_log(errors);
@@ -151,10 +196,48 @@ mod tests {
     use crate::config::config::ConfigSource;
     use crate::config::environment::environment::PythonEnvironment;
 
+    struct TestConfigurer(
+        Box<
+            dyn Fn(
+                    Option<&Path>,
+                    ConfigFile,
+                    Vec<ConfigError>,
+                ) -> (ArcId<ConfigFile>, Vec<ConfigError>)
+                + Send
+                + Sync,
+        >,
+    );
+
+    impl TestConfigurer {
+        fn new_standard(
+            f: impl Fn(
+                Option<&Path>,
+                ConfigFile,
+                Vec<ConfigError>,
+            ) -> (ArcId<ConfigFile>, Vec<ConfigError>)
+            + Send
+            + Sync
+            + 'static,
+        ) -> ConfigFinder {
+            standard_config_finder(Arc::new(TestConfigurer(Box::new(f))))
+        }
+    }
+
+    impl ConfigConfigurer for TestConfigurer {
+        fn configure(
+            &self,
+            root: Option<&Path>,
+            config: ConfigFile,
+            errors: Vec<ConfigError>,
+        ) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
+            (self.0)(root, config, errors)
+        }
+    }
+
     #[test]
     fn test_site_package_path_from_environment() {
         let args = ConfigOverrideArgs::default();
-        let config = standard_config_finder(Arc::new(move |_, x| args.override_config(x)))
+        let config = TestConfigurer::new_standard(move |_, x, _| args.override_config(x))
             .python_file(ModuleName::unknown(), &ModulePath::filesystem("".into()));
         let env = PythonEnvironment::get_default_interpreter_env();
         if let Some(paths) = env.site_package_path {
@@ -173,14 +256,14 @@ mod tests {
         ) -> ArcId<ConfigFile> {
             let expect_dir = expect_dir.map(|p| p.to_path_buf());
             let module_path2 = module_path.clone();
-            standard_config_finder(Arc::new(move |dir, x| {
+            TestConfigurer::new_standard(move |dir, x, _| {
                 assert_eq!(
                     dir.map(|p| p.to_path_buf()),
                     expect_dir,
                     "failed for {expect_dir:?}, {module_name}, {module_path}"
                 );
                 (ArcId::new(x), Vec::new())
-            }))
+            })
             .python_file(module_name, &module_path2)
         }
 
@@ -237,7 +320,7 @@ mod tests {
             finder(
                 None,
                 ModuleName::from_str("foo.bar"),
-                ModulePath::filesystem(PathBuf::new())
+                ModulePath::filesystem(PathBuf::from("/")),
             )
             .deref(),
             &ConfigFile::default(),

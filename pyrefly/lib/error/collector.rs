@@ -92,6 +92,8 @@ pub struct CollectedErrors {
     pub suppressed: Vec<Error>,
     /// Errors that are disabled with configuration options.
     pub disabled: Vec<Error>,
+    /// Errors that are suppressed by baseline file.
+    pub baseline: Vec<Error>,
 }
 
 /// Collects the user errors (e.g. type errors) associated with a module.

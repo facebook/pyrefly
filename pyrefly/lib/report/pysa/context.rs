@@ -21,7 +21,7 @@ use crate::types::stdlib::Stdlib;
 
 /// Pyrefly information about a module.
 pub struct ModuleContext<'a> {
-    pub handle: &'a Handle,
+    pub handle: Handle,
     pub transaction: &'a Transaction<'a>,
     pub bindings: Bindings,
     pub answers: Arc<Answers>,
@@ -34,20 +34,26 @@ pub struct ModuleContext<'a> {
 
 impl ModuleContext<'_> {
     pub fn create<'a>(
-        handle: &'a Handle,
+        handle: Handle,
         transaction: &'a Transaction<'a>,
         module_ids: &'a ModuleIds,
     ) -> Option<ModuleContext<'a>> {
+        let bindings = transaction.get_bindings(&handle)?;
+        let answers = transaction.get_answers(&handle)?;
+        let stdlib = transaction.get_stdlib(&handle);
+        let ast = transaction.get_ast(&handle)?;
+        let module_info = transaction.get_module_info(&handle)?;
+        let module_id = module_ids.get(ModuleKey::from_handle(&handle))?;
         Some(ModuleContext {
-            handle,
             transaction,
-            bindings: transaction.get_bindings(handle)?,
-            answers: transaction.get_answers(handle)?,
-            stdlib: transaction.get_stdlib(handle),
-            ast: transaction.get_ast(handle)?,
-            module_info: transaction.get_module_info(handle)?,
-            module_id: module_ids.get(ModuleKey::from_handle(handle))?,
+            bindings,
+            answers,
+            stdlib,
+            ast,
+            module_info,
+            module_id,
             module_ids,
+            handle,
         })
     }
 }

@@ -23,16 +23,18 @@ Default configuration
   Covered files:
     */bar/baz.py (glob)
     */bar/qux.py (glob)
-  Fallback search path (guessed from project_includes): * (glob)
-  Site package path from user: * (glob)
-  Site package path queried from interpreter: * (glob)
+  Resolving imports from:
+    Fallback search path (guessed from project_includes): * (glob)
+    Site package path from user: * (glob)
+    Site package path queried from interpreter: * (glob)
 Default configuration
   Using interpreter: * (glob)
   Covered files:
     */foo.py (glob)
-  Fallback search path (guessed from project_includes): * (glob)
-  Site package path from user: * (glob)
-  Site package path queried from interpreter: * (glob)
+  Resolving imports from:
+    Fallback search path (guessed from project_includes): * (glob)
+    Site package path from user: * (glob)
+    Site package path queried from interpreter: * (glob)
 [0]
 ```
 
@@ -119,7 +121,7 @@ $ mkdir $TMPDIR/interpreters && touch $TMPDIR/interpreters/test.py \
 > mkdir $TMPDIR/alternative-venv && touch $TMPDIR/alternative-venv/python3 && \
 > touch $TMPDIR/alternative-venv/pyvenv.cfg && \
 > VIRTUAL_ENV=$TMPDIR/alternative-venv $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml \
-> --python-interpreter "cli-interpreter"
+> --python-interpreter-path "cli-interpreter"
 Configuration at * (glob)
   Using interpreter: cli-interpreter
 * (glob+)

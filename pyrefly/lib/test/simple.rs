@@ -469,7 +469,7 @@ testcase!(
 from typing import Any, assert_type
 x = [[], [], [[]]]
 # Not too important it is precisely this type, but detect changes
-assert_type(x, list[list[list[Any]]])
+assert_type(x, list[list[list[Any]] | list[Any]])
 "#,
 );
 
@@ -1812,5 +1812,21 @@ testcase!(
     test_starred_empty_tuple_no_panic,
     r#"
 (),*()
+    "#,
+);
+
+testcase!(
+    test_asyncio_gather,
+    r#"
+import asyncio
+from typing import assert_type
+
+async def wait(n: int) -> int:
+    await asyncio.sleep(0.1)
+    return n
+
+async def main() -> None:
+    a = await asyncio.gather(*[wait(i) for i in range(10)])
+    assert_type(a, list[int])
     "#,
 );

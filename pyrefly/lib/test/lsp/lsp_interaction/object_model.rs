@@ -218,6 +218,24 @@ impl TestServer {
         }));
     }
 
+    pub fn provide_type(&mut self, file: &'static str, line: u32, col: u32) {
+        let path = self.get_root_or_panic().join(file);
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "types/provide-type".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&path).unwrap().to_string()
+                },
+                "positions": [{
+                    "line": line,
+                    "character": col
+                }]
+            }),
+        }));
+    }
+
     pub fn inlay_hint(
         &mut self,
         file: &'static str,
@@ -417,8 +435,12 @@ impl TestClient {
                             && let (Ok(expected_url), Ok(actual_url)) = (Url::parse(Url::from_file_path(&path).unwrap().as_ref()), Url::parse(uri_str))
                             && let (Ok(expected_path), Ok(actual_path)) = (expected_url.to_file_path(), actual_url.to_file_path()) {
                                 // Canonicalize both paths for comparison to handle symlinks and normalize case
-                                // This is very relevant for publish diagnostics, where the LS might send a notification for 
-                                // a file that does not exactly match the file_open message. 
+                                // This is very relevant for publish diagnostics, where the LS might send a notification for
+                                // a file that does not exactly match the file_open message.
+                                // This is very relevant for publish diagnostics, where the LS might send a notification for
+                                // a file that does not exactly match the file_open message.
+                                // This is very relevant for publish diagnostics, where the LS might send a notification for
+                                // a file that does not exactly match the file_open message.
                                 let expected_canonical = expected_path.canonicalize().unwrap_or(expected_path);
                                 let actual_canonical = actual_path.canonicalize().unwrap_or(actual_path);
 

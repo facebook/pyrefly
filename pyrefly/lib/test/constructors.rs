@@ -281,6 +281,35 @@ assert_type(x, int)
 );
 
 testcase!(
+    test_new_returns_any,
+    r#"
+from typing import assert_type, Any
+class C:
+    def __new__(cls) -> Any:
+        return 0
+x = C()
+assert_type(x, Any)
+    "#,
+);
+
+testcase!(
+    test_new_returns_error,
+    r#"
+from typing import assert_type, overload, Self
+class C:
+    @overload
+    def __new__(cls, x: str) -> Self: ...
+    @overload
+    def __new__(cls, x: bytes) -> Self: ...
+    def __new__(cls, x: str | bytes) -> Self: ...
+
+# Intentionally make it such that `__new__` returns an error-induced `Any`
+x = C(42)  # E: No matching overload found for function `C.__new__`
+assert_type(x, C)
+    "#,
+);
+
+testcase!(
     test_new_returns_something_else_generic,
     r#"
 from typing import assert_type

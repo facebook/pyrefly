@@ -28,6 +28,7 @@ use crate::binding::binding::KeyExpect;
 use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::binding::scope::FlowStyle;
@@ -444,8 +445,13 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             self.is_definitely_type_alias_rhs(value.as_ref())
         };
+        let mut tparams = None;
         if is_definitely_type_alias {
-            self.ensure_type(&mut value, &mut None);
+            let mut legacy = Some(LegacyTParamCollector::new(false));
+            self.ensure_type(&mut value, &mut legacy);
+            if let Some(collector) = legacy {
+                tparams = Some(collector.lookup_keys().into_boxed_slice());
+            }
         } else {
             self.ensure_expr(&mut value, user.usage());
         }
@@ -461,7 +467,7 @@ impl<'a> BindingsBuilder<'a> {
             Some((_, idx)) => Some((AnnotationStyle::Direct, idx)),
             None => canonical_ann.map(|idx| (AnnotationStyle::Forwarded, idx)),
         };
-        let binding = Binding::NameAssign(name.id.clone(), ann, value);
+        let binding = Binding::NameAssign(name.id.clone(), ann, value, tparams);
         // Record the raw assignment
         let (first_used_by, def_idx) = user.decompose();
         let def_idx = self.insert_binding_idx(def_idx, binding);

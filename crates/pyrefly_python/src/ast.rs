@@ -16,6 +16,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNoneLiteral;
+use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Parameter;
@@ -30,6 +31,8 @@ use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtIf;
 use ruff_python_ast::StringFlags;
 use ruff_python_ast::StringLiteral;
+use ruff_python_ast::StringLiteralFlags;
+use ruff_python_ast::StringLiteralValue;
 use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
 use ruff_python_ast::visitor::source_order::TraversalSignal;
 use ruff_python_parser::ParseError;
@@ -308,5 +311,18 @@ impl Ast {
         let mut covering_nodes = visitor.covering_nodes;
         covering_nodes.reverse();
         covering_nodes
+    }
+
+    pub fn str_expr(s: &str, range: TextRange) -> Expr {
+        Expr::StringLiteral(ExprStringLiteral {
+            node_index: AtomicNodeIndex::dummy(),
+            range,
+            value: StringLiteralValue::single(StringLiteral {
+                node_index: AtomicNodeIndex::dummy(),
+                range,
+                value: s.into(),
+                flags: StringLiteralFlags::empty(),
+            }),
+        })
     }
 }

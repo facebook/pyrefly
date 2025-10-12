@@ -40,6 +40,7 @@ use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
 use pyrefly_util::memory::MemoryUsageTrace;
 use pyrefly_util::watcher::Watcher;
+use ruff_text_size::Ranged;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
@@ -248,6 +249,14 @@ struct OutputArgs {
     /// Pass "" to show absolute paths. When omitted, we will use the current working directory.
     #[arg(long)]
     relative_to: Option<String>,
+
+    /// Path to baseline file for comparing type errors
+    #[arg(long, value_name = "BASELINE_FILE")]
+    baseline: Option<PathBuf>,
+
+    /// When specified, emit a sorted/formatted JSON of the errors to the baseline file
+    #[arg(long, requires("baseline"))]
+    update_baseline: bool,
 }
 
 #[derive(Clone, Debug, ValueEnum, Default, PartialEq, Eq)]
@@ -274,10 +283,10 @@ struct BehaviorArgs {
     /// Remove unused ignores from the input files.
     #[arg(long)]
     remove_unused_ignores: bool,
-    /// If we are removing unused ignores, should we remove all unsused ignores or only Pyre-fly specific `pyrefly: ignore`s?
+    /// If we are removing unused ignores, should we remove all unused ignores or only Pyrefly specific `pyrefly: ignore`s?
     #[arg(long, requires("remove_unused_ignores"))]
     all: bool,
-    /// If we are removing unused ignores, should we remove all unsused ignores or only Pyre-fly specific `pyrefly: ignore`s?
+    /// If we are suppressing errors, should the suppression comment go at the end of the line instead of on the line above?
     #[arg(long, requires("suppress_errors"))]
     same_line: bool,
 }
@@ -704,7 +713,30 @@ impl CheckArgs {
             |x| PathBuf::from_str(x.as_str()).unwrap(),
         );
 
-        let errors = loads.collect_errors();
+        let errors = loads
+            .collect_errors_with_baseline(self.output.baseline.as_deref(), relative_to.as_path());
+
+        // We update the baseline file if requested, after reporting any new errors using the old baseline
+        if self.output.update_baseline
+            && let Some(baseline_path) = &self.output.baseline
+        {
+            let mut new_baseline = errors.shown.clone();
+            new_baseline.extend(errors.baseline);
+            new_baseline.sort_by_cached_key(|error| {
+                (
+                    error.path().to_string(),
+                    error.range().start(),
+                    error.range().end(),
+                    error.error_kind(),
+                )
+            });
+            OutputFormat::write_error_json_to_file(
+                baseline_path,
+                relative_to.as_path(),
+                &new_baseline,
+            )?;
+        }
+
         if let Some(path) = &self.output.output {
             self.output.output_format.write_errors_to_file(
                 path,

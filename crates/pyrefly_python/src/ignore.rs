@@ -291,7 +291,7 @@ impl Ignore {
                 ignore
                     .1
                     .iter()
-                    .any(|s| (s.tool == Tool::Pyrefly || s.tool == Tool::Any))
+                    .any(|s| s.tool == Tool::Pyrefly || s.tool == Tool::Any)
             }))
         } else {
             Box::new(ignore_iter.filter(|ignore| ignore.1.iter().any(|s| s.tool == Tool::Pyrefly)))

@@ -195,7 +195,7 @@ fn on_class(
                             on_type(variance.inv(), inj, ty, on_edge, on_var);
                         }
                     }
-                    Params::Ellipsis => {
+                    Params::Ellipsis | Params::Materialization => {
                         // Unknown params
                     }
                     Params::ParamSpec(prefix, param_spec) => {

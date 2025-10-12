@@ -16,8 +16,8 @@ class Pet(Enum):  # E?: Uninitialized attributes (pyre)
     genus: str  # Non-member attribute
     species: str  # Non-member attribute
 
-    CAT = 1  # Member attribute
-    DOG = 2  # Member attribute
+    CAT = "felis", "catus"  # Member attribute
+    DOG = "canis", "lupus"  # Member attribute
 
     def __init__(self, genus: str, species: str) -> None:
         self.genus = genus

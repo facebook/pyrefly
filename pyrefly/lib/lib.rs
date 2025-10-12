@@ -27,7 +27,6 @@
 #![feature(box_patterns)]
 #![feature(closure_lifetime_binder)]
 #![feature(if_let_guard)]
-#![feature(let_chains)]
 
 mod alt;
 mod binding;
@@ -65,6 +64,7 @@ pub mod library {
                 pub use crate::commands::all::Command;
                 pub use crate::commands::check::CheckArgs;
                 pub use crate::commands::check::FullCheckArgs;
+                pub use crate::commands::config_finder::DefaultConfigConfigurer;
                 pub use crate::commands::config_finder::standard_config_finder;
                 pub use crate::commands::util;
             }

@@ -22,6 +22,7 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::error;
 
+use crate::commands::config_finder::ConfigConfigurer;
 use crate::commands::config_finder::standard_config_finder;
 use crate::config::config::ConfigFile;
 use crate::config::environment::environment::PythonEnvironment;
@@ -66,6 +67,49 @@ pub struct Workspace {
 impl Workspace {
     pub fn new() -> Self {
         Self::default()
+    }
+}
+
+struct WorkspaceConfigConfigurer(Arc<Workspaces>);
+
+impl ConfigConfigurer for WorkspaceConfigConfigurer {
+    fn configure(
+        &self,
+        root: Option<&std::path::Path>,
+        mut config: ConfigFile,
+        mut errors: Vec<pyrefly_config::finder::ConfigError>,
+    ) -> (ArcId<ConfigFile>, Vec<pyrefly_config::finder::ConfigError>) {
+        if let Some(dir) = root {
+            self.0.get_with(dir.to_owned(), |w| {
+                if let Some(search_path) = w.search_path.clone() {
+                    config.search_path_from_args = search_path;
+                }
+                if let Some(PythonInfo {
+                    interpreter,
+                    mut env,
+                }) = w.python_info.clone()
+                {
+                    let site_package_path: Option<Vec<PathBuf>> =
+                        config.python_environment.site_package_path.take();
+                    env.site_package_path = site_package_path;
+                    config.interpreters.set_lsp_python_interpreter(interpreter);
+                    config.python_environment = env;
+                    // skip interpreter query because we already have the interpreter from the workspace
+                    config.interpreters.skip_interpreter_query = true;
+                }
+            })
+        };
+
+        // we print the errors here instead of returning them since
+        // it gives the most immediate feedback for config loading errors
+        for error in errors.drain(..).chain(config.configure()) {
+            error.print();
+        }
+        let config = ArcId::new(config);
+
+        self.0.loaded_configs.insert(config.downgrade());
+
+        (config, errors)
     }
 }
 
@@ -182,40 +226,7 @@ impl Workspaces {
     }
 
     pub fn config_finder(workspaces: &Arc<Workspaces>) -> ConfigFinder {
-        let workspaces = workspaces.dupe();
-        standard_config_finder(Arc::new(move |dir, mut config| {
-            if let Some(dir) = dir {
-                workspaces.get_with(dir.to_owned(), |w| {
-                    if let Some(search_path) = w.search_path.clone() {
-                        config.search_path_from_args = search_path;
-                    }
-                    if let Some(PythonInfo {
-                        interpreter,
-                        mut env,
-                    }) = w.python_info.clone()
-                    {
-                        let site_package_path: Option<Vec<PathBuf>> =
-                            config.python_environment.site_package_path.take();
-                        env.site_package_path = site_package_path;
-                        config.interpreters.set_lsp_python_interpreter(interpreter);
-                        config.python_environment = env;
-                        // skip interpreter query because we already have the interpreter from the workspace
-                        config.interpreters.skip_interpreter_query = true;
-                    }
-                })
-            };
-
-            // we print the errors here instead of returning them since
-            // it gives the most immediate feedback for config loading errors
-            for error in config.configure() {
-                error.print();
-            }
-            let config = ArcId::new(config);
-
-            workspaces.loaded_configs.insert(config.downgrade());
-
-            (config, Vec::new())
-        }))
+        standard_config_finder(Arc::new(WorkspaceConfigConfigurer(workspaces.dupe())))
     }
 
     pub fn roots(&self) -> Vec<PathBuf> {

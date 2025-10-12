@@ -5,19 +5,27 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
+
 use pretty_assertions::assert_eq;
+use pyrefly_types::callable::Callable;
+use pyrefly_types::callable::Param;
+use pyrefly_types::callable::ParamList;
+use pyrefly_types::callable::Required;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::types::Type;
 use ruff_python_ast::name::Name;
 
+use crate::report::pysa::call_graph::Target;
+use crate::report::pysa::captured_variable::ModuleCapturedVariables;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionBaseDefinition;
 use crate::report::pysa::function::FunctionDefinition;
 use crate::report::pysa::function::FunctionParameter;
 use crate::report::pysa::function::FunctionParameters;
 use crate::report::pysa::function::FunctionSignature;
-use crate::report::pysa::function::add_undecorated_signatures;
-use crate::report::pysa::function::export_all_functions;
+use crate::report::pysa::function::collect_function_base_definitions;
+use crate::report::pysa::function::export_function_definitions;
 use crate::report::pysa::module::ModuleIds;
 use crate::report::pysa::override_graph::WholeProgramReversedOverrideGraph;
 use crate::report::pysa::scope::ScopeParent;
@@ -26,6 +34,7 @@ use crate::test::pysa::utils::create_location;
 use crate::test::pysa::utils::create_state;
 use crate::test::pysa::utils::get_class;
 use crate::test::pysa::utils::get_class_ref;
+use crate::test::pysa::utils::get_function_ref;
 use crate::test::pysa::utils::get_handle_for_module_name;
 
 fn create_function_definition(
@@ -47,6 +56,8 @@ fn create_function_definition(
             overridden_base_method: None,
         },
         undecorated_signatures,
+        captured_variables: Vec::new(),
+        decorator_callees: HashMap::new(),
     }
 }
 
@@ -72,13 +83,20 @@ fn test_exported_functions(
 
     let test_module_handle = get_handle_for_module_name(module_name, &transaction);
 
-    let context = ModuleContext::create(&test_module_handle, &transaction, &module_ids).unwrap();
+    let context = ModuleContext::create(test_module_handle, &transaction, &module_ids).unwrap();
 
     let expected_function_definitions = create_expected_function_definitions(&context);
 
     let reversed_override_graph = WholeProgramReversedOverrideGraph::new();
-    let actual_function_definitions = add_undecorated_signatures(
-        &export_all_functions(&reversed_override_graph, &context),
+    let captured_variables = ModuleCapturedVariables::new();
+    let actual_function_definitions = export_function_definitions(
+        &collect_function_base_definitions(
+            &handles,
+            &transaction,
+            &module_ids,
+            &reversed_override_graph,
+        ),
+        &captured_variables,
         &context,
     );
 
@@ -426,6 +444,221 @@ def foo():
                 /* overloads */
                 vec![create_simple_signature(vec![], PysaType::none())],
             ),
+        ]
+    },
+);
+
+exported_functions_testcase!(
+    test_export_simple_decorator,
+    r#"
+import typing
+
+def decorator(f: typing.Callable[[int], int]) -> typing.Callable[[int], int]:
+    return f
+
+@decorator
+def foo(x: int) -> int:
+    return x
+"#,
+    &|context: &ModuleContext| {
+        let callable_int_to_int = PysaType::from_type(
+            &Type::Callable(Box::new(Callable::list(
+                ParamList::new(vec![Param::PosOnly(
+                    None,
+                    Type::ClassType(context.stdlib.int().clone()),
+                    Required::Required,
+                )]),
+                Type::ClassType(context.stdlib.int().clone()),
+            ))),
+            context,
+        );
+        vec![
+            create_function_definition(
+                "decorator",
+                ScopeParent::TopLevel,
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "f".into(),
+                        annotation: callable_int_to_int.clone(),
+                        required: true,
+                    }],
+                    callable_int_to_int.clone(),
+                )],
+            ),
+            create_function_definition(
+                "foo",
+                ScopeParent::TopLevel,
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "x".into(),
+                        annotation: PysaType::from_class_type(context.stdlib.int(), context),
+                        required: true,
+                    }],
+                    PysaType::from_class_type(context.stdlib.int(), context),
+                )],
+            )
+            .with_decorator_callees(HashMap::from([(
+                create_location(7, 2, 7, 11),
+                vec![Target::Function(get_function_ref(
+                    "test",
+                    "decorator",
+                    context,
+                ))],
+            )])),
+        ]
+    },
+);
+
+exported_functions_testcase!(
+    test_export_decorator_factory,
+    r#"
+import typing
+
+def decorator(x: int) -> typing.Callable[[typing.Callable[[int], int]], typing.Callable[[int], int]]:
+    return lambda f: f
+
+@decorator(1)
+def foo(x: int) -> int:
+    return x
+"#,
+    &|context: &ModuleContext| {
+        let callable_int_to_int = Type::Callable(Box::new(Callable::list(
+            ParamList::new(vec![Param::PosOnly(
+                None,
+                Type::ClassType(context.stdlib.int().clone()),
+                Required::Required,
+            )]),
+            Type::ClassType(context.stdlib.int().clone()),
+        )));
+        vec![
+            create_function_definition(
+                "decorator",
+                ScopeParent::TopLevel,
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "x".into(),
+                        annotation: PysaType::from_class_type(context.stdlib.int(), context),
+                        required: true,
+                    }],
+                    PysaType::from_type(
+                        &Type::Callable(Box::new(Callable::list(
+                            ParamList::new(vec![Param::PosOnly(
+                                None,
+                                callable_int_to_int.clone(),
+                                Required::Required,
+                            )]),
+                            callable_int_to_int.clone(),
+                        ))),
+                        context,
+                    ),
+                )],
+            ),
+            create_function_definition(
+                "foo",
+                ScopeParent::TopLevel,
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "x".into(),
+                        annotation: PysaType::from_class_type(context.stdlib.int(), context),
+                        required: true,
+                    }],
+                    PysaType::from_class_type(context.stdlib.int(), context),
+                )],
+            )
+            .with_decorator_callees(HashMap::from([(
+                create_location(7, 2, 7, 11),
+                vec![Target::Function(get_function_ref(
+                    "test",
+                    "decorator",
+                    context,
+                ))],
+            )])),
+        ]
+    },
+);
+
+exported_functions_testcase!(
+    test_export_multiple_decorator,
+    r#"
+import typing
+
+def d1(f: typing.Callable[[int], int]) -> typing.Callable[[int], int]:
+    return f
+
+def d2(f: typing.Callable[[int], int]) -> typing.Callable[[int], int]:
+    return f
+
+@d1
+@d2
+def foo(x: int) -> int:
+    return x
+"#,
+    &|context: &ModuleContext| {
+        let callable_int_to_int = PysaType::from_type(
+            &Type::Callable(Box::new(Callable::list(
+                ParamList::new(vec![Param::PosOnly(
+                    None,
+                    Type::ClassType(context.stdlib.int().clone()),
+                    Required::Required,
+                )]),
+                Type::ClassType(context.stdlib.int().clone()),
+            ))),
+            context,
+        );
+        vec![
+            create_function_definition(
+                "d1",
+                ScopeParent::TopLevel,
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "f".into(),
+                        annotation: callable_int_to_int.clone(),
+                        required: true,
+                    }],
+                    callable_int_to_int.clone(),
+                )],
+            ),
+            create_function_definition(
+                "d2",
+                ScopeParent::TopLevel,
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "f".into(),
+                        annotation: callable_int_to_int.clone(),
+                        required: true,
+                    }],
+                    callable_int_to_int.clone(),
+                )],
+            ),
+            create_function_definition(
+                "foo",
+                ScopeParent::TopLevel,
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "x".into(),
+                        annotation: PysaType::from_class_type(context.stdlib.int(), context),
+                        required: true,
+                    }],
+                    PysaType::from_class_type(context.stdlib.int(), context),
+                )],
+            )
+            .with_decorator_callees(HashMap::from([
+                (
+                    create_location(10, 2, 10, 4),
+                    vec![Target::Function(get_function_ref("test", "d1", context))],
+                ),
+                (
+                    create_location(11, 2, 11, 4),
+                    vec![Target::Function(get_function_ref("test", "d2", context))],
+                ),
+            ])),
         ]
     },
 );

@@ -86,7 +86,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum AllOffPartial {
     All,
@@ -99,7 +99,6 @@ pub enum AllOffPartial {
 #[serde(rename_all = "camelCase")]
 pub struct InlayHintConfig {
     #[serde(default)]
-    #[expect(unused)]
     pub call_argument_names: AllOffPartial,
     #[serde(default = "default_true")]
     pub function_return_types: bool,
@@ -1021,12 +1020,12 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         attr_name: &Name,
         definition: AttrDefinition,
+        docstring_range: Option<TextRange>,
         preference: &FindPreference,
     ) -> Option<(TextRangeWithModule, Option<TextRange>)> {
         match definition {
             AttrDefinition::FullyResolved(text_range_with_module_info) => {
-                // TODO(kylei): attribute docstrings
-                Some((text_range_with_module_info, None))
+                Some((text_range_with_module_info, docstring_range))
             }
             AttrDefinition::PartiallyResolvedImportedModuleAttribute { module_name } => {
                 let (handle, export) =
@@ -1165,6 +1164,7 @@ impl<'a> Transaction<'a> {
                                         handle,
                                         &x.name,
                                         x.definition?,
+                                        x.docstring_range,
                                         preference,
                                     )?;
                                 Some(FindDefinitionItemWithDocstring {
@@ -1662,6 +1662,7 @@ impl<'a> Transaction<'a> {
                         ty: _,
                         is_deprecated: _,
                         definition: attribute_definition,
+                        docstring_range,
                     } in solver.completions(base_type, Some(expected_name), false)
                     {
                         if let Some((TextRangeWithModule { module, range }, _)) =
@@ -1670,6 +1671,7 @@ impl<'a> Transaction<'a> {
                                     handle,
                                     &name,
                                     definition,
+                                    docstring_range,
                                     &FindPreference::default(),
                                 )
                             })
@@ -1865,6 +1867,21 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn get_documentation_from_export(
+        &self,
+        export_info: Option<(Handle, Export)>,
+    ) -> Option<lsp_types::Documentation> {
+        let (definition_handle, export) = export_info?;
+        let docstring_range = export.docstring_range?;
+        let def_module = self.get_module_info(&definition_handle)?;
+        let docstring = Docstring(docstring_range, def_module.clone()).resolve();
+        let documentation = lsp_types::Documentation::MarkupContent(lsp_types::MarkupContent {
+            kind: lsp_types::MarkupKind::Markdown,
+            value: docstring,
+        });
+        Some(documentation)
+    }
+
     /// Adds completions for local variables and returns true if we have added any
     /// If an identifier is present, filter matches
     fn add_local_variable_completions(
@@ -1893,12 +1910,23 @@ impl<'a> Transaction<'a> {
                     continue;
                 }
                 let binding = bindings.get(idx);
-                let kind = binding
-                    .symbol_kind()
-                    .map_or(CompletionItemKind::VARIABLE, |k| {
-                        k.to_lsp_completion_item_kind()
-                    });
                 let ty = self.get_type(handle, key);
+                let export_info = self.key_to_export(handle, key, &FindPreference::default());
+
+                let kind = if let Some((_, ref export)) = export_info {
+                    export
+                        .symbol_kind
+                        .map_or(CompletionItemKind::VARIABLE, |k| {
+                            k.to_lsp_completion_item_kind()
+                        })
+                } else {
+                    binding
+                        .symbol_kind()
+                        .map_or(CompletionItemKind::VARIABLE, |k| {
+                            k.to_lsp_completion_item_kind()
+                        })
+                };
+
                 let is_deprecated = ty.as_ref().is_some_and(|t| {
                     if let Type::ClassDef(cls) = t {
                         self.ad_hoc_solve(handle, |solver| {
@@ -1910,11 +1938,14 @@ impl<'a> Transaction<'a> {
                     }
                 });
                 let detail = ty.map(|t| t.to_string());
+                let documentation = self.get_documentation_from_export(export_info);
+
                 has_added_any = true;
                 completions.push(CompletionItem {
                     label: label.to_owned(),
                     detail,
                     kind: Some(kind),
+                    documentation,
                     tags: if is_deprecated {
                         Some(vec![CompletionItemTag::DEPRECATED])
                     } else {
@@ -1937,6 +1968,33 @@ impl<'a> Transaction<'a> {
                     ..Default::default()
                 })
             });
+    }
+
+    fn get_docstring_for_attribute(
+        &self,
+        handle: &Handle,
+        attr_info: &AttrInfo,
+    ) -> Option<lsp_types::Documentation> {
+        let definition = attr_info.definition.as_ref()?.clone();
+        let attribute_definition = self.resolve_attribute_definition(
+            handle,
+            &attr_info.name,
+            definition,
+            attr_info.docstring_range,
+            &FindPreference::default(),
+        );
+
+        let (definition, Some(docstring_range)) = attribute_definition? else {
+            return None;
+        };
+        let docstring = Docstring(docstring_range, definition.module);
+
+        Some(lsp_types::Documentation::MarkupContent(
+            lsp_types::MarkupContent {
+                kind: lsp_types::MarkupKind::Markdown,
+                value: docstring.resolve().trim().to_owned(),
+            },
+        ))
     }
 
     fn add_literal_completions(
@@ -2087,10 +2145,12 @@ impl<'a> Transaction<'a> {
                                 };
                                 let ty = &x.ty;
                                 let detail = ty.clone().map(|t| t.as_hover_string());
+                                let documentation = self.get_docstring_for_attribute(handle, x);
                                 result.push(CompletionItem {
                                     label: x.name.as_str().to_owned(),
                                     detail,
                                     kind,
+                                    documentation,
                                     tags: if x.is_deprecated {
                                         Some(vec![CompletionItemTag::DEPRECATED])
                                     } else {
@@ -2350,7 +2410,7 @@ impl<'a> Transaction<'a> {
                 key @ Key::Definition(_) if containers => {
                     if let Some(ty) = self.get_type(handle, key) {
                         let e = match bindings.get(idx) {
-                            Binding::NameAssign(_, None, e) => match &**e {
+                            Binding::NameAssign(_, None, e, _) => match &**e {
                                 Expr::List(ExprList { elts, .. }) => {
                                     if elts.is_empty() {
                                         Some(&**e)
@@ -2443,7 +2503,7 @@ impl<'a> Transaction<'a> {
                         && let Some(ty) = self.get_type(handle, key) =>
                 {
                     let e = match bindings.get(idx) {
-                        Binding::NameAssign(_, None, e) => Some(&**e),
+                        Binding::NameAssign(_, None, e, _) => Some(&**e),
                         Binding::Expr(None, e) => Some(e),
                         _ => None,
                     };
@@ -2467,7 +2527,81 @@ impl<'a> Transaction<'a> {
                 _ => {}
             }
         }
+
+        if inlay_hint_config.call_argument_names != AllOffPartial::Off {
+            res.extend(self.add_inlay_hints_for_positional_function_args(handle));
+        }
+
         Some(res)
+    }
+
+    fn collect_function_calls_from_ast(module: Arc<ModModule>) -> Vec<ExprCall> {
+        fn collect_function_calls(x: &Expr, calls: &mut Vec<ExprCall>) {
+            if let Expr::Call(call) = x {
+                calls.push(call.clone());
+            }
+            x.recurse(&mut |x| collect_function_calls(x, calls));
+        }
+
+        let mut function_calls = Vec::new();
+        module.visit(&mut |x| collect_function_calls(x, &mut function_calls));
+        function_calls
+    }
+
+    fn add_inlay_hints_for_positional_function_args(
+        &self,
+        handle: &Handle,
+    ) -> Vec<(TextSize, String)> {
+        let mut param_hints: Vec<(TextSize, String)> = Vec::new();
+
+        if let Some(mod_module) = self.get_ast(handle) {
+            let function_calls = Self::collect_function_calls_from_ast(mod_module);
+
+            for call in function_calls {
+                if let Some(answers) = self.get_answers(handle) {
+                    let callee_type = if let Some((overloads, chosen_idx)) =
+                        answers.get_all_overload_trace(call.arguments.range)
+                    {
+                        // If we have overload information, use the chosen overload
+                        overloads
+                            .get(chosen_idx.unwrap_or_default())
+                            .map(|c| Type::Callable(Box::new(c.clone())))
+                    } else {
+                        // Otherwise, try to get the type of the callee directly
+                        answers.get_type_trace(call.func.range())
+                    };
+
+                    if let Some(params) =
+                        callee_type.and_then(Self::normalize_singleton_function_type_into_params)
+                    {
+                        for (arg_idx, arg) in call.arguments.args.iter().enumerate() {
+                            // Skip keyword arguments - they already show their parameter name
+                            let is_keyword_arg = call
+                                .arguments
+                                .keywords
+                                .iter()
+                                .any(|kw| kw.value.range() == arg.range());
+
+                            if !is_keyword_arg
+                                && let Some(
+                                    Param::Pos(name, _, _)
+                                    | Param::PosOnly(Some(name), _, _)
+                                    | Param::KwOnly(name, _, _),
+                                ) = params.get(arg_idx)
+                                && name.as_str() != "self"
+                                && name.as_str() != "cls"
+                            {
+                                param_hints
+                                    .push((arg.range().start(), format!("{}= ", name.as_str())));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        param_hints.sort_by_key(|(pos, _)| *pos);
+        param_hints
     }
 
     pub fn semantic_tokens(

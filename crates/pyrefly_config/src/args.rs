@@ -45,7 +45,12 @@ pub struct ConfigOverrideArgs {
     /// constructing a modified search path. Setting this flag will instruct
     /// Pyrefly to use the exact `search_path` you give it through your config
     /// file and CLI args.
-    #[arg(long)]
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
     disable_search_path_heuristics: Option<bool>,
 
     /// The Python version any `sys.version` checks should evaluate against.
@@ -66,12 +71,22 @@ pub struct ConfigOverrideArgs {
     #[arg(long, group = "env_source")]
     conda_environment: Option<String>,
 
-    /// The Python executable that will be queried for `python_version`
-    /// `python_platform`, or `site_package_path` if any of the values are missing.
+    /// The path to a Python executable that will be queried for `python-version`
+    /// `python-platform`, or `site-package-path` if any of the values are missing.
     #[arg(long, value_name = "EXE_PATH", group = "env_source")]
-    python_interpreter: Option<PathBuf>,
+    python_interpreter_path: Option<PathBuf>,
 
-    /// Skip doing any automatic querying for `python-interpreter` or `conda-environment`
+    /// The Python executable name available on your PATH that will be queried for your
+    /// `python-version`, `python-platform`, or `site-package-path` if any of the values
+    /// are missing. We execute `which <COMMAND>` to fill in your `python-interpreter-path`,
+    /// which is useful if you don't know where the Python executable will be on a given
+    /// machine, but want to use one other than the default.
+    /// When this and `python-interpreter-path` are unset, we query for `python3` and `python`.
+    #[arg(long, value_name = "COMMAND", group = "env_source")]
+    fallback_python_interpreter_name: Option<String>,
+
+    /// Skip doing any automatic querying for `python-interpreter-path`,
+    /// `fallback-python-interpreter-name`, or `conda-environment`
     #[arg(long, group = "env_source")]
     skip_interpreter_query: bool,
 
@@ -87,25 +102,50 @@ pub struct ConfigOverrideArgs {
     #[arg(long)]
     ignore_missing_imports: Option<Vec<String>>,
     /// Ignore missing source packages when only type stubs are available, allowing imports to proceed without source validation.
-    #[arg(long)]
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
     ignore_missing_source: Option<bool>,
     /// Whether to ignore type errors in generated code.
-    #[arg(long)]
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
     ignore_errors_in_generated_code: Option<bool>,
     /// If this is true, infer type variables not determined by a call or constructor based on their first usage.
     /// For example, the type of an empty container would be determined by the first thing you put into it.
     /// If this is false, any unsolved type variables at the end of a call or constructor will be replaced with `Any`.
     /// Defaults to true.
-    #[arg(long)]
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
     infer_with_first_use: Option<bool>,
     /// Whether to respect ignore files (.gitignore, .ignore, .git/exclude).
-    #[arg(long)]
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
     use_ignore_files: Option<bool>,
     /// Controls how Pyrefly analyzes function definitions that lack type annotations on parameters and return values.
     #[arg(long)]
     untyped_def_behavior: Option<UntypedDefBehavior>,
     /// Whether Pyrefly will respect ignore statements for other tools, e.g. `# mypy: ignore`.
-    #[arg(long)]
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
     permissive_ignores: Option<bool>,
     /// Force this rule to emit an error. Can be used multiple times.
     #[arg(long, hide_possible_values = true)]
@@ -176,20 +216,29 @@ impl ConfigOverrideArgs {
 
         if self.skip_interpreter_query || config.interpreters.skip_interpreter_query {
             config.interpreters.skip_interpreter_query = true;
-            config.interpreters.python_interpreter = None;
+            config.interpreters.python_interpreter_path = None;
+            config.interpreters.fallback_python_interpreter_name = None;
+            config.interpreters.conda_environment = None;
+        }
+        if let Some(x) = &self.python_interpreter_path {
+            config.interpreters.python_interpreter_path = Some(ConfigOrigin::cli(x.clone()));
+            config.interpreters.fallback_python_interpreter_name = None;
+            config.interpreters.conda_environment = None;
+        }
+        if let Some(x) = &self.fallback_python_interpreter_name {
+            config.interpreters.fallback_python_interpreter_name =
+                Some(ConfigOrigin::cli(x.clone()));
+            config.interpreters.python_interpreter_path = None;
             config.interpreters.conda_environment = None;
         }
         if let Some(conda_environment) = &self.conda_environment {
             config.interpreters.conda_environment =
                 Some(ConfigOrigin::cli(conda_environment.clone()));
-            config.interpreters.python_interpreter = None;
+            config.interpreters.python_interpreter_path = None;
+            config.interpreters.fallback_python_interpreter_name = None;
         }
         if let Some(x) = &self.typeshed_path {
             config.typeshed_path = Some(x.clone());
-        }
-        if let Some(x) = &self.python_interpreter {
-            config.interpreters.python_interpreter = Some(ConfigOrigin::cli(x.clone()));
-            config.interpreters.conda_environment = None;
         }
         if let Some(x) = &self.use_ignore_files {
             config.use_ignore_files = *x;

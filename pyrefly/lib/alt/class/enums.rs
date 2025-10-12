@@ -7,10 +7,17 @@
 
 use std::sync::Arc;
 
+use itertools::Itertools;
+use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_python::dunder;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_types::annotation::Annotation;
 use pyrefly_types::class::ClassType;
+use pyrefly_types::literal::LitEnum;
 use pyrefly_types::read_only::ReadOnlyReason;
 use pyrefly_types::tuple::Tuple;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
@@ -22,6 +29,9 @@ use crate::alt::class::class_field::WithDefiningClass;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::EnumMetadata;
+use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
@@ -45,7 +55,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect()
     }
 
-    pub fn is_valid_enum_member(
+    fn is_valid_enum_member(
         &self,
         name: &Name,
         ty: &Type,
@@ -81,6 +91,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Checks for a special-cased enum attribute, falling back to a regular instance attribute lookup.
+    pub fn get_enum_or_instance_attribute(
+        &self,
+        class: &ClassType,
+        metadata: &ClassMetadata,
+        attr_name: &Name,
+    ) -> Option<ClassAttribute> {
+        self.special_case_enum_attr_lookup(class, metadata, attr_name)
+            .or_else(|| self.get_instance_attribute(class, attr_name))
+    }
+
     /// Special-case enum attribute lookups:
     /// - if this is an enum and the attribute is `value`, we'll redirect it to
     ///   look up the type of `_value_` so that the `value` property understands
@@ -95,54 +116,94 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///
     /// Return None if either this is not an enum or this is not a special-case
     /// attribute.
-    pub fn special_case_enum_attr_lookup(
+    fn special_case_enum_attr_lookup(
         &self,
         class: &ClassType,
         metadata: &ClassMetadata,
         name: &Name,
     ) -> Option<ClassAttribute> {
-        if metadata.is_enum() && (name == &VALUE || name == &VALUE_PROP) {
-            if !self.field_is_inherited_from_enum(class.class_object(), &VALUE_PROP) {
-                // If `value` has been overridden, do not use the type of `_value_`
-                self.get_instance_attribute(class, &VALUE_PROP)
-            } else if self.field_is_inherited_from_enum(class.class_object(), &VALUE) {
-                // The `_value_` annotation on `enum.Enum` is `Any`; we can infer a better type
-                let enum_value_types: Vec<_> = self
-                    .get_enum_members(class.class_object())
-                    .into_iter()
-                    .filter_map(|lit| {
-                        if let Lit::Enum(lit_enum) = lit {
-                            Some(lit_enum.ty)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                let ty = if enum_value_types.is_empty() {
-                    // Assume Any, rather than Never, if there are no members because they may
-                    // be created dynamically and we don't want downstream analysis to be incorrect.
-                    Type::any_implicit()
-                } else {
-                    self.unions(enum_value_types)
-                };
-                Some(if name == &VALUE_PROP {
-                    ClassAttribute::read_only(ty, ReadOnlyReason::EnumMemberValue)
-                } else {
-                    ClassAttribute::read_write(ty)
-                })
-            } else {
-                self.get_instance_attribute(class, &VALUE).map(|attr| {
-                    // Do not allow writing `.value`, which is a property.
-                    if name == &VALUE_PROP {
-                        attr.read_only_equivalent(ReadOnlyReason::EnumMemberValue)
-                    } else {
-                        attr
-                    }
-                })
-            }
-        } else {
-            None
+        let enum_metadata = metadata.enum_metadata()?;
+        if !((name == &VALUE || name == &VALUE_PROP)
+            && (self.field_is_inherited_from(
+                class.class_object(),
+                name,
+                (ModuleName::enum_().as_str(), "Enum"),
+            ) || self.field_is_inherited_from(
+                class.class_object(),
+                name,
+                (ModuleName::django_models_enums().as_str(), "Choices"),
+            )))
+        {
+            return None;
         }
+        if name == &VALUE {
+            let ty = self
+                .mixed_in_enum_data_type(class.class_object())
+                .unwrap_or_else(|| {
+                    // The `_value_` annotation on `enum.Enum` is `Any`; we can infer a better type
+                    let enum_value_types: Vec<_> =
+                        self.get_enum_members(class.class_object())
+                            .into_iter()
+                            .filter_map(|lit| {
+                                if let Lit::Enum(lit_enum) = lit {
+                                    Some(self.enum_literal_to_value_type(
+                                        *lit_enum,
+                                        enum_metadata.is_django,
+                                    ))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                    if enum_value_types.is_empty() {
+                        // Assume Any, rather than Never, if there are no members because they may
+                        // be created dynamically and we don't want downstream analysis to be incorrect.
+                        Type::any_implicit()
+                    } else {
+                        self.unions(enum_value_types)
+                    }
+                });
+            Some(ClassAttribute::read_write(ty))
+        } else {
+            self.get_enum_or_instance_attribute(class, metadata, &VALUE)
+                .map(|attr| {
+                    // Do not allow writing `.value`, which is a property.
+                    attr.read_only_equivalent(ReadOnlyReason::EnumMemberValue)
+                })
+        }
+    }
+
+    /// If this enum mixes in a data type by inheriting from it, return the mixed-in type.
+    fn mixed_in_enum_data_type(&self, class: &Class) -> Option<Type> {
+        let bases = self.get_base_types_for_class(class);
+        let first_base = bases.iter().next()?;
+        let enum_class = self.stdlib.enum_class();
+        if first_base == enum_class {
+            None
+        } else if self.has_superclass(first_base.class_object(), enum_class.class_object()) {
+            self.mixed_in_enum_data_type(first_base.class_object())
+        } else {
+            Some(first_base.clone().to_type())
+        }
+    }
+
+    fn enum_literal_to_value_type(&self, lit_enum: LitEnum, is_django: bool) -> Type {
+        let ty = match lit_enum.ty {
+            Type::Tuple(Tuple::Concrete(elements)) if is_django && elements.len() >= 2 => {
+                // The last element is the label.
+                let value_len = elements.len() - 1;
+                Type::Tuple(Tuple::Concrete(
+                    elements.into_iter().take(value_len).collect(),
+                ))
+            }
+            ty => ty,
+        };
+        let int_ty = self.stdlib.int();
+        ty.transform(&mut |t| {
+            if matches!(t, Type::ClassType(cls) if cls.has_qname(ModuleName::enum_().as_str(), "auto")) {
+                *t = int_ty.clone().to_type();
+            }
+        })
     }
 
     pub fn get_enum_member_count(&self, cls: &Class) -> Option<usize> {
@@ -173,7 +234,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Type::Tuple(Tuple::Concrete(elements)) = &lit_enum.ty
                     && elements.len() >= 2
                 {
-                    Some(elements[1].clone())
+                    Some(elements[elements.len() - 1].clone())
                 } else {
                     None
                 }
@@ -181,16 +242,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect();
 
         label_types.push(self.stdlib.str().clone().to_type());
-        let label_type = self.unions(label_types);
 
-        let base_value_type = match self.get_class_member(cls, &VALUE) {
-            Some(WithDefiningClass { value, .. }) => value.ty(),
-            _ => Type::any_implicit(),
+        // Also include the type of __empty__ field if it exists, since it contributes to label types
+        let empty_name = Name::new_static("__empty__");
+        let has_empty = if let Some(WithDefiningClass { value, .. }) =
+            self.get_class_member(cls, &empty_name)
+        {
+            label_types.push(value.ty());
+            true
+        } else {
+            false
         };
 
+        let label_type = self.unions(label_types);
+
+        let base_value_attr = self.get_enum_or_instance_attribute(
+            &self.as_class_type_unchecked(cls),
+            &metadata,
+            &VALUE_PROP,
+        );
+        let base_value_type = base_value_attr
+            .and_then(|attr| {
+                self.resolve_get_class_attr(
+                    attr,
+                    TextRange::default(),
+                    &self.error_swallower(),
+                    None,
+                )
+                .ok()
+            })
+            .unwrap_or_else(Type::any_implicit);
+
         // if value is optional, make the type optional
-        let empty_name = Name::new_static("__empty__");
-        let has_empty = self.get_class_member(cls, &empty_name).is_some();
         let values_type = if has_empty {
             self.union(base_value_type.clone(), Type::None)
         } else {
@@ -216,5 +299,108 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         Some(ClassSynthesizedFields::new(fields))
+    }
+
+    /// Enum handling:
+    /// - Check whether the field is a member (which depends only on its type and name)
+    /// - Validate that a member should not have an annotation, and should respect any explicit annotation on `_value_`
+    ///
+    /// TODO(stroxler, yangdanny): We currently operate on promoted types, which means we do not infer `Literal[...]`
+    /// types for the `.value` / `._value_` attributes of literals. This is permitted in the spec although not optimal
+    /// for most cases; we are handling it this way in part because generic enum behavior is not yet well-specified.
+    ///
+    /// We currently skip the check for `_value_` if the class defines `__new__`, since that can
+    /// change the value of the enum member. https://docs.python.org/3/howto/enum.html#when-to-use-new-vs-init
+    pub fn get_enum_class_field_type(
+        &self,
+        class: &Class,
+        name: &Name,
+        direct_annotation: Option<&Annotation>,
+        ty: &Type,
+        initialization: &ClassFieldInitialization,
+        is_descriptor: bool,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        if is_descriptor {
+            return None;
+        }
+        let metadata = self.get_metadata_for_class(class);
+        if let Some(enum_) = metadata.enum_metadata()
+            && self.is_valid_enum_member(name, ty, initialization)
+        {
+            if direct_annotation.is_some() {
+                self.error(
+                    errors, range,ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    format!("Enum member `{name}` may not be annotated directly. Instead, annotate the `_value_` attribute."),
+                );
+            }
+            if enum_.has_value
+                && let Some(enum_value_ty) = self.type_of_enum_value(enum_)
+                && !class.fields().contains(&dunder::NEW)
+                && (!matches!(ty, Type::Ellipsis) || !self.module().path().is_interface())
+            {
+                self.check_enum_value_annotation(ty, &enum_value_ty, name, range, errors);
+            }
+            Some(Type::Literal(Lit::Enum(Box::new(LitEnum {
+                class: enum_.cls.clone(),
+                member: name.clone(),
+                ty: ty.clone(),
+            }))))
+        } else {
+            None
+        }
+    }
+
+    /// Look up the `_value_` attribute of an enum class. This field has to be a plain instance
+    /// attribute annotated in the class body; it is used to validate enum member values, which are
+    /// supposed to all share this type.
+    ///
+    /// TODO(stroxler): We don't currently enforce in this function that it is
+    /// an instance attribute annotated in the class body. Should we? It is unclear; this helper
+    /// is only used to validate enum members, not to produce errors on invalid `_value_`
+    fn type_of_enum_value(&self, enum_: &EnumMetadata) -> Option<Type> {
+        let field = self
+            .get_class_member(enum_.cls.class_object(), &VALUE)?
+            .value;
+        if field.is_simple_instance_attribute() {
+            Some(field.ty())
+        } else {
+            None
+        }
+    }
+
+    fn check_enum_value_annotation(
+        &self,
+        mut value: &Type,
+        annotation: &Type,
+        member: &Name,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if matches!(value, Type::Tuple(_)) {
+            // TODO: check tuple values against constructor signature
+            // see https://typing.python.org/en/latest/spec/enums.html#member-values
+            return;
+        }
+        if matches!(value, Type::ClassType(cls) if cls.has_qname("enum", "auto")) {
+            return;
+        }
+        if let Type::ClassType(cls) = value
+            && cls.has_qname("enum", "member")
+            && let [member_targ] = cls.targs().as_slice()
+        {
+            value = member_targ;
+        }
+        if !self.is_subset_eq(value, annotation) {
+            self.error(
+                errors, range, ErrorInfo::Kind(ErrorKind::BadAssignment),
+                format!(
+                    "Enum member `{member}` has type `{}`, must match the `_value_` attribute annotation of `{}`",
+                    self.for_display(value.clone()),
+                    self.for_display(annotation.clone()),
+                ),
+            );
+        }
     }
 }

@@ -205,9 +205,11 @@ fn implicitly_imported_submodule(
 
 fn is_deprecated_decorator(decorator: &Decorator) -> bool {
     decorator.expression.as_call_expr().is_some_and(|x| {
-        x.func
-            .as_name_expr()
-            .is_some_and(|x| x.id == "deprecated" || x.id == "warnings.deprecated")
+        x.func.as_name_expr().is_some_and(|x| {
+            x.id == "deprecated"
+                || x.id == "warnings.deprecated"
+                || x.id == "typing_extensions.deprecated"
+        })
     })
 }
 

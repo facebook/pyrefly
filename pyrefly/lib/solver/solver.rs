@@ -65,7 +65,7 @@ enum Variable {
     ///
     /// Pyrefly only creates these for assignments, and will attempt to
     /// determine the type ("pin" it) using the first use of the name assigned.
-    Contained,
+    Partial,
     /// A variable due to generic instantiation, `def f[T](x: T): T` with `f(1)`
     Quantified(Box<Quantified>),
     /// A variable caused by recursion, e.g. `x = f(); def f(): return x`.
@@ -86,7 +86,7 @@ enum Variable {
 impl Display for Variable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Variable::Contained => write!(f, "Contained"),
+            Variable::Partial => write!(f, "Partial"),
             Variable::Quantified(q) => {
                 let k = q.kind;
                 if let Some(t) = &q.default {
@@ -109,7 +109,7 @@ impl Variable {
     /// E.g. `x = 1; while True: x = x` should be `Literal[1]` while
     /// `[1]` should be `List[int]`.
     fn promote<Ans: LookupAnswer>(&self, ty: Type, type_order: TypeOrder<Ans>) -> Type {
-        if matches!(self, Variable::Contained | Variable::Quantified(_)) {
+        if matches!(self, Variable::Partial | Variable::Quantified(_)) {
             ty.promote_literals(type_order.stdlib())
         } else {
             ty
@@ -305,7 +305,7 @@ impl Solver {
             Variable::Quantified(q) => {
                 *variable = Variable::Answer(q.as_gradual_type());
             }
-            Variable::Contained | Variable::Unwrap => {
+            Variable::Partial | Variable::Unwrap => {
                 *variable = Variable::Answer(Type::any_implicit());
             }
             Variable::Parameter => {
@@ -484,7 +484,7 @@ impl Solver {
     /// e.g. `[]` with an unknown type of element.
     pub fn fresh_contained(&self, uniques: &UniqueFactory) -> Var {
         let v = Var::new(uniques);
-        self.variables.lock().insert_fresh(v, Variable::Contained);
+        self.variables.lock().insert_fresh(v, Variable::Partial);
         v
     }
 
@@ -596,7 +596,7 @@ impl Solver {
         is_subset(self_obj, &self_param);
 
         // Either we have solutions, or we fall back to Any. We don't use finish_quantified
-        // because we don't want Variable::Contained.
+        // because we don't want Variable::Partial.
         for v in vs {
             self.force_var(v);
         }
@@ -632,7 +632,7 @@ impl Solver {
                 }
                 Variable::Quantified(_) => {
                     if self.infer_with_first_use {
-                        *e = Variable::Contained;
+                        *e = Variable::Partial;
                     } else {
                         *e = Variable::Answer(Type::any_implicit())
                     }
@@ -680,7 +680,7 @@ impl Solver {
     }
 
     /// Finalize the tparam instantiations. Any targs which don't yet have an instantiation
-    /// will resolve to their default, if one exists. Otherwise, create a "contained" var and
+    /// will resolve to their default, if one exists. Otherwise, create a "partial" var and
     /// try to find an instantiation at the first use, like finish_quantified.
     pub fn finish_class_targs(&self, targs: &mut TArgs, uniques: &UniqueFactory) {
         // The default can refer to a tparam from earlier in the list, so we maintain a
@@ -719,7 +719,7 @@ impl Solver {
                     Some(t)
                 } else {
                     let v = Var::new(uniques);
-                    self.variables.lock().insert_fresh(v, Variable::Contained);
+                    self.variables.lock().insert_fresh(v, Variable::Partial);
                     Some(v.to_type())
                 }
             } else {
@@ -790,10 +790,6 @@ impl Solver {
         }
         if branches.len() == 1 {
             return branches.pop().unwrap();
-        }
-        for b in &branches[1..] {
-            // Do the is_subset_eq only to force free variables
-            let _ = self.is_subset_eq_impl(&branches[0], b, type_order, true);
         }
 
         // We want to union modules differently, by merging their module sets
@@ -887,7 +883,7 @@ impl Solver {
     }
 
     /// Is `got <: want`? If you aren't sure, return `false`.
-    /// May cause contained variables to be resolved to an answer.
+    /// May cause partial variables to be resolved to an answer.
     pub fn is_subset_eq<Ans: LookupAnswer>(
         &self,
         got: &Type,
@@ -987,8 +983,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     fn is_subset_eq_var(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
         // This function does two things: it checks that got <: want, and it solves free variables assuming that
         // got <: want. Most callers want both behaviors. The exception is that in a union, we call is_subset_eq
-        // for the sole purpose of solving contained and parameter variables, throwing away the check result.
-        let should_force = |v: &Variable| !self.union || matches!(v, Variable::Contained);
+        // for the sole purpose of solving partial and parameter variables, throwing away the check result.
+        let should_force = |v: &Variable| !self.union || matches!(v, Variable::Partial);
         match (got, want) {
             _ if got == want => Ok(()),
             (Type::Var(v1), Type::Var(v2)) => {

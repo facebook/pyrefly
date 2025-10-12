@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::SysInfo;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -20,6 +21,7 @@ use vec1::Vec1;
 
 use crate::handle::Handle;
 use crate::source_db::SourceDatabase;
+use crate::source_db::Target;
 
 /// A simple [`SourceDatabase`] that can be used for easy setup and testing.
 #[derive(Debug, PartialEq, Eq)]
@@ -63,8 +65,18 @@ impl SourceDatabase for MapDatabase {
             .collect()
     }
 
-    fn lookup(&self, module: &ModuleName, _: Option<&Path>) -> Option<ModulePath> {
-        self.0.get(module).map(|paths| paths.last().dupe())
+    fn lookup(
+        &self,
+        module: &ModuleName,
+        _: Option<&Path>,
+        style: Option<ModuleStyle>,
+    ) -> Option<ModulePath> {
+        let paths = self.0.get(module)?;
+        let style = style.unwrap_or(ModuleStyle::Interface);
+        if let Some(result) = paths.iter().find(|p| p.style() == style) {
+            return Some(result.dupe());
+        }
+        Some(paths.last().dupe())
     }
 
     fn handle_from_module_path(&self, module_path: ModulePath) -> Option<Handle> {
@@ -85,5 +97,9 @@ impl SourceDatabase for MapDatabase {
             .flatten()
             .map(|p| p.as_path().to_path_buf())
             .collect()
+    }
+
+    fn get_target(&self, _: Option<&Path>) -> Option<Target> {
+        None
     }
 }

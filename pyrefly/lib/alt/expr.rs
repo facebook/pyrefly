@@ -17,6 +17,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::typed_dict::ExtraItems;
+use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
@@ -26,7 +27,6 @@ use ruff_python_ast::Comprehension;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
-use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprSlice;
 use ruff_python_ast::ExprStarred;
@@ -43,8 +43,6 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
-use crate::alt::callable::CallKeyword;
-use crate::alt::callable::CallWithTypes;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::unwrap::Hint;
 use crate::alt::unwrap::HintRef;
@@ -57,7 +55,6 @@ use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::types::callable::Callable;
-use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
@@ -75,7 +72,6 @@ use crate::types::type_var::Restriction;
 use crate::types::type_var::TypeVar;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
-use crate::types::types::CalleeKind;
 use crate::types::types::Type;
 
 #[derive(Debug, Clone, Copy)]
@@ -104,6 +100,21 @@ impl<'a> TypeOrExpr<'a> {
             TypeOrExpr::Type(ty, _) => ty.clone(),
             TypeOrExpr::Expr(x) => solver.expr_infer(x, errors),
         }
+    }
+
+    pub fn materialize<Ans: LookupAnswer>(
+        &self,
+        solver: &AnswersSolver<Ans>,
+        errors: &ErrorCollector,
+        owner: &'a Owner<Type>,
+    ) -> (Self, bool) {
+        let ty = self.infer(solver, errors);
+        let materialized = ty.materialize();
+        let changed = ty != materialized;
+        (
+            TypeOrExpr::Type(owner.push(materialized), self.range()),
+            changed,
+        )
     }
 }
 
@@ -538,7 +549,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.stdlib.list(self.unions(elem_tys)).to_type()
                 }
             }
-            Expr::Dict(x) => self.dict_infer(x, hint, errors),
+            Expr::Dict(x) => self.dict_infer(&x.items, hint, x.range, errors),
             Expr::Set(x) => {
                 let elem_hint = hint.and_then(|ty| self.decompose_set(ty));
                 if x.is_empty() {
@@ -625,126 +636,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::YieldFrom(x) => self.get(&KeyYieldFrom(x.range)).return_ty.clone(),
             Expr::Compare(x) => self.compare_infer(x, errors),
             Expr::Call(x) => {
-                let mut callee_ty = self.expr_infer(&x.func, errors);
-                if matches!(&callee_ty, Type::ClassDef(cls) if cls.is_builtin("super")) {
-                    // Because we have to construct a binding for super in order to fill in implicit arguments,
-                    // we can't handle things like local aliases to super. If we hit a case where the binding
-                    // wasn't constructed, fall back to `Any`.
-                    self.get_hashed_opt(Hashed::new(&Key::SuperInstance(x.range)))
-                        .map_or_else(Type::any_implicit, |type_info| type_info.arc_clone_ty())
+                let callee_ty = self.expr_infer(&x.func, errors);
+                if let Some(d) = self.call_to_dict(&callee_ty, &x.arguments) {
+                    self.dict_infer(&d, hint, x.range, errors)
                 } else {
-                    self.expand_type_mut(&mut callee_ty);
-
-                    let args;
-                    let kws;
-                    let call = CallWithTypes::new();
-                    if callee_ty.is_union() {
-                        // If we have a union we will distribute over it, and end up duplicating each function call.
-                        args = x
-                            .arguments
-                            .args
-                            .map(|x| call.call_arg(&CallArg::expr_maybe_starred(x), self, errors));
-                        kws = x
-                            .arguments
-                            .keywords
-                            .map(|x| call.call_keyword(&CallKeyword::new(x), self, errors));
-                    } else {
-                        args = x.arguments.args.map(CallArg::expr_maybe_starred);
-                        kws = x.arguments.keywords.map(CallKeyword::new);
-                    }
-
-                    self.distribute_over_union(&callee_ty, |ty| match ty.callee_kind() {
-                        Some(CalleeKind::Function(FunctionKind::AssertType)) => self
-                            .call_assert_type(
-                                &x.arguments.args,
-                                &x.arguments.keywords,
-                                x.arguments.range,
-                                hint,
-                                errors,
-                            ),
-                        Some(CalleeKind::Function(FunctionKind::RevealType)) => self
-                            .call_reveal_type(
-                                &x.arguments.args,
-                                &x.arguments.keywords,
-                                x.arguments.range,
-                                hint,
-                                errors,
-                            ),
-                        Some(CalleeKind::Function(FunctionKind::Cast)) => {
-                            // For typing.cast, we have to hard-code a check for whether the first argument
-                            // is a type, so it's simplest to special-case the entire call.
-                            self.call_typing_cast(
-                                &x.arguments.args,
-                                &x.arguments.keywords,
-                                x.arguments.range,
-                                errors,
-                            )
-                        }
-                        // Treat assert_type and reveal_type like pseudo-builtins for convenience. Note that we still
-                        // log a name-not-found error, but we also assert/reveal the type as requested.
-                        None if ty.is_error() && is_special_name(&x.func, "assert_type") => self
-                            .call_assert_type(
-                                &x.arguments.args,
-                                &x.arguments.keywords,
-                                x.arguments.range,
-                                hint,
-                                errors,
-                            ),
-                        None if ty.is_error() && is_special_name(&x.func, "reveal_type") => self
-                            .call_reveal_type(
-                                &x.arguments.args,
-                                &x.arguments.keywords,
-                                x.arguments.range,
-                                hint,
-                                errors,
-                            ),
-                        Some(CalleeKind::Function(FunctionKind::IsInstance))
-                            if self.has_exactly_two_posargs(&x.arguments) =>
-                        {
-                            self.call_isinstance(&x.arguments.args[0], &x.arguments.args[1], errors)
-                        }
-                        Some(CalleeKind::Function(FunctionKind::IsSubclass))
-                            if self.has_exactly_two_posargs(&x.arguments) =>
-                        {
-                            self.call_issubclass(&x.arguments.args[0], &x.arguments.args[1], errors)
-                        }
-                        _ if matches!(ty, Type::ClassDef(cls) if cls == self.stdlib.builtins_type().class_object())
-                            && x.arguments.args.len() == 1 && x.arguments.keywords.is_empty() =>
-                        {
-                            // We may be able to provide a more precise type when the constructor for `builtins.type`
-                            // is called with a single argument.
-                            let arg_ty = self.expr_infer(&x.arguments.args[0], errors);
-                            self.type_of(arg_ty)
-                        }
-                        // Decorators can be applied in two ways:
-                        //   - (common, idiomatic) via `@decorator`:
-                        //     @staticmethod
-                        //     def f(): ...
-                        //   - (uncommon, mostly seen in legacy code) via a function call:
-                        //     def f(): ...
-                        //     f = staticmethod(f)
-                        // Check if this call applies a decorator with known typing effects to a function.
-                        _ if let Some(ret) = self.maybe_apply_function_decorator(ty, &args, &kws, errors) => ret,
-                        _ => {
-                            let callable = self.as_call_target_or_error(
-                                ty.clone(),
-                                CallStyle::FreeForm,
-                                x.func.range(),
-                                errors,
-                                None,
-                            );
-                            self.call_infer(
-                                callable,
-                                &args,
-                                &kws,
-                                x.arguments.range,
-                                errors,
-                                None,
-                                hint,
-                                None,
-                            )
-                        }
-                    })
+                    self.expr_call_infer(x, callee_ty, hint, errors)
                 }
             }
             Expr::FString(x) => {
@@ -815,8 +711,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn dict_infer(&self, x: &ExprDict, hint: Option<HintRef>, errors: &ErrorCollector) -> Type {
-        let flattened_items = Ast::flatten_dict_items(&x.items);
+    fn dict_infer(
+        &self,
+        items: &[DictItem],
+        hint: Option<HintRef>,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let flattened_items = Ast::flatten_dict_items(items);
         let hints = hint.as_ref().map_or(Vec::new(), |hint| match hint.ty() {
             Type::Union(ts) => ts
                 .iter()
@@ -836,7 +738,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &flattened_items,
                 typed_dict,
                 is_update,
-                x.range,
+                range,
                 &check_errors,
                 &item_errors,
             );
@@ -952,6 +854,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let value_ty = self.unions(value_tys);
             self.stdlib.dict(key_ty, value_ty).to_type()
         }
+    }
+
+    /// If this is a `dict` call that can be converted to an equivalent dict literal (e.g., `dict(x=1)` => `{'x': 1}`),
+    /// return the items in the converted dict.
+    fn call_to_dict(&self, callee_ty: &Type, args: &Arguments) -> Option<Vec<DictItem>> {
+        if !matches!(callee_ty, Type::ClassDef(class) if class.is_builtin("dict")) {
+            return None;
+        }
+        if !args.args.is_empty() {
+            // The positional args could contain expressions that are convertible to dict literals,
+            // but this is a less common pattern, so we defer supporting it for now.
+            return None;
+        }
+        Some(args.keywords.map(|kw| {
+            DictItem {
+                key: kw
+                    .arg
+                    .as_ref()
+                    .map(|id| Ast::str_expr(id.as_str(), id.range)),
+                value: kw.value.clone(),
+            }
+        }))
     }
 
     pub fn as_bool(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) -> Option<bool> {
@@ -1932,15 +1856,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    fn has_exactly_two_posargs(&self, arguments: &Arguments) -> bool {
-        arguments.keywords.is_empty()
-            && arguments.args.len() == 2
-            && arguments
-                .args
-                .iter()
-                .all(|e| !matches!(e, Expr::Starred(_)))
-    }
-
     /// When indexing/slicing concrete tuples with literals, try to infer a more precise type
     fn infer_tuple_index(
         &self,
@@ -2139,17 +2054,5 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 format!("{reason}"),
             );
         }
-    }
-}
-
-/// Match on an expression by name. Should be used only for special names that we essentially treat like keywords,
-/// like reveal_type.
-fn is_special_name(x: &Expr, name: &str) -> bool {
-    match x {
-        // Note that this matches on a bare name regardless of whether it's been imported.
-        // It's convenient to be able to call functions like reveal_type in the course of
-        // debugging without scrolling to the top of the file to add an import.
-        Expr::Name(x) => x.id.as_str() == name,
-        _ => false,
     }
 }

@@ -146,6 +146,23 @@ impl<'a> CallKeyword<'a> {
             value: TypeOrExpr::Expr(&x.value),
         }
     }
+
+    pub fn materialize<Ans: LookupAnswer>(
+        &self,
+        solver: &AnswersSolver<Ans>,
+        errors: &ErrorCollector,
+        owner: &'a Owner<Type>,
+    ) -> (Self, bool) {
+        let (materialized, changed) = self.value.materialize(solver, errors, owner);
+        (
+            Self {
+                range: self.range,
+                arg: self.arg,
+                value: materialized,
+            },
+            changed,
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -180,6 +197,24 @@ impl<'a> CallArg<'a> {
         match x {
             Expr::Starred(inner) => Self::Star(TypeOrExpr::Expr(&inner.value), x.range()),
             _ => Self::expr(x),
+        }
+    }
+
+    pub fn materialize<Ans: LookupAnswer>(
+        &self,
+        solver: &AnswersSolver<Ans>,
+        errors: &ErrorCollector,
+        owner: &'a Owner<Type>,
+    ) -> (Self, bool) {
+        match self {
+            Self::Arg(value) => {
+                let (materialized, changed) = value.materialize(solver, errors, owner);
+                (Self::Arg(materialized), changed)
+            }
+            Self::Star(value, range) => {
+                let (materialized, changed) = value.materialize(solver, errors, owner);
+                (Self::Star(materialized, *range), changed)
+            }
         }
     }
 
@@ -984,7 +1019,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     context,
                 );
             }
-            Params::Ellipsis => {
+            Params::Ellipsis | Params::Materialization => {
                 // Deal with Callable[..., R]
                 for arg in self_arg.iter().chain(args.iter()) {
                     arg.pre_eval(self, arg_errors).post_infer(self, arg_errors)

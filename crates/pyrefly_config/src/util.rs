@@ -146,7 +146,7 @@ impl<T> ConfigOrigin<T> {
         }
     }
 
-    fn as_ref(&self) -> ConfigOrigin<&T> {
+    pub fn as_ref(&self) -> ConfigOrigin<&T> {
         match *self {
             ConfigOrigin::ConfigFile(ref value) => ConfigOrigin::ConfigFile(value),
             ConfigOrigin::CommandLine(ref value) => ConfigOrigin::CommandLine(value),

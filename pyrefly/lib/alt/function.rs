@@ -90,7 +90,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         // Overloads in .pyi should not have an implementation.
         let skip_implementation = self.module().path().style() == ModuleStyle::Interface
-            || class_metadata.is_some_and(|idx| self.get_idx(*idx).is_protocol());
+            || class_metadata.is_some_and(|idx| self.get_idx(*idx).is_protocol())
+            || def.metadata().flags.is_abstract_method;
         if def.metadata().flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
             let successor = self.get_function_successor(&def);
@@ -355,9 +356,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(CalleeKind::Class(ClassKind::EnumMember)) => Some(SpecialDecorator::EnumMember),
             Some(CalleeKind::Function(FunctionKind::Override)) => Some(SpecialDecorator::Override),
             Some(CalleeKind::Function(FunctionKind::Final)) => Some(SpecialDecorator::Final),
-            _ if matches!(decorator, Type::ClassType(cls) if cls.has_qname("warnings", "deprecated")) => {
-                Some(SpecialDecorator::Deprecated)
-            }
+            _ if decorator.is_deprecation_marker() => Some(SpecialDecorator::Deprecated),
             _ if decorator.is_property_setter_decorator() => {
                 Some(SpecialDecorator::PropertySetter(decorator))
             }
@@ -433,6 +432,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(DataclassTransformKeywords::from_type_map(kws));
                 true
             }
+            SpecialDecorator::AbstractMethod => {
+                flags.is_abstract_method = true;
+                true
+            }
             _ => false,
         }
     }
@@ -440,7 +443,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn get_requiredness(
         &self,
         default: Option<&Expr>,
-        check: Option<(&Type, &(dyn Fn() -> TypeCheckContext))>,
+        check: Option<(&Type, &dyn Fn() -> TypeCheckContext)>,
         stub_or_impl: FunctionStubOrImpl,
         errors: &ErrorCollector,
     ) -> Required {

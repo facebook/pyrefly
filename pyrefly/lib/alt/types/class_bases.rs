@@ -58,6 +58,14 @@ impl ClassBases {
     pub fn iter(&self) -> impl Iterator<Item = &ClassType> {
         self.base_types.iter()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.base_types.is_empty()
+    }
+
+    pub fn base_type_count(&self) -> usize {
+        self.base_types.len()
+    }
 }
 
 impl fmt::Display for ClassBases {

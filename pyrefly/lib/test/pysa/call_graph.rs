@@ -5,34 +5,47 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+
+use pretty_assertions::assert_eq;
+use serde::Serialize;
 
 use crate::report::pysa::call_graph::AttributeAccessCallees;
 use crate::report::pysa::call_graph::CallCallees;
+use crate::report::pysa::call_graph::CallGraph;
 use crate::report::pysa::call_graph::CallGraphs;
 use crate::report::pysa::call_graph::CallTarget;
 use crate::report::pysa::call_graph::ExpressionCallees;
+use crate::report::pysa::call_graph::FunctionTrait;
 use crate::report::pysa::call_graph::IdentifierCallees;
 use crate::report::pysa::call_graph::ImplicitReceiver;
-use crate::report::pysa::call_graph::build_call_graphs_for_module;
+use crate::report::pysa::call_graph::Target;
+use crate::report::pysa::call_graph::export_call_graphs;
 use crate::report::pysa::context::ModuleContext;
+use crate::report::pysa::function::FunctionBaseDefinition;
 use crate::report::pysa::function::FunctionRef;
+use crate::report::pysa::function::WholeProgramFunctionDefinitions;
 use crate::report::pysa::function::collect_function_base_definitions;
 use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleIds;
+use crate::report::pysa::override_graph::OverrideGraph;
 use crate::report::pysa::override_graph::build_reversed_override_graph;
 use crate::test::pysa::utils::create_state;
 use crate::test::pysa::utils::get_class_ref;
 use crate::test::pysa::utils::get_handle_for_module_name;
 
 // Omit fields from `FunctionRef` so that we can easily write the expected results
-#[derive(Debug, Hash, Eq, PartialEq, Clone)]
-struct DefinitionRefForTest {
+#[derive(Debug, Hash, Eq, PartialEq, Clone, Serialize, PartialOrd, Ord)]
+struct FunctionRefForTest {
     module_name: String,
+    defining_class: Option<String>,
     identifier: String,
 }
 
-fn split_module_name_and_identifier(string: &str) -> (String, String) {
+impl FunctionTrait for FunctionRefForTest {}
+
+fn split_module_and_identifier(string: &str) -> (String, String) {
     let parts: Vec<&str> = string.split('.').collect();
     if let Some((last, rest)) = parts.split_last() {
         (rest.join("."), (*last).to_owned())
@@ -41,89 +54,160 @@ fn split_module_name_and_identifier(string: &str) -> (String, String) {
     }
 }
 
-impl DefinitionRefForTest {
-    fn from_definition_ref(definition_ref: &FunctionRef) -> Self {
+fn split_module_class_and_identifier(string: &str) -> (String, Option<String>, String) {
+    let parts: Vec<&str> = string.split('.').collect();
+    if let Some((last, rest)) = parts.split_last()
+        && let Some((second_to_last, rest_of_rest)) = rest.split_last()
+    {
+        if rest_of_rest.is_empty() {
+            (rest.join("."), None, (*last).to_owned())
+        } else {
+            (
+                rest_of_rest.join("."),
+                Some((*second_to_last).to_owned()),
+                (*last).to_owned(),
+            )
+        }
+    } else {
+        panic!("Invalid string: {}", string)
+    }
+}
+
+impl FunctionRefForTest {
+    fn from_definition_ref(
+        function_ref: FunctionRef,
+        function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
+    ) -> Self {
         Self {
-            module_name: definition_ref.module_name.to_string(),
-            identifier: definition_ref.function_name.to_string(),
+            module_name: function_ref.module_name.to_string(),
+            identifier: function_ref.function_name.to_string(),
+            defining_class: function_base_definitions
+                .get(function_ref.module_id, &function_ref.function_id)
+                .and_then(|definition| {
+                    definition
+                        .defining_class
+                        .as_ref()
+                        .map(|class| class.class.name().to_string())
+                }),
         }
     }
 
     fn from_string(string: &str) -> Self {
-        let (module_name, identifier) = split_module_name_and_identifier(string);
+        let (module_name, defining_class, identifier) = split_module_class_and_identifier(string);
         Self {
             module_name,
             identifier,
+            defining_class,
         }
     }
 }
 
-impl std::fmt::Display for DefinitionRefForTest {
+impl std::fmt::Display for FunctionRefForTest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}.{}", self.module_name, self.identifier)
     }
 }
 
-impl<Target> CallTarget<Target> {
+impl CallTarget<FunctionRefForTest> {
     fn with_receiver_class(mut self, receiver_class: String, context: &ModuleContext) -> Self {
         self.receiver_class = Some({
-            let (module_name, class_name) = split_module_name_and_identifier(&receiver_class);
+            let (module_name, class_name) = split_module_and_identifier(&receiver_class);
             get_class_ref(&module_name, &class_name, context)
         });
         self
     }
 }
 
-fn create_call_target(target: &str) -> CallTarget<DefinitionRefForTest> {
+enum TargetType {
+    Function,
+    Override,
+    #[allow(dead_code)]
+    Object,
+}
+
+fn create_call_target(target: &str, target_type: TargetType) -> CallTarget<FunctionRefForTest> {
     CallTarget {
-        target: DefinitionRefForTest::from_string(target),
+        target: match target_type {
+            TargetType::Function => Target::Function(FunctionRefForTest::from_string(target)),
+            TargetType::Override => Target::Override(FunctionRefForTest::from_string(target)),
+            TargetType::Object => Target::Object(target.to_owned()),
+        },
         implicit_receiver: ImplicitReceiver::False,
+        implicit_dunder_call: false,
+        is_class_method: false,
+        is_static_method: false,
         receiver_class: None,
     }
 }
 
 fn call_graph_for_test_from_actual(
-    call_graph: &CallGraphs<FunctionRef, PysaLocation>,
-) -> CallGraphs<DefinitionRefForTest, String> {
-    let call_graph_for_test = call_graph
-        .0
-        .iter()
-        .map(|(caller, callees)| {
-            let caller = DefinitionRefForTest::from_definition_ref(caller);
-            let callees_for_test = callees
-                .iter()
-                .map(|(location, expression_callees)| {
-                    (
-                        location.as_key(),
-                        expression_callees.map_target(DefinitionRefForTest::from_definition_ref),
-                    )
-                })
-                .collect::<HashMap<_, _>>();
-            (caller, callees_for_test)
-        })
-        .collect::<HashMap<_, _>>();
-    CallGraphs::from_map(call_graph_for_test)
+    call_graphs: CallGraphs<FunctionRef>,
+    function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
+) -> CallGraphs<FunctionRefForTest> {
+    let create_function_ref_for_test = |function_ref| {
+        FunctionRefForTest::from_definition_ref(function_ref, function_base_definitions)
+    };
+    CallGraphs::from_map(
+        call_graphs
+            .into_iter()
+            .map(|(caller, callees)| {
+                let caller = create_function_ref_for_test(caller);
+                let callees_for_test = CallGraph::from_map(
+                    callees
+                        .into_iter()
+                        .map(|(location, expression_callees)| {
+                            (
+                                location.clone(),
+                                expression_callees.map_function(create_function_ref_for_test),
+                            )
+                        })
+                        .collect::<HashMap<_, _>>(),
+                );
+                (caller, callees_for_test)
+            })
+            .collect::<HashMap<_, _>>(),
+    )
 }
 
 fn call_graph_for_test_from_expected(
-    call_graph: Vec<(
-        String,
-        Vec<(String, ExpressionCallees<DefinitionRefForTest>)>,
-    )>,
-) -> CallGraphs<DefinitionRefForTest, String> {
-    let call_graph_for_test = call_graph
-        .into_iter()
+    call_graph: Vec<(String, Vec<(String, ExpressionCallees<FunctionRefForTest>)>)>,
+) -> CallGraphs<FunctionRefForTest> {
+    CallGraphs::from_map(
+        call_graph
+            .into_iter()
+            .map(|(caller, callees)| {
+                let callees_for_test = CallGraph::from_map(
+                    callees
+                        .into_iter()
+                        .map(|(location, expression_callees_for_test)| {
+                            (
+                                PysaLocation::from_key(&location).unwrap(),
+                                expression_callees_for_test,
+                            )
+                        })
+                        .collect::<HashMap<_, _>>(),
+                );
+                (FunctionRefForTest::from_string(&caller), callees_for_test)
+            })
+            .collect::<HashMap<_, _>>(),
+    )
+}
+
+fn sort_call_graphs(
+    call_graphs: &CallGraphs<FunctionRefForTest>,
+) -> BTreeMap<FunctionRefForTest, BTreeMap<String, ExpressionCallees<FunctionRefForTest>>> {
+    call_graphs
+        .iter()
         .map(|(caller, callees)| {
-            let callees_for_test = callees
-                .into_iter()
-                .map(|(location, expression_callees_for_test)| {
-                    ((*location).to_owned(), expression_callees_for_test)
+            let sorted_callees = callees
+                .iter()
+                .map(|(location, expression_callees)| {
+                    (location.as_key(), expression_callees.clone())
                 })
-                .collect::<HashMap<_, _>>();
-            (DefinitionRefForTest::from_string(&caller), callees_for_test)
+                .collect::<BTreeMap<_, _>>();
+            (caller.clone(), sorted_callees)
         })
-        .collect::<HashMap<_, _>>();
-    CallGraphs::from_map(call_graph_for_test)
+        .collect::<BTreeMap<_, _>>()
 }
 
 fn test_building_call_graph_for_module(
@@ -131,14 +215,11 @@ fn test_building_call_graph_for_module(
     code: &str,
     create_expected: &dyn Fn(
         &ModuleContext,
-    ) -> Vec<(
-        String,
-        Vec<(String, ExpressionCallees<DefinitionRefForTest>)>,
-    )>,
+    )
+        -> Vec<(String, Vec<(String, ExpressionCallees<FunctionRefForTest>)>)>,
 ) {
     let state = create_state(test_module_name, code);
     let transaction = state.transaction();
-
     let handles = transaction.handles();
     let module_ids = ModuleIds::new(&handles);
 
@@ -152,38 +233,44 @@ fn test_building_call_graph_for_module(
     );
 
     let test_module_handle = get_handle_for_module_name(test_module_name, &transaction);
-    let context = ModuleContext::create(&test_module_handle, &transaction, &module_ids).unwrap();
-    let actual_call_graph = call_graph_for_test_from_actual(&build_call_graphs_for_module(
-        &context,
-        &function_base_definitions,
-    ));
+    let context = ModuleContext::create(test_module_handle, &transaction, &module_ids).unwrap();
+
     let expected_call_graph = call_graph_for_test_from_expected(create_expected(&context));
+
+    let override_graph =
+        OverrideGraph::from_reversed(&reversed_override_graph, &function_base_definitions);
+    let mut actual_call_graph = call_graph_for_test_from_actual(
+        export_call_graphs(&context, &function_base_definitions, &override_graph),
+        &function_base_definitions,
+    );
+    // We don't care about callables that are not specified in the expected call graphs
+    actual_call_graph.intersect(&expected_call_graph);
+
     assert_eq!(
-        expected_call_graph, actual_call_graph,
-        "Expected: {:#?}. Actual: {:#?}",
-        expected_call_graph, actual_call_graph,
+        sort_call_graphs(&expected_call_graph),
+        sort_call_graphs(&actual_call_graph)
     );
 }
 
-fn call_callees_from_expected(
-    expected: Vec<CallTarget<DefinitionRefForTest>>,
-) -> ExpressionCallees<DefinitionRefForTest> {
+fn call_callees(
+    expected: Vec<CallTarget<FunctionRefForTest>>,
+) -> ExpressionCallees<FunctionRefForTest> {
     ExpressionCallees::Call(CallCallees {
         call_targets: expected.to_vec(),
     })
 }
 
-fn attribute_access_callees_from_expected(
-    expected: Vec<CallTarget<DefinitionRefForTest>>,
-) -> ExpressionCallees<DefinitionRefForTest> {
+fn attribute_access_callees(
+    expected: Vec<CallTarget<FunctionRefForTest>>,
+) -> ExpressionCallees<FunctionRefForTest> {
     ExpressionCallees::AttributeAccess(AttributeAccessCallees {
         callable_targets: expected.to_vec(),
     })
 }
 
-fn identifier_callees_from_expected(
-    expected: Vec<CallTarget<DefinitionRefForTest>>,
-) -> ExpressionCallees<DefinitionRefForTest> {
+fn identifier_callees(
+    expected: Vec<CallTarget<FunctionRefForTest>>,
+) -> ExpressionCallees<FunctionRefForTest> {
     ExpressionCallees::Identifier(IdentifierCallees {
         callable_targets: expected.to_vec(),
     })
@@ -218,8 +305,8 @@ def bar():
    &|_context: &ModuleContext| { vec![(
         TEST_DEFINITION_NAME.to_owned(),
         vec![
-            ("3:3-3:6".to_owned(), identifier_callees_from_expected(vec![create_call_target("test.bar")])),
-            ("3:3-3:8".to_owned(), call_callees_from_expected(vec![create_call_target("test.bar")])),
+            ("3:3-3:6".to_owned(), identifier_callees(vec![create_call_target("test.bar", TargetType::Function)])),
+            ("3:3-3:8".to_owned(), call_callees(vec![create_call_target("test.bar", TargetType::Function)])),
         ],
     )] },
 }
@@ -236,13 +323,13 @@ def foo(c: C):
 "#,
     &|context: &ModuleContext| {
         let call_target = vec![
-            create_call_target("test.m").with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context)
+            create_call_target("test.C.m", TargetType::Function).with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context)
         ];
         vec![(
             TEST_DEFINITION_NAME.to_owned(),
             vec![
-                ("6:3-6:6".to_owned(), attribute_access_callees_from_expected(call_target.clone())),
-                ("6:3-6:8".to_owned(), call_callees_from_expected(call_target.clone())),
+                ("6:3-6:6".to_owned(), attribute_access_callees(call_target.clone())),
+                ("6:3-6:8".to_owned(), call_callees(call_target.clone())),
             ],
         )]
     },
@@ -265,29 +352,9 @@ def foo(b: bool):
         vec![(
             TEST_DEFINITION_NAME.to_owned(),
             vec![
-                ("6:9-6:12".to_owned(), identifier_callees_from_expected(vec![create_call_target("test.bar")])),
-                ("8:9-8:12".to_owned(), identifier_callees_from_expected(vec![create_call_target("test.baz")])),
+                ("6:9-6:12".to_owned(), identifier_callees(vec![create_call_target("test.bar", TargetType::Function)])),
+                ("8:9-8:12".to_owned(), identifier_callees(vec![create_call_target("test.baz", TargetType::Function)])),
             ],
-        )]
-    },
-}
-
-call_graph_testcase! {
-    test_conditional_function_with_none,
-    TEST_MODULE_NAME,
-    r#"
-def bar() -> bool: ...
-def foo(b: bool):
-  if b:
-    f = bar
-  else:
-    f = False
-  f()
-"#,
-    &|_context: &ModuleContext| {
-        vec![(
-            TEST_DEFINITION_NAME.to_owned(),
-            vec![("5:9-5:12".to_owned(), identifier_callees_from_expected(vec![create_call_target("test.bar")]))],
         )]
     },
 }
@@ -298,25 +365,21 @@ call_graph_testcase! {
     r#"
 from typing import Optional
 class C:
-  def m():
+  def m(self):
     ...
 def foo(c: Optional[C]):
-  c.m()
+ if c is not None:
+    c.m()
 "#,
     &|context: &ModuleContext| {
         let call_target = vec![
-            create_call_target("test.m").with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context)
+            create_call_target("test.C.m", TargetType::Function).with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context)
         ];
         vec![(
             TEST_DEFINITION_NAME.to_owned(),
             vec![
-                (
-                    "7:3-7:8".to_owned(),
-                    call_callees_from_expected(call_target.clone())),
-                (
-                    "7:3-7:6".to_owned(),
-                    attribute_access_callees_from_expected(call_target.clone()),
-                )
+                ("8:5-8:10".to_owned(), call_callees(call_target.clone())),
+                ("8:5-8:8".to_owned(), attribute_access_callees(call_target.clone()))
             ],
         )]
     },
@@ -327,26 +390,26 @@ call_graph_testcase! {
     TEST_MODULE_NAME,
     r#"
 class C:
-  def m():
+  def m(self):
     ...
 class D(C):
-  def m():
+  def m(self):
     ...
 class E(D):
-  def m():
+  def m(self):
     ...
 def foo(c: C):
   c.m()
 "#,
     &|context: &ModuleContext| {
         let call_target = vec![
-            create_call_target("test.m").with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context)
+            create_call_target("test.C.m", TargetType::Override).with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context)
         ];
         vec![(
             TEST_DEFINITION_NAME.to_owned(),
             vec![
-                ("12:3-12:8".to_owned(), call_callees_from_expected(call_target.clone())),
-                ("12:3-12:6".to_owned(), attribute_access_callees_from_expected(call_target.clone()))
+                ("12:3-12:8".to_owned(), call_callees(call_target.clone())),
+                ("12:3-12:6".to_owned(), attribute_access_callees(call_target.clone()))
             ],
         )]
     },
@@ -368,28 +431,131 @@ def foo(c: C):
 "#,
     &|context: &ModuleContext| {
         let class_method_target = vec![
-            create_call_target("test.f").with_implicit_receiver(ImplicitReceiver::TrueWithClassReceiver).with_receiver_class("test.C".to_owned(), context)
+            create_call_target("test.C.f", TargetType::Function).with_implicit_receiver(ImplicitReceiver::TrueWithClassReceiver).with_receiver_class("test.C".to_owned(), context).with_is_class_method(true)
         ];
         let class_method_target_2 = vec![
-            create_call_target("test.f").with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context)
+            create_call_target("test.C.f", TargetType::Function).with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context).with_is_class_method(true)
         ];
         let method_target = vec![
-            create_call_target("test.g").with_implicit_receiver(ImplicitReceiver::False)
+            create_call_target("test.C.g", TargetType::Function).with_implicit_receiver(ImplicitReceiver::False)
         ];
         let method_target_2 = vec![
-            create_call_target("test.g").with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context)
+            create_call_target("test.C.g", TargetType::Function).with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context)
         ];
         vec![(
             TEST_DEFINITION_NAME.to_owned(),
             vec![
-                ("7:3-7:8".to_owned(), call_callees_from_expected(class_method_target.clone())),
-                ("7:3-7:6".to_owned(), attribute_access_callees_from_expected(class_method_target.clone())),
-                ("8:3-8:8".to_owned(), call_callees_from_expected(class_method_target_2.clone())),
-                ("8:3-8:6".to_owned(), attribute_access_callees_from_expected(class_method_target_2.clone())),
-                ("9:3-9:9".to_owned(), call_callees_from_expected(method_target.clone())),
-                ("9:3-9:6".to_owned(), attribute_access_callees_from_expected(method_target.clone())),
-                ("10:3-10:8".to_owned(), call_callees_from_expected(method_target_2.clone())),
-                ("10:3-10:6".to_owned(), attribute_access_callees_from_expected(method_target_2.clone())),
+                ("7:3-7:8".to_owned(), call_callees(class_method_target.clone())),
+                ("7:3-7:6".to_owned(), attribute_access_callees(class_method_target.clone())),
+                ("8:3-8:8".to_owned(), call_callees(class_method_target_2.clone())),
+                ("8:3-8:6".to_owned(), attribute_access_callees(class_method_target_2.clone())),
+                ("9:3-9:9".to_owned(), call_callees(method_target.clone())),
+                ("9:3-9:6".to_owned(), attribute_access_callees(method_target.clone())),
+                ("10:3-10:8".to_owned(), call_callees(method_target_2.clone())),
+                ("10:3-10:6".to_owned(), attribute_access_callees(method_target_2.clone())),
+            ],
+        )]
+    },
+}
+
+call_graph_testcase! {
+    test_method_call_on_inherited_class_without_override,
+    TEST_MODULE_NAME,
+    r#"
+class C:
+  def m(self):
+    ...
+class D(C):
+  pass
+class E(D):
+  def m(self):
+    ...
+def foo(d: D):
+  d.m()
+"#,
+    &|context: &ModuleContext| {
+        let call_targets = vec![
+            create_call_target("test.E.m", TargetType::Function).with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.D".to_owned(), context),
+            create_call_target("test.C.m", TargetType::Function).with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.D".to_owned(), context)
+        ];
+        vec![(
+            TEST_DEFINITION_NAME.to_owned(),
+            vec![
+                ("11:3-11:8".to_owned(), call_callees(call_targets.clone())),
+                ("11:3-11:6".to_owned(), attribute_access_callees(call_targets.clone()))
+            ],
+        )]
+    },
+}
+
+call_graph_testcase! {
+    test_callable_instance_with_dunder_call_method,
+    TEST_MODULE_NAME,
+    r#"
+class C:
+  def __call__(self, a: int): ...
+def foo(c: C):
+   c(1)
+"#,
+    &|_context: &ModuleContext| {
+        let call_targets = vec![
+            create_call_target("test.C.__call__", TargetType::Function).with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_implicit_dunder_call(true)
+        ];
+        vec![(
+            TEST_DEFINITION_NAME.to_owned(),
+            vec![
+                ("5:4-5:8".to_owned(), call_callees(call_targets.clone())),
+                ("5:4-5:5".to_owned(), identifier_callees(call_targets.clone()))
+            ],
+        )]
+    },
+}
+
+call_graph_testcase! {
+    test_callable_instance_with_static_dunder_call,
+    TEST_MODULE_NAME,
+    r#"
+class C:
+  @staticmethod
+  def __call__(a: int) -> bool: ...
+def foo(c: C):
+   c(1)
+"#,
+    &|_context: &ModuleContext| {
+        let call_targets = vec![
+            create_call_target("test.C.__call__", TargetType::Function).with_implicit_dunder_call(true).with_is_static_method(true)
+        ];
+        vec![(
+            TEST_DEFINITION_NAME.to_owned(),
+            vec![
+                ("6:4-6:8".to_owned(), call_callees(call_targets.clone())),
+                ("6:4-6:5".to_owned(), identifier_callees(call_targets.clone()))
+            ],
+        )]
+    },
+}
+
+call_graph_testcase! {
+    test_explicit_dunder_call_method_invocation,
+    TEST_MODULE_NAME,
+    r#"
+class C:
+  def __call__(self, a: int) -> bool: ...
+def foo(c: C):
+   c.__call__(1)
+"#,
+    &|context: &ModuleContext| {
+        let call_targets = vec![
+            create_call_target("test.C.__call__", TargetType::Function).with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_receiver_class("test.C".to_owned(), context),
+        ];
+        vec![(
+            TEST_DEFINITION_NAME.to_owned(),
+            vec![
+                ("5:4-5:17".to_owned(), call_callees(call_targets.clone())),
+                ("5:4-5:14".to_owned(), attribute_access_callees(call_targets.clone())),
+                ("5:4-5:5".to_owned(), identifier_callees(vec![
+                    create_call_target("test.C.__call__", TargetType::Function).with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver).with_implicit_dunder_call(true)
+                ]))
             ],
         )]
     },

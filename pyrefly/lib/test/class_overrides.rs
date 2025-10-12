@@ -536,6 +536,23 @@ class UseDerived(UseBase):
 );
 
 testcase!(
+    test_override_dunder_names_empty_base,
+    r#"
+from typing import override
+
+# Make sure the override check is always carried out even when the base class list is empty
+class C:
+    @override
+    def __eq__(self, other: object) -> bool:  # OK
+        ...
+    
+    @override
+    def __does_not_exist__(self, other: object) -> bool:  # E: no parent class has a matching attribute
+        ...
+    "#,
+);
+
+testcase!(
     bug = "We currently skip checking overrides of `__call__`, which is a soundness hole",
     test_override_dunder_call,
     r#"
