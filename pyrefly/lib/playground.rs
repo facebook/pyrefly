@@ -633,7 +633,7 @@ mod tests {
     #[test]
     fn test_cross_file_goto_definition() {
         let mut state = Playground::new(None).unwrap();
-        let mut files = HashMap::new();
+        let mut files = SmallMap::new();
         files.insert(
             "sandbox.py".to_owned(),
             "from utils import format_number\n\ndef test(x: int):\n  return format_number(x)"
@@ -644,7 +644,7 @@ mod tests {
             "# Utility functions\n# Some comments\n# More comments\n\ndef format_number(x: int) -> str:\n    return f\"Number: {x}\"".to_owned(),
         );
 
-        state.update_sandbox_files(files);
+        state.update_sandbox_files(files, true);
         state.set_active_file("sandbox.py");
 
         let result = state.goto_definition(Position::new(4, 10));
