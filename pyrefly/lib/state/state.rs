@@ -457,10 +457,19 @@ impl<'a> Transaction<'a> {
     }
 
     /// Compute transitive dependency closure for the given handle.
-    /// Note that for IDE services, if the given handle is an in-memory one, then you are probably
-    /// not getting what you want, because the set of rdeps of in-memory file for IDE service will
-    /// only contain itself.
     pub fn get_transitive_rdeps(&self, handle: Handle) -> HashSet<Handle> {
+        // The set of rdeps on an in-memory file is only itself. This is never what callers want, so they
+        // should not need to convert it themself.
+        let handle = if let ModulePathDetails::Memory(path) = handle.path().details() {
+            Handle::new(
+                handle.module(),
+                ModulePath::filesystem(path.clone()),
+                handle.sys_info().dupe(),
+            )
+        } else {
+            handle
+        };
+
         let mut transitive_rdeps = HashSet::new();
         let mut work_list = vec![handle];
         loop {
