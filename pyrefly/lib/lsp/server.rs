@@ -79,6 +79,7 @@ use lsp_types::Registration;
 use lsp_types::RegistrationParams;
 use lsp_types::RelatedFullDocumentDiagnosticReport;
 use lsp_types::RelativePattern;
+use lsp_types::RenameFilesParams;
 use lsp_types::RenameOptions;
 use lsp_types::RenameParams;
 use lsp_types::SemanticTokens;
@@ -141,6 +142,7 @@ use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::SignatureHelpRequest;
 use lsp_types::request::UnregisterCapability;
+use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
 use lsp_types::request::WorkspaceSymbolRequest;
 use pyrefly_build::handle::Handle;
@@ -444,7 +446,20 @@ pub fn capabilities(
                 supported: Some(true),
                 change_notifications: Some(OneOf::Left(true)),
             }),
-            file_operations: None,
+            file_operations: Some(lsp_types::WorkspaceFileOperationsServerCapabilities {
+                will_rename: Some(lsp_types::FileOperationRegistrationOptions {
+                    filters: vec![lsp_types::FileOperationFilter {
+                        pattern: lsp_types::FileOperationPattern {
+                            glob: "**/*.{py,pyi}".to_owned(),
+
+                            matches: Some(lsp_types::FileOperationPatternKind::File),
+                            options: None,
+                        },
+                        scheme: None,
+                    }],
+                }),
+                ..Default::default()
+            }),
         }),
         ..Default::default()
     }
@@ -879,6 +894,20 @@ impl Server {
                         self.send_response(new_response(
                             x.id,
                             Ok(self.provide_type(&transaction, params)),
+                        ));
+                        ide_transaction_manager.save(transaction);
+                    }
+                } else if let Some(params) = as_request::<WillRenameFiles>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<WillRenameFiles>(
+                            params, &x.id,
+                        )
+                    {
+                        let transaction =
+                            ide_transaction_manager.non_committable_transaction(&self.state);
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(self.will_rename_files(&transaction, params)),
                         ));
                         ide_transaction_manager.save(transaction);
                     }
@@ -2107,6 +2136,24 @@ impl Server {
             // all the in-memory files based on the fresh main State as soon as possible.
             let _ = lsp_queue.send(LspEvent::RecheckFinished);
         }));
+    }
+
+    fn will_rename_files(
+        &self,
+        _transaction: &Transaction<'_>,
+        params: RenameFilesParams,
+    ) -> Option<WorkspaceEdit> {
+        // TODO: Implement import updates when files are renamed
+        // For now, return None to indicate no edits are needed
+        // This is similar to how basedpyright initially implemented this feature
+        eprintln!(
+            "will_rename_files called with {} file(s)",
+            params.files.len()
+        );
+        for file in &params.files {
+            eprintln!("  Renaming: {} -> {}", file.old_uri, file.new_uri);
+        }
+        None
     }
 }
 
