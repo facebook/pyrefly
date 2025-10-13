@@ -2741,40 +2741,19 @@ impl<'a> CancellableTransaction<'a> {
         // General strategy:
         // 1: Compute the set of transitive rdeps.
         // 2. Find references in each one of them using the index computed during earlier checking
-        let mut transitive_rdeps = match definition.module.path().details() {
-            ModulePathDetails::Memory(path_buf) => {
-                let handle_of_filesystem_counterpart = Handle::new(
-                    definition.module.name(),
-                    ModulePath::filesystem(path_buf.clone()),
-                    sys_info.dupe(),
-                );
-                // In-memory files can never be found through import resolution (no rdeps),
-                // so we must compute the transitive rdeps of its filesystem counterpart instead.
-                let mut rdeps = self
-                    .as_ref()
-                    .get_transitive_rdeps(handle_of_filesystem_counterpart.dupe());
-                // We still add itself to the rdeps set, so that we will still find local references
-                // within the file.
-                rdeps.insert(Handle::new(
-                    definition.module.name(),
-                    definition.module.path().dupe(),
-                    sys_info.dupe(),
-                ));
-                rdeps
-            }
-            _ => {
-                let definition_handle = Handle::new(
-                    definition.module.name(),
-                    definition.module.path().dupe(),
-                    sys_info.dupe(),
-                );
-                let rdeps = self.as_ref().get_transitive_rdeps(definition_handle.dupe());
-                // We still need to know everything about the definition file, because the index
-                // only contains non-local references.
-                self.run(&[definition_handle], Require::Everything)?;
-                rdeps
-            }
-        };
+        let handle = Handle::new(
+            definition.module.name(),
+            definition.module.path().dupe(),
+            sys_info.dupe(),
+        );
+        let mut transitive_rdeps = self.as_ref().get_transitive_rdeps(handle);
+        // We still add itself to the rdeps set, so that we will still find local references
+        // within the file.
+        transitive_rdeps.insert(Handle::new(
+            definition.module.name(),
+            definition.module.path().dupe(),
+            sys_info.dupe(),
+        ));
         // Remove the filesystem counterpart from candidate list,
         // otherwise we will have results from both filesystem and in-memory version of the file.
         for fs_counterpart_of_in_memory_handles in transitive_rdeps
