@@ -176,6 +176,7 @@ use crate::lsp::features::hover::get_hover;
 use crate::lsp::features::provide_type::ProvideType;
 use crate::lsp::features::provide_type::ProvideTypeResponse;
 use crate::lsp::features::provide_type::provide_type;
+use crate::lsp::features::will_rename_files::will_rename_files;
 use crate::lsp::lsp::apply_change_events;
 use crate::lsp::lsp::as_notification;
 use crate::lsp::lsp::as_request;
@@ -2140,20 +2141,10 @@ impl Server {
 
     fn will_rename_files(
         &self,
-        _transaction: &Transaction<'_>,
+        transaction: &Transaction<'_>,
         params: RenameFilesParams,
     ) -> Option<WorkspaceEdit> {
-        // TODO: Implement import updates when files are renamed
-        // For now, return None to indicate no edits are needed
-        // This is similar to how basedpyright initially implemented this feature
-        eprintln!(
-            "will_rename_files called with {} file(s)",
-            params.files.len()
-        );
-        for file in &params.files {
-            eprintln!("  Renaming: {} -> {}", file.old_uri, file.new_uri);
-        }
-        None
+        will_rename_files(&self.state, transaction, &self.open_files, params)
     }
 }
 

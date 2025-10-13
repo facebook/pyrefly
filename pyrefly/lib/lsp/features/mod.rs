@@ -7,3 +7,4 @@
 
 pub mod hover;
 pub mod provide_type;
+pub mod will_rename_files;
