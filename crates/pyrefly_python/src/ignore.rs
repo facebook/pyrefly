@@ -298,6 +298,24 @@ impl Ignore {
         };
         filtered_ignores.map(|(line, _)| *line).collect()
     }
+
+    /// Returns the line number where suppressions are stored for a given comment line.
+    /// Handles both inline comments (same line) and above-line comments (next line).
+    ///
+    /// This is useful for hover functionality where we need to map from the line where
+    /// a user is hovering over a comment to the line where the suppression actually applies.
+    pub fn get_suppression_target_line(&self, comment_line: LineNumber) -> Option<LineNumber> {
+        // Check if suppressions are on the same line (inline comment)
+        if self.ignores.contains_key(&comment_line) {
+            return Some(comment_line);
+        }
+        // Check if suppressions are on the next line (above-line comment)
+        let next_line = comment_line.increment();
+        if self.ignores.contains_key(&next_line) {
+            return Some(next_line);
+        }
+        None
+    }
 }
 
 #[cfg(test)]
