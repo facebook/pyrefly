@@ -324,3 +324,16 @@ class Both(Foo, Bar): # Expect error here
     ...
 "#,
 );
+
+testcase!(
+    test_multiple_inheritance_special_methods,
+    r#"
+class Foo:
+    def __init__(self, x: int) -> None: ...
+class Bar:
+    def __init__(self, x: str) -> None: ...
+
+class Both(Foo, Bar): # No error here, because __init__ is special
+    ...
+"#,
+);

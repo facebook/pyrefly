@@ -1982,6 +1982,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for parent_cls in mro.ancestors_no_object().iter() {
             let class_fields = parent_cls.class_object().fields();
             for field in class_fields {
+                // Skip fields that are not relevant for override consistency checks
+                if !self.should_check_field_for_override_consistency(field) {
+                    continue;
+                }
                 let key = KeyClassField(parent_cls.class_object().index(), field.clone());
                 let field_entry = self.get_from_class(cls, &key);
                 if let Some(field_entry) = field_entry.as_ref() {
