@@ -300,7 +300,7 @@ class A:
     x: int
 class B:
     x: str
-class C(A, B): # E: Field `x` has inconsistent types inherited from multiple base classes
+class C(A, B):
     x: int # E: Class member `C.x` overrides parent class `B` in an inconsistent manner
 class D:
     x: int

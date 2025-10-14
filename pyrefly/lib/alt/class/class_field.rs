@@ -1969,6 +1969,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Maps field from inherited class
         let mro = self.get_mro_for_class(cls);
         let mut inherited_fields: SmallMap<&Name, Vec<(&Name, Type)>> = SmallMap::new();
+        let current_class_fields: SmallSet<_> = cls.fields().collect();
 
         for parent_cls in mro.ancestors_no_object().iter() {
             let class_fields = parent_cls.class_object().fields();
@@ -1976,6 +1977,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let key = KeyClassField(parent_cls.class_object().index(), field.clone());
                 let field_entry = self.get_from_class(cls, &key);
                 if let Some(field_entry) = field_entry.as_ref() {
+                    // Skip fields that are overridden in the current class,
+                    // they will have been checked by
+                    // `check_consistent_override_for_field` already
+                    if current_class_fields.contains(field) {
+                        continue;
+                    }
                     inherited_fields
                         .entry(field)
                         .or_default()
