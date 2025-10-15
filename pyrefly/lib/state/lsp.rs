@@ -1663,6 +1663,7 @@ impl<'a> Transaction<'a> {
                         is_deprecated: _,
                         definition: attribute_definition,
                         docstring_range,
+                        is_reexport: _,
                     } in solver.completions(base_type, Some(expected_name), false)
                     {
                         if let Some((TextRangeWithModule { module, range }, _)) =
@@ -2040,20 +2041,7 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         import_format: ImportFormat,
     ) -> Vec<CompletionItem> {
-        let mut results = self.completion_unsorted_opt(handle, position, import_format);
-        for item in &mut results {
-            let sort_text = if item.additional_text_edits.is_some() {
-                "3"
-            } else if item.label.starts_with("__") {
-                "2"
-            } else if item.label.as_str().starts_with("_") {
-                "1"
-            } else {
-                "0"
-            }
-            .to_owned();
-            item.sort_text = Some(sort_text);
-        }
+        let mut results = self.completion_sorted_opt(handle, position, import_format);
         results.sort_by(|item1, item2| {
             item1
                 .sort_text
@@ -2065,7 +2053,7 @@ impl<'a> Transaction<'a> {
         results
     }
 
-    fn completion_unsorted_opt(
+    fn completion_sorted_opt(
         &self,
         handle: &Handle,
         position: TextSize,
@@ -2151,6 +2139,11 @@ impl<'a> Transaction<'a> {
                                     detail,
                                     kind,
                                     documentation,
+                                    sort_text: if x.is_reexport {
+                                        Some("1".to_owned())
+                                    } else {
+                                        None
+                                    },
                                     tags: if x.is_deprecated {
                                         Some(vec![CompletionItemTag::DEPRECATED])
                                     } else {
@@ -2199,6 +2192,22 @@ impl<'a> Transaction<'a> {
                     }
                 }
             }
+        }
+        for item in &mut result {
+            let sort_text = if item.additional_text_edits.is_some() {
+                "4"
+            } else if item.label.starts_with("__") {
+                "3"
+            } else if item.label.as_str().starts_with("_") {
+                "2"
+            } else if let Some(sort_text) = &item.sort_text {
+                // 1 is reserved for re-exports
+                sort_text.as_str()
+            } else {
+                "0"
+            }
+            .to_owned();
+            item.sort_text = Some(sort_text);
         }
         result
     }

@@ -371,7 +371,7 @@ fn test_completion_with_autoimport() {
                         label: "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search".to_owned(),
                         detail: Some("from autoimport_provider import this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search\n".to_owned()),
                         kind: Some(CompletionItemKind::FUNCTION),
-                        sort_text: Some("3".to_owned()),
+                        sort_text: Some("4".to_owned()),
                         additional_text_edits: Some(vec![lsp_types::TextEdit {
                             range: lsp_types::Range {
                                 start: lsp_types::Position {
@@ -412,7 +412,7 @@ fn test_completion_with_autoimport() {
                         label: "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search".to_owned(),
                         detail: Some("from autoimport_provider import this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search\n".to_owned()),
                         kind: Some(CompletionItemKind::FUNCTION),
-                        sort_text: Some("3".to_owned()),
+                        sort_text: Some("4".to_owned()),
                         additional_text_edits: Some(vec![lsp_types::TextEdit {
                             range: lsp_types::Range {
                                 start: lsp_types::Position {

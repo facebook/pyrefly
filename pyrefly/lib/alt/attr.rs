@@ -1845,6 +1845,8 @@ pub struct AttrInfo {
     pub is_deprecated: bool,
     pub definition: Option<AttrDefinition>,
     pub docstring_range: Option<TextRange>,
+    /// is this defined in another module (true) or in this module (false)?
+    pub is_reexport: bool,
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -1872,6 +1874,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     TextRangeWithModule::new(c.module().dupe(), range),
                                 )),
                                 docstring_range: c.field_docstring_range(fld),
+                                is_reexport: false,
                             });
                         }
                     }
@@ -1886,6 +1889,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 TextRangeWithModule::new(c.module().dupe(), range),
                             )),
                             docstring_range: c.field_docstring_range(expected_attribute_name),
+                            is_reexport: false,
                         });
                     }
                 }
@@ -1966,6 +1970,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     }) => *docstring_range,
                                     _ => None,
                                 },
+                                is_reexport: matches!(
+                                    export_location,
+                                    ExportLocation::OtherModule(..)
+                                ),
                             }),
                     );
                 }
@@ -1994,6 +2002,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 }) => *docstring_range,
                                 _ => None,
                             },
+                            is_reexport: matches!(export_location, ExportLocation::OtherModule(..)),
                         });
                     }
                 }
