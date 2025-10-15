@@ -131,7 +131,7 @@ This does not specify
 import should be resolved from. See [`search-path`](#search-path) instead.
 
 - Type: list of [filesystem glob patterns](#filesystem-globbing)
-- Default: `["**/*"]`
+- Default: `["**/*.py*"]`
 - Flag equivalent: `FILES...` argument
 - Equivalent configs: `include` in Pyright, `files`/`modules`/`packages` in
   mypy
@@ -158,7 +158,7 @@ type checking as way to filter files that match `project-includes`,
 but we don't want to type check.
 
 - Type: list of [filesystem glob patterns](#filesystem-globbing)
-- Default: `["**/node_modules", "**/__pycache__", "**/*venv/**"]`
+- Default: `["**/node_modules", "**/__pycache__", "**/*venv/**", "**/.[!/.]*/**"]`
 - Flag equivalent: `--project-excludes`
 - Equivalent configs: `exclude` in Pyright and mypy
 - Notes:
@@ -868,10 +868,10 @@ interpreter installed, some of these values may be overridden.
 ```toml
 ###### configuring what to type check and where to import from
 
-# check all files in "."
-project-includes = ["."]
-# exclude dotfiles
-project-excludes = ["**/.[!/.]*", "**/*venv/**"]
+# check all Python files under the containing directory
+project-includes = ["**/*.py*"]
+# exclude some uninteresting files
+project-excludes = ["**/node_modules", "**/__pycache__", "**/*venv/**", "**/.[!/.]*/**"]
 # perform an upward search for `.gitignore`, `.ignore`, and `.git/info/exclude`, and
 # add those to `project-excludes` automatically
 use-ignore-files = true
