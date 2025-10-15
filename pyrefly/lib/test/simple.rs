@@ -1365,6 +1365,9 @@ class NotBoolable:
 # bool()
 y = bool(NotBoolable())  # E: has type `int`, which is not callable
 
+# unary not
+z = not NotBoolable()  # E: has type `int`, which is not callable  # E: Expected `__bool__` to be a callable, got `int`
+
 # if expressions
 x = 0 if NotBoolable() else 1  # E: has type `int`, which is not callable  # E: Expected `__bool__` to be a callable, got `int`
 

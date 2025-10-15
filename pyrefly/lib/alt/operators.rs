@@ -480,10 +480,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let f = |lit: &Lit| lit.positive();
                 unop(t, &f, &dunder::POS)
             }
-            UnaryOp::Not => match t.as_bool() {
-                None => self.stdlib.bool().clone().to_type(),
-                Some(b) => Type::Literal(Lit::Bool(!b)),
-            },
+            UnaryOp::Not => {
+                self
+                    .check_dunder_bool_is_callable(t, x.range, errors);
+                match t.as_bool() {
+                    None => self.stdlib.bool().clone().to_type(),
+                    Some(b) => Type::Literal(Lit::Bool(!b)),
+                }
+            }
             UnaryOp::Invert => {
                 let f = |lit: &Lit| lit.invert();
                 unop(t, &f, &dunder::INVERT)
