@@ -245,7 +245,7 @@ from collections import namedtuple
 class A(NamedTuple):
     a: int
     b: str
-    _c: str  # Not OK
+    _c: str  # E: NamedTuple field name may not start with an underscore
 B = namedtuple("B", ["a", "b", "_c"])  # E: NamedTuple field name may not start with an underscore
 C = namedtuple("C", ["a", "b", "_c"], rename=True)  # OK
 "#,

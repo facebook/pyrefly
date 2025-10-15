@@ -1085,6 +1085,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let metadata = self.get_metadata_for_class(class);
 
+        if metadata.named_tuple_metadata().is_some()
+            && class.is_field_annotated(name)
+            && name.as_str().starts_with('_')
+            && matches!(
+                field_definition,
+                ClassFieldDefinition::DeclaredByAnnotation { .. }
+                    | ClassFieldDefinition::AssignedInBody { .. }
+            )
+        {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                format!("NamedTuple field name may not start with an underscore: `{name}`"),
+            );
+        }
+
         let magically_initialized = {
             // We consider fields to be always-initialized if it's defined within stub files.
             // See https://github.com/python/typeshed/pull/13875 for reasoning.
