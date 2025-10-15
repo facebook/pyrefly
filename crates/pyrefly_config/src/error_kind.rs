@@ -137,6 +137,8 @@ pub enum ErrorKind {
     /// do not recognize as always executing (we recognize constructors and some test setup
     /// methods).
     ImplicitlyDefinedAttribute,
+    /// A protocol attribute was first defined inside a method instead of the class body.
+    ProtocolImplicitlyDefinedAttribute,
     /// An error related to the import machinery.
     /// e.g. failed to import a module.
     ImportError,

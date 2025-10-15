@@ -785,6 +785,22 @@ for val in x:  # not-iterable
 
 An error related to parsing or syntax. This covers a variety of cases, such as function calls with duplicate keyword args, some poorly defined functions, and so on.
 
+## protocol-implicitly-defined-attribute
+
+Protocols must declare the attributes they require directly in the class body. Assigning to a new `self` attribute inside a protocol method introduces a member that implementations of the protocol would never be required to provide.
+
+Add an annotated attribute (or property) to the protocol, or remove the assignment.
+
+```python
+from typing import Protocol
+
+class Template(Protocol):
+    name: str
+
+    def method(self) -> None:
+        self.temp: list[int] = []  # protocol-implicitly-defined-attribute
+```
+
 ## read-only
 
 This error indicates that the attribute being accessed does exist but cannot be modified.

@@ -364,7 +364,23 @@ from typing import Protocol
 class P(Protocol):
     x: int
     def f(self, y: str):
-        self.y = y  # E: Attribute `y` is implicitly defined by assignment in method `f`, which is not a constructor
+        self.y = y  # E: Protocol `P` must declare attribute `y` in the class body; assignment in method `f` does not
+    "#,
+);
+
+testcase!(
+    bug = "pyrefly#1305 Ensure protocols reject attributes first defined inside methods without requiring configuration toggles.",
+    test_protocol_implicit_attr_must_be_declared_on_class,
+    r#"
+from typing import Protocol
+
+class Template(Protocol):
+    name: str
+    value: int = 0
+
+    def method(self) -> None:
+        self.name = "name"
+        self.temp: list[int] = []  # E: Protocol `Template` must declare attribute `temp` in the class body; assignment in method `method` does not
     "#,
 );
 

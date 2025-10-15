@@ -1360,11 +1360,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_abstract,
             is_inherited,
         );
-        if let RawClassFieldInitialization::Method(MethodThatSetsAttr {
-            method_name,
-            recognized_attribute_defining_method: false,
-        }) = initial_value
-        {
+        if let RawClassFieldInitialization::Method(method) = initial_value {
             let mut defined_in_parent = false;
             let parents = metadata.base_class_objects();
             for parent in parents {
@@ -1373,14 +1369,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     break;
                 };
             }
-            if !defined_in_parent {
-                self.error(
-                errors,
-                range,
-                ErrorInfo::Kind(ErrorKind::ImplicitlyDefinedAttribute,
-                ),
-                format!("Attribute `{}` is implicitly defined by assignment in method `{method_name}`, which is not a constructor", &name),
-            );
+            if !defined_in_parent && !method.recognized_attribute_defining_method {
+                if metadata.is_protocol() {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::ProtocolImplicitlyDefinedAttribute),
+                        format!(
+                            "Protocol `{}` must declare attribute `{}` in the class body; assignment in method `{}` does not",
+                            class.name(),
+                            name,
+                            method.method_name
+                        ),
+                    );
+                } else {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::ImplicitlyDefinedAttribute),
+                        format!(
+                            "Attribute `{}` is implicitly defined by assignment in method `{}`, which is not a constructor",
+                            &name,
+                            method.method_name
+                        ),
+                    );
+                }
             }
         }
         if let Some(dm) = metadata.dataclass_metadata()
