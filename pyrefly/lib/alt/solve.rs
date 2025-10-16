@@ -343,17 +343,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .any(|base| base.has_toplevel_qname("abc", "ABC"));
                 let has_explicit_abc_metaclass = metadata.has_explicit_metaclass()
                     && metadata.custom_metaclass().is_some_and(|meta| {
-                        meta.class_object()
-                            .has_toplevel_qname("abc", "ABCMeta")
+                        meta.class_object().has_toplevel_qname("abc", "ABCMeta")
                     });
                 let defines_abstract_member = cls.fields().any(|name| {
                     self.get_field_from_current_class_only(cls, name)
                         .is_some_and(|field| field.is_abstract())
                 });
-                if !has_direct_abc_base
-                    && !has_explicit_abc_metaclass
-                    && !defines_abstract_member
-                {
+                if !has_direct_abc_base && !has_explicit_abc_metaclass && !defines_abstract_member {
                     self.error(
                         errors,
                         cls.range(),
