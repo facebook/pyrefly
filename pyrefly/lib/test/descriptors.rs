@@ -319,3 +319,29 @@ class A:
         return self.d
     "#,
 );
+
+testcase!(
+    test_descriptor_incompatible_get_return_annotation,
+    r#"
+from typing import Literal
+class A:
+    def __get__(self, obj, objtype) -> A | int: ...
+class B(A):
+    def __get__(self, obj, objtype) -> Literal[1]: ...
+class C:
+    a: A = B()  # E: Descriptor `a` returns `Literal[1]` when accessed on instances of `C`, which is not assignable to `A`
+    "#,
+);
+
+testcase!(
+    test_descriptor_incompatible_set_annotation,
+    r#"
+from typing import Any
+class A:
+    def __set__(self, obj, value: Any) -> None: ...
+class B(A):
+    def __set__(self, obj, value: str) -> None: ...
+class C:
+    a: A = B()  # E: Descriptor `a` setter `BoundMethod[B, (self: B, obj: Unknown, value: str) -> None]` does not accept annotated type `A`
+    "#,
+);
