@@ -314,9 +314,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn solve_abstract_members(
         &self,
         cls: &Class,
-        _errors: &ErrorCollector,
+        errors: &ErrorCollector,
     ) -> Arc<AbstractClassMembers> {
+        let metadata = self.get_metadata_for_class(cls);
         let abstract_members = self.calculate_abstract_members(cls);
+        if metadata.is_final() {
+            let unimplemented = abstract_members.unimplemented_abstract_methods();
+            if !unimplemented.is_empty() {
+                let members = unimplemented
+                    .iter()
+                    .map(|member| format!("`{member}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.error(
+                    errors,
+                    cls.range(),
+                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                    format!(
+                        "Final class `{}` cannot have unimplemented abstract members: {}",
+                        cls.name(),
+                        members
+                    ),
+                );
+            }
+        }
         Arc::new(abstract_members)
     }
 

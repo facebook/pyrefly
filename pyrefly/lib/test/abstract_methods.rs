@@ -103,14 +103,13 @@ child = Child()  # E: Cannot instantiate `Child`
 );
 
 testcase!(
-    bug = "We should consider erroring on the class definition too",
     test_final_class_with_abstract_methods,
     r#"
 from typing import final
 from abc import ABC, abstractmethod
 
 @final
-class BadClass(ABC):
+class BadClass(ABC):  # E: Final class `BadClass` cannot have unimplemented abstract members: `method`
     @abstractmethod
     def method(self) -> None:
         pass
