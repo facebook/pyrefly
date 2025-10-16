@@ -1904,6 +1904,25 @@ def f(): ...
 f()  # deprecated!
 ```
 
+## implicit-any
+
+This error is emitted when a Pyrefly infers an implicit `Any` type in your code. This is common in gradually-typed code, but reduces type safety so we provide this error for users that want to enforce fully-typed codebases.
+
+This error is off by default. Typically, it can be fixed by providing an explicit type annotation.
+
+```python
+# this only errors when return type inference is disabled
+def missing_return_annotation():
+    return 1
+
+def missing_param_annotation(x: int, y) -> int:
+    return x
+
+# this only errors when first-use inference is disabled
+x = []
+```
+
+
 ## implicit-import
 
 A module exists, but was not imported. At runtime, if something has made this import
