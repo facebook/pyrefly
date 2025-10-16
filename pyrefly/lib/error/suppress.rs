@@ -162,6 +162,15 @@ pub fn find_unused_ignores<'a>(
 }
 
 pub fn remove_unused_ignores(loads: &Errors, all: bool) {
+    let removed_ignores = remove_unused_ignores_internal(loads, all);
+    info!(
+        "Removed {} unused error suppression(s) in {} file(s)",
+        removed_ignores.values().sum::<usize>(),
+        removed_ignores.len(),
+    );
+}
+
+fn remove_unused_ignores_internal(loads: &Errors, all: bool) -> SmallMap<PathBuf, usize> {
     let errors = loads.collect_errors();
     let mut all_ignores: SmallMap<&PathBuf, SmallSet<LineNumber>> = SmallMap::new();
     for (module_path, ignore) in loads.collect_ignores() {
@@ -187,7 +196,7 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) {
     // TODO: right now we only remove pyrefly ignores, but we should have options to clean up
     // other comment based ignores as well
     let regex = Regex::new(r"(#\s*pyrefly:\s*ignore.*$|#\s*type:\s*ignore.*$)").unwrap();
-    let mut removed_ignores: SmallMap<&PathBuf, usize> = SmallMap::new();
+    let mut removed_ignores: SmallMap<PathBuf, usize> = SmallMap::new();
     for (path, ignores) in path_ignores {
         let mut unused_ignore_count = 0;
         let mut ignore_locations: SmallSet<usize> = SmallSet::new();
@@ -205,11 +214,16 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) {
             let lines = file.lines();
             for (idx, line) in lines.enumerate() {
                 if ignore_locations.contains(&idx) {
-                    unused_ignore_count += 1;
-                    let new_string = regex.replace_all(line, "");
-                    if !new_string.trim().is_empty() {
-                        buf.push_str(new_string.trim_end());
+                    if regex.is_match(line) {
+                        unused_ignore_count += 1;
+                        let new_string = regex.replace_all(line, "");
+                        if !new_string.trim().is_empty() {
+                            buf.push_str(new_string.trim_end());
+                        }
+                        buf.push('\n');
+                        continue;
                     }
+                    buf.push_str(line);
                     buf.push('\n');
                     continue;
                 }
@@ -219,15 +233,11 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) {
             if let Err(e) = fs_anyhow::write(path, buf) {
                 error!("Failed to remove unused error suppressions in {} files:", e);
             } else if unused_ignore_count > 0 {
-                removed_ignores.insert(path, unused_ignore_count);
+                removed_ignores.insert(path.clone(), unused_ignore_count);
             }
         }
     }
-    info!(
-        "Removed {} unused error suppression(s) in {} file(s)",
-        removed_ignores.values().sum::<usize>(),
-        removed_ignores.len(),
-    );
+    removed_ignores
 }
 
 #[cfg(test)]
@@ -263,14 +273,14 @@ mod tests {
     }
 
     fn assert_suppress_errors(before: &str, after: &str) {
-        assert_suppressions(before, after, SuppressFlag::Add, false, false)
+        let _ = assert_suppressions(before, after, SuppressFlag::Add, false, false);
     }
 
     fn assert_suppress_same_line(before: &str, after: &str) {
-        assert_suppressions(before, after, SuppressFlag::Add, false, true)
+        let _ = assert_suppressions(before, after, SuppressFlag::Add, false, true);
     }
 
-    fn assert_remove_ignores(before: &str, after: &str, all: bool) {
+    fn assert_remove_ignores(before: &str, after: &str, all: bool) -> SmallMap<PathBuf, usize> {
         assert_suppressions(before, after, SuppressFlag::Remove, all, false)
     }
 
@@ -280,7 +290,7 @@ mod tests {
         kind: SuppressFlag,
         all: bool,
         same_line: bool,
-    ) {
+    ) -> SmallMap<PathBuf, usize> {
         let tdir = tempfile::tempdir().unwrap();
 
         let mut config = ConfigFile::default();
@@ -305,14 +315,16 @@ mod tests {
         )]);
         transaction.run(&[handle.dupe()], Require::Everything);
         let loads = transaction.get_errors([handle.clone()].iter());
-        if kind == SuppressFlag::Add {
+        let removed = if kind == SuppressFlag::Add {
             suppress::suppress_errors(loads.collect_errors().shown, same_line);
+            SmallMap::new()
         } else {
-            suppress::remove_unused_ignores(&loads, all);
-        }
+            suppress::remove_unused_ignores_internal(&loads, all)
+        };
 
         let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
         assert_eq!(after, got_file);
+        removed
     }
 
     #[test]
@@ -477,6 +489,20 @@ def g() -> str:
     return "hello"
 "#;
         assert_remove_ignores(input, want, false);
+    }
+
+    #[test]
+    fn test_remove_suppression_inline_count_is_one() {
+        let input = r#"
+def g() -> str:
+    return "hello" # pyrefly: ignore # bad-return
+"#;
+        let want = r#"
+def g() -> str:
+    return "hello"
+"#;
+        let removed = assert_remove_ignores(input, want, false);
+        assert_eq!(1, removed.values().sum::<usize>());
     }
 
     #[test]
