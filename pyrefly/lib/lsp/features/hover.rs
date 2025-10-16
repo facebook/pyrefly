@@ -22,85 +22,6 @@ use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
 
-/// Finds the byte offset of the first '#' character that starts a comment.
-/// Returns None if no comment is found or if all '#' are inside strings.
-/// Handles escape sequences and single/double quotes.
-///
-/// TODO: could handle triple-quoted strings on the same line in the future?
-fn find_comment_start_in_line(line: &str) -> Option<usize> {
-    let mut in_string = false;
-    let mut string_char = '\0';
-    let mut escaped = false;
-    let mut byte_offset = 0;
-
-    for ch in line.chars() {
-        if escaped {
-            escaped = false;
-            byte_offset += ch.len_utf8();
-            continue;
-        }
-
-        if ch == '\\' && in_string {
-            escaped = true;
-            byte_offset += ch.len_utf8();
-            continue;
-        }
-
-        if ch == '"' || ch == '\'' {
-            if !in_string {
-                in_string = true;
-                string_char = ch;
-            } else if ch == string_char {
-                in_string = false;
-            }
-        }
-
-        if ch == '#' && !in_string {
-            return Some(byte_offset);
-        }
-
-        byte_offset += ch.len_utf8();
-    }
-    None
-}
-
-/// Detects if the given position is hovering over an ignore comment.
-/// Returns the comment range and the line number where suppressions apply.
-fn find_ignore_comment_at_position(
-    module: &pyrefly_python::module::Module,
-    position: TextSize,
-) -> Option<(
-    ruff_text_size::TextRange,
-    pyrefly_util::lined_buffer::LineNumber,
-)> {
-    let display_pos = module.lined_buffer().display_pos(position);
-    let hover_line = display_pos.line;
-
-    // Get the line content
-    let line_start = module.lined_buffer().line_start(hover_line);
-    let line_content = module
-        .lined_buffer()
-        .content_in_line_range(hover_line, hover_line);
-
-    // Check if there's a comment on this line
-    let comment_start_byte = find_comment_start_in_line(line_content)?;
-    let comment_start = line_start + TextSize::new(comment_start_byte as u32);
-
-    // Check if position is within the comment
-    if position < comment_start {
-        return None; // Hovering over code, not comment
-    }
-
-    // Verify this comment actually suppresses something
-    let suppression_line = module.ignore().get_suppression_target_line(hover_line)?;
-
-    // Calculate comment range (from # to end of line, excluding newline)
-    let line_end = line_start + TextSize::new(line_content.len() as u32);
-    let comment_range = ruff_text_size::TextRange::new(comment_start, line_end);
-
-    Some((comment_range, suppression_line))
-}
-
 /// Gets all suppressed errors that overlap with the given line.
 ///
 /// This function filters the suppressed errors for a specific handle to find
@@ -239,13 +160,22 @@ pub fn get_hover(
     position: TextSize,
 ) -> Option<Hover> {
     // First, check if we're hovering over an ignore comment
-    if let Some(module) = transaction.get_module_info(handle)
-        && let Some((_comment_range, suppression_line)) =
-            find_ignore_comment_at_position(&module, position)
-    {
-        let suppressed_errors =
-            get_suppressed_errors_for_line(transaction, handle, suppression_line);
-        return Some(format_suppressed_errors_hover(suppressed_errors));
+    if let Some(module) = transaction.get_module_info(handle) {
+        let display_pos = module.lined_buffer().display_pos(position);
+        let hover_line = display_pos.line;
+
+        // Check if there's a suppression on this line or the next line
+        if let Some(suppression_line) = module.ignore().get_suppression_target_line(hover_line) {
+            // Get the comment range and check if the cursor is within it
+            if let Some(comment_range) = module.ignore().get_comment_range(hover_line) {
+                // Check if position is within the comment
+                if comment_range.contains(position) {
+                    let suppressed_errors =
+                        get_suppressed_errors_for_line(transaction, handle, suppression_line);
+                    return Some(format_suppressed_errors_hover(suppressed_errors));
+                }
+            }
+        }
     }
 
     // Otherwise, fall through to the existing type hover logic

@@ -28,8 +28,53 @@
 
 use dupe::Dupe;
 use pyrefly_util::lined_buffer::LineNumber;
+use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+
+/// Finds the byte offset of the first '#' character that starts a comment.
+/// Returns None if no comment is found or if all '#' are inside strings.
+/// Handles escape sequences and single/double quotes.
+///
+/// This is string-aware parsing that avoids treating '#' inside strings as comments.
+/// For example: `x = "hello # world"  # real comment` correctly identifies the second '#'.
+fn find_comment_start_in_line(line: &str) -> Option<usize> {
+    let mut in_string = false;
+    let mut string_char = '\0';
+    let mut escaped = false;
+    let mut byte_offset = 0;
+
+    for ch in line.chars() {
+        if escaped {
+            escaped = false;
+            byte_offset += ch.len_utf8();
+            continue;
+        }
+
+        if ch == '\\' && in_string {
+            escaped = true;
+            byte_offset += ch.len_utf8();
+            continue;
+        }
+
+        if ch == '"' || ch == '\'' {
+            if !in_string {
+                in_string = true;
+                string_char = ch;
+            } else if ch == string_char {
+                in_string = false;
+            }
+        }
+
+        if ch == '#' && !in_string {
+            return Some(byte_offset);
+        }
+
+        byte_offset += ch.len_utf8();
+    }
+    None
+}
 
 /// The name of the tool that is being suppressed.
 #[derive(PartialEq, Debug, Clone, Hash, Eq, Dupe, Copy)]
@@ -124,6 +169,8 @@ pub struct Suppression {
     tool: Tool,
     /// The permissible error kinds, use empty Vec to many any are allowed
     kind: Vec<String>,
+    /// The byte range of this suppression comment in the source file
+    range: TextRange,
 }
 
 /// Record the position of `# type: ignore[valid-type]` statements.
@@ -194,23 +241,65 @@ impl Ignore {
         // If we see a comment on a non-code line, move it to the next non-comment line.
         let mut pending = Vec::new();
         let mut line = LineNumber::default();
+        let mut byte_pos = TextSize::default();
+
         for (idx, line_str) in code.lines().enumerate() {
             line = LineNumber::from_zero_indexed(idx as u32);
-            let mut xs = line_str.split('#');
-            let first = xs.next().unwrap_or("");
-            if !pending.is_empty() && (line_str.is_empty() || !first.trim_start().is_empty()) {
-                ignores.entry(line).or_default().append(&mut pending);
+            let line_start = byte_pos;
+            let line_len = TextSize::try_from(line_str.len()).unwrap();
+
+            // Step 1: Determine if this line has code (non-comment, non-empty content)
+            let comment_offset = find_comment_start_in_line(line_str);
+            let has_code = match comment_offset {
+                Some(offset) => !line_str[..offset].trim().is_empty(),
+                None => !line_str.trim().is_empty(),
+            };
+            let is_empty = line_str.trim().is_empty();
+
+            // Step 2: Apply or clear pending suppressions
+            // This happens BEFORE we process this line's own comments
+            if !pending.is_empty() {
+                if has_code {
+                    // Line with code: apply pending suppressions
+                    ignores.entry(line).or_default().append(&mut pending);
+                } else if is_empty {
+                    // Empty line: clear pending (stop propagation)
+                    pending.clear();
+                }
+                // Comment-only line: keep pending (allow chaining)
             }
-            for x in xs {
-                if let Some(supp) = Self::parse_ignore_comment(x) {
-                    if first.trim_start().is_empty() {
-                        pending.push(supp);
-                    } else {
-                        ignores.entry(line).or_default().push(supp);
+
+            // Step 3: Process this line's comments (if any)
+            if let Some(offset) = comment_offset {
+                let comment_start = line_start + TextSize::try_from(offset).unwrap();
+                let comment_end = line_start + line_len;
+                let comment_range = TextRange::new(comment_start, comment_end);
+                let comment_content = &line_str[offset..];
+
+                // Parse all suppression directives in the comment
+                // (there could be multiple, like # type: ignore # pyrefly: ignore)
+                let mut remaining = comment_content;
+                while let Some(hash_pos) = remaining.find('#') {
+                    let after_hash = &remaining[hash_pos + 1..];
+                    if let Some(supp) = Self::parse_ignore_comment(after_hash, comment_range) {
+                        if has_code {
+                            // Inline comment - applies to this line
+                            ignores.entry(line).or_default().push(supp);
+                        } else {
+                            // Above-line comment - applies to next line with code
+                            pending.push(supp);
+                        }
                     }
+                    // Move past this # to find the next one
+                    remaining = after_hash;
                 }
             }
+
+            // Move to next line (account for the newline character)
+            byte_pos = line_start + line_len + TextSize::from(1);
         }
+
+        // Any remaining pending suppressions apply to the next line after EOF
         if !pending.is_empty() {
             ignores
                 .entry(line.increment())
@@ -221,7 +310,8 @@ impl Ignore {
     }
 
     /// Given the content of a comment, parse it as a suppression.
-    fn parse_ignore_comment(l: &str) -> Option<Suppression> {
+    /// The `range` parameter specifies the byte range of the entire comment in the source file.
+    fn parse_ignore_comment(l: &str, range: TextRange) -> Option<Suppression> {
         let mut lex = Lexer(l);
         lex.trim_start();
 
@@ -244,11 +334,13 @@ impl Ignore {
             return Some(Suppression {
                 tool,
                 kind: inside.split(',').map(|x| x.trim().to_owned()).collect(),
+                range,
             });
         } else if gap || lex.word_boundary() {
             return Some(Suppression {
                 tool,
                 kind: Vec::new(),
+                range,
             });
         }
         None
@@ -316,6 +408,32 @@ impl Ignore {
         }
         None
     }
+
+    /// Returns the TextRange of the comment on the given line, if one exists with suppressions.
+    /// Checks both the current line (for inline comments) and the next line (for above-line comments).
+    ///
+    /// This is used by hover functionality to determine if the user is hovering over
+    /// an ignore comment (as opposed to hovering over code).
+    ///
+    /// Returns the range covering all comment text from the '#' to the end of the line.
+    pub fn get_comment_range(&self, line: LineNumber) -> Option<TextRange> {
+        // Check current line first (inline comment case)
+        if let Some(suppressions) = self.ignores.get(&line)
+            && let Some(first_supp) = suppressions.first()
+        {
+            return Some(first_supp.range);
+        }
+
+        // Check next line (above-line comment case)
+        let next_line = line.increment();
+        if let Some(suppressions) = self.ignores.get(&next_line)
+            && let Some(first_supp) = suppressions.first()
+        {
+            return Some(first_supp.range);
+        }
+
+        None
+    }
 }
 
 #[cfg(test)]
@@ -345,20 +463,26 @@ mod tests {
             "code # mypy: ignore\n# pyre-fixme\nmore code",
             &[(Tool::Mypy, 1), (Tool::Pyre, 3)],
         );
+        // Empty lines clear pending suppressions
         f(
             "# type: ignore\n# mypy: ignore\n# bad\n\ncode",
-            &[(Tool::Any, 4), (Tool::Mypy, 4)],
+            &[], // Empty line on line 4 clears pending from lines 1-2
         );
+        // Test simple above-line comment
+        f("# pyrefly: ignore\na: int = 1", &[(Tool::Pyrefly, 2)]);
     }
 
     #[test]
     fn test_parse_ignore_comment() {
         fn f(x: &str, tool: Option<Tool>, kind: &[&str]) {
+            // Use a dummy range for testing (doesn't matter for parsing logic)
+            let dummy_range = TextRange::new(TextSize::from(0), TextSize::from(100));
             assert_eq!(
-                Ignore::parse_ignore_comment(x),
+                Ignore::parse_ignore_comment(x, dummy_range),
                 tool.map(|tool| Suppression {
                     tool,
                     kind: kind.map(|x| (*x).to_owned()),
+                    range: dummy_range,
                 }),
                 "{x:?}"
             );
@@ -401,6 +525,63 @@ mod tests {
 
         // For a malformed comment, at least do something with it (works well incrementally)
         f("type: ignore[hello", Some(Tool::Any), &["hello"]);
+    }
+
+    #[test]
+    fn test_suppression_ranges() {
+        // Verify that suppression ranges correctly point to comments in the source
+        let code = "x = 1  # type: ignore\ny = 2  # pyrefly: ignore\n";
+        let ignores = Ignore::parse_ignores(code);
+
+        // Line 1: "x = 1  # type: ignore"
+        let line1_suppressions = ignores.get(&LineNumber::new(1).unwrap()).unwrap();
+        assert_eq!(line1_suppressions.len(), 1);
+        let range1 = line1_suppressions[0].range;
+        assert_eq!(&code[range1], "# type: ignore");
+
+        // Line 2: "y = 2  # pyrefly: ignore"
+        let line2_suppressions = ignores.get(&LineNumber::new(2).unwrap()).unwrap();
+        assert_eq!(line2_suppressions.len(), 1);
+        let range2 = line2_suppressions[0].range;
+        assert_eq!(&code[range2], "# pyrefly: ignore");
+    }
+
+    #[test]
+    fn test_suppression_ranges_with_strings() {
+        // Verify that '#' inside strings doesn't confuse range calculation
+        let code = r#"x = "hello # world"  # type: ignore
+"#;
+        let ignores = Ignore::parse_ignores(code);
+
+        let line1_suppressions = ignores.get(&LineNumber::new(1).unwrap()).unwrap();
+        assert_eq!(line1_suppressions.len(), 1);
+        let range = line1_suppressions[0].range;
+        // Should only match the real comment, not the # inside the string
+        assert_eq!(&code[range], "# type: ignore");
+    }
+
+    #[test]
+    fn test_above_line_comment_range() {
+        // Verify that above-line comments store the correct range
+        let code = "# type: ignore\na: int = 1\n";
+        let ignores = Ignore::parse_ignores(code);
+
+        // The suppression should be stored on line 2 (where the code is)
+        let line2_suppressions = ignores.get(&LineNumber::new(2).unwrap()).unwrap();
+        assert_eq!(line2_suppressions.len(), 1);
+        let range = line2_suppressions[0].range;
+
+        // But the range should point to the comment on line 1
+        assert_eq!(&code[range], "# type: ignore");
+
+        // Verify get_comment_range returns the range when queried from line 1
+        let ignore_struct = Ignore::new(code);
+        let comment_range = ignore_struct.get_comment_range(LineNumber::new(1).unwrap());
+        assert!(
+            comment_range.is_some(),
+            "get_comment_range should return Some for line 1"
+        );
+        assert_eq!(&code[comment_range.unwrap()], "# type: ignore");
     }
 
     #[test]
