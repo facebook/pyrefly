@@ -30,18 +30,18 @@ class Suit(IntegerChoices):
     HEART = 3, _("Heart")
     CLUB = 4, _("Club")
 
+assert_type(Suit.CLUB._value_, int)
 assert_type(Suit.CLUB.value, int)
+assert_type(Suit.values, list[int])
 "#,
 );
 
 django_testcase!(
-    bug = "label types are not correct",
     test_enum_iterable,
     r#"
 import enum
 
 from django.db.models import TextChoices
-from django.utils.functional import _StrOrPromise
 
 from typing_extensions import assert_type
 
@@ -59,7 +59,7 @@ class Medal(TextChoices):
 
 # Assertions for mixing multiple choices types with consistent base types - only `TextChoices`.
 x1 = (Medal, Gender)
-assert_type([member.label for choices in x1 for member in choices], list[_StrOrPromise]) # E: assert_type(list[str], list[_StrPromise | str])
+assert_type([member.label for choices in x1 for member in choices], list[str]) 
 assert_type([member.value for choices in x1 for member in choices], list[str])
 "#,
 );
@@ -83,12 +83,12 @@ class VoidChoices(BaseEmptyChoices):
 
 assert_type(VoidChoices.names, list[str])
 assert_type(VoidChoices.labels, list[str])
-assert_type(VoidChoices.values, list[Any | None]) 
-assert_type(VoidChoices.choices, list[tuple[Any | None, str]]) 
+assert_type(VoidChoices.values, list[int | None]) 
+assert_type(VoidChoices.choices, list[tuple[int | None, str]]) 
 assert_type(VoidChoices.ABYSS, Literal[VoidChoices.ABYSS])
 assert_type(VoidChoices.ABYSS.name, Literal["ABYSS"])
 assert_type(VoidChoices.ABYSS.label, str) 
-assert_type(VoidChoices.ABYSS.value, Any)
+assert_type(VoidChoices.ABYSS.value, int)
 assert_type(VoidChoices.ABYSS.do_not_call_in_templates, Literal[True])
 assert_type(VoidChoices.__empty__, str)
 "#,
@@ -98,7 +98,7 @@ django_testcase!(
     test_enum_union,
     r#"
 from django.utils.functional import _StrOrPromise
-from typing_extensions import assert_type, Any
+from typing_extensions import assert_type, Any, Literal
 from django.db.models import Choices
 from django.utils.translation import gettext_lazy as _
 
@@ -106,9 +106,34 @@ class Suit(Choices):
     DIAMOND = 1, _("Diamond")
     SPADE = "2", _("Spade")
 
-assert_type(Suit.values, list[Any])
-
+assert_type(Suit.DIAMOND._value_, tuple[Literal[1]] | tuple[Literal['2']])
+assert_type(Suit.DIAMOND.value, tuple[Literal[1]] | tuple[Literal['2']])
+assert_type(Suit.values, list[tuple[Literal[1]] | tuple[Literal['2']]])
 "#,
+);
+
+django_testcase!(
+    test_overwrite_value,
+    r#"
+from django.db.models import Choices
+from typing import Any, assert_type
+
+class A(Choices):
+    X = 1
+    _value_: str
+
+class B(Choices):
+    X = 1
+    @property
+    def value(self) -> str: ...
+
+assert_type(A.X._value_, str)
+assert_type(A.X.value, str)
+assert_type(A.values, list[str])
+assert_type(B.X._value_, int)
+assert_type(B.X.value, str)
+assert_type(B.values, list[str])
+    "#,
 );
 
 django_testcase!(
@@ -203,7 +228,20 @@ assert_type(Medal.choices, list[tuple[str, str | _StrPromise]])
 assert_type(Medal.GOLD.label, (str | _StrPromise))
 assert_type(Medal.SILVER.label, (str | _StrPromise))
 assert_type(Medal.GOLD.value, str)
+assert_type(Medal.SILVER.value, str)
 "#,
+);
+
+django_testcase!(
+    test_auto_in_tuple,
+    r#"
+import enum
+from typing import assert_type
+from django.db.models import Choices
+class E(Choices):
+    X = (enum.auto(), "labelX")
+assert_type(E.X.value, tuple[int])
+    "#,
 );
 
 django_testcase!(
@@ -226,7 +264,6 @@ assert_type(VehicleWithEmpty.labels, list[_StrOrPromise])
 );
 
 django_testcase!(
-    bug = "we don't correctly synthesize the type of the value",
     test_float,
     r#"
 from django.db.models import Choices
@@ -237,12 +274,12 @@ class Constants(float, Choices):
     PI = 3.141592653589793, "π"
     TAU = 6.283185307179586, "τ"
 
-assert_type(Constants.PI.value, float) # E: assert_type(Any, float) 
+assert_type(Constants.PI.value, float)
+assert_type(Constants.values, list[float])
 "#,
 );
 
 django_testcase!(
-    bug = "iter attribute is not recognized",
     test_enum_class_iteration,
     r#"
 from django.db.models import TextChoices
@@ -251,6 +288,47 @@ from typing_extensions import TypeVar
 T_Choices = TypeVar("T_Choices", bound=TextChoices)
 
 def get_choice_labels(choices: type[T_Choices]) -> list[str]:
-    return [choice.label for choice in choices]  # E: Type `type[T_Choices]` is not iterable 
+    return [choice.label for choice in choices]
 "#,
+);
+
+django_testcase!(
+    test_empty_lazy_translation_widening,
+    r#"
+from django.db.models import IntegerChoices
+from django.utils.functional import _StrPromise
+from django.utils.translation import gettext_lazy as _
+from typing_extensions import assert_type
+
+class Vehicle(IntegerChoices):
+    CAR = 1
+    __empty__ = _("Unknown")
+
+assert_type(Vehicle.__empty__, _StrPromise) 
+"#,
+);
+
+django_testcase!(
+    test_three_element_tuple_member,
+    r#"
+from typing import assert_type, Literal
+from django.db.models import Choices
+class A(Choices):
+    X = 1, 2, "ALabel"
+assert_type(A.X.value, tuple[Literal[1], Literal[2]])
+assert_type(A.X.label, str)
+    "#,
+);
+
+django_testcase!(
+    test_override_properties,
+    r#"
+from typing import Any
+from django.db.models import TextChoices
+class A(TextChoices):
+    @property
+    def label(self) -> Any: ...
+    @property
+    def value(self) -> Any: ...
+    "#,
 );

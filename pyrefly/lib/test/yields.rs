@@ -291,9 +291,9 @@ assert_type(generator2(1), Generator[int, Any, Generator[int, None, None]])
 testcase!(
     test_await_simple,
     r#"
-from typing import Any, Awaitable, assert_type
+from typing import Any, Awaitable, assert_type, Generator
 class Foo(Awaitable[int]):
-    pass
+    def __await__(self) -> Generator[Any, Any, int]: ...
 async def bar() -> str: ...
 
 async def test() -> None:
@@ -305,9 +305,9 @@ async def test() -> None:
 testcase!(
     test_await_literal,
     r#"
-from typing import Awaitable, Literal
+from typing import Any, Awaitable, Literal, Generator
 class Foo(Awaitable[Literal[42]]):
-    pass
+    def __await__(self) -> Generator[Any, Any, Literal[42]]: ...
 async def test() -> Literal[42]:
     return await Foo()
 "#,
@@ -407,6 +407,41 @@ async def test() -> None:
         pass
     for z in gen():  # E: Type `AsyncGenerator[int, None]` is not iterable
         pass
+"#,
+);
+
+testcase!(
+    test_async_generator_comprehension_with_await,
+    r#"
+from typing import AsyncIterable, AsyncGenerator, assert_type
+
+async def some_async_func(x: int) -> bool:
+    return x % 2 == 0
+
+async def main() -> None:
+    generator = (x for x in [1, 2, 3] if await some_async_func(x))
+    assert_type(generator, AsyncGenerator[int, None])
+    async_iterable: AsyncIterable[int] = generator
+    assert_type(generator, AsyncGenerator[int, None])
+"#,
+);
+
+testcase!(
+    test_implicit_async_generator,
+    r#"
+from typing import AsyncGenerator, Generator, assert_type
+
+async def get_list() -> list[int]:
+    return [1]
+
+async def predicate() -> bool:
+    return True
+
+async def test_implicit_generators() -> None:
+    assert_type((await predicate() for _ in [1]), AsyncGenerator[bool, None])
+    assert_type((x for x in [1] if await predicate()), AsyncGenerator[int, None])
+    assert_type((x for x in await get_list()), Generator[int, None, None])
+    assert_type((x for _ in [1] for x in await get_list()), AsyncGenerator[int, None])
 "#,
 );
 

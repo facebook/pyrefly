@@ -171,6 +171,9 @@ use crate::error::error::Error;
 use crate::lsp::build_system::queue_source_db_rebuild_and_recheck;
 use crate::lsp::build_system::should_requery_build_system;
 use crate::lsp::features::hover::get_hover;
+use crate::lsp::features::provide_type::ProvideType;
+use crate::lsp::features::provide_type::ProvideTypeResponse;
+use crate::lsp::features::provide_type::provide_type;
 use crate::lsp::lsp::apply_change_events;
 use crate::lsp::lsp::as_notification;
 use crate::lsp::lsp::as_request;
@@ -226,6 +229,9 @@ pub trait TspInterface {
 
     /// Get access to the state for creating transactions
     fn state(&self) -> &Arc<State>;
+
+    /// Get access to the recheck queue for async task processing
+    fn recheck_queue(&self) -> &HeavyTaskQueue;
 
     /// Process an LSP event and return the next step
     fn process_event<'a>(
@@ -867,6 +873,18 @@ impl Server {
                         ));
                         ide_transaction_manager.save(transaction);
                     }
+                } else if let Some(params) = as_request::<ProvideType>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<ProvideType>(params, &x.id)
+                    {
+                        let transaction =
+                            ide_transaction_manager.non_committable_transaction(&self.state);
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(self.provide_type(&transaction, params)),
+                        ));
+                        ide_transaction_manager.save(transaction);
+                    }
                 } else if &x.method == "pyrefly/textDocument/typeErrorDisplayStatus" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
                     self.send_response(new_response(
@@ -998,6 +1016,16 @@ impl Server {
             }
         }
         None
+    }
+
+    fn provide_type(
+        &self,
+        transaction: &Transaction<'_>,
+        params: crate::lsp::features::provide_type::ProvideTypeParams,
+    ) -> Option<ProvideTypeResponse> {
+        let uri = &params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri)?;
+        provide_type(transaction, &handle, params.positions)
     }
 
     fn type_error_display_status(&self, path: &Path) -> TypeErrorDisplayStatus {
@@ -2029,10 +2057,17 @@ impl Server {
         }
     }
 
+    fn should_request_workspace_settings(&self) -> bool {
+        self.initialize_params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.configuration)
+            == Some(true)
+    }
+
     fn request_settings_for_all_workspaces(&self) {
-        if let Some(workspace) = &self.initialize_params.capabilities.workspace
-            && workspace.configuration == Some(true)
-        {
+        if self.should_request_workspace_settings() {
             let roots = self.workspaces.roots();
             self.send_request::<WorkspaceConfiguration>(ConfigurationParams {
                 items: roots
@@ -2085,6 +2120,10 @@ impl TspInterface for Server {
 
     fn state(&self) -> &Arc<State> {
         &self.state
+    }
+
+    fn recheck_queue(&self) -> &HeavyTaskQueue {
+        &self.recheck_queue
     }
 
     fn process_event<'a>(

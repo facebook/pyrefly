@@ -275,7 +275,7 @@ def f(foo: object):
 testcase!(
     test_join_empty_facets_vs_nonempty,
     r#"
-from typing import reveal_type
+from typing import reveal_type, Literal
 class A:
     x: int | None
 def test(y: A | None) -> None:
@@ -283,7 +283,7 @@ def test(y: A | None) -> None:
         if y.x:
             reveal_type(y)  # E: revealed type: A (_.x: int)
         else:
-            reveal_type(y)  # E: revealed type: A (_.x: int | None)
+            reveal_type(y)  # E: revealed type: A (_.x: Literal[0] | None)
     else:
         reveal_type(y)  # E: revealed type: None
     reveal_type(y)  # E: revealed type: A | None
@@ -416,12 +416,11 @@ def f(foo: Foo, condition: Callable[[], bool]):
         assert_type(foo.x, Bar)
         if isinstance(foo.x, Baz):
             assert_type(foo.x, Baz)
-        # TODO(stroxler): Should this simplify to just Bar? Open question.
-        assert_type(foo.x, Bar | Baz)
+        assert_type(foo.x, Bar)
         while condition():
             assert isinstance(foo.x, Baz)
             assert_type(foo.x, Baz)
-        assert_type(foo.x, Bar| Baz)
+        assert_type(foo.x, Bar)
 "#,
 );
 

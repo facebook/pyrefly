@@ -36,7 +36,7 @@ fn test_exported_global_variables(
 
     let test_module_handle = get_handle_for_module_name(module_name, &transaction);
 
-    let context = ModuleContext::create(&test_module_handle, &transaction, &module_ids).unwrap();
+    let context = ModuleContext::create(test_module_handle, &transaction, &module_ids).unwrap();
 
     let expected_globals = create_expected_globals(&context);
 

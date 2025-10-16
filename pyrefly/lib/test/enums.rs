@@ -568,3 +568,73 @@ def test(x: EmptyEnum):
     assert_type(x.value, Any)
     "#,
 );
+
+testcase!(
+    test_enum_iter,
+    r#"
+from enum import Enum
+from typing import TypeVar
+
+class MyEnum(Enum):
+    A = "a"
+    B = "b"
+
+T_Enum = TypeVar("T_Enum", bound=Enum)
+
+def get_labels(enum_cls: type[T_Enum]) -> list[str]:
+    return [e.name for e in enum_cls] 
+    "#,
+);
+
+testcase!(
+    test_mixin_datatype,
+    r#"
+from enum import Enum
+from typing import assert_type
+
+class A(float, Enum):
+    X = 1
+
+class FloatEnum(float, Enum):
+    pass
+class B(FloatEnum):
+    X = 1
+
+assert_type(A.X.value, float)
+assert_type(B.X.value, float)
+    "#,
+);
+
+testcase!(
+    test_override_value_prop,
+    r#"
+from enum import Enum
+from typing import assert_type
+class E(Enum):
+    X = 1
+    @property
+    def value(self) -> str: ...
+assert_type(E.X._value_, int)
+assert_type(E.X.value, str)
+    "#,
+);
+
+testcase!(
+    test_auto,
+    r#"
+from enum import auto, Enum, StrEnum
+from typing import assert_type
+class E1(Enum):
+    X = auto()
+class E2(StrEnum):
+    X = auto()
+class E3(str, Enum):
+    X = auto()
+class E4(Enum):
+    X = (auto(),)
+assert_type(E1.X.value, int)
+assert_type(E2.X.value, str)
+assert_type(E3.X.value, str)
+assert_type(E4.X.value, tuple[int])
+    "#,
+);

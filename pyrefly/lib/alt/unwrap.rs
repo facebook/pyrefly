@@ -110,7 +110,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match ty {
             Type::Any(style) => Type::Any(*style),
             Type::Never(style) => Type::Never(*style),
-            _ => self.solver().expand(var.to_type()),
+            _ => self.solver().expand_vars(var.to_type()),
         }
     }
 
@@ -200,6 +200,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let iterable_ty = self.stdlib.async_iterable(iter_ty.to_type()).to_type();
         if self.is_subset_eq(ty, &iterable_ty) {
             Some(self.resolve_var(ty, iter_ty))
+        } else {
+            None
+        }
+    }
+
+    pub fn unwrap_async_iterator(&self, ty: &Type) -> Option<Type> {
+        let var = self.fresh_var();
+        let iterator_ty = self.stdlib.async_iterator(var.to_type()).to_type();
+        if self.is_subset_eq(ty, &iterator_ty) {
+            Some(self.resolve_var(ty, var))
         } else {
             None
         }

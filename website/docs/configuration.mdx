@@ -131,7 +131,7 @@ This does not specify
 import should be resolved from. See [`search-path`](#search-path) instead.
 
 - Type: list of [filesystem glob patterns](#filesystem-globbing)
-- Default: `["**/*"]`
+- Default: `["**/*.py*"]`
 - Flag equivalent: `FILES...` argument
 - Equivalent configs: `include` in Pyright, `files`/`modules`/`packages` in
   mypy
@@ -158,7 +158,7 @@ type checking as way to filter files that match `project-includes`,
 but we don't want to type check.
 
 - Type: list of [filesystem glob patterns](#filesystem-globbing)
-- Default: `["**/node_modules", "**/__pycache__", "**/*venv/**"]`
+- Default: `["**/node_modules", "**/__pycache__", "**/*venv/**", "**/.[!/.]*/**"]`
 - Flag equivalent: `--project-excludes`
 - Equivalent configs: `exclude` in Pyright and mypy
 - Notes:
@@ -305,10 +305,11 @@ See the [Environment Autoconfiguration section](#environment-autoconfiguration) 
 information. We query Conda with `conda info --envs`, then find the environment's interpreter in Environment Autoconfirugration.
 
 We will query Conda for information about this environment, even when it's not sourced,
-unless a Python environment (venv, Conda) is activated or `--python-interpreter` or
+unless a Python environment (venv, Conda) is activated or `--python-interpreter-path` or
 `--conda-environment` are passed in through the CLI.
 
-This configuration option **is mutually exclusive with `python-interpreter` and `skip-interpreter-query`**.
+**`conda-environment`, `fallback-python-interpreter-name`, `conda-environment`,
+and `skip-interpreter-query` are mutually exclusive with each other.**
 
 - Type: string of existing Conda environment name
 - Default: none
@@ -317,21 +318,22 @@ This configuration option **is mutually exclusive with `python-interpreter` and 
 - Notes:
     - This enables the use of a non-local but customizable global environment without having to hard-code a path, which is not preferable on a shared project.
 
-### `python-interpreter`
+### `python-interpreter-path`
 
 The Python interpreter to query when attempting to autoconfigure
 Python environment values (`site-package-path`, `python-platform`, `python-version`).
 See the [Environment Autoconfiguration section](#environment-autoconfiguration) for more information.
 
-This configuration option **is mutually exclusive with `conda-environment` and `skip-interpreter-query`**.
+**`conda-environment`, `fallback-python-interpreter-name`, `conda-environment`,
+and `skip-interpreter-query` are mutually exclusive with each other.**
 
 - Type: path to executable
 - Default: `$(which python3)`, then `$(which python)`, or none
-- Flag equivalent: `--python-interpreter`
+- Flag equivalent: `--python-interpreter-path`
 - Equivalent configs: `python_executable` in mypy
 - Notes:
-  - This executes the value present in the `python-interpreter` field without any checks. It could
-    be a security risk if your `python-interpreter` is an arbitrary executable.
+  - This executes the value present in the `python-interpreter-path` field without any checks. It could
+    be a security risk if your `python-interpreter-path` is an arbitrary executable.
   - If you don't have a Python interpreter installed on your machine, we'll output an
     error letting you that we couldn't appropriately configure your environment.
     Configure `skip-interpreter-query` to skip the check and avoid the error.
@@ -340,6 +342,30 @@ NOTE: Ideally, this should not be set manually, unless you're using a venv, runn
 testing specific behavior, or having trouble with [Environment Autoconfiguration](#environment-autoconfiguration).
 Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
 to be reused between different systems and platforms.
+
+### `fallback-python-interpreter-name`
+
+The Python interpreter, available on your `$PATH`, to use. Pyrefly will perform
+`which <your command>`, and automatically fill in `python-interpreter-path` for you with
+the found path. Pyrefly will automatically search for `python3` and `python` on your
+path when this option and [`python-interpreter-path`](#python-interpreter-path) are unset if
+[`skip-interpreter-query = false`](#skip-interpreter-query),
+so this should primarily be used when you have a non-standard Python executable you want to
+use.
+
+**`conda-environment`, `fallback-python-interpreter-name`, `conda-environment`,
+and `skip-interpreter-query` are mutually exclusive with each other.**
+
+- Type: string of command to use
+- Default: `python3`, then `python`, or none
+- Flag equivalent: `--fallback-python-interpreter-name`
+- Notes:
+  - This executes the value present in the `fallback-python-interpreter-name` field without
+    any checks. It could be a security risk if your `fallback-python-interpreter-name` is an
+    arbitrary executable.
+  - If you don't have a Python interpreter installed on your machine, we'll output an
+    error letting you that we couldn't appropriately configure your environment.
+    Configure `skip-interpreter-query` to skip the check and avoid the error.
 
 ### `skip-interpreter-query`
 
@@ -350,7 +376,8 @@ and [`python-platform`](#python-platform), and will use an empty
 [`site-package-path`](#site-package-path). It's likely you'll want to override
 these to match the environment you'll be running in.
 
-This configuration option **is mutually exclusive with `python-interpreter` and `conda-environment`**.
+**`conda-environment`, `fallback-python-interpreter-name`, `conda-environment`,
+and `skip-interpreter-query` are mutually exclusive with each other.**
 
 - Type: bool
 - Default: `false`
@@ -603,12 +630,14 @@ packages you have installed and append those to the end of any `site-package-pat
 you've configured yourself, either through CLI flags or a config file.
 
 We look for an interpreter with the following logic:
-1. Use [`python-interpreter`](#python-interpreter) or
-   [`conda-environment`](#conda-environment) if either are set by a flag.
-   Both cannot be set in flags at the same time.
+1. Use [`python-interpreter-path`](#python-interpreter-path),
+   [`fallback-python-interpreter-name](#fallback-python-interpreter-name), or
+   [`conda-environment`](#conda-environment) if any are set by a flag.
+   More than one cannot be set in flags at the same time.
 2. Determine if there's an active `venv` or `conda` environment. If both are active at
    the same time, we take `venv` over `conda`.
-3. Use [`python-interpreter`](#python-interpreter) or
+3. Use [`python-interpreter-path`](#python-interpreter-path),
+   [`fallback-python-interpreter-name](#fallback-python-interpreter-name), or
    [`conda-environment`](#conda-environment) if either are set in a config file.
    Both cannot be set in a config at the same time.
 4. Find a `venv` at the root of the project by searching for something that looks like a
@@ -816,7 +845,7 @@ If you have a venv set up locally, you can get Pyrefly working with it by having
 in your shell (`source .venv/bin/activate`), and we will automatically pick up your installed packages. To pick
 up your packages even when your environment isn't sourced, you can add `.venv/bin/python3` (or
 `<path_to_venv>/bin/python3`) to your Pyrefly configuration under
-[`python-interpreter`](#python-interpreter) or pass it in with the `--python-interpreter` flag.
+[`python-interpreter-path`](#python-interpreter-path) or pass it in with the `--python-interpreter-path` flag.
 
 ### Conda
 
@@ -824,7 +853,7 @@ If you have conda set up locally, you can get Pyrefly working with it by having 
 sourced in your shell (`conda activate <environment>`), and we will automatically pick up your installed packages.
 To pick up your packages even when your environment isn't sourced, you can query your environment's install
 location with `conda env list`, and add `<conda_environment_path>/bin/python3` to your Pyrefly configuration
-under [`python-interpreter`](#python-interpreter) or pass it in with the `--python-interpreter` flag.
+under [`python-interpreter-path`](#python-interpreter-path) or pass it in with the `--python-interpreter-path` flag.
 
 ## Example Configurations
 
@@ -839,10 +868,10 @@ interpreter installed, some of these values may be overridden.
 ```toml
 ###### configuring what to type check and where to import from
 
-# check all files in "."
-project-includes = ["."]
-# exclude dotfiles
-project-excludes = ["**/.[!/.]*", "**/*venv/**"]
+# check all Python files under the containing directory
+project-includes = ["**/*.py*"]
+# exclude some uninteresting files
+project-excludes = ["**/node_modules", "**/__pycache__", "**/*venv/**", "**/.[!/.]*/**"]
 # perform an upward search for `.gitignore`, `.ignore`, and `.git/info/exclude`, and
 # add those to `project-excludes` automatically
 use-ignore-files = true
@@ -864,7 +893,7 @@ python-version = "3.13"
 skip-interpreter-query = false
 # query the default Python interpreter on your system, if installed and `python_platform`,
 # `python-version`, or `site-package-path` are unset.
-# python-interpreter = null # this is commented out because there are no `null` values in TOML
+# python-interpreter-path = null # this is commented out because there are no `null` values in TOML
 
 #### configuring your type check settings
 
@@ -897,7 +926,7 @@ site-package-path = ["venv/lib/python3.12/site-packages"]
 
 python-platform = "linux"
 python-version = "3.12"
-python-interpreter = "venv/bin/python3"
+python-interpreter-path = "venv/bin/python3"
 
 replace-imports-with-any = [
   "sympy.*",
@@ -944,7 +973,7 @@ site-package-path = ["venv/lib/python3.12/site-packages"]
 #### configuring your python environment
 python-platform = "linux"
 python-version = "3.12"
-python-interpreter = "venv/bin/python3"
+python-interpreter-path = "venv/bin/python3"
 
 #### configuring your type check settings
 replace-imports-with-any = [

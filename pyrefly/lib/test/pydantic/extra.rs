@@ -5,17 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use crate::test::util::TestEnv;
-use crate::testcase;
+use crate::pydantic_testcase;
 
-fn pydantic_env() -> TestEnv {
-    let path = std::env::var("PYDANTIC_TEST_PATH").expect("PYDANTIC_TEST_PATH must be set");
-    TestEnv::new_with_site_package_path(&path)
-}
-
-testcase!(
+pydantic_testcase!(
     test_extra_allow,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel
 
@@ -27,9 +20,8 @@ ModelAllow(x=1, y=2)
 "#,
 );
 
-testcase!(
+pydantic_testcase!(
     test_extra_forbid,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel
 
@@ -40,9 +32,8 @@ ModelForbid(x=1, y=2) # E: Unexpected keyword argument `y` in function `ModelFor
 "#,
 );
 
-testcase!(
+pydantic_testcase!(
     test_extra_ignore,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel
 
@@ -53,9 +44,8 @@ ModelForbid(x=1, y=2)
 "#,
 );
 
-testcase!(
+pydantic_testcase!(
     test_extra_default,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel
 
@@ -66,9 +56,8 @@ ModelForbid(x=1, y=2)
 "#,
 );
 
-testcase!(
+pydantic_testcase!(
     test_extra_wrong_type,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel
 
@@ -79,9 +68,8 @@ ModelForbid(x=1, y=2)
 "#,
 );
 
-testcase!(
+pydantic_testcase!(
     test_extra_wrong_literal,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel
 
@@ -92,9 +80,8 @@ ModelForbid(x=1, y=2)
 "#,
 );
 
-testcase!(
+pydantic_testcase!(
     test_extra_allow_config_dict,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel, ConfigDict
 
@@ -107,9 +94,8 @@ ModelAllow(x=1, y=2)
 "#,
 );
 
-testcase!(
+pydantic_testcase!(
     test_extra_forbid_config_dict,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel, ConfigDict
 
@@ -121,9 +107,8 @@ ModelForbid(x=1, y=2) # E: Unexpected keyword argument `y` in function `ModelFor
 "#,
 );
 
-testcase!(
+pydantic_testcase!(
     test_extra_ignore_config_dict,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel, ConfigDict
 
@@ -135,9 +120,8 @@ ModelForbid(x=1, y=2)
 "#,
 );
 
-testcase!(
+pydantic_testcase!(
     test_extra_default_config_dict,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel, ConfigDict
 
@@ -153,9 +137,8 @@ ModelForbid(x=1, y=2)
 // the list of valid keywords is still 'allow', 'forbid' and 'ignore' (as well as None).
 // Values like True/False seem legitimate and won't cause an error but won't actually apply to the model
 // The errors here are raised directly from the stub definitions
-testcase!(
+pydantic_testcase!(
     test_extra_wrong_type_config_dict,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel, ConfigDict
 
@@ -167,9 +150,8 @@ ModelForbid(x=1, y=2)
 "#,
 );
 
-testcase!(
+pydantic_testcase!(
     test_extra_wrong_literal_config_dict,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel, ConfigDict
 

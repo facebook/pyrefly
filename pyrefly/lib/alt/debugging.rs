@@ -31,7 +31,6 @@ use crate::graph::index::Idx;
 ///   if debug {
 ///      ... dump some information that would be too verbose if printed for stdlib modules ...
 ///   }
-#[expect(dead_code)]
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn show_idx<K>(&self, idx: Idx<K>) -> String
     where
@@ -118,6 +117,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 AnyIdx::KeyAnnotation(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyClassMetadata(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyClassMro(idx) => self.show_binding_for_with(&bindings, idx),
+                AnyIdx::KeyAbstractClassCheck(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyLegacyTypeParam(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyYield(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyYieldFrom(idx) => self.show_binding_for_with(&bindings, idx),

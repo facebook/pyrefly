@@ -50,7 +50,7 @@ class C:
     let module_ids = ModuleIds::new(&handles);
 
     let test_module_handle = get_handle_for_module_name("test", &transaction);
-    let context = ModuleContext::create(&test_module_handle, &transaction, &module_ids).unwrap();
+    let context = ModuleContext::create(test_module_handle, &transaction, &module_ids).unwrap();
 
     // Builtin types
 
@@ -101,7 +101,7 @@ class C:
     );
 
     assert_eq!(
-        PysaType::new("Any".to_owned(), ClassNamesFromType::not_a_class()),
+        PysaType::new("typing.Any".to_owned(), ClassNamesFromType::not_a_class()),
         PysaType::from_type(&Type::any_explicit(), &context),
     );
 

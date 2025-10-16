@@ -32,6 +32,7 @@ use vec1::Vec1;
 use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
+use crate::alt::attr::AttrSubsetError;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
@@ -65,7 +66,7 @@ enum Variable {
     ///
     /// Pyrefly only creates these for assignments, and will attempt to
     /// determine the type ("pin" it) using the first use of the name assigned.
-    Contained,
+    Partial,
     /// A variable due to generic instantiation, `def f[T](x: T): T` with `f(1)`
     Quantified(Box<Quantified>),
     /// A variable caused by recursion, e.g. `x = f(); def f(): return x`.
@@ -86,7 +87,7 @@ enum Variable {
 impl Display for Variable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Variable::Contained => write!(f, "Contained"),
+            Variable::Partial => write!(f, "Partial"),
             Variable::Quantified(q) => {
                 let k = q.kind;
                 if let Some(t) = &q.default {
@@ -109,7 +110,7 @@ impl Variable {
     /// E.g. `x = 1; while True: x = x` should be `Literal[1]` while
     /// `[1]` should be `List[int]`.
     fn promote<Ans: LookupAnswer>(&self, ty: Type, type_order: TypeOrder<Ans>) -> Type {
-        if matches!(self, Variable::Contained | Variable::Quantified(_)) {
+        if matches!(self, Variable::Partial | Variable::Quantified(_)) {
             ty.promote_literals(type_order.stdlib())
         } else {
             ty
@@ -305,7 +306,7 @@ impl Solver {
             Variable::Quantified(q) => {
                 *variable = Variable::Answer(q.as_gradual_type());
             }
-            Variable::Contained | Variable::Unwrap => {
+            Variable::Partial | Variable::Unwrap => {
                 *variable = Variable::Answer(Type::any_implicit());
             }
             Variable::Parameter => {
@@ -319,13 +320,13 @@ impl Solver {
     /// Variables that have not yet been bound will remain as Var.
     ///
     /// In addition, if the type exceeds a large depth, it will be replaced with `Any`.
-    pub fn expand(&self, mut t: Type) -> Type {
-        self.expand_mut(&mut t);
+    pub fn expand_vars(&self, mut t: Type) -> Type {
+        self.expand_vars_mut(&mut t);
         t
     }
 
     /// Like `expand`, but when you have a `&mut`.
-    pub fn expand_mut(&self, t: &mut Type) {
+    pub fn expand_vars_mut(&self, t: &mut Type) {
         self.expand_with_limit(t, TYPE_LIMIT, &VarRecurser::new());
         // After we substitute bound variables, we may be able to simplify some types
         self.simplify_mut(t);
@@ -412,7 +413,7 @@ impl Solver {
                 *x = unions(mem::take(xs));
             }
             if let Type::Tuple(tuple) = x {
-                *x = simplify_tuples(mem::take(tuple));
+                *x = Type::Tuple(simplify_tuples(mem::take(tuple)));
             }
             // When a param spec is resolved, collapse any Concatenate and Callable types that use it
             if let Type::Concatenate(ts, box Type::ParamSpecValue(paramlist)) = x {
@@ -484,7 +485,7 @@ impl Solver {
     /// e.g. `[]` with an unknown type of element.
     pub fn fresh_contained(&self, uniques: &UniqueFactory) -> Var {
         let v = Var::new(uniques);
-        self.variables.lock().insert_fresh(v, Variable::Contained);
+        self.variables.lock().insert_fresh(v, Variable::Partial);
         v
     }
 
@@ -596,7 +597,7 @@ impl Solver {
         is_subset(self_obj, &self_param);
 
         // Either we have solutions, or we fall back to Any. We don't use finish_quantified
-        // because we don't want Variable::Contained.
+        // because we don't want Variable::Partial.
         for v in vs {
             self.force_var(v);
         }
@@ -632,7 +633,7 @@ impl Solver {
                 }
                 Variable::Quantified(_) => {
                     if self.infer_with_first_use {
-                        *e = Variable::Contained;
+                        *e = Variable::Partial;
                     } else {
                         *e = Variable::Answer(Type::any_implicit())
                     }
@@ -667,7 +668,10 @@ impl Solver {
     /// instantiation, but __init__ will.
     pub fn generalize_class_targs(&self, targs: &mut TArgs) {
         // Expanding targs might require the variables lock, so do that first.
-        targs.as_mut().iter_mut().for_each(|t| self.expand_mut(t));
+        targs
+            .as_mut()
+            .iter_mut()
+            .for_each(|t| self.expand_vars_mut(t));
         let lock = self.variables.lock();
         targs.iter_paired_mut().for_each(|(param, t)| {
             if let Type::Var(v) = t
@@ -680,7 +684,7 @@ impl Solver {
     }
 
     /// Finalize the tparam instantiations. Any targs which don't yet have an instantiation
-    /// will resolve to their default, if one exists. Otherwise, create a "contained" var and
+    /// will resolve to their default, if one exists. Otherwise, create a "partial" var and
     /// try to find an instantiation at the first use, like finish_quantified.
     pub fn finish_class_targs(&self, targs: &mut TArgs, uniques: &UniqueFactory) {
         // The default can refer to a tparam from earlier in the list, so we maintain a
@@ -719,7 +723,7 @@ impl Solver {
                     Some(t)
                 } else {
                     let v = Var::new(uniques);
-                    self.variables.lock().insert_fresh(v, Variable::Contained);
+                    self.variables.lock().insert_fresh(v, Variable::Partial);
                     Some(v.to_type())
                 }
             } else {
@@ -749,7 +753,7 @@ impl Solver {
     }
 
     pub fn for_display(&self, t: Type) -> Type {
-        let mut t = self.expand(t);
+        let mut t = self.expand_vars(t);
         self.simplify_mut(&mut t);
         t.deterministic_printing()
     }
@@ -762,6 +766,7 @@ impl Solver {
         errors: &ErrorCollector,
         loc: TextRange,
         tcc: &dyn Fn() -> TypeCheckContext,
+        subset_error: SubsetError,
     ) {
         let tcc = tcc();
         let msg = tcc.kind.format_error(
@@ -769,12 +774,16 @@ impl Solver {
             &self.for_display(want.clone()),
             errors.module().name(),
         );
+        let mut msg_lines = vec1![msg];
+        if let Some(subset_error_msg) = subset_error.to_error_msg() {
+            msg_lines.push(subset_error_msg);
+        }
         match tcc.context {
             Some(ctx) => {
-                errors.add(loc, ErrorInfo::Context(&|| ctx.clone()), vec1![msg]);
+                errors.add(loc, ErrorInfo::Context(&|| ctx.clone()), msg_lines);
             }
             None => {
-                errors.add(loc, ErrorInfo::Kind(tcc.kind.as_error_kind()), vec1![msg]);
+                errors.add(loc, ErrorInfo::Kind(tcc.kind.as_error_kind()), msg_lines);
             }
         }
     }
@@ -790,10 +799,6 @@ impl Solver {
         }
         if branches.len() == 1 {
             return branches.pop().unwrap();
-        }
-        for b in &branches[1..] {
-            // Do the is_subset_eq only to force free variables
-            let _ = self.is_subset_eq_impl(&branches[0], b, type_order, true);
         }
 
         // We want to union modules differently, by merging their module sets
@@ -867,9 +872,14 @@ impl Solver {
                 // is more restrictive (so the `forced` is an over-approximation).
                 if self.is_subset_eq(&t, &forced, type_order).is_err() {
                     // Poor error message, but overall, this is a terrible experience for users.
-                    self.error(&t, &forced, errors, loc, &|| {
-                        TypeCheckContext::of_kind(TypeCheckKind::CycleBreaking)
-                    });
+                    self.error(
+                        &t,
+                        &forced,
+                        errors,
+                        loc,
+                        &|| TypeCheckContext::of_kind(TypeCheckKind::CycleBreaking),
+                        SubsetError::Other,
+                    );
                 }
             }
             _ => {
@@ -887,7 +897,7 @@ impl Solver {
     }
 
     /// Is `got <: want`? If you aren't sure, return `false`.
-    /// May cause contained variables to be resolved to an answer.
+    /// May cause partial variables to be resolved to an answer.
     pub fn is_subset_eq<Ans: LookupAnswer>(
         &self,
         got: &Type,
@@ -942,6 +952,77 @@ pub struct TypeVarSpecializationError {
     pub error: SubsetError,
 }
 
+#[derive(Debug, Clone)]
+pub enum TypedDictSubsetError {
+    /// TypedDict `got` is missing a field that `want` requires
+    MissingField { got: Name, want: Name, field: Name },
+    /// TypedDict field in `got` is ReadOnly but `want` requires read-write
+    ReadOnlyMismatch { got: Name, want: Name, field: Name },
+    /// TypedDict field in `got` is not required but `want` requires it
+    RequiredMismatch { got: Name, want: Name, field: Name },
+    /// TypedDict field in `got` is required cannot be, since it is `NotRequired` and read-write in `want`
+    NotRequiredReadWriteMismatch { got: Name, want: Name, field: Name },
+    /// TypedDict invariant field type mismatch (read-write fields must have exactly the same type)
+    InvariantFieldMismatch {
+        got: Name,
+        got_field_ty: Type,
+        want: Name,
+        want_field_ty: Type,
+        field: Name,
+    },
+    /// TypedDict covariant field type mismatch (readonly field type in `got` is not a subtype of `want`)
+    CovariantFieldMismatch {
+        got: Name,
+        got_field_ty: Type,
+        want: Name,
+        want_field_ty: Type,
+        field: Name,
+    },
+}
+
+impl TypedDictSubsetError {
+    pub fn to_error_msg(self) -> String {
+        match self {
+            TypedDictSubsetError::MissingField { got, want, field } => {
+                format!("Field `{field}` is present in `{want}` and absent in `{got}`")
+            }
+            TypedDictSubsetError::ReadOnlyMismatch { got, want, field } => {
+                format!("Field `{field}` is read-write in `{want}` but is `ReadOnly` in `{got}`")
+            }
+            TypedDictSubsetError::RequiredMismatch { got, want, field } => {
+                format!("Field `{field}` is required in `{want}` but is `NotRequired` in `{got}`")
+            }
+            TypedDictSubsetError::NotRequiredReadWriteMismatch { got, want, field } => {
+                format!(
+                    "Field `{field}` is `NotRequired` and read-write in `{want}`, so it cannot be required in `{got}`"
+                )
+            }
+            TypedDictSubsetError::InvariantFieldMismatch {
+                got,
+                got_field_ty,
+                want,
+                want_field_ty,
+                field,
+            } => format!(
+                "Field `{field}` in `{got}` has type `{}`, which is not consistent with `{}` in `{want}` (read-write fields must have the same type)",
+                got_field_ty.deterministic_printing(),
+                want_field_ty.deterministic_printing()
+            ),
+            TypedDictSubsetError::CovariantFieldMismatch {
+                got,
+                got_field_ty,
+                want,
+                want_field_ty,
+                field,
+            } => format!(
+                "Field `{field}` in `{got}` has type `{}`, which is not assignable to `{}`, the type of `{want}.{field}` (read-only fields are covariant)",
+                got_field_ty.deterministic_printing(),
+                want_field_ty.deterministic_printing()
+            ),
+        }
+    }
+}
+
 /// If a got <: want check fails, the failure reason
 #[derive(Debug, Clone)]
 pub enum SubsetError {
@@ -950,8 +1031,38 @@ pub enum SubsetError {
     /// Instantiations for quantified vars are incompatible with bounds
     #[allow(dead_code)]
     TypeVarSpecialization(Vec1<TypeVarSpecializationError>),
+    /// `got` is missing an attribute that the Protocol `want` requires
+    /// The first element is the name of the protocol, the second is the name of the attribute
+    MissingAttribute(Name, Name),
+    /// Attribute in `got` is incompatible with the same attribute in Protocol `want`
+    /// The first element is the name of `want, the second element is `got`, and the third element is the name of the attribute
+    IncompatibleAttribute(Box<(Name, Type, Name, AttrSubsetError)>),
+    /// TypedDict subset check failed
+    TypedDict(Box<TypedDictSubsetError>),
     // TODO(rechen): replace this with specific reasons
     Other,
+}
+
+impl SubsetError {
+    pub fn to_error_msg(self) -> Option<String> {
+        match self {
+            SubsetError::PosParamName(got, want) => Some(format!(
+                "Positional parameter name mismatch: got `{got}`, want `{want}`"
+            )),
+            SubsetError::TypeVarSpecialization(_) => {
+                // TODO
+                None
+            }
+            SubsetError::MissingAttribute(protocol, attribute) => Some(format!(
+                "Protocol `{protocol}` requires attribute `{attribute}`"
+            )),
+            SubsetError::IncompatibleAttribute(box (protocol, got, attribute, err)) => {
+                Some(err.to_error_msg(&Name::new(format!("{got}")), &protocol, &attribute))
+            }
+            SubsetError::TypedDict(err) => Some(err.to_error_msg()),
+            SubsetError::Other => None,
+        }
+    }
 }
 
 /// A helper to implement subset ergonomically.
@@ -987,8 +1098,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     fn is_subset_eq_var(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
         // This function does two things: it checks that got <: want, and it solves free variables assuming that
         // got <: want. Most callers want both behaviors. The exception is that in a union, we call is_subset_eq
-        // for the sole purpose of solving contained and parameter variables, throwing away the check result.
-        let should_force = |v: &Variable| !self.union || matches!(v, Variable::Contained);
+        // for the sole purpose of solving partial and parameter variables, throwing away the check result.
+        let should_force = |v: &Variable| !self.union || matches!(v, Variable::Partial);
         match (got, want) {
             _ if got == want => Ok(()),
             (Type::Var(v1), Type::Var(v2)) => {

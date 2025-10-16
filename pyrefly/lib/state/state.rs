@@ -62,7 +62,6 @@ use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
-use tracing::error;
 use tracing::info;
 use tracing::trace;
 use vec1::vec1;
@@ -409,6 +408,45 @@ impl<'a> Transaction<'a> {
         .rev()
         .map(|(_, handle, name, export)| (handle, name, export))
         .collect()
+    }
+
+    pub fn search_modules_fuzzy(&self, pattern: &str) -> Vec<ModuleName> {
+        // Make sure all the modules are in updated_modules.
+        for x in self.readable.modules.keys() {
+            self.get_module(x);
+        }
+
+        let matcher = SkimMatcherV2::default().smart_case();
+        let mut results = Vec::new();
+
+        // Collect unique module names from all known modules
+        let mut seen_modules = SmallSet::new();
+        for module_handle in self.data.updated_modules.keys() {
+            let module_name = module_handle.module();
+            let module_name_str = module_name.as_str();
+
+            // Skip builtins module
+            if module_name_str == "builtins" {
+                continue;
+            }
+
+            // Skip if we've already seen this module name
+            if !seen_modules.insert(module_name) {
+                continue;
+            }
+
+            let components = module_name.components();
+            let last_component = components.last().map(|name| name.as_str()).unwrap_or("");
+            if let Some(score) = matcher.fuzzy_match(last_component, pattern) {
+                results.push((score, module_name));
+            }
+        }
+
+        results.sort_by_key(|(score, _)| -score);
+        results
+            .into_iter()
+            .map(|(_, module_name)| module_name)
+            .collect()
     }
 
     fn search_exports_helper<V: Send + Sync>(
@@ -848,7 +886,44 @@ impl<'a> Transaction<'a> {
                 break; // Fast path - avoid asking again since we just did it.
             }
         }
-        if computed && let Some(next) = step.next() {
+
+        // Eagerly compute the next, if we computed this one. This makes sure that all modules
+        // eventually reach the "Solutions" step, where we can evict previous results to free
+        // memory.
+        //
+        // This can also help with performance by eliminating bottlenecks. By being eager, we can
+        // increase overall thread utilization. In many cases, this eager behavior means that a
+        // result has already been computed when we need it. This is especially useful when imports
+        // form large strongly-connected components.
+        //
+        // !! NOTE !!
+        //
+        // This eager behavior has the effect of checking all modules transitively reachable by
+        // imports. To understand why, consider that computing an all solutions will demand the
+        // types of all imports.
+        //
+        // Usually, a project only uses a small fraction of its 3rd party dependencies. In cases
+        // like this, the additional cost (time + memory) of checking all transitive modules is
+        // much higher than the cost of just keeping Answers around. So, we want some modules to
+        // behave "eagerly" -- for the benefits described at the beginning of this comment -- and
+        // some to behave "lazily" -- to avoid the pitfalls described above.
+        //
+        // For now, we use the "Require" level of a module to determine whether it should be eager
+        // or lazy. This works because in practice we always ask for Require >= Errors for modules
+        // being checked, and only use Require::Exports as the "default" require level, for files
+        // reached _only_ through imports.
+        //
+        // However, this only works for "check" and does not effect laziness in the IDE, which uses
+        // the default level Require::Indexing. It also does not effect laziness for glean, pysa, or
+        // other "tracing" check modes. This is by design, since those modes currently require all
+        // modules to have completed Solutions to operate correctly.
+        //
+        // TODO: It would be much nicer to identify when a module is a 3rd party dependency directly
+        // instead of approximating it using require levels.
+        if computed
+            && let Some(next) = step.next()
+            && /* See "NOTE" */ module_data.state.read().require.compute_errors()
+        {
             // For a large benchmark, LIFO is 10Gb retained, FIFO is 13Gb.
             // Perhaps we are getting to the heart of the graph with LIFO?
             self.data.todo.push_lifo(next, module_data.dupe());
@@ -1442,20 +1517,6 @@ impl<'a> Transaction<'a> {
                     exports.wildcard(ctx.lookup);
                     exports.exports(ctx.lookup);
                     write(&"Exports-force", start)?;
-                }
-            }
-            let start = Instant::now();
-            let diff = lock
-                .steps
-                .solutions
-                .as_ref()
-                .unwrap()
-                .first_difference(alt.solutions.as_deref().unwrap());
-            write(&"Diff", start)?;
-            if false {
-                // Disabled code, but super useful for debugging differences
-                if let Some(diff) = diff {
-                    error!("Not deterministic {}: {}", m.handle.module(), diff)
                 }
             }
             if let Some(subscriber) = &self.data.subscriber {

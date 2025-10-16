@@ -11,12 +11,18 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
+use ruff_python_ast::Arguments;
+use ruff_python_ast::Expr;
+use ruff_python_ast::ExprCall;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 use vec1::Vec1;
 use vec1::vec1;
 
@@ -27,6 +33,7 @@ use crate::alt::callable::CallKeyword;
 use crate::alt::callable::CallWithTypes;
 use crate::alt::class::class_field::DescriptorBase;
 use crate::alt::unwrap::HintRef;
+use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -91,11 +98,6 @@ impl CallTarget {
             _ => None,
         }
     }
-}
-
-struct CalledOverload {
-    signature: Callable,
-    call_errors: ErrorCollector,
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -260,15 +262,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(m) = metadata
                     && m.flags.is_deprecated
                 {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::new(ErrorKind::Deprecated, context),
-                        format!(
-                            "`{}` is deprecated",
-                            m.kind.as_func_id().format(self.module().name())
-                        ),
+                    // We manually construct an error using the message from the context but a
+                    // Deprecated error kind so that the error is shown at the Deprecated severity
+                    // (default: WARN) rather than the severity of the context's error kind.
+                    let msg = format!(
+                        "`{}` is deprecated",
+                        m.kind.as_func_id().format(self.module().name())
                     );
+                    let full_msg = if let Some(ctx) = context {
+                        vec1![ctx().format(), msg]
+                    } else {
+                        vec1![msg]
+                    };
+                    errors.add(range, ErrorInfo::Kind(ErrorKind::Deprecated), full_msg);
                 }
                 target
             }
@@ -475,8 +481,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.record_overload_trace_from_type(range, new_method);
                 if self.is_compatible_constructor_return(&ret, cls.class_object()) {
                     dunder_new_ret = Some(ret);
-                } else {
+                } else if !matches!(ret, Type::Any(AnyStyle::Error | AnyStyle::Implicit)) {
                     // Got something other than an instance of the class under construction.
+                    // According to the spec, the actual type (as opposed to the class under construction)
+                    // should take priority. However, if the actual type comes from a type error or an implicit
+                    // Any, using the class under construction is still more useful.
                     self.solver()
                         .finish_class_targs(cls.targs_mut(), self.uniques);
                     return ret.subst(&cls.targs().substitution_map());
@@ -611,10 +620,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         format!("`{}` can not be instantiated", cls.name()),
                     );
                 }
-                if self
-                    .get_metadata_for_class(cls.class_object())
-                    .is_protocol()
-                {
+                let metadata = self.get_metadata_for_class(cls.class_object());
+                if metadata.is_protocol() {
                     self.error(
                         errors,
                         range,
@@ -624,6 +631,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             cls.name()
                         ),
                     );
+                } else {
+                    let abstract_members = self.get_abstract_members_for_class(cls.class_object());
+                    let unimplemented_abstract_methods =
+                        abstract_members.unimplemented_abstract_methods();
+                    if !unimplemented_abstract_methods.is_empty() {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::new(ErrorKind::BadInstantiation, context),
+                            format!(
+                                "Cannot instantiate `{}` because the following members are abstract: {}",
+                                cls.name(),
+                                unimplemented_abstract_methods
+                                    .iter()
+                                    .map(|x| format!("`{x}`"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
+                        );
+                    }
                 }
                 if cls.has_qname("builtins", "bool") {
                     match self.first_arg_type(args, errors) {
@@ -756,156 +783,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             res
         }
-    }
-
-    /// Calls an overloaded function, returning the return type and the closest matching overload signature.
-    pub fn call_overloads(
-        &self,
-        overloads: Vec1<TargetWithTParams<Function>>,
-        metadata: FuncMetadata,
-        self_obj: Option<Type>,
-        args: &[CallArg],
-        keywords: &[CallKeyword],
-        range: TextRange,
-        errors: &ErrorCollector,
-        context: Option<&dyn Fn() -> ErrorContext>,
-        hint: Option<HintRef>,
-        ctor_targs: Option<&mut TArgs>,
-    ) -> (Type, Callable) {
-        // There may be Expr values in args and keywords.
-        // If we infer them for each overload, we may end up inferring them multiple times.
-        // If those overloads contain nested overloads, then we can easily end up with O(2^n) perf.
-        // Therefore, flatten all TypeOrExpr's into Type before we start
-        let call = CallWithTypes::new();
-        let args = call.vec_call_arg(args, self, errors);
-        let keywords = call.vec_call_keyword(keywords, self, errors);
-
-        let mut closest_overload: Option<CalledOverload> = None;
-        for callable in overloads.iter() {
-            let mut ctor_targs_ = ctor_targs.as_ref().map(|x| (**x).clone());
-            let tparams = callable.0.as_deref();
-
-            let mut try_call = |hint| {
-                let call_errors = self.error_collector();
-                let res = self.callable_infer(
-                    callable.1.signature.clone(),
-                    Some(metadata.kind.as_func_id()),
-                    tparams,
-                    self_obj.clone(),
-                    &args,
-                    &keywords,
-                    range,
-                    errors,
-                    &call_errors,
-                    // We intentionally drop the context here, as arg errors don't need it,
-                    // and if there are any call errors, we'll log a "No matching overloads"
-                    // error with the necessary context.
-                    None,
-                    hint,
-                    ctor_targs_.as_mut(),
-                );
-                (call_errors, res)
-            };
-
-            // We want to use our hint to contextually type the arguments, but errors resulting
-            // from the hint should not influence overload selection. If there are call errors, we
-            // try again without a hint in case we can still match this overload.
-            let (call_errors, res) = try_call(hint);
-            let (call_errors, res) =
-                if tparams.is_some() && hint.is_some() && !call_errors.is_empty() {
-                    try_call(None)
-                } else {
-                    (call_errors, res)
-                };
-
-            if call_errors.is_empty() {
-                // An overload is chosen, we should record it to power IDE services.
-                self.record_overload_trace(
-                    range,
-                    overloads.map(|TargetWithTParams(_, Function { signature, .. })| signature),
-                    &callable.1.signature,
-                    true,
-                );
-
-                // If the selected overload is deprecated, we log a deprecation error.
-                if callable.1.metadata.flags.is_deprecated {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::new(ErrorKind::Deprecated, context),
-                        format!(
-                            "Call to deprecated overload `{}`",
-                            callable
-                                .1
-                                .metadata
-                                .kind
-                                .as_func_id()
-                                .format(self.module().name())
-                        ),
-                    );
-                }
-                if let Some(targs) = ctor_targs {
-                    *targs = ctor_targs_.unwrap();
-                }
-                return (res, callable.1.signature.clone());
-            }
-            let called_overload = CalledOverload {
-                signature: callable.1.signature.clone(),
-                call_errors,
-            };
-            match &closest_overload {
-                Some(overload)
-                    if overload.call_errors.len() <= called_overload.call_errors.len() => {}
-                _ => {
-                    closest_overload = Some(called_overload);
-                }
-            }
-        }
-        // We're guaranteed to have at least one overload.
-        let closest_overload = closest_overload.unwrap();
-        self.record_overload_trace(
-            range,
-            overloads.map(|TargetWithTParams(_, Function { signature, .. })| signature),
-            &closest_overload.signature,
-            false,
-        );
-
-        let mut msg = vec1![
-            format!(
-                "No matching overload found for function `{}`",
-                metadata.kind.as_func_id().format(self.module().name())
-            ),
-            "Possible overloads:".to_owned(),
-        ];
-        for overload in overloads {
-            let suffix = if overload.1.signature == closest_overload.signature {
-                " [closest match]"
-            } else {
-                ""
-            };
-            let signature = match self_obj {
-                Some(_) => overload
-                    .1
-                    .signature
-                    .split_first_param()
-                    .map(|(_, signature)| signature)
-                    .unwrap_or(overload.1.signature),
-                None => overload.1.signature,
-            };
-            let signature = self
-                .solver()
-                .for_display(Type::Callable(Box::new(signature)));
-            msg.push(format!("{signature}{suffix}"));
-        }
-        // We intentionally discard closest_overload.call_errors. When no overload matches,
-        // there's a high likelihood that the "closest" one by our heuristic isn't the right
-        // one, in which case the call errors are just noise.
-        errors.add(
-            range,
-            ErrorInfo::new(ErrorKind::NoMatchingOverload, context),
-            msg,
-        );
-        (Type::any_error(), closest_overload.signature)
     }
 
     /// Helper function hide details of call synthesis from the attribute resolution code.
@@ -1100,5 +977,155 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Only if neither are overridden, use the `__new__` and `__init__` from object
             self.unions(vec![new_attr_ty, init_attr_ty])
         }
+    }
+
+    pub fn expr_call_infer(
+        &self,
+        x: &ExprCall,
+        mut callee_ty: Type,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        if matches!(&callee_ty, Type::ClassDef(cls) if cls.is_builtin("super")) {
+            // Because we have to construct a binding for super in order to fill in implicit arguments,
+            // we can't handle things like local aliases to super. If we hit a case where the binding
+            // wasn't constructed, fall back to `Any`.
+            self.get_hashed_opt(Hashed::new(&Key::SuperInstance(x.range)))
+                .map_or_else(Type::any_implicit, |type_info| type_info.arc_clone_ty())
+        } else {
+            self.expand_vars_mut(&mut callee_ty);
+
+            let args;
+            let kws;
+            let call = CallWithTypes::new();
+            if callee_ty.is_union() {
+                // If we have a union we will distribute over it, and end up duplicating each function call.
+                args = x
+                    .arguments
+                    .args
+                    .map(|x| call.call_arg(&CallArg::expr_maybe_starred(x), self, errors));
+                kws = x
+                    .arguments
+                    .keywords
+                    .map(|x| call.call_keyword(&CallKeyword::new(x), self, errors));
+            } else {
+                args = x.arguments.args.map(CallArg::expr_maybe_starred);
+                kws = x.arguments.keywords.map(CallKeyword::new);
+            }
+
+            self.distribute_over_union(&callee_ty, |ty| match ty.callee_kind() {
+                Some(CalleeKind::Function(FunctionKind::AssertType)) => self
+                    .call_assert_type(
+                        &x.arguments.args,
+                        &x.arguments.keywords,
+                        x.arguments.range,
+                        hint,
+                        errors,
+                    ),
+                Some(CalleeKind::Function(FunctionKind::RevealType)) => self
+                    .call_reveal_type(
+                        &x.arguments.args,
+                        &x.arguments.keywords,
+                        x.arguments.range,
+                        hint,
+                        errors,
+                    ),
+                Some(CalleeKind::Function(FunctionKind::Cast)) => {
+                    // For typing.cast, we have to hard-code a check for whether the first argument
+                    // is a type, so it's simplest to special-case the entire call.
+                    self.call_typing_cast(
+                        &x.arguments.args,
+                        &x.arguments.keywords,
+                        x.arguments.range,
+                        errors,
+                    )
+                }
+                // Treat assert_type and reveal_type like pseudo-builtins for convenience. Note that we still
+                // log a name-not-found error, but we also assert/reveal the type as requested.
+                None if ty.is_error() && is_special_name(&x.func, "assert_type") => self
+                    .call_assert_type(
+                        &x.arguments.args,
+                        &x.arguments.keywords,
+                        x.arguments.range,
+                        hint,
+                        errors,
+                    ),
+                None if ty.is_error() && is_special_name(&x.func, "reveal_type") => self
+                    .call_reveal_type(
+                        &x.arguments.args,
+                        &x.arguments.keywords,
+                        x.arguments.range,
+                        hint,
+                        errors,
+                    ),
+                Some(CalleeKind::Function(FunctionKind::IsInstance))
+                    if self.has_exactly_two_posargs(&x.arguments) =>
+                {
+                    self.call_isinstance(&x.arguments.args[0], &x.arguments.args[1], errors)
+                }
+                Some(CalleeKind::Function(FunctionKind::IsSubclass))
+                    if self.has_exactly_two_posargs(&x.arguments) =>
+                {
+                    self.call_issubclass(&x.arguments.args[0], &x.arguments.args[1], errors)
+                }
+                _ if matches!(ty, Type::ClassDef(cls) if cls == self.stdlib.builtins_type().class_object())
+                    && x.arguments.args.len() == 1 && x.arguments.keywords.is_empty() =>
+                {
+                    // We may be able to provide a more precise type when the constructor for `builtins.type`
+                    // is called with a single argument.
+                    let arg_ty = self.expr_infer(&x.arguments.args[0], errors);
+                    self.type_of(arg_ty)
+                }
+                // Decorators can be applied in two ways:
+                //   - (common, idiomatic) via `@decorator`:
+                //     @staticmethod
+                //     def f(): ...
+                //   - (uncommon, mostly seen in legacy code) via a function call:
+                //     def f(): ...
+                //     f = staticmethod(f)
+                // Check if this call applies a decorator with known typing effects to a function.
+                _ if let Some(ret) = self.maybe_apply_function_decorator(ty, &args, &kws, errors) => ret,
+                _ => {
+                    let callable = self.as_call_target_or_error(
+                        ty.clone(),
+                        CallStyle::FreeForm,
+                        x.func.range(),
+                        errors,
+                        None,
+                    );
+                    self.call_infer(
+                        callable,
+                        &args,
+                        &kws,
+                        x.arguments.range,
+                        errors,
+                        None,
+                        hint,
+                        None,
+                    )
+                }
+            })
+        }
+    }
+
+    fn has_exactly_two_posargs(&self, arguments: &Arguments) -> bool {
+        arguments.keywords.is_empty()
+            && arguments.args.len() == 2
+            && arguments
+                .args
+                .iter()
+                .all(|e| !matches!(e, Expr::Starred(_)))
+    }
+}
+
+/// Match on an expression by name. Should be used only for special names that we essentially treat like keywords,
+/// like reveal_type.
+fn is_special_name(x: &Expr, name: &str) -> bool {
+    match x {
+        // Note that this matches on a bare name regardless of whether it's been imported.
+        // It's convenient to be able to call functions like reveal_type in the course of
+        // debugging without scrolling to the top of the file to add an import.
+        Expr::Name(x) => x.id.as_str() == name,
+        _ => false,
     }
 }

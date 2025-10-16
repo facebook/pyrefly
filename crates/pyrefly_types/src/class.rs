@@ -38,7 +38,7 @@ use crate::types::TParams;
 use crate::types::Type;
 
 /// The name of a nominal type, e.g. `str`
-#[derive(Debug, Clone, TypeEq, Display, Dupe)]
+#[derive(Debug, Clone, Display, Dupe)]
 pub struct Class(Arc<ClassInner>);
 
 impl Hash for Class {
@@ -54,6 +54,7 @@ impl PartialEq for Class {
 }
 
 impl Eq for Class {}
+impl TypeEq for Class {}
 
 impl Ord for Class {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -84,38 +85,39 @@ pub struct ClassFieldProperties {
     // The field is initialized on the class (outside of a method)
     is_initialized_on_class: bool,
     range: TextRange,
+    // The range of the docstring following this field, if present
+    docstring_range: Option<TextRange>,
 }
-
-impl PartialEq for ClassFieldProperties {
-    fn eq(&self, other: &Self) -> bool {
-        self.is_annotated == other.is_annotated
-            && self.is_initialized_on_class == other.is_initialized_on_class
-    }
-}
-
-impl Eq for ClassFieldProperties {}
-impl TypeEq for ClassFieldProperties {}
 
 /// The index of a class within the file, used as a reference to data associated with the class.
 #[derive(Debug, Clone, Dupe, Copy, Eq, PartialEq, Hash, PartialOrd, Ord)]
-#[derive(TypeEq, Display)]
+#[derive(Display)]
 pub struct ClassDefIndex(pub u32);
 
 impl ClassFieldProperties {
-    pub fn new(is_annotated: bool, has_default_value: bool, range: TextRange) -> Self {
+    pub fn new(
+        is_annotated: bool,
+        has_default_value: bool,
+        range: TextRange,
+        docstring_range: Option<TextRange>,
+    ) -> Self {
         Self {
             is_annotated,
             is_initialized_on_class: has_default_value,
             range,
+            docstring_range,
         }
     }
 
     pub fn is_initialized_on_class(&self) -> bool {
         self.is_initialized_on_class
     }
+
+    pub fn docstring_range(&self) -> Option<TextRange> {
+        self.docstring_range
+    }
 }
 
-#[derive(TypeEq, Eq, PartialEq)]
 struct ClassInner {
     def_index: ClassDefIndex,
     qname: QName,
@@ -264,6 +266,10 @@ impl Class {
 
     pub fn field_decl_range(&self, name: &Name) -> Option<TextRange> {
         Some(self.0.fields.get(name)?.range)
+    }
+
+    pub fn field_docstring_range(&self, name: &Name) -> Option<TextRange> {
+        self.0.fields.get(name)?.docstring_range
     }
 
     pub fn has_qname(&self, module: &str, parent: &NestingContext, name: &str) -> bool {

@@ -23,16 +23,18 @@ Default configuration
   Covered files:
     */bar/baz.py (glob)
     */bar/qux.py (glob)
-  Fallback search path (guessed from project_includes): * (glob)
-  Site package path from user: * (glob)
-  Site package path queried from interpreter: * (glob)
+  Resolving imports from:
+    Fallback search path (guessed from project_includes): * (glob)
+    Site package path from user: * (glob)
+    Site package path queried from interpreter: * (glob)
 Default configuration
   Using interpreter: * (glob)
   Covered files:
     */foo.py (glob)
-  Fallback search path (guessed from project_includes): * (glob)
-  Site package path from user: * (glob)
-  Site package path queried from interpreter: * (glob)
+  Resolving imports from:
+    Fallback search path (guessed from project_includes): * (glob)
+    Site package path from user: * (glob)
+    Site package path queried from interpreter: * (glob)
 [0]
 ```
 
@@ -119,7 +121,7 @@ $ mkdir $TMPDIR/interpreters && touch $TMPDIR/interpreters/test.py \
 > mkdir $TMPDIR/alternative-venv && touch $TMPDIR/alternative-venv/python3 && \
 > touch $TMPDIR/alternative-venv/pyvenv.cfg && \
 > VIRTUAL_ENV=$TMPDIR/alternative-venv $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml \
-> --python-interpreter "cli-interpreter"
+> --python-interpreter-path "cli-interpreter"
 Configuration at * (glob)
   Using interpreter: cli-interpreter
 * (glob+)
@@ -235,5 +237,45 @@ $ touch $TMPDIR/config_finder/project/pyrefly.toml && \
 > $PYREFLY dump-config $TMPDIR/config_finder/project/main.py
 Configuration at `*/config_finder/project/pyrefly.toml` (glob)
 * (glob+)
+[0]
+```
+
+## We can manually override typing_extensions
+
+<!-- See https://typing.python.org/en/latest/spec/distributing.html#import-resolution-ordering:
+     typing_extensions.py on the search path takes precedence over typeshed
+-->
+
+```scrut {output_stream: stdout}
+$ mkdir $TMPDIR/typing_extensions_project && \
+> echo "x: int = 42" > $TMPDIR/typing_extensions_project/typing_extensions.py && \
+> echo "from typing import assert_type; from typing_extensions import x; assert_type(x, int)" > $TMPDIR/typing_extensions_project/foo.py && \
+> $PYREFLY check $TMPDIR/typing_extensions_project/foo.py --search-path $TMPDIR/typing_extensions_project
+[0]
+```
+
+## We don't accidentally override typing_extensions with an installed package
+
+<!-- See https://typing.python.org/en/latest/spec/distributing.html#import-resolution-ordering:
+     typeshed takes precedence over installed packages
+-->
+
+```scrut {output_stream.stdout}
+$ mkdir $TMPDIR/site_package_path && \
+> echo "x: int = 42" > $TMPDIR/site_package_path/typing_extensions.py && \
+> echo "from typing import TypedDict; from typing_extensions import NotRequired; class C(TypedDict): x: NotRequired[int]" > $TMPDIR/site_package_path/lib.py && \
+> echo "from lib import C; C()" > $TMPDIR/foo.py && \
+> $PYREFLY check $TMPDIR/foo.py --site-package-path $TMPDIR/site_package_path
+[0]
+```
+
+## Skip hidden directories
+
+```scrut {output_stream.stdout}
+$ mkdir $TMPDIR/contains_hidden && \
+> mkdir $TMPDIR/contains_hidden/.hidden && \
+> touch $TMPDIR/contains_hidden/ok.py && \
+> echo "1 + 'oops'" > $TMPDIR/contains_hidden/.hidden/secret_error.py && \
+> $PYREFLY check $TMPDIR/contains_hidden
 [0]
 ```

@@ -11,15 +11,17 @@ use std::fmt;
 use std::fmt::Display;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use dupe::Dupe;
-use pyrefly_util::with_hash::WithHash;
 use serde::Serialize;
 use serde::Serializer;
+use static_interner::Intern;
+use static_interner::Interner;
 
 use crate::dunder;
 use crate::module_name::ModuleName;
+
+static MODULE_PATH_INTERNER: Interner<ModulePathDetails> = Interner::new();
 
 #[derive(Debug, Clone, Dupe, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ModuleStyle {
@@ -30,9 +32,19 @@ pub enum ModuleStyle {
     Interface,
 }
 
+impl ModuleStyle {
+    pub fn of_path(path: &Path) -> Self {
+        if path.extension() == Some("pyi".as_ref()) {
+            ModuleStyle::Interface
+        } else {
+            ModuleStyle::Executable
+        }
+    }
+}
+
 /// Store information about where a module is sourced from.
 #[derive(Debug, Clone, Dupe, PartialEq, Eq, Hash)]
-pub struct ModulePath(Arc<WithHash<ModulePathDetails>>);
+pub struct ModulePath(Intern<ModulePathDetails>);
 
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize)]
 pub enum ModulePathDetails {
@@ -55,7 +67,7 @@ impl PartialOrd for ModulePath {
 
 impl Ord for ModulePath {
     fn cmp(&self, other: &Self) -> Ordering {
-        if Arc::ptr_eq(&self.0, &other.0) {
+        if self.0 == other.0 {
             // In the common case of equality (as we usually just matched ModuleName),
             // we can short circuit the comparison entirely.
             Ordering::Equal
@@ -69,19 +81,9 @@ fn is_path_init(path: &Path) -> bool {
     path.file_stem() == Some(dunder::INIT.as_str().as_ref())
 }
 
-impl ModuleStyle {
-    fn of_path(path: &Path) -> Self {
-        if path.extension() == Some("pyi".as_ref()) {
-            ModuleStyle::Interface
-        } else {
-            ModuleStyle::Executable
-        }
-    }
-}
-
 impl Display for ModulePath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &**self.0 {
+        match &*self.0 {
             ModulePathDetails::FileSystem(path) | ModulePathDetails::Namespace(path) => {
                 write!(f, "{}", path.display())
             }
@@ -101,7 +103,7 @@ impl Display for ModulePath {
 
 impl Serialize for ModulePath {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match &**self.0 {
+        match &*self.0 {
             ModulePathDetails::FileSystem(path)
             | ModulePathDetails::Memory(path)
             | ModulePathDetails::Namespace(path) => path.serialize(serializer),
@@ -112,7 +114,7 @@ impl Serialize for ModulePath {
 
 impl ModulePath {
     fn new(details: ModulePathDetails) -> Self {
-        Self(Arc::new(WithHash::new(details)))
+        Self(MODULE_PATH_INTERNER.intern(details))
     }
 
     pub fn filesystem(path: PathBuf) -> Self {
@@ -191,7 +193,7 @@ impl ModulePath {
 
     /// Convert to a path, that may not exist on disk.
     pub fn as_path(&self) -> &Path {
-        match &**self.0 {
+        match &*self.0 {
             ModulePathDetails::FileSystem(path)
             | ModulePathDetails::BundledTypeshed(path)
             | ModulePathDetails::Memory(path)

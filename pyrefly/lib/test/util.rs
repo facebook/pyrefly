@@ -18,7 +18,7 @@ use anstream::ColorChoice;
 use anyhow::anyhow;
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
-use pyrefly_build::map_db::MapDatabase;
+use pyrefly_build::source_db::map_db::MapDatabase;
 use pyrefly_config::error::ErrorDisplayConfig;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
@@ -104,6 +104,7 @@ pub struct TestEnv {
     infer_with_first_use: bool,
     site_package_path: Vec<PathBuf>,
     implicitly_defined_attribute_error: bool,
+    implicit_any_error: bool,
     default_require_level: Require,
 }
 
@@ -118,6 +119,7 @@ impl TestEnv {
             infer_with_first_use: true,
             site_package_path: Vec::new(),
             implicitly_defined_attribute_error: false,
+            implicit_any_error: false,
             default_require_level: Require::Exports,
         }
     }
@@ -148,6 +150,11 @@ impl TestEnv {
 
     pub fn enable_implicitly_defined_attribute_error(mut self) -> Self {
         self.implicitly_defined_attribute_error = true;
+        self
+    }
+
+    pub fn enable_implicit_any_error(mut self) -> Self {
+        self.implicit_any_error = true;
         self
     }
 
@@ -220,6 +227,9 @@ impl TestEnv {
         let errors = config.root.errors.as_mut().unwrap();
         if self.implicitly_defined_attribute_error {
             errors.set_error_severity(ErrorKind::ImplicitlyDefinedAttribute, Severity::Error);
+        }
+        if self.implicit_any_error {
+            errors.set_error_severity(ErrorKind::ImplicitAny, Severity::Error);
         }
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
         for (name, path, _) in self.modules.iter() {
@@ -355,13 +365,16 @@ pub fn extract_cursors_for_test(source: &str) -> Vec<TextSize> {
 
 pub fn mk_multi_file_state(
     files: &[(&'static str, &str)],
+    default_require_level: Require,
     assert_zero_errors: bool,
 ) -> (HashMap<&'static str, Handle>, State) {
     let mut test_env = TestEnv::new();
     for (name, code) in files {
         test_env.add(name, code);
     }
-    let (state, handle) = test_env.to_state();
+    let (state, handle) = test_env
+        .with_default_require_level(default_require_level)
+        .to_state();
     let mut handles = HashMap::new();
     for (name, _) in files {
         handles.insert(*name, handle(name));
@@ -386,8 +399,9 @@ pub fn mk_multi_file_state(
 
 pub fn mk_multi_file_state_assert_no_errors(
     files: &[(&'static str, &str)],
+    default_require_level: Require,
 ) -> (HashMap<&'static str, Handle>, State) {
-    mk_multi_file_state(files, true)
+    mk_multi_file_state(files, default_require_level, true)
 }
 
 fn get_batched_lsp_operations_report_helper(
@@ -395,7 +409,7 @@ fn get_batched_lsp_operations_report_helper(
     assert_zero_errors: bool,
     get_report: impl Fn(&State, &Handle, TextSize) -> String,
 ) -> String {
-    let (handles, state) = mk_multi_file_state(files, assert_zero_errors);
+    let (handles, state) = mk_multi_file_state(files, Require::Indexing, assert_zero_errors);
     let mut report = String::new();
     for (name, code) in files {
         report.push_str("# ");
@@ -435,7 +449,7 @@ pub fn get_batched_lsp_operations_report_no_cursor(
     files: &[(&'static str, &str)],
     get_report: impl Fn(&State, &Handle) -> String,
 ) -> String {
-    let (handles, state) = mk_multi_file_state(files, true);
+    let (handles, state) = mk_multi_file_state(files, Require::Indexing, true);
     let mut report = String::new();
     for (name, _code) in files {
         report.push_str("# ");

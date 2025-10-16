@@ -27,6 +27,7 @@ use lsp_types::Url;
 use lsp_types::notification::Exit;
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
+use pretty_assertions::assert_eq;
 use pyrefly_util::fs_anyhow::read_to_string;
 use serde_json::Value;
 
@@ -187,6 +188,24 @@ impl TestServer {
         }));
     }
 
+    pub fn completion(&mut self, file: &'static str, line: u32, col: u32) {
+        let path = self.get_root_or_panic().join(file);
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/completion".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&path).unwrap().to_string()
+                },
+                "position": {
+                    "line": line,
+                    "character": col
+                }
+            }),
+        }));
+    }
+
     pub fn diagnostic(&mut self, file: &'static str) {
         let path = self.get_root_or_panic().join(file);
         let id = self.next_request_id();
@@ -214,6 +233,24 @@ impl TestServer {
                     "line": line,
                     "character": col
                 }
+            }),
+        }));
+    }
+
+    pub fn provide_type(&mut self, file: &'static str, line: u32, col: u32) {
+        let path = self.get_root_or_panic().join(file);
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "types/provide-type".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&path).unwrap().to_string()
+                },
+                "positions": [{
+                    "line": line,
+                    "character": col
+                }]
             }),
         }));
     }
@@ -417,8 +454,12 @@ impl TestClient {
                             && let (Ok(expected_url), Ok(actual_url)) = (Url::parse(Url::from_file_path(&path).unwrap().as_ref()), Url::parse(uri_str))
                             && let (Ok(expected_path), Ok(actual_path)) = (expected_url.to_file_path(), actual_url.to_file_path()) {
                                 // Canonicalize both paths for comparison to handle symlinks and normalize case
-                                // This is very relevant for publish diagnostics, where the LS might send a notification for 
-                                // a file that does not exactly match the file_open message. 
+                                // This is very relevant for publish diagnostics, where the LS might send a notification for
+                                // a file that does not exactly match the file_open message.
+                                // This is very relevant for publish diagnostics, where the LS might send a notification for
+                                // a file that does not exactly match the file_open message.
+                                // This is very relevant for publish diagnostics, where the LS might send a notification for
+                                // a file that does not exactly match the file_open message.
                                 let expected_canonical = expected_path.canonicalize().unwrap_or(expected_path);
                                 let actual_canonical = actual_path.canonicalize().unwrap_or(actual_path);
 
@@ -578,13 +619,17 @@ pub struct LspInteraction {
 
 impl LspInteraction {
     pub fn new() -> Self {
+        Self::new_with_indexing_mode(IndexingMode::None)
+    }
+
+    pub fn new_with_indexing_mode(indexing_mode: IndexingMode) -> Self {
         init_test();
 
         let (language_client_sender, language_client_receiver) = bounded::<Message>(0);
         let (language_server_sender, language_server_receiver) = bounded::<Message>(0);
 
         let args = LspArgs {
-            indexing_mode: IndexingMode::None,
+            indexing_mode,
             workspace_indexing_limit: 0,
         };
         let connection = Connection {

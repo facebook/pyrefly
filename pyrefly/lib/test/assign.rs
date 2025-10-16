@@ -575,7 +575,7 @@ def expect_str(x: str) -> Any: ...
 class C:
     __iadd__: None = None
 def test(x: C):
-    x += expect_str(0) # E: Argument `Literal[0]` is not assignable to parameter `x` with type `str`
+    x += expect_str(0) # E: Expected `__iadd__` to be a callable # E: Argument `Literal[0]` is not assignable to parameter `x` with type `str`
 "#,
 );
 

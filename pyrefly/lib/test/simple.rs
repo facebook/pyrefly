@@ -37,9 +37,9 @@ testcase!(
 from typing import assert_type
 def f(x: type[int] | type[str], y: type[int | str]) -> None:
     assert_type(x, type[int] | type[str])
-    assert_type(x, type[int | str])  
+    assert_type(x, type[int | str])
     assert_type(y, type[int] | type[str])
-    assert_type(y, type[int | str])  
+    assert_type(y, type[int | str])
 "#,
 );
 
@@ -469,7 +469,7 @@ testcase!(
 from typing import Any, assert_type
 x = [[], [], [[]]]
 # Not too important it is precisely this type, but detect changes
-assert_type(x, list[list[list[Any]]])
+assert_type(x, list[list[list[Any]] | list[Any]])
 "#,
 );
 
@@ -1365,6 +1365,9 @@ class NotBoolable:
 # bool()
 y = bool(NotBoolable())  # E: has type `int`, which is not callable
 
+# unary not
+z = not NotBoolable()  # E: has type `int`, which is not callable
+
 # if expressions
 x = 0 if NotBoolable() else 1  # E: has type `int`, which is not callable  # E: Expected `__bool__` to be a callable, got `int`
 
@@ -1812,5 +1815,21 @@ testcase!(
     test_starred_empty_tuple_no_panic,
     r#"
 (),*()
+    "#,
+);
+
+testcase!(
+    test_asyncio_gather,
+    r#"
+import asyncio
+from typing import assert_type
+
+async def wait(n: int) -> int:
+    await asyncio.sleep(0.1)
+    return n
+
+async def main() -> None:
+    a = await asyncio.gather(*[wait(i) for i in range(10)])
+    assert_type(a, list[int])
     "#,
 );

@@ -43,11 +43,8 @@
   ],
   "annotations_coroutines.py": [],
   "annotations_forward_refs.py": [
-    "Line 22: Expected 1 errors",
-    "Line 23: Expected 1 errors",
     "Line 24: Expected 1 errors",
     "Line 25: Expected 1 errors",
-    "Line 66: Expected 1 errors",
     "Line 87: Unexpected errors ['Expected a type form, got instance of `(self: Self@ClassD) -> None`']",
     "Line 96: Unexpected errors ['assert_type(Any, int) failed']"
   ],
@@ -57,8 +54,8 @@
   "annotations_methods.py": [],
   "annotations_typeexpr.py": [],
   "callables_annotation.py": [
-    "Line 156: Unexpected errors ['`Proto4[Ellipsis]` is not assignable to `Proto3`']",
-    "Line 157: Unexpected errors ['`Proto7` is not assignable to `Proto6`']"
+    "Line 156: Unexpected errors ['`Proto4[Ellipsis]` is not assignable to `Proto3`\\n  `Proto4[Ellipsis].__call__` has type `BoundMethod[Proto4[Ellipsis], (Proto4[Ellipsis], int, ...) -> None]`, which is not assignable to `BoundMethod[Proto4[Ellipsis], (self: Proto4[Ellipsis], a: int, *args: Any, **kwargs: Any) -> None]`, the type of `Proto3.__call__`']",
+    "Line 157: Unexpected errors ['`Proto7` is not assignable to `Proto6`\\n  `Proto7.__call__` has type `BoundMethod[Proto7, (self: Proto7, a: float, /, b: int, *, k: str, m: str) -> None]`, which is not assignable to `BoundMethod[Proto7, (self: Proto7, a: int, /, *args: Any, *, k: str, **kwargs: Any) -> None]`, the type of `Proto6.__call__`']"
   ],
   "callables_kwargs.py": [],
   "callables_protocol.py": [],
@@ -136,14 +133,12 @@
     "Line 98: Expected 1 errors"
   ],
   "generics_basic.py": [
-    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`', '`+` is not supported between `AnyStr` and `AnyStr`\\n  No matching overload found for function `str.__add__`\\n  Possible overloads:\\n  (value: LiteralString, /) -> LiteralString\\n  (value: str, /) -> str [closest match]', 'Returned type `bytes | Unknown` is not assignable to declared return type `AnyStr`']",
+    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`\\n  Protocol `Buffer` requires attribute `__buffer__`', '`+` is not supported between `AnyStr` and `AnyStr`\\n  No matching overload found for function `str.__add__`\\n  Possible overloads:\\n  (value: LiteralString, /) -> LiteralString\\n  (value: str, /) -> str [closest match]', 'Returned type `bytes | Unknown` is not assignable to declared return type `AnyStr`']",
     "Line 67: Unexpected errors ['assert_type(MyStr, str) failed']",
     "Line 68: Unexpected errors ['assert_type(MyStr, str) failed', 'Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`']"
   ],
   "generics_defaults.py": [
-    "Line 130: Unexpected errors ['assert_type(Any, int) failed']",
-    "Line 169: Unexpected errors ['assert_type([DefaultIntT](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']",
-    "Line 170: Unexpected errors ['assert_type(Any, int) failed', 'Generic attribute `attr` of class `Foo7` is not visible on the class']"
+    "Line 170: Unexpected errors ['assert_type([DefaultIntT](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']"
   ],
   "generics_defaults_referential.py": [
     "Line 66: Unexpected errors ['Expected default `TypeVar[X1]` of `Ok1` to be assignable to the upper bound of `float`']",
@@ -243,27 +238,8 @@
   "narrowing_typeis.py": [],
   "overloads_basic.py": [],
   "overloads_consistency.py": [],
-  "overloads_definitions.py": [
-    "Lines 170, 175, 181, 183: Expected error (tag 'override-final')",
-    "Line 49: Unexpected errors ['Overloaded function must have an implementation']",
-    "Line 176: Unexpected errors ['`final_method` is declared as final in parent class `Base`']"
-  ],
-  "overloads_evaluation.py": [
-    "Line 105: Unexpected errors ['No matching overload found for function `example2`\\n  Possible overloads:\\n  (x: int, y: str, z: int) -> str [closest match]\\n  (x: int, y: int, z: int) -> int']",
-    "Line 106: Unexpected errors ['assert_type(Any, int | str) failed']",
-    "Line 134: Unexpected errors ['No matching overload found for function `expand_bool`\\n  Possible overloads:\\n  (x: Literal[False]) -> Literal[0] [closest match]\\n  (x: Literal[True]) -> Literal[1]']",
-    "Line 135: Unexpected errors ['assert_type(Any, Literal[0, 1]) failed']",
-    "Line 160: Unexpected errors ['No matching overload found for function `expand_enum`\\n  Possible overloads:\\n  (x: Literal[Color.RED]) -> Literal[0] [closest match]\\n  (x: Literal[Color.BLUE]) -> Literal[1]']",
-    "Line 161: Unexpected errors ['assert_type(Any, Literal[0, 1]) failed']",
-    "Line 180: Unexpected errors ['No matching overload found for function `expand_type_union`\\n  Possible overloads:\\n  (x: type[int]) -> int [closest match]\\n  (x: type[str]) -> str']",
-    "Line 181: Unexpected errors ['assert_type(Any, int | str) failed']",
-    "Line 204: Unexpected errors ['No matching overload found for function `expand_tuple`\\n  Possible overloads:\\n  (x: tuple[int, int]) -> int [closest match]\\n  (x: tuple[int, str]) -> str']",
-    "Line 205: Unexpected errors ['assert_type(Any, int | str) failed']",
-    "Line 234: Unexpected errors ['assert_type(str, int) failed']",
-    "Line 264: Unexpected errors ['assert_type(list[int], Any) failed']",
-    "Line 280: Unexpected errors ['assert_type(list[int], Any) failed']",
-    "Line 345: Unexpected errors ['assert_type(list[int], Any) failed']"
-  ],
+  "overloads_definitions.py": [],
+  "overloads_evaluation.py": [],
   "protocols_class_objects.py": [
     "Line 29: Expected 1 errors",
     "Line 34: Expected 1 errors",
@@ -274,25 +250,19 @@
     "Line 26: Unexpected errors ['Cannot instantiate `Proto` because it is a protocol']"
   ],
   "protocols_definition.py": [
-    "Line 67: Expected 1 errors",
     "Line 116: Expected 1 errors",
     "Line 117: Expected 1 errors",
-    "Line 79: Unexpected errors ['`Concrete` is not assignable to `Template`']"
+    "Line 79: Unexpected errors ['`Concrete` is not assignable to `Template`\\n  Protocol `Template` requires attribute `temp`']"
   ],
   "protocols_explicit.py": [
     "Line 27: Expected 1 errors",
-    "Line 60: Expected 1 errors",
-    "Line 90: Expected 1 errors",
-    "Line 110: Expected 1 errors",
-    "Line 135: Expected 1 errors",
-    "Line 165: Expected 1 errors"
+    "Line 89: Expected 1 errors",
+    "Line 134: Expected 1 errors"
   ],
   "protocols_generic.py": [],
-  "protocols_merging.py": [
-    "Line 82: Expected 1 errors"
-  ],
+  "protocols_merging.py": [],
   "protocols_modules.py": [
-    "Line 25: Unexpected errors ['`Module[_protocols_modules1]` is not assignable to `Options1`']"
+    "Line 25: Unexpected errors ['`Module[_protocols_modules1]` is not assignable to `Options1`\\n  `Module[_protocols_modules1].timeout` has type `Literal[100]`, which is not consistent with `int` in `Options1.timeout` (the type of read-write attributes cannot be changed)']"
   ],
   "protocols_recursive.py": [],
   "protocols_runtime_checkable.py": [
@@ -312,12 +282,12 @@
     "Line 104: Expected 1 errors"
   ],
   "qualifiers_annotated.py": [
-    "Line 76: Expected 1 errors",
-    "Line 77: Expected 1 errors",
-    "Line 84: Expected 1 errors",
-    "Line 85: Expected 1 errors",
-    "Line 92: Expected 1 errors",
-    "Line 93: Expected 1 errors"
+    "Line 71: Expected 1 errors",
+    "Line 72: Expected 1 errors",
+    "Line 79: Expected 1 errors",
+    "Line 80: Expected 1 errors",
+    "Line 87: Expected 1 errors",
+    "Line 88: Expected 1 errors"
   ],
   "qualifiers_final_annotation.py": [
     "Line 34: Expected 1 errors",
@@ -357,9 +327,7 @@
   "typeddicts_class_syntax.py": [],
   "typeddicts_extra_items.py": [],
   "typeddicts_final.py": [],
-  "typeddicts_inheritance.py": [
-    "Line 65: Expected 1 errors"
-  ],
+  "typeddicts_inheritance.py": [],
   "typeddicts_operations.py": [],
   "typeddicts_readonly.py": [],
   "typeddicts_readonly_consistency.py": [],
@@ -372,7 +340,7 @@
   "typeddicts_readonly_kwargs.py": [],
   "typeddicts_readonly_update.py": [],
   "typeddicts_required.py": [
-    "Line 74: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveMovie']`\"]"
+    "Line 71: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveMovie']`\"]"
   ],
   "typeddicts_type_consistency.py": [],
   "typeddicts_usage.py": []

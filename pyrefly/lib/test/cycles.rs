@@ -345,6 +345,20 @@ assert_type(B().x, B)
 );
 
 testcase!(
+    potential_cycle_through_generic_base_union,
+    r#"
+type A = Child | int
+class Base[T]:
+    def __init__(self, value: T) -> None:
+        ...
+class Child(Base[A]):  # Note how the Base targ is a union of `Child` and another class
+    pass
+
+Child("abc")  # E: not assignable to parameter `value` with type `Child | int`
+"#,
+);
+
+testcase!(
     test_init_cycle,
     r#"
 from typing import reveal_type

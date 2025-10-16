@@ -14,6 +14,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::facet::FacetKind;
+use pyrefly_types::type_info::JoinStyle;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_util::prelude::SliceExt;
@@ -37,6 +38,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::VarianceMap;
+use crate::alt::types::abstract_class::AbstractClassMembers;
 use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
@@ -45,6 +47,7 @@ use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
 use crate::alt::types::yields::YieldFromResult;
 use crate::alt::types::yields::YieldResult;
+use crate::alt::unwrap::HintRef;
 use crate::binding::binding::AnnAssignHasValue;
 use crate::binding::binding::AnnotationStyle;
 use crate::binding::binding::AnnotationTarget;
@@ -306,6 +309,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(cls) => self.calculate_class_mro(cls, errors),
         };
         Arc::new(mro)
+    }
+
+    pub fn solve_abstract_members(
+        &self,
+        cls: &Class,
+        errors: &ErrorCollector,
+    ) -> Arc<AbstractClassMembers> {
+        let metadata = self.get_metadata_for_class(cls);
+        let abstract_members = self.calculate_abstract_members(cls);
+        if metadata.is_final() {
+            let unimplemented = abstract_members.unimplemented_abstract_methods();
+            if !unimplemented.is_empty() {
+                let members = unimplemented
+                    .iter()
+                    .map(|member| format!("`{member}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.error(
+                    errors,
+                    cls.range(),
+                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                    format!(
+                        "Final class `{}` cannot have unimplemented abstract members: {}",
+                        cls.name(),
+                        members
+                    ),
+                );
+            }
+        }
+        Arc::new(abstract_members)
     }
 
     pub fn solve_annotation(
@@ -652,21 +685,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         iterable: &Type,
         range: TextRange,
         errors: &ErrorCollector,
+        orig_context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Vec<Iterable> {
         // Use the iterable protocol interfaces to determine the iterable type.
         // Special cases like Tuple should be intercepted first.
-        let context = || ErrorContext::Iteration(self.for_display(iterable.clone()));
+        let context = || {
+            orig_context.map_or_else(
+                || ErrorContext::Iteration(self.for_display(iterable.clone())),
+                |ctx| ctx(),
+            )
+        };
         match iterable {
             Type::ClassType(cls) if let Some(Tuple::Concrete(elts)) = self.as_tuple(cls) => {
                 vec![Iterable::FixedLen(elts.clone())]
             }
             Type::Tuple(Tuple::Concrete(elts)) => vec![Iterable::FixedLen(elts.clone())],
             Type::Var(v) if let Some(_guard) = self.recurse(*v) => {
-                self.iterate(&self.solver().force_var(*v), range, errors)
+                self.iterate(&self.solver().force_var(*v), range, errors, orig_context)
             }
             Type::Union(ts) => ts
                 .iter()
-                .flat_map(|t| self.iterate(t, range, errors))
+                .flat_map(|t| self.iterate(t, range, errors, orig_context))
                 .collect(),
             _ => {
                 let ty = self
@@ -722,6 +761,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 vec![Iterable::OfType(ty)]
             }
         }
+    }
+
+    pub fn get_produced_type(&self, iterables: Vec<Iterable>) -> Type {
+        let mut produced_types = Vec::new();
+        for iterable in iterables {
+            match iterable {
+                Iterable::OfType(t) => produced_types.push(t),
+                Iterable::FixedLen(ts) => produced_types.extend(ts),
+            }
+        }
+        self.unions(produced_types)
     }
 
     fn check_is_exception(
@@ -1093,7 +1143,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
         }
-        let ta = TypeAlias::new(name.clone(), Type::type_form(ty), style);
+        // Extract Annotated metadata; skip the first element since that's the type and collect the rest of the vector
+        let annotated_metadata = match expr {
+            Expr::Subscript(s)
+                if matches!(
+                    self.expr_qualifier(&s.value, TypeFormContext::TypeAlias, errors),
+                    Some(Qualifier::Annotated)
+                ) =>
+            {
+                Ast::unpack_slice(&s.slice)
+                    .iter()
+                    .skip(1)
+                    .map(|e| self.expr_infer(e, &self.error_swallower()))
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+
+        let ta = TypeAlias::new(name.clone(), Type::type_form(ty), style, annotated_metadata);
+
         Forallable::TypeAlias(ta).forall(self.validated_tparams(
             range,
             tparams,
@@ -1148,36 +1216,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Type {
-        let base_exception_class_type =
-            Type::type_form(self.stdlib.base_exception().clone().to_type());
-        let arg1 = Type::optional(base_exception_class_type);
-        let arg2 = Type::optional(self.stdlib.base_exception().clone().to_type());
-        let arg3 = Type::optional(self.stdlib.traceback_type().clone().to_type());
-        let exit_arg_types = [
-            CallArg::ty(&arg1, range),
-            CallArg::ty(&arg2, range),
-            CallArg::ty(&arg3, range),
-        ];
-        match kind {
+        // Call `__exit__` or `__aexit__` and unwrap the results if async, swallowing any errors from the call itself
+        let call_exit = |exit_arg_types, swallow_errors| match kind {
             IsAsync::Sync => self.call_method_or_error(
                 context_manager_type,
                 &kind.context_exit_dunder(),
                 range,
-                &exit_arg_types,
+                exit_arg_types,
                 &[],
-                errors,
+                swallow_errors,
                 context,
             ),
             IsAsync::Async => match self.unwrap_awaitable(&self.call_method_or_error(
                 context_manager_type,
                 &kind.context_exit_dunder(),
                 range,
-                &exit_arg_types,
+                exit_arg_types,
                 &[],
-                errors,
+                swallow_errors,
                 context,
             )) {
                 Some(ty) => ty,
+                // We emit this error directly, since it's different from type checking the arguments
                 None => self.error(
                     errors,
                     range,
@@ -1185,7 +1245,53 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     format!("Expected `{}` to be async", dunder::AEXIT),
                 ),
             },
+        };
+        let base_exception_class_type =
+            Type::type_form(self.stdlib.base_exception().clone().to_type());
+        let arg1 = base_exception_class_type;
+        let arg2 = self.stdlib.base_exception().clone().to_type();
+        let arg3 = self.stdlib.traceback_type().clone().to_type();
+        let exit_with_error_args = [
+            CallArg::ty(&arg1, range),
+            CallArg::ty(&arg2, range),
+            CallArg::ty(&arg3, range),
+        ];
+        let exit_ok_args = [
+            CallArg::ty(&Type::None, range),
+            CallArg::ty(&Type::None, range),
+            CallArg::ty(&Type::None, range),
+        ];
+        let exit_with_error_errors =
+            ErrorCollector::new(errors.module().clone(), ErrorStyle::Delayed);
+        let exit_with_ok_errors = ErrorCollector::new(errors.module().clone(), ErrorStyle::Delayed);
+        let error_args_result = call_exit(&exit_with_error_args, &exit_with_error_errors);
+        let ok_args_result = call_exit(&exit_ok_args, &exit_with_ok_errors);
+        // If the call only has one error we can directly forward it
+        // If there is more than one error, we emit a generic error instead of emitting one error for each mismatched argument
+        if exit_with_error_errors.len() <= 1 {
+            errors.extend(exit_with_error_errors);
+        } else {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::new(ErrorKind::BadContextManager, context),
+                format!("`{}` must be callable with the argument types (type[BaseException], BaseException, TracebackType)", kind.context_exit_dunder()),
+            );
         }
+        if exit_with_ok_errors.len() <= 1 {
+            errors.extend(exit_with_ok_errors);
+        } else {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::new(ErrorKind::BadContextManager, context),
+                format!(
+                    "`{}` must be callable with the argument types (None, None, None)",
+                    kind.context_exit_dunder()
+                ),
+            );
+        }
+        self.union(error_args_result, ok_args_result)
     }
 
     fn context_value(
@@ -1359,14 +1465,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ) {
                 self.pin_all_placeholder_types(ty);
             }
-            self.expand_type_mut(ty);
+            self.expand_vars_mut(ty);
         });
         Arc::new(type_info)
     }
 
-    pub fn expand_type_mut(&self, ty: &mut Type) {
+    pub fn expand_vars_mut(&self, ty: &mut Type) {
         // Replace any solved recursive variables with their answers.
-        self.solver().expand_mut(ty);
+        self.solver().expand_vars_mut(ty);
     }
 
     fn check_del_typed_dict_field(
@@ -1449,7 +1555,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             BindingExpect::UnpackedLength(b, range, expect) => {
                 let iterable_ty = self.get_idx(*b);
-                let iterables = self.iterate(iterable_ty.ty(), *range, errors);
+                let iterables = self.iterate(iterable_ty.ty(), *range, errors, None);
                 for iterable in iterables {
                     match iterable {
                         Iterable::OfType(_) => {}
@@ -1547,6 +1653,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     errors,
                 );
             }
+
+            // If we are inheriting from multiple base types, we should
+            // check whether the multiple inheritance is consistent
+            if class_bases.as_ref().base_type_count() > 1 {
+                self.check_consistent_multiple_inheritance(cls, errors);
+            }
         }
         Arc::new(EmptyAnswer)
     }
@@ -1599,6 +1711,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         field: &BindingClassField,
         errors: &ErrorCollector,
     ) -> Arc<ClassField> {
+        let functional_class_def = matches!(
+            self.bindings().get(field.class_idx),
+            BindingClass::FunctionalClassDef(_, _, _, _)
+        );
         let field = match &self.get_idx(field.class_idx).0 {
             None => ClassField::recursive(),
             Some(class) => self.calculate_class_field(
@@ -1606,6 +1722,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &field.name,
                 field.range,
                 &field.definition,
+                functional_class_def,
                 errors,
             ),
         };
@@ -1886,7 +2003,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::Narrow(k, op, range) => {
                 self.narrow(self.get_idx(*k).as_ref(), op, *range, errors)
             }
-            Binding::Phi(ks) => {
+            Binding::Phi(join_style, ks) => {
                 if ks.len() == 1 {
                     self.get_idx(*ks.first().unwrap()).arc_clone()
                 } else {
@@ -1903,13 +2020,41 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                         })
                         .collect::<Vec<_>>();
-                    TypeInfo::join(type_infos, &|ts| self.unions(ts))
+                    TypeInfo::join(
+                        type_infos,
+                        &|ts| self.unions(ts),
+                        &|got, want| self.is_subset_eq(got, want),
+                        join_style.map(|idx| self.get_idx(*idx)),
+                    )
                 }
             }
-            Binding::Default(default, binding) => {
+            Binding::LoopPhi(default, ks) => {
                 // We force the default first so that if we hit a recursive case it is already available
                 self.get_idx(*default);
-                self.binding_to_type_info(binding, errors)
+                // Then solve the phi like a regular Phi binding
+                if ks.len() == 1 {
+                    self.get_idx(*ks.first().unwrap()).arc_clone()
+                } else {
+                    let type_infos = ks
+                        .iter()
+                        .filter_map(|k| {
+                            let t: Arc<TypeInfo> = self.get_idx(*k);
+                            // Filter out all `@overload`-decorated types except the one that
+                            // accumulates all signatures into a Type::Overload.
+                            if matches!(t.ty(), Type::Overload(_)) || !t.ty().is_overload() {
+                                Some(t.arc_clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    TypeInfo::join(
+                        type_infos,
+                        &|ts| self.unions(ts),
+                        &|got, want| self.is_subset_eq(got, want),
+                        JoinStyle::SimpleMerge,
+                    )
+                }
             }
             Binding::AssignToAttribute(attr, got) => {
                 // NOTE: Deterministic pinning of placeholder types based on first use relies on an
@@ -2251,7 +2396,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn pin_all_placeholder_types(&self, ty: &mut Type) {
         // Expand the type, in case unexpanded `Vars` are hiding further `Var`s that
         // need to be pinned.
-        self.solver().expand_mut(ty);
+        self.solver().expand_vars_mut(ty);
         // Collect all the vars we may need to pin
         fn f(t: &Type, vars: &mut Vec<Var>) {
             match t {
@@ -2285,8 +2430,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn binding_to_type(&self, binding: &Binding, errors: &ErrorCollector) -> Type {
         match binding {
             Binding::Forward(..)
-            | Binding::Default(..)
             | Binding::Phi(..)
+            | Binding::LoopPhi(..)
             | Binding::Narrow(..)
             | Binding::AssignToAttribute(..)
             | Binding::AssignToSubscript(..)
@@ -2884,28 +3029,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ))
                 };
                 let iterables = if is_async.is_async() {
-                    let hint = ty.clone().and_then(|x| {
+                    let infer_hint = ty.clone().and_then(|x| {
                         x.ty(self.stdlib)
                             .map(|ty| self.stdlib.async_iterable(ty.clone()).to_type())
                     });
-                    let iterable = self.expr(e, hint.as_ref().map(|t| (t, tcc)), errors);
+                    let iterable = self.expr_infer_with_hint(
+                        e,
+                        infer_hint.as_ref().map(|t| HintRef::new(t, None)),
+                        errors,
+                    );
                     self.async_iterate(&iterable, e.range(), errors)
                 } else {
-                    let hint = ty.clone().and_then(|x| {
+                    let infer_hint = ty.clone().and_then(|x| {
                         x.ty(self.stdlib)
                             .map(|ty| self.stdlib.iterable(ty.clone()).to_type())
                     });
-                    let iterable = self.expr(e, hint.as_ref().map(|t| (t, tcc)), errors);
-                    self.iterate(&iterable, e.range(), errors)
+                    let iterable = self.expr_infer_with_hint(
+                        e,
+                        infer_hint.as_ref().map(|t| HintRef::new(t, None)),
+                        errors,
+                    );
+                    self.iterate(&iterable, e.range(), errors, None)
                 };
-                let mut values = Vec::new();
-                for iterable in iterables {
-                    match iterable {
-                        Iterable::OfType(ty) => values.push(ty),
-                        Iterable::FixedLen(ts) => values.extend(ts),
-                    }
+                let value = self.get_produced_type(iterables);
+                let check_hint = ty.clone().and_then(|x| x.ty(self.stdlib));
+                if let Some(check_hint) = check_hint {
+                    self.check_and_return_type(value, &check_hint, e.range(), errors, tcc)
+                } else {
+                    value
                 }
-                self.unions(values)
             }
             Binding::ContextValue(ann, e, range, kind) => {
                 let context_manager = self.get_idx(*e);
@@ -2924,7 +3076,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Binding::UnpackedValue(ann, to_unpack, range, pos) => {
-                let iterables = self.iterate(self.get_idx(*to_unpack).ty(), *range, errors);
+                let iterables = self.iterate(self.get_idx(*to_unpack).ty(), *range, errors, None);
                 let mut values = Vec::new();
                 for iterable in iterables {
                     values.push(match iterable {
@@ -3087,7 +3239,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                     Type::TypeAlias(ta) => {
                         let params_range = params.as_ref().map_or(expr.range(), |x| x.range);
-                        Forallable::TypeAlias(ta).forall(self.validated_tparams(
+                        Forallable::TypeAlias(*ta).forall(self.validated_tparams(
                             params_range,
                             self.scoped_type_params(params.as_ref()),
                             TParamsSource::TypeAlias,

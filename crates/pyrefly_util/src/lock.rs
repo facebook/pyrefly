@@ -82,4 +82,12 @@ impl Condvar {
     {
         self.0.wait_while(guard, condition).unwrap()
     }
+
+    pub fn wait_timeout<'a, T>(
+        &self,
+        guard: sync::MutexGuard<'a, T>,
+        duration: std::time::Duration,
+    ) -> (sync::MutexGuard<'a, T>, sync::WaitTimeoutResult) {
+        self.0.wait_timeout(guard, duration).unwrap()
+    }
 }

@@ -9,23 +9,29 @@ use std::collections::HashMap;
 use std::ops::Not;
 
 use pyrefly_build::handle::Handle;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::Callable;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::Type;
 use pyrefly_util::thread_pool::ThreadPool;
 use rayon::prelude::*;
+use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
 use serde::Serialize;
 
-use crate::alt::answers::Answers;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecoratedFunction;
-use crate::binding::bindings::Bindings;
 use crate::report::pysa::ModuleContext;
+use crate::report::pysa::call_graph::Target;
+use crate::report::pysa::call_graph::resolve_decorator_callees;
+use crate::report::pysa::captured_variable::CapturedVariable;
+use crate::report::pysa::captured_variable::ModuleCapturedVariables;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::location::PysaLocation;
@@ -35,6 +41,8 @@ use crate::report::pysa::module::ModuleKey;
 use crate::report::pysa::override_graph::WholeProgramReversedOverrideGraph;
 use crate::report::pysa::scope::ScopeParent;
 use crate::report::pysa::scope::get_scope_parent;
+use crate::report::pysa::slow_fun_monitor::slow_fun_monitor_scope;
+use crate::report::pysa::step_logger::StepLogger;
 use crate::report::pysa::types::PysaType;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::state::Transaction;
@@ -42,14 +50,9 @@ use crate::state::state::Transaction;
 /// Represents a unique identifier for a function **within a module**.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FunctionId {
-    Function {
-        location: PysaLocation,
-    },
+    Function { location: PysaLocation },
     ModuleTopLevel,
-    #[expect(dead_code)]
-    ClassTopLevel {
-        class_id: ClassId,
-    },
+    ClassTopLevel { class_id: ClassId },
 }
 
 impl FunctionId {
@@ -71,7 +74,7 @@ impl Serialize for FunctionId {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FunctionRef {
     pub module_id: ModuleId,
     pub module_name: ModuleName, // For debugging purposes only. Reader should use the module id.
@@ -79,15 +82,24 @@ pub struct FunctionRef {
     pub function_name: Name, // For debugging purposes only. Reader should use the function id.
 }
 
+// For many function implementations, we need to pass the module context where the function is defined.
+fn assert_function_in_context(function: &DecoratedFunction, context: &ModuleContext) {
+    match &function.undecorated.metadata.kind {
+        FunctionKind::Def(func_id) => {
+            assert_eq!(func_id.module, context.module_info.name());
+        }
+        _ => (),
+    }
+}
+
 impl FunctionRef {
     pub fn from_decorated_function(function: &DecoratedFunction, context: &ModuleContext) -> Self {
+        assert_function_in_context(function, context);
+        assert!(should_export_function(function, context));
         let name = function.metadata().kind.as_func_id().func;
         let display_range = context.module_info.display_range(function.id_range());
         FunctionRef {
-            module_id: context
-                .module_ids
-                .get(ModuleKey::from_module(&context.module_info))
-                .unwrap(),
+            module_id: context.module_id,
             module_name: context.module_info.name(),
             function_id: FunctionId::Function {
                 location: PysaLocation::new(display_range),
@@ -204,6 +216,10 @@ pub struct FunctionDefinition {
     #[serde(flatten)]
     pub base: FunctionBaseDefinition,
     pub undecorated_signatures: Vec<FunctionSignature>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub captured_variables: Vec<CapturedVariable>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub decorator_callees: HashMap<PysaLocation, Vec<Target<FunctionRef>>>,
 }
 
 impl FunctionDefinition {
@@ -240,6 +256,15 @@ impl FunctionDefinition {
     #[cfg(test)]
     pub fn with_defining_class(mut self, defining_class: ClassRef) -> Self {
         self.base.defining_class = Some(defining_class);
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_decorator_callees(
+        mut self,
+        decorator_callees: HashMap<PysaLocation, Vec<Target<FunctionRef>>>,
+    ) -> Self {
+        self.decorator_callees = decorator_callees;
         self
     }
 }
@@ -320,7 +345,7 @@ fn export_function_parameters(params: &Params, context: &ModuleContext) -> Funct
                 .map(|param| export_function_parameter(param, context))
                 .collect(),
         ),
-        Params::Ellipsis => FunctionParameters::Ellipsis,
+        Params::Ellipsis | Params::Materialization => FunctionParameters::Ellipsis,
         Params::ParamSpec(_, _) => FunctionParameters::ParamSpec,
     }
 }
@@ -332,17 +357,15 @@ fn export_function_signature(function: &Callable, context: &ModuleContext) -> Fu
     }
 }
 
-pub fn get_all_functions(
-    bindings: &Bindings,
-    answers: &Answers,
-) -> impl Iterator<Item = DecoratedFunction> {
-    bindings
-        .keys::<KeyDecoratedFunction>()
-        .map(|idx| DecoratedFunction::from_bindings_answers(idx, bindings, answers))
+pub fn get_all_functions(context: &ModuleContext) -> impl Iterator<Item = DecoratedFunction> {
+    context.bindings.keys::<KeyDecoratedFunction>().map(|idx| {
+        DecoratedFunction::from_bindings_answers(idx, &context.bindings, &context.answers)
+    })
 }
 
 // Return the function type, considering decorators and overloads.
 fn get_function_type(function: &DecoratedFunction, context: &ModuleContext) -> Type {
+    assert_function_in_context(function, context);
     let definition_binding = Key::Definition(function.undecorated.identifier);
     let idx = context.bindings.key_to_idx(&definition_binding);
     context.answers.get_idx(idx).unwrap().arc_clone_ty()
@@ -355,6 +378,7 @@ fn get_undecorated_return_type(function: &DecoratedFunction, context: &ModuleCon
 }
 
 pub fn should_export_function(function: &DecoratedFunction, context: &ModuleContext) -> bool {
+    assert_function_in_context(function, context);
     // We only want to export one function when we have an @overload chain.
     // If the function has no successor (function in the same scope with the same name), then we should export it.
     // If the function has successors, but is not an overload, then we should export it. It probably means the successor is a redefinition.
@@ -363,13 +387,13 @@ pub fn should_export_function(function: &DecoratedFunction, context: &ModuleCont
 }
 
 fn get_undecorated_signatures(
-    function: DecoratedFunction,
+    function: &DecoratedFunction,
     context: &ModuleContext,
 ) -> Vec<FunctionSignature> {
     // We need the list of raw parameters, ignoring decorators.
     // For overloads, we need the list of all overloads, not just the current one.
     // To get it, we check if `get_function_type` returns `Type::Overload`.
-    let decorated_type = get_function_type(&function, context);
+    let decorated_type = get_function_type(function, context);
     match decorated_type {
         Type::Overload(Overload { signatures, .. }) => signatures
             .iter()
@@ -392,7 +416,7 @@ fn get_undecorated_signatures(
                     .collect(),
             ),
             return_annotation: PysaType::from_type(
-                &get_undecorated_return_type(&function, context),
+                &get_undecorated_return_type(function, context),
                 context,
             ),
         }],
@@ -405,7 +429,7 @@ pub fn export_all_functions(
 ) -> ModuleFunctionDefinitions<FunctionBaseDefinition> {
     let mut function_base_definitions = ModuleFunctionDefinitions::new();
 
-    for function in get_all_functions(&context.bindings, &context.answers) {
+    for function in get_all_functions(context) {
         if !should_export_function(&function, context) {
             continue;
         }
@@ -446,32 +470,79 @@ pub fn export_all_functions(
     function_base_definitions
 }
 
-pub fn add_undecorated_signatures(
-    function_base_definitions: &ModuleFunctionDefinitions<FunctionBaseDefinition>,
+fn find_definition_ast<'a>(
+    function: &DecoratedFunction,
+    context: &'a ModuleContext<'a>,
+) -> Option<&'a StmtFunctionDef> {
+    let range = function.id_range();
+    Ast::locate_node(&context.ast, range.start())
+        .iter()
+        .find_map(|node| match node {
+            AnyNodeRef::StmtFunctionDef(stmt) if stmt.name.range == range => Some(*stmt),
+            _ => None,
+        })
+}
+
+fn get_decorator_callees(
+    function: &DecoratedFunction,
+    function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
+    context: &ModuleContext,
+) -> HashMap<PysaLocation, Vec<Target<FunctionRef>>> {
+    if let Some(function_def) = find_definition_ast(function, context) {
+        resolve_decorator_callees(
+            &function_def.decorator_list,
+            function_base_definitions,
+            context,
+        )
+    } else {
+        HashMap::new()
+    }
+}
+
+pub fn export_function_definitions(
+    function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
+    captured_variables: &ModuleCapturedVariables,
     context: &ModuleContext,
 ) -> ModuleFunctionDefinitions<FunctionDefinition> {
     let mut function_definitions = ModuleFunctionDefinitions::new();
+    let function_base_definitions_for_module = function_base_definitions
+        .get_for_module(context.module_id)
+        .unwrap();
 
-    for function in get_all_functions(&context.bindings, &context.answers) {
+    for function in get_all_functions(context) {
+        if !should_export_function(&function, context) {
+            continue;
+        }
         let current_function = FunctionRef::from_decorated_function(&function, context);
-        if let Some(function_base_definition) = function_base_definitions
+        let function_base_definition = function_base_definitions_for_module
             .0
             .get(&current_function.function_id)
-        {
-            assert!(
-                function_definitions
-                    .0
-                    .insert(
-                        current_function.function_id.clone(),
-                        FunctionDefinition {
-                            base: function_base_definition.to_owned(),
-                            undecorated_signatures: get_undecorated_signatures(function, context),
-                        },
-                    )
-                    .is_none(),
-                "Found undecorated signatures for the same function"
-            );
-        }
+            .unwrap();
+        let undecorated_signatures = get_undecorated_signatures(&function, context);
+
+        let captured_variables = captured_variables
+            .get(&current_function)
+            .map(|set| set.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+
+        let decorator_callees =
+            get_decorator_callees(&function, function_base_definitions, context);
+
+        assert!(
+            function_definitions
+                .0
+                .insert(
+                    current_function.function_id.clone(),
+                    FunctionDefinition {
+                        base: function_base_definition.to_owned(),
+                        undecorated_signatures,
+                        captured_variables,
+                        decorator_callees,
+                    },
+                )
+                .is_none(),
+            "Found multiple function definitions with the same function id"
+        );
     }
 
     function_definitions
@@ -483,18 +554,32 @@ pub fn collect_function_base_definitions(
     module_ids: &ModuleIds,
     reversed_override_graph: &WholeProgramReversedOverrideGraph,
 ) -> WholeProgramFunctionDefinitions<FunctionBaseDefinition> {
+    let step = StepLogger::start(
+        "Indexing function definitions",
+        "Indexed function definitions",
+    );
+
     let base_definitions = dashmap::DashMap::new();
 
     ThreadPool::new().install(|| {
-        handles.par_iter().for_each(|handle| {
-            let module_id = module_ids.get(ModuleKey::from_handle(handle)).unwrap();
-            let base_definitions_for_module = export_all_functions(
-                reversed_override_graph,
-                &ModuleContext::create(handle, transaction, module_ids).unwrap(),
-            );
-            base_definitions.insert(module_id, base_definitions_for_module);
-        });
+        slow_fun_monitor_scope(|slow_function_monitor| {
+            handles.par_iter().for_each(|handle| {
+                let module_id = module_ids.get(ModuleKey::from_handle(handle)).unwrap();
+                let context =
+                    ModuleContext::create(handle.clone(), transaction, module_ids).unwrap();
+                let base_definitions_for_module = slow_function_monitor.monitor_function(
+                    || export_all_functions(reversed_override_graph, &context),
+                    format!(
+                        "Indexing function definitions for {}",
+                        handle.module().as_str(),
+                    ),
+                    /* max_time_in_seconds */ 4,
+                );
+                base_definitions.insert(module_id, base_definitions_for_module);
+            });
+        })
     });
 
+    step.finish();
     WholeProgramFunctionDefinitions(base_definitions.into_read_only())
 }

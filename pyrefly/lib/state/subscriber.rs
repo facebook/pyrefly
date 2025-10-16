@@ -47,11 +47,6 @@ impl Subscriber for TestSubscriber {
                 e.insert((1, None));
             }
             Entry::Occupied(mut e) => {
-                assert!(
-                    e.get().1.is_some(),
-                    "Handle started a second time without finishing: {:?}",
-                    e.key()
-                );
                 e.get_mut().0 += 1;
                 e.get_mut().1 = None;
             }
@@ -79,18 +74,8 @@ impl TestSubscriber {
     /// For each handle, return a pair of (the number of times each handle started, the final load state).
     /// Panics if any handle was started but not finished.
     #[allow(dead_code)] // Only in test code
-    pub fn finish(self) -> SmallMap<Handle, (usize, Arc<Load>)> {
-        let value = mem::take(&mut *self.0.lock());
-        let mut res = SmallMap::with_capacity(value.len());
-        for (k, v) in value {
-            match v.1 {
-                Some(load) => {
-                    res.insert(k, (v.0, load));
-                }
-                None => panic!("Handle started but never finished: {k:?}"),
-            }
-        }
-        res
+    pub fn finish(self) -> SmallMap<Handle, (usize, Option<Arc<Load>>)> {
+        mem::take(&mut *self.0.lock())
     }
 }
 

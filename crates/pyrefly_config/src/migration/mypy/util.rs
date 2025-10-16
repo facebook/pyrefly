@@ -144,6 +144,10 @@ fn code_to_kind(mut errors: HashMap<String, Severity>) -> Option<ErrorDisplayCon
         map.insert(ErrorKind::UnsupportedOperation, value);
     }
 
+    if let Some(value) = [errors.remove("dict-item")].into_iter().flatten().max() {
+        map.insert(ErrorKind::BadTypedDict, value);
+    }
+
     if map.is_empty() {
         None
     } else {

@@ -6,17 +6,15 @@
  */
 
 use num_traits::ToPrimitive;
+use pyrefly_python::ast::Ast;
+use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprNumberLiteral;
-use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Int;
 use ruff_python_ast::Number;
-use ruff_python_ast::StringLiteral;
-use ruff_python_ast::StringLiteralFlags;
-use ruff_python_ast::StringLiteralValue;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -35,6 +33,7 @@ use crate::types::callable::FunctionKind;
 use crate::types::class::ClassType;
 use crate::types::facet::FacetChain;
 use crate::types::facet::FacetKind;
+use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
 use crate::types::type_info::TypeInfo;
@@ -102,7 +101,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.intersect_with_fallback(left, right, Type::never)
     }
 
-    fn intersects(&self, ts: &[Type]) -> Type {
+    /// Calculate the intersection of a number of types
+    pub fn intersects(&self, ts: &[Type]) -> Type {
         match ts {
             [] => Type::ClassType(self.stdlib.object().clone()),
             [ty] => ty.clone(),
@@ -180,7 +180,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn narrow_issubclass(&self, left: &Type, right: &Type, range: TextRange) -> Type {
         let mut res = Vec::new();
         for right in self.as_class_info(right.clone()) {
-            if let Some(left) = self.untype_opt(left.clone(), range)
+            if matches!(left, Type::ClassDef(_)) && matches!(right, Type::ClassDef(_)) {
+                res.push(self.intersect(left, &right))
+            } else if let Some(left) = self.untype_opt(left.clone(), range)
                 && let Some(right) = self.unwrap_class_object_silently(&right)
             {
                 res.push(Type::type_form(self.intersect(&left, &right)))
@@ -194,7 +196,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn narrow_is_not_subclass(&self, left: &Type, right: &Type, range: TextRange) -> Type {
         let mut res = Vec::new();
         for right in self.as_class_info(right.clone()) {
-            if let Some(left) = self.untype_opt(left.clone(), range)
+            if matches!(left, Type::ClassDef(_)) && matches!(right, Type::ClassDef(_)) {
+                res.push(self.subtract(left, &right))
+            } else if let Some(left) = self.untype_opt(left.clone(), range)
                 && let Some(right) = self.unwrap_class_object_silently(&right)
             {
                 res.push(Type::type_form(self.subtract(&left, &right)))
@@ -629,12 +633,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &ErrorCollector::new(errors.module().clone(), ErrorStyle::Never),
                     ) == Some(!boolval)
                     {
-                        Type::never()
-                    } else if matches!(t, Type::ClassType(cls) if cls.is_builtin("bool")) {
-                        Type::Literal(Lit::Bool(boolval))
-                    } else {
-                        t.clone()
+                        return Type::never();
+                    } else if let Type::ClassType(cls) = t {
+                        if cls.is_builtin("bool") {
+                            return Type::Literal(Lit::Bool(boolval));
+                        }
+                        if !boolval {
+                            if cls.is_builtin("int") {
+                                return Type::Literal(Lit::Int(LitInt::new(0)));
+                            } else if cls.is_builtin("str") {
+                                return Type::Literal(Lit::Str("".into()));
+                            } else if cls.is_builtin("bytes") {
+                                let empty = Vec::new();
+                                return Type::Literal(Lit::Bytes(empty.into_boxed_slice()));
+                            }
+                        }
                     }
+
+                    t.clone()
                 })
             }
             AtomicNarrowOp::Eq(v) => {
@@ -756,17 +772,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             FacetKind::Key(key) => {
                 // We synthesize a slice expression for the subscript here
-                // The range doesn't matter, since narrowing logic swallows type errors
-                let synthesized_slice = Expr::StringLiteral(ExprStringLiteral {
-                    node_index: AtomicNodeIndex::dummy(),
-                    range,
-                    value: StringLiteralValue::single(StringLiteral {
-                        node_index: AtomicNodeIndex::dummy(),
-                        range,
-                        value: key.clone().into_boxed_str(),
-                        flags: StringLiteralFlags::empty(),
-                    }),
-                });
+                // Use a synthesized fake range to avoid overwriting typing traces
+                let synthesized_slice = Ast::str_expr(key, TextRange::empty(TextSize::from(0)));
                 match remaining_facets.split_first() {
                     None => match base.type_at_facet(first_facet) {
                         Some(ty) => ty.clone(),
@@ -915,6 +922,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             NarrowOp::Or(ops) => TypeInfo::join(
                 ops.map(|op| self.narrow(type_info, op, range, errors)),
                 &|tys| self.unions(tys),
+                &|got, want| self.is_subset_eq(got, want),
+                JoinStyle::SimpleMerge,
             ),
         }
     }

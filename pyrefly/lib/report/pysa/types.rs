@@ -43,14 +43,8 @@ pub struct PysaType {
     string: String,
 
     // Whether the type is a bool/int/float/enum, after stripping Optional and Awaitable.
-    #[serde(skip_serializing_if = "<&bool>::not")]
-    is_bool: bool,
-    #[serde(skip_serializing_if = "<&bool>::not")]
-    is_int: bool,
-    #[serde(skip_serializing_if = "<&bool>::not")]
-    is_float: bool,
-    #[serde(skip_serializing_if = "<&bool>::not")]
-    is_enum: bool,
+    #[serde(flatten)]
+    scalar_type_properties: ScalarTypeProperties,
 
     #[serde(skip_serializing_if = "ClassNamesFromType::skip_serializing")]
     class_names: ClassNamesFromType,
@@ -173,10 +167,10 @@ fn strip_coroutine<'a>(type_: &'a Type, context: &ModuleContext) -> Option<&'a T
     }
 }
 
-fn has_superclass(class: &Class, want: &Class, context: &ModuleContext) -> bool {
+pub fn has_superclass(class: &Class, want: &Class, context: &ModuleContext) -> bool {
     context
         .transaction
-        .ad_hoc_solve(context.handle, |solver| {
+        .ad_hoc_solve(&context.handle, |solver| {
             solver.type_order().has_superclass(class, want)
         })
         .unwrap()
@@ -226,56 +220,58 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
     }
 }
 
+fn preprocess_type(type_: &Type, context: &ModuleContext) -> Type {
+    // Promote `Literal[..]` into `str` or `int`.
+    let type_ = type_.clone().promote_literals(&context.stdlib);
+    strip_self_type(type_)
+}
+
 impl PysaType {
     #[cfg(test)]
     pub fn new(string: String, class_names: ClassNamesFromType) -> PysaType {
         PysaType {
             string,
-            is_bool: false,
-            is_int: false,
-            is_float: false,
-            is_enum: false,
+            scalar_type_properties: ScalarTypeProperties {
+                is_bool: false,
+                is_int: false,
+                is_float: false,
+                is_enum: false,
+            },
             class_names,
         }
     }
 
     #[cfg(test)]
     pub fn with_is_bool(mut self, is_bool: bool) -> PysaType {
-        self.is_bool = is_bool;
+        self.scalar_type_properties.is_bool = is_bool;
         self
     }
 
     #[cfg(test)]
     pub fn with_is_int(mut self, is_int: bool) -> PysaType {
-        self.is_int = is_int;
+        self.scalar_type_properties.is_int = is_int;
         self
     }
 
     #[cfg(test)]
     pub fn with_is_float(mut self, is_float: bool) -> PysaType {
-        self.is_float = is_float;
+        self.scalar_type_properties.is_float = is_float;
         self
     }
 
     #[cfg(test)]
     pub fn with_is_enum(mut self, is_enum: bool) -> PysaType {
-        self.is_enum = is_enum;
+        self.scalar_type_properties.is_enum = is_enum;
         self
     }
 
     pub fn from_type(type_: &Type, context: &ModuleContext) -> PysaType {
-        // Promote `Literal[..]` into `str` or `int`.
-        let type_ = type_.clone().promote_literals(&context.stdlib);
-        let type_ = strip_self_type(type_);
-
+        let type_ = preprocess_type(type_, context);
         let string = string_for_type(&type_);
 
         PysaType {
             string,
-            is_bool: is_scalar_type(&type_, context.stdlib.bool().class_object(), context),
-            is_int: is_scalar_type(&type_, context.stdlib.int().class_object(), context),
-            is_float: is_scalar_type(&type_, context.stdlib.float().class_object(), context),
-            is_enum: is_scalar_type(&type_, context.stdlib.enum_class().class_object(), context),
+            scalar_type_properties: ScalarTypeProperties::from_preprocessed_type(&type_, context),
             class_names: get_classes_of_type(&type_, context),
         }
     }
@@ -297,10 +293,7 @@ impl PysaType {
     pub fn any_implicit() -> PysaType {
         PysaType {
             string: "Unknown".to_owned(),
-            is_bool: false,
-            is_int: false,
-            is_float: false,
-            is_enum: false,
+            scalar_type_properties: ScalarTypeProperties::none(),
             class_names: ClassNamesFromType::not_a_class(),
         }
     }
@@ -309,11 +302,90 @@ impl PysaType {
     pub fn none() -> PysaType {
         PysaType {
             string: "None".to_owned(),
+            scalar_type_properties: ScalarTypeProperties::none(),
+            class_names: ClassNamesFromType::not_a_class(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
+pub struct ScalarTypeProperties {
+    // Whether the type is a bool/int/float/enum, after stripping Optional and Awaitable.
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    is_bool: bool,
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    is_int: bool,
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    is_float: bool,
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    is_enum: bool,
+}
+
+impl ScalarTypeProperties {
+    pub fn from_type(type_: &Type, context: &ModuleContext) -> ScalarTypeProperties {
+        let type_ = preprocess_type(type_, context);
+        Self::from_preprocessed_type(&type_, context)
+    }
+
+    fn from_preprocessed_type(type_: &Type, context: &ModuleContext) -> ScalarTypeProperties {
+        ScalarTypeProperties {
+            is_bool: is_scalar_type(type_, context.stdlib.bool().class_object(), context),
+            is_int: is_scalar_type(type_, context.stdlib.int().class_object(), context),
+            is_float: is_scalar_type(type_, context.stdlib.float().class_object(), context),
+            is_enum: is_scalar_type(type_, context.stdlib.enum_class().class_object(), context),
+        }
+    }
+
+    pub fn none() -> ScalarTypeProperties {
+        ScalarTypeProperties {
             is_bool: false,
             is_int: false,
             is_float: false,
             is_enum: false,
-            class_names: ClassNamesFromType::not_a_class(),
         }
+    }
+
+    pub fn join(mut self, other: ScalarTypeProperties) -> Self {
+        self.is_bool &= other.is_bool;
+        self.is_int &= other.is_int;
+        self.is_float &= other.is_float;
+        self.is_enum &= other.is_enum;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn int() -> ScalarTypeProperties {
+        ScalarTypeProperties {
+            is_bool: false,
+            is_int: true,
+            is_float: false,
+            is_enum: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn bool() -> ScalarTypeProperties {
+        ScalarTypeProperties {
+            is_bool: true,
+            is_int: true,
+            is_float: false,
+            is_enum: false,
+        }
+    }
+}
+
+pub fn is_callable_like(ty: &Type) -> bool {
+    match ty {
+        Type::Function(_) => true,
+        Type::Callable(_) => true,
+        Type::BoundMethod(_) => true,
+        Type::Overload(_) => true,
+        Type::Union(unions) => {
+            unions.iter().any(is_callable_like)
+                && unions
+                    .iter()
+                    .all(|ty| ty.is_none() || ty.is_any() || is_callable_like(ty))
+        }
+        _ => false,
     }
 }

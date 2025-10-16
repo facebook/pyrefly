@@ -22,7 +22,6 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
-use crate::alt::solve::Iterable;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::KeyAnnotation;
 use crate::config::error_kind::ErrorKind;
@@ -41,7 +40,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         method_type: Type,
         range: TextRange,
-        errors: &ErrorCollector,
+        callee_errors: &ErrorCollector,
+        call_errors: &ErrorCollector,
         context: &dyn Fn() -> ErrorContext,
         opname: &Name,
         call_arg_type: &Type,
@@ -50,7 +50,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             method_type,
             CallStyle::Method(opname),
             range,
-            errors,
+            callee_errors,
             Some(context),
         );
         self.call_infer(
@@ -58,7 +58,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &[CallArg::ty(call_arg_type, range)],
             &[],
             range,
-            errors,
+            call_errors,
             Some(context),
             None,
             None,
@@ -85,23 +85,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let Some(method_type_dunder) = method_type_dunder else {
                 continue;
             };
-            let dunder_errors = self.error_collector();
+            let callee_errors = self.error_collector();
+            let call_errors = self.error_collector();
             let ret = self.callable_dunder_helper(
                 method_type_dunder,
                 range,
-                &dunder_errors,
+                &callee_errors,
+                &call_errors,
                 &context,
                 dunder,
                 arg,
             );
-            if dunder_errors.is_empty() {
+            if call_errors.is_empty() {
+                errors.extend(callee_errors);
                 return ret;
             } else if first_call.is_none() {
-                first_call = Some((dunder_errors, ret));
+                first_call = Some((callee_errors, call_errors, ret));
             }
         }
-        if let Some((dunder_errors, ret)) = first_call {
-            errors.extend(dunder_errors);
+        if let Some((callee_errors, call_errors, ret)) = first_call {
+            errors.extend(callee_errors);
+            errors.extend(call_errors);
             ret
         } else {
             let dunders = calls
@@ -128,29 +132,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (Tuple::Unbounded(l), Tuple::Unbounded(r)) => Type::Tuple(Tuple::Unbounded(Box::new(
                 self.union((**l).clone(), (**r).clone()),
             ))),
-            (Tuple::Concrete(l), r @ Tuple::Unbounded(_)) => Type::Tuple(Tuple::Unpacked(
-                Box::new((l.clone(), Type::Tuple(r.clone()), Vec::new())),
+            (Tuple::Concrete(l), r @ Tuple::Unbounded(_)) => Type::Tuple(Tuple::unpacked(
+                l.clone(),
+                Type::Tuple(r.clone()),
+                Vec::new(),
             )),
-            (l @ Tuple::Unbounded(_), Tuple::Concrete(r)) => Type::Tuple(Tuple::Unpacked(
-                Box::new((Vec::new(), Type::Tuple(l.clone()), r.clone())),
+            (l @ Tuple::Unbounded(_), Tuple::Concrete(r)) => Type::Tuple(Tuple::unpacked(
+                Vec::new(),
+                Type::Tuple(l.clone()),
+                r.clone(),
             )),
             (Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)), Tuple::Concrete(r)) => {
                 let mut new_suffix = l_suffix.clone();
                 new_suffix.extend(r.clone());
-                Type::Tuple(Tuple::Unpacked(Box::new((
+                Type::Tuple(Tuple::unpacked(
                     l_prefix.clone(),
                     l_middle.clone(),
                     new_suffix,
-                ))))
+                ))
             }
             (Tuple::Concrete(l), Tuple::Unpacked(box (r_prefix, r_middle, r_suffix))) => {
                 let mut new_prefix = l.clone();
                 new_prefix.extend(r_prefix.clone());
-                Type::Tuple(Tuple::Unpacked(Box::new((
+                Type::Tuple(Tuple::unpacked(
                     new_prefix,
                     r_middle.clone(),
                     r_suffix.clone(),
-                ))))
+                ))
             }
             (Tuple::Unbounded(l), Tuple::Unpacked(box (r_prefix, r_middle, r_suffix))) => {
                 let mut middle = r_prefix.clone();
@@ -159,11 +167,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.unwrap_iterable(r_middle)
                         .unwrap_or(Type::any_implicit()),
                 );
-                Type::Tuple(Tuple::Unpacked(Box::new((
+                Type::Tuple(Tuple::unpacked(
                     Vec::new(),
                     Type::Tuple(Tuple::unbounded(self.unions(middle))),
                     r_suffix.clone(),
-                ))))
+                ))
             }
             (Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)), Tuple::Unbounded(r)) => {
                 let mut middle = l_suffix.clone();
@@ -172,11 +180,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.unwrap_iterable(l_middle)
                         .unwrap_or(Type::any_implicit()),
                 );
-                Type::Tuple(Tuple::Unpacked(Box::new((
+                Type::Tuple(Tuple::unpacked(
                     l_prefix.clone(),
                     Type::Tuple(Tuple::unbounded(self.unions(middle))),
                     Vec::new(),
-                ))))
+                ))
             }
             (
                 Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)),
@@ -192,11 +200,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.unwrap_iterable(r_middle)
                         .unwrap_or(Type::any_implicit()),
                 );
-                Type::Tuple(Tuple::Unpacked(Box::new((
+                Type::Tuple(Tuple::unpacked(
                     l_prefix.clone(),
                     Type::Tuple(Tuple::unbounded(self.unions(middle))),
                     r_suffix.clone(),
-                ))))
+                ))
             }
         }
     }
@@ -380,23 +388,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         ret
                                     } else {
                                         let iteration_errors = self.error_collector();
-                                        let iterables =
-                                            self.iterate(right, x.range, &iteration_errors);
-                                        if !iteration_errors.is_empty()
-                                            || !iterables.iter().any(|iterable| match iterable {
-                                                Iterable::OfType(ty) => self.is_subset_eq(left, ty),
-                                                Iterable::FixedLen(ts) => {
-                                                    ts.iter().any(|t| self.is_subset_eq(left, t))
-                                                }
-                                            })
-                                        {
-                                            // Iterating `y` failed, or `x` does not match any of the produced types.
-                                            self.error(
-                                                errors,
+                                        let iterables = self.iterate(
+                                            right,
+                                            x.range,
+                                            &iteration_errors,
+                                            Some(&context),
+                                        );
+                                        if iteration_errors.is_empty() {
+                                            // Make sure `x` matches the produced type.
+                                            self.check_type(
+                                                left,
+                                                &self.get_produced_type(iterables),
                                                 x.range,
-                                                ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
-                                                context().format(),
+                                                errors,
+                                                &|| TypeCheckContext {
+                                                    kind: TypeCheckKind::Container,
+                                                    context: Some(context()),
+                                                },
                                             );
+                                        } else {
+                                            // Iterating `y` failed.
+                                            errors.extend(iteration_errors);
                                         }
                                         self.stdlib.bool().clone().to_type()
                                     }
@@ -472,10 +484,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let f = |lit: &Lit| lit.positive();
                 unop(t, &f, &dunder::POS)
             }
-            UnaryOp::Not => match t.as_bool() {
-                None => self.stdlib.bool().clone().to_type(),
-                Some(b) => Type::Literal(Lit::Bool(!b)),
-            },
+            UnaryOp::Not => {
+                self.check_dunder_bool_is_callable(t, x.range, errors);
+                match t.as_bool() {
+                    None => self.stdlib.bool().clone().to_type(),
+                    Some(b) => Type::Literal(Lit::Bool(!b)),
+                }
+            }
             UnaryOp::Invert => {
                 let f = |lit: &Lit| lit.invert();
                 unop(t, &f, &dunder::INVERT)

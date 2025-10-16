@@ -5,21 +5,23 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Not;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
-use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::class::Class;
 use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use serde::Serialize;
+use serde::ser::SerializeStruct;
 use starlark_map::Hashed;
 
-use crate::alt::answers::Answers;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::BindingClass;
@@ -30,8 +32,13 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
-use crate::binding::bindings::Bindings;
+use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::report::pysa::ModuleContext;
+use crate::report::pysa::call_graph::Target;
+use crate::report::pysa::call_graph::resolve_decorator_callees;
+use crate::report::pysa::function::FunctionBaseDefinition;
+use crate::report::pysa::function::FunctionRef;
+use crate::report::pysa::function::WholeProgramFunctionDefinitions;
 use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleId;
 use crate::report::pysa::module::ModuleIds;
@@ -39,6 +46,7 @@ use crate::report::pysa::module::ModuleKey;
 use crate::report::pysa::scope::ScopeParent;
 use crate::report::pysa::scope::get_scope_parent;
 use crate::report::pysa::types::PysaType;
+use crate::report::pysa::types::is_callable_like;
 
 /// Represents a unique identifier for a class **within a module**.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
@@ -59,12 +67,11 @@ impl ClassId {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClassRef {
     pub module_id: ModuleId,
-    pub module_name: ModuleName, // For debugging purposes only. Reader should use the module id.
     pub class_id: ClassId,
-    pub class_name: String, // For debugging purposes only. Reader should use the class id.
+    pub class: Class,
 }
 
 impl ClassRef {
@@ -73,10 +80,25 @@ impl ClassRef {
             module_id: module_ids
                 .get(ModuleKey::from_module(class.module()))
                 .unwrap(),
-            module_name: class.module_name(),
             class_id: ClassId::from_class(class),
-            class_name: class.qname().id().to_string(),
+            class: class.clone(),
         }
+    }
+}
+
+impl Serialize for ClassRef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("ClassRef", 4)?;
+        state.serialize_field("module_id", &self.module_id)?;
+        // Exported for debugging purposes only
+        state.serialize_field("module_name", &self.class.module_name())?;
+        state.serialize_field("class_id", &self.class_id)?;
+        // Exported for debugging purposes only
+        state.serialize_field("class_name", &self.class.name())?;
+        state.end()
     }
 }
 
@@ -84,6 +106,16 @@ impl ClassRef {
 pub enum PysaClassMro {
     Resolved(Vec<ClassRef>),
     Cyclic,
+}
+
+/// See `pyrefly::binding::ClassFieldDeclaration`
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub enum PysaClassFieldDeclaration {
+    DeclaredByAnnotation,
+    DeclaredWithoutAnnotation,
+    AssignedInBody,
+    DefinedWithoutAssign,
+    DefinedInMethod,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -94,18 +126,53 @@ pub struct PysaClassField {
     pub explicit_annotation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<PysaLocation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declaration_kind: Option<PysaClassFieldDeclaration>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ClassDefinition {
     pub class_id: ClassId,
     pub name: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub bases: Vec<ClassRef>,
     pub mro: PysaClassMro,
     pub parent: ScopeParent,
     #[serde(skip_serializing_if = "<&bool>::not")]
     pub is_synthesized: bool, // True if this class was synthesized (e.g., from namedtuple), false if from actual `class X:` statement
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    pub is_dataclass: bool,
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    pub is_named_tuple: bool,
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    pub is_typed_dict: bool,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub fields: HashMap<String, PysaClassField>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub decorator_callees: HashMap<PysaLocation, Vec<Target<FunctionRef>>>,
+}
+
+impl PysaClassFieldDeclaration {
+    fn from(definition: &ClassFieldDefinition) -> Option<Self> {
+        match definition {
+            ClassFieldDefinition::DeclaredByAnnotation { .. } => {
+                Some(PysaClassFieldDeclaration::DeclaredByAnnotation)
+            }
+            ClassFieldDefinition::DeclaredWithoutAnnotation => {
+                Some(PysaClassFieldDeclaration::DeclaredWithoutAnnotation)
+            }
+            ClassFieldDefinition::AssignedInBody { .. } => {
+                Some(PysaClassFieldDeclaration::AssignedInBody)
+            }
+            ClassFieldDefinition::DefinedWithoutAssign { .. } => {
+                Some(PysaClassFieldDeclaration::DefinedWithoutAssign)
+            }
+            ClassFieldDefinition::DefinedInMethod { .. } => {
+                Some(PysaClassFieldDeclaration::DefinedInMethod)
+            }
+            ClassFieldDefinition::MethodLike { .. } => None,
+        }
+    }
 }
 
 impl ClassDefinition {
@@ -126,25 +193,53 @@ impl ClassDefinition {
         self.fields = fields;
         self
     }
+
+    #[cfg(test)]
+    pub fn with_decorator_callees(
+        mut self,
+        decorator_callees: HashMap<PysaLocation, Vec<Target<FunctionRef>>>,
+    ) -> Self {
+        self.decorator_callees = decorator_callees;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_is_dataclass(mut self, is_dataclass: bool) -> Self {
+        self.is_dataclass = is_dataclass;
+        self
+    }
 }
 
-pub fn get_all_classes(bindings: &Bindings, answers: &Answers) -> impl Iterator<Item = Class> {
-    bindings
+pub fn get_all_classes(context: &ModuleContext) -> impl Iterator<Item = Class> {
+    context
+        .bindings
         .keys::<KeyClass>()
-        .map(|idx| answers.get_idx(idx).unwrap().0.dupe().unwrap())
+        .map(|idx| context.answers.get_idx(idx).unwrap().0.dupe().unwrap())
 }
 
-pub fn get_class_field(
+fn get_class_field(
     class: &Class,
     field: &Name,
     context: &ModuleContext,
 ) -> Option<Arc<ClassField>> {
     context
         .transaction
-        .ad_hoc_solve(context.handle, |solver| {
+        .ad_hoc_solve(&context.handle, |solver| {
             solver.get_field_from_current_class_only(class, field)
         })
         .unwrap()
+}
+
+pub fn get_context_from_class<'a>(
+    class: &'a Class,
+    context: &'a ModuleContext<'a>,
+) -> ModuleContext<'a> {
+    let handle = Handle::new(
+        class.module_name(),
+        class.module_path().clone(),
+        context.handle.sys_info().clone(),
+    );
+    ModuleContext::create(handle, context.transaction, context.module_ids).unwrap()
 }
 
 pub fn get_class_field_declaration<'a>(
@@ -152,6 +247,7 @@ pub fn get_class_field_declaration<'a>(
     field: &'a Name,
     context: &'a ModuleContext,
 ) -> Option<&'a BindingClassField> {
+    assert_eq!(class.module(), &context.module_info);
     let key_class_field = KeyClassField(class.index(), field.clone());
     // We use `key_to_idx_hashed_opt` below because the key might not be valid (could be a synthesized field).
     context
@@ -160,19 +256,47 @@ pub fn get_class_field_declaration<'a>(
         .map(|idx| context.bindings.get(idx))
 }
 
-pub fn get_class_mro(class: &Class, bindings: &Bindings, answers: &Answers) -> Arc<ClassMro> {
-    answers
-        .get_idx(bindings.key_to_idx(&KeyClassMro(class.index())))
+pub fn get_class_mro(class: &Class, context: &ModuleContext) -> Arc<ClassMro> {
+    assert_eq!(class.module(), &context.module_info);
+    context
+        .answers
+        .get_idx(context.bindings.key_to_idx(&KeyClassMro(class.index())))
         .unwrap()
+}
+
+fn get_class_fields<'a>(
+    class: &'a Class,
+    context: &'a ModuleContext<'a>,
+) -> Vec<(Cow<'a, Name>, Arc<ClassField>)> {
+    let mut fields = class
+        .fields()
+        .filter_map(|name| {
+            get_class_field(class, name, context).map(|field| (Cow::Borrowed(name), field))
+        })
+        .collect::<Vec<_>>();
+
+    let synthesized_fields_idx = context
+        .bindings
+        .key_to_idx(&KeyClassSynthesizedFields(class.index()));
+    let synthesized_fields = context.answers.get_idx(synthesized_fields_idx).unwrap();
+    fields.extend(
+        synthesized_fields
+            .fields()
+            .filter(|(name, _)| !class.contains(name))
+            .map(|(name, field)| (Cow::Owned(name.clone()), field.inner.dupe())),
+    );
+
+    fields
 }
 
 pub fn export_class_fields(
     class: &Class,
     context: &ModuleContext,
 ) -> HashMap<String, PysaClassField> {
-    class
-        .fields()
-        .filter_map(|name| get_class_field(class, name, context).map(|field| (name, field)))
+    assert_eq!(class.module(), &context.module_info);
+    get_class_fields(class, context)
+        .iter()
+        .filter(|(_, field)| !is_callable_like(&field.ty()))
         .filter_map(|(name, field)| {
             let field_binding = get_class_field_declaration(class, name, context);
 
@@ -224,7 +348,9 @@ pub fn export_class_fields(
                     // Exclude fields that are functions definitions, because they are already exported in `function_definitions`.
                     None
                 }
-                Some(BindingClassField { range, .. }) => Some((
+                Some(BindingClassField {
+                    range, definition, ..
+                }) => Some((
                     name.to_string(),
                     PysaClassField {
                         type_: PysaType::from_type(&field.ty(), context),
@@ -232,6 +358,7 @@ pub fn export_class_fields(
                         location: Some(PysaLocation::new(
                             context.module_info.display_range(*range),
                         )),
+                        declaration_kind: PysaClassFieldDeclaration::from(definition),
                     },
                 )),
                 _ => Some((
@@ -240,6 +367,7 @@ pub fn export_class_fields(
                         type_: PysaType::from_type(&field.ty(), context),
                         explicit_annotation,
                         location: None,
+                        declaration_kind: None,
                     },
                 )),
             }
@@ -247,7 +375,42 @@ pub fn export_class_fields(
         .collect()
 }
 
-pub fn export_all_classes(context: &ModuleContext) -> HashMap<PysaLocation, ClassDefinition> {
+fn find_definition_ast<'a>(
+    class: &Class,
+    context: &'a ModuleContext<'a>,
+) -> Option<&'a StmtClassDef> {
+    assert_eq!(class.module(), &context.module_info);
+    Ast::locate_node(&context.ast, class.qname().range().start())
+        .iter()
+        .find_map(|node| match node {
+            AnyNodeRef::StmtClassDef(stmt) if stmt.name.range == class.qname().range() => {
+                Some(*stmt)
+            }
+            _ => None,
+        })
+}
+
+fn get_decorator_callees(
+    class: &Class,
+    function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
+    context: &ModuleContext,
+) -> HashMap<PysaLocation, Vec<Target<FunctionRef>>> {
+    assert_eq!(class.module(), &context.module_info);
+    if let Some(class_def) = find_definition_ast(class, context) {
+        resolve_decorator_callees(
+            &class_def.decorator_list,
+            function_base_definitions,
+            context,
+        )
+    } else {
+        HashMap::new()
+    }
+}
+
+pub fn export_all_classes(
+    function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
+    context: &ModuleContext,
+) -> HashMap<PysaLocation, ClassDefinition> {
     let mut class_definitions = HashMap::new();
 
     for class_idx in context.bindings.keys::<KeyClass>() {
@@ -279,7 +442,7 @@ pub fn export_all_classes(context: &ModuleContext) -> HashMap<PysaLocation, Clas
             .map(|base_class| ClassRef::from_class(base_class, context.module_ids))
             .collect::<Vec<_>>();
 
-        let mro = match &*get_class_mro(&class, &context.bindings, &context.answers) {
+        let mro = match &*get_class_mro(&class, context) {
             ClassMro::Resolved(mro) => PysaClassMro::Resolved(
                 mro.iter()
                     .map(|class_type| {
@@ -290,6 +453,8 @@ pub fn export_all_classes(context: &ModuleContext) -> HashMap<PysaLocation, Clas
             ClassMro::Cyclic => PysaClassMro::Cyclic,
         };
 
+        let decorator_callees = get_decorator_callees(&class, function_base_definitions, context);
+
         let class_definition = ClassDefinition {
             class_id: ClassId::from_class(&class),
             name: class.qname().id().to_string(),
@@ -297,7 +462,11 @@ pub fn export_all_classes(context: &ModuleContext) -> HashMap<PysaLocation, Clas
             bases,
             mro,
             is_synthesized,
+            is_dataclass: metadata.dataclass_metadata().is_some(),
+            is_named_tuple: metadata.named_tuple_metadata().is_some(),
+            is_typed_dict: metadata.typed_dict_metadata().is_some(),
             fields,
+            decorator_callees,
         };
 
         assert!(

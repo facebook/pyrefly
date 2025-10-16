@@ -21,6 +21,7 @@ use tracing::error;
 use crate::commands::check;
 use crate::commands::check::Handles;
 use crate::commands::files::FilesArgs;
+use crate::commands::files::get_project_config_for_current_dir;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::ErrorKind;
 use crate::lsp::module_helpers::handle_from_module_path;
@@ -40,16 +41,36 @@ use crate::types::types::Type;
 pub struct InferFlags {
     // Default should be false for all of them and then we can override to easily customize
     /// Whether to add type annotations to container types like lists and dictionaries
-    #[arg(long, value_parser = clap::value_parser!(bool))]
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
     pub containers: Option<bool>,
     /// Whether to add return type annotations to functions
-    #[arg(long, value_parser = clap::value_parser!(bool))]
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
     pub return_types: Option<bool>,
     /// Whether to add type annotations to function parameters
-    #[arg(long, value_parser = clap::value_parser!(bool))]
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
     pub parameter_types: Option<bool>,
     /// Whether to automatically add imports for types used in annotations
-    #[arg(long, value_parser = clap::value_parser!(bool))]
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
     pub imports: Option<bool>,
 }
 
@@ -186,7 +207,7 @@ fn hint_to_string(
 impl InferArgs {
     pub fn run(self) -> anyhow::Result<CommandExitStatus> {
         self.config_override.validate()?;
-        let (files_to_check, config_finder) = self.files.resolve(&self.config_override)?;
+        let (files_to_check, config_finder) = self.files.resolve(self.config_override)?;
         Self::run_inner(files_to_check, config_finder, self.flags)
     }
 
@@ -250,7 +271,9 @@ impl InferArgs {
         }
         // Add imports, if needed
         let check_args = check::CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
-        let (_, config_finder) = FilesArgs::get(Vec::new(), None, &check_args.config_override)?;
+        let current_dir_config =
+            get_project_config_for_current_dir(ConfigOverrideArgs::default())?.0;
+        let config_finder = ConfigFinder::new_constant(current_dir_config);
         let state = holder.as_ref();
         match check_args.run_once(files_to_check, config_finder) {
             Ok((_, errors)) => {
@@ -365,6 +388,7 @@ mod test {
             "file_one.py",
             "file_two.py",
         ]
+        project_excludes = []
         "#;
         let tdir = tempfile::tempdir().unwrap();
         let file_one_path = tdir.path().join("file_one.py");
@@ -377,7 +401,7 @@ mod test {
         t.add(&file_one_path.display().to_string(), file_one);
         t.add(&file_two_path.display().to_string(), file_two);
         t.add(&config_path.display().to_string(), configuration);
-        let args = InferArgs::parse_from(["infer", &tdir.path().display().to_string()]);
+        let args = InferArgs::parse_from(["infer", "--config", &config_path.display().to_string()]);
         let result = args.run();
         assert!(result.is_ok(), "infer command failed: {:?}", result.err());
 

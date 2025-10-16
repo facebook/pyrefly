@@ -9,5 +9,5 @@ pub(crate) mod active_environment;
 pub(crate) mod conda;
 pub mod environment;
 pub(crate) mod finder;
-pub(crate) mod interpreters;
+pub mod interpreters;
 pub(crate) mod venv;

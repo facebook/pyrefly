@@ -32,6 +32,7 @@ use crate::binding::base_class::BaseClass;
 use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
+use crate::binding::binding::BindingAbstractClassCheck;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassBaseType;
@@ -47,6 +48,7 @@ use crate::binding::binding::ClassBinding;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyAbstractClassCheck;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassBaseType;
@@ -104,6 +106,7 @@ impl<'a> BindingsBuilder<'a> {
             variance_idx: self.idx_for_promise(KeyVariance(def_index)),
             consistent_override_check_idx: self
                 .idx_for_promise(KeyConsistentOverrideCheck(def_index)),
+            abstract_class_check_idx: self.idx_for_promise(KeyAbstractClassCheck(def_index)),
         };
         // The user - used for first-usage tracking of any expressions we analyze in a class definition -
         // is the `Idx<Key>` of the class object bound to the class name.
@@ -117,6 +120,7 @@ impl<'a> BindingsBuilder<'a> {
         let mut pydantic_config_dict = PydanticConfigDict::default();
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let body = mem::take(&mut x.body);
+        let field_docstrings = self.extract_field_docstrings(&body);
         let decorators_with_ranges = self.ensure_and_bind_decorators_with_ranges(
             mem::take(&mut x.decorator_list),
             class_object.usage(),
@@ -248,9 +252,17 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 _ => (true, false),
             };
+
+            let docstring_range = field_docstrings.get(&range).copied();
+
             fields.insert_hashed(
                 name.clone(),
-                ClassFieldProperties::new(is_annotated, is_initialized_on_class, range),
+                ClassFieldProperties::new(
+                    is_annotated,
+                    is_initialized_on_class,
+                    range,
+                    docstring_range,
+                ),
             );
             let key_field = KeyClassField(class_indices.def_index, name.clone().into_key());
             let binding = BindingClassField {
@@ -332,6 +344,46 @@ impl<'a> BindingsBuilder<'a> {
                 pydantic_config_dict,
             },
         );
+        self.insert_binding_idx(
+            class_indices.abstract_class_check_idx,
+            BindingAbstractClassCheck {
+                class_idx: class_indices.class_idx,
+            },
+        );
+    }
+
+    /// Extracts docstrings for each field, mapping the field's range to the docstring's range.
+    fn extract_field_docstrings(
+        &self,
+        body: &[ruff_python_ast::Stmt],
+    ) -> SmallMap<TextRange, TextRange> {
+        use ruff_python_ast::Expr;
+        use ruff_python_ast::Stmt;
+
+        let mut field_docstrings = SmallMap::new();
+        let mut i = 0;
+
+        while i < body.len() {
+            let stmt = &body[i];
+
+            let is_field = matches!(stmt, Stmt::AnnAssign(_) | Stmt::Assign(_));
+
+            if let Stmt::FunctionDef(func_def) = stmt {
+                if let Some(docstring_range) = Docstring::range_from_stmts(&func_def.body) {
+                    field_docstrings.insert(func_def.name.range, docstring_range);
+                }
+            } else if is_field
+                && let Some(next_stmt) = body.get(i + 1)
+                && let Stmt::Expr(expr_stmt) = next_stmt
+                && matches!(&*expr_stmt.value, Expr::StringLiteral(_))
+            {
+                field_docstrings.insert(stmt.range(), next_stmt.range());
+            }
+
+            i += 1;
+        }
+
+        field_docstrings
     }
 
     fn extract_string_literals(
@@ -497,6 +549,7 @@ impl<'a> BindingsBuilder<'a> {
                     member_annotation.is_some() || class_kind == SynthesizedClassKind::NamedTuple,
                     member_value.is_some(),
                     range,
+                    None, // Synthesized fields don't have docstrings
                 ),
             );
             let annotation = member_annotation.map(|annotation_expr| {
@@ -562,6 +615,12 @@ impl<'a> BindingsBuilder<'a> {
             class_indices.consistent_override_check_idx,
             BindingConsistentOverrideCheck {
                 class_key: class_indices.class_idx,
+            },
+        );
+        self.insert_binding_idx(
+            class_indices.abstract_class_check_idx,
+            BindingAbstractClassCheck {
+                class_idx: class_indices.class_idx,
             },
         );
     }

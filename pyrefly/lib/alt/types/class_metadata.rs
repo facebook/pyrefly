@@ -47,6 +47,7 @@ pub struct ClassMetadata {
     enum_metadata: Option<EnumMetadata>,
     protocol_metadata: Option<ProtocolMetadata>,
     dataclass_metadata: Option<DataclassMetadata>,
+    extends_abc: bool,
     bases: Vec<Class>,
     has_generic_base_class: bool,
     has_base_any: bool,
@@ -84,6 +85,7 @@ impl ClassMetadata {
         enum_metadata: Option<EnumMetadata>,
         protocol_metadata: Option<ProtocolMetadata>,
         dataclass_metadata: Option<DataclassMetadata>,
+        extends_abc: bool,
         has_generic_base_class: bool,
         has_base_any: bool,
         is_new_type: bool,
@@ -102,6 +104,7 @@ impl ClassMetadata {
             enum_metadata,
             protocol_metadata,
             dataclass_metadata,
+            extends_abc,
             bases,
             has_generic_base_class,
             has_base_any,
@@ -124,6 +127,7 @@ impl ClassMetadata {
             enum_metadata: None,
             protocol_metadata: None,
             dataclass_metadata: None,
+            extends_abc: false,
             bases: Vec::new(),
             has_generic_base_class: false,
             has_base_any: false,
@@ -171,6 +175,10 @@ impl ClassMetadata {
 
     pub fn is_final(&self) -> bool {
         self.is_final
+    }
+
+    pub fn extends_abc(&self) -> bool {
+        self.extends_abc
     }
 
     pub fn is_deprecated(&self) -> bool {
@@ -240,6 +248,10 @@ impl ClassMetadata {
     }
 }
 
+/// A field that we synthesize and add to a class. Note that if a non-synthesized field already
+/// exists on the class, it will take precedence over the synthesized field in attribute lookup.
+/// If you want to modify the type of a non-synthesized field, see
+/// AnswersSolver::get_special_class_field_type() in class_field.rs.
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct ClassSynthesizedField {
     pub inner: Arc<ClassField>,
@@ -296,6 +308,10 @@ impl ClassSynthesizedFields {
             self.0.insert_hashed(name, field);
         }
         self
+    }
+
+    pub fn fields(&self) -> impl ExactSizeIterator<Item = (&Name, &ClassSynthesizedField)> {
+        self.0.iter()
     }
 }
 
@@ -426,7 +442,7 @@ pub struct TotalOrderingMetadata {
 /// If a class is present in multiple places of the inheritance tree (and is
 /// linearizable using C3 linearization), it is possible it appears with
 /// different type arguments. The type arguments computed here will always be
-/// those coming from the instance that was selected during lineariation.
+/// those coming from the instance that was selected during linearization.
 #[derive(Clone, Debug, VisitMut, TypeEq, PartialEq, Eq)]
 pub enum ClassMro {
     Resolved(Vec<ClassType>),

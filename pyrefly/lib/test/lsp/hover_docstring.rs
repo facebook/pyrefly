@@ -166,7 +166,6 @@ Docstring Result: `Test docstring`
     );
 }
 
-// TODO(kylei): attribute docstrings
 #[test]
 fn method_test() {
     let code = r#"
@@ -182,14 +181,13 @@ print(Foo().f())
 # main.py
 5 | print(Foo().f())
                 ^
-Docstring Result: None
+Docstring Result: `Test docstring`
 "#
         .trim(),
         report.trim(),
     );
 }
 
-// TODO(kylei): attribute docstrings
 #[test]
 fn attribute_test() {
     let code = r#"
@@ -205,7 +203,7 @@ print(Foo.f())
 # main.py
 5 | print(Foo.f())
               ^
-Docstring Result: None
+Docstring Result: `Test docstring`
 "#
         .trim(),
         report.trim(),
@@ -242,7 +240,6 @@ Docstring Result: `Test docstring`
     );
 }
 
-// TODO(kylei): attribute docstrings
 #[test]
 fn cross_module_method_test() {
     let lib = r#"
@@ -264,7 +261,7 @@ print(Foo().f())
 # main.py
 3 | print(Foo().f())
                 ^
-Docstring Result: None
+Docstring Result: `Test docstring`
 
 
 # lib.py
@@ -355,6 +352,33 @@ Docstring Result: `Test docstring`
 
 
 # lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn test_removes_block_quote_symbols_at_start_of_line() {
+    let code = r#"
+def fun() -> None:
+    """
+    >>> d = {"col1": [1, 2], "col2": [3, 4]}
+    """
+    pass
+
+f = fun()
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
+    assert_eq!(
+        r#"
+# main.py
+8 | f = fun()
+        ^
+Docstring Result: `  
+d = {"col1": [1, 2], "col2": [3, 4]}  
+`
 "#
         .trim(),
         report.trim(),

@@ -230,3 +230,97 @@ x = list("abcdefg")
 assert_type(x, list[str])
 "#,
 );
+
+testcase!(
+    test_literal_string_format,
+    r#"
+from typing import assert_type, LiteralString
+
+# Basic format with literal strings
+sep: LiteralString = "{} {}"
+x: LiteralString = "foo"
+y: LiteralString = "bar"
+result = sep.format(x, y)
+assert_type(result, LiteralString)
+
+# With keyword arguments
+result2 = "{a} {b}".format(a=x, b=y)
+assert_type(result2, LiteralString)
+
+# Non-literal positional arg should return str
+z: str = "baz"
+result3 = sep.format(x, z)
+assert_type(result3, str)
+
+# Non-literal keyword arg should return str
+result4 = "{a}".format(a=z)
+assert_type(result4, str)
+
+# Test starred arguments
+args = (x, y)
+result5 = sep.format(*args)
+assert_type(result5, LiteralString)
+
+args2: tuple[str, ...] = (x, y)
+result6 = sep.format(*args2)
+assert_type(result6, str)
+"#,
+);
+
+testcase!(
+    test_literal_string_join,
+    r#"
+from typing import assert_type, LiteralString
+
+sep: LiteralString = ","
+items: list[LiteralString] = ["a", "b", "c"]
+result = sep.join(items)
+assert_type(result, LiteralString)
+
+# Tuple of literals
+result2 = sep.join(("x", "y", "z"))
+assert_type(result2, LiteralString)
+
+# Non-literal items should return str
+non_lit: list[str] = ["x", "y"]
+result3 = sep.join(non_lit)
+assert_type(result3, str)
+
+# Union with non-literal should return str
+mixed: list[LiteralString | str] = []
+result4 = sep.join(mixed)
+assert_type(result4, str)
+"#,
+);
+
+testcase!(
+    test_literal_string_replace,
+    r#"
+from typing import assert_type, LiteralString
+
+x: LiteralString = "hello world"
+old: LiteralString = "world"
+new: LiteralString = "universe"
+
+# Basic replace
+result = x.replace(old, new)
+assert_type(result, LiteralString)
+
+# With count argument (should still return LiteralString)
+result2 = x.replace(old, new, 1)
+assert_type(result2, LiteralString)
+
+# With count keyword
+result3 = x.replace(old, new, count=1)
+assert_type(result3, LiteralString)
+
+# Non-literal old should return str
+non_lit: str = "foo"
+result4 = x.replace(non_lit, new)
+assert_type(result4, str)
+
+# Non-literal new should return str
+result5 = x.replace(old, non_lit)
+assert_type(result5, str)
+"#,
+);

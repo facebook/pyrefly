@@ -40,6 +40,7 @@ fn get_test_report(
             data,
             tags,
             text_edit,
+            documentation,
             ..
         } in state
             .transaction()
@@ -72,6 +73,17 @@ fn get_test_report(
                 if let Some(text_edit) = text_edit {
                     report.push_str(" with text edit: ");
                     report.push_str(&format!("{:?}", &text_edit));
+                }
+                if let Some(documentation) = documentation {
+                    report.push('\n');
+                    match documentation {
+                        lsp_types::Documentation::String(s) => {
+                            report.push_str(&s);
+                        }
+                        lsp_types::Documentation::MarkupContent(content) => {
+                            report.push_str(&content.value);
+                        }
+                    }
                 }
             }
         }
@@ -126,7 +138,7 @@ class Foo:
     @property
     def also_not_ok(self) -> int: ...
 foo = Foo()
-foo. 
+foo.
 #   ^
 "#;
     let report =
@@ -134,7 +146,7 @@ foo.
     assert_eq!(
         r#"
 # main.py
-11 | foo. 
+11 | foo.
          ^
 Completion Results:
 - (Field) [DEPRECATED] also_not_ok: int
@@ -152,7 +164,7 @@ fn complete_deprecated_class() {
 from warnings import deprecated
 @deprecated("this class is deprecated")
 class MyDeprecatedClass: pass
-MyDe 
+MyDe
 #   ^
 "#;
     let report =
@@ -160,7 +172,7 @@ MyDe
     assert_eq!(
         r#"
 # main.py
-5 | MyDe 
+5 | MyDe
         ^
 Completion Results:
 - (Class) [DEPRECATED] MyDeprecatedClass: type[MyDeprecatedClass]
@@ -456,7 +468,7 @@ fn from_import_empty_test() {
 imperial_guard = "cool"
 "#;
     let main_code = r#"
-from foo import 
+from foo import
 #              ^
 "#;
     let report = get_batched_lsp_operations_report_allow_error(
@@ -466,7 +478,7 @@ from foo import
     assert_eq!(
         r#"
 # main.py
-2 | from foo import 
+2 | from foo import
                    ^
 Completion Results:
 
@@ -975,6 +987,8 @@ Completion Results:
 - (Function) packages_distributions: from importlib.metadata import packages_distributions
 
 - (Function) timerfd_settime_ns: from os import timerfd_settime_ns
+
+- (Module) typing_extensions: import typing_extensions
 "#
         .trim(),
         report.trim(),
@@ -1909,6 +1923,248 @@ foo(x="x")
 3 | foo(x="x")
            ^
 Completion Results:
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_with_imported_class_docstring() {
+    let lib = r#"
+class Foo:
+    """This is a Foo class with useful functionality."""
+    pass
+"#;
+    let main = r#"
+from lib import Foo
+F
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main), ("lib", lib)],
+        get_default_test_report(),
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | F
+     ^
+Completion Results:
+- (Class) Foo: type[Foo]
+This is a Foo class with useful functionality.
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_with_imported_function_docstring() {
+    let lib = r#"
+def bar():
+    """This function does something useful."""
+    pass
+"#;
+    let main = r#"
+from lib import bar
+b
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main), ("lib", lib)],
+        get_default_test_report(),
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | b
+     ^
+Completion Results:
+- (Function) bar: () -> None
+This function does something useful.
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_with_local_class_docstring() {
+    let code = r#"
+class Foo:
+    """This is a local Foo class with useful functionality."""
+    pass
+F
+#^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+5 | F
+     ^
+Completion Results:
+- (Class) Foo: type[Foo]
+This is a local Foo class with useful functionality.
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_with_local_function_docstring() {
+    let code = r#"
+def bar():
+    """This function does something useful."""
+    pass
+b
+#^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+5 | b
+     ^
+Completion Results:
+- (Function) bar: () -> None
+This function does something useful.
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn dot_complete_with_method_docstring() {
+    let code = r#"
+class Foo:
+    def method(self) -> int:
+        """This is a method docstring."""
+        return 42
+
+f = Foo()
+f.
+# ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+8 | f.
+      ^
+Completion Results:
+- (Method) method: def method(self: Foo) -> int
+This is a method docstring.
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn dot_complete_with_multiple_methods_docstring() {
+    let code = r#"
+class Foo:
+    def first(self) -> int:
+        """First method documentation."""
+        return 1
+
+    def second(self) -> str:
+        """Second method documentation."""
+        return "hello"
+
+f = Foo()
+f.
+# ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+12 | f.
+       ^
+Completion Results:
+- (Method) first: def first(self: Foo) -> int
+First method documentation.
+- (Method) second: def second(self: Foo) -> str
+Second method documentation.
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn dot_complete_with_property_docstring() {
+    let code = r#"
+class Foo:
+    @property
+    def value(self) -> int:
+        """Property with documentation."""
+        return 42
+
+f = Foo()
+f.
+# ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+9 | f.
+      ^
+Completion Results:
+- (Field) value: int
+Property with documentation.
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn dot_complete_mixed_with_and_without_docstring() {
+    let code = r#"
+class Foo:
+    x: int
+
+    def documented(self) -> str:
+        """This has documentation."""
+        return "doc"
+
+    def undocumented(self) -> int:
+        return 123
+
+f = Foo()
+f.
+# ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+13 | f.
+       ^
+Completion Results:
+- (Method) documented: def documented(self: Foo) -> str
+This has documentation.
+- (Method) undocumented: def undocumented(self: Foo) -> int
+- (Field) x: int
 "#
         .trim(),
         report.trim(),

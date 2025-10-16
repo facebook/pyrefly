@@ -5,17 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use crate::test::util::TestEnv;
-use crate::testcase;
+use crate::pydantic_testcase;
 
-fn pydantic_env() -> TestEnv {
-    let path = std::env::var("PYDANTIC_TEST_PATH").expect("PYDANTIC_TEST_PATH must be set");
-    TestEnv::new_with_site_package_path(&path)
-}
-
-testcase!(
+pydantic_testcase!(
     test_config_conditional_extra,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel
 
@@ -28,9 +21,8 @@ print(u)
 "#,
 );
 
-testcase!(
+pydantic_testcase!(
     test_model_config,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel, ConfigDict
 
@@ -44,9 +36,38 @@ m.x = 10 # E: Cannot set field `x`
 "#,
 );
 
-testcase!(
+pydantic_testcase!(
+    test_model_config_dict_func,
+    r#"
+from pydantic import BaseModel
+
+class Model(BaseModel):
+    model_config = dict(frozen=True)
+
+    x: int = 42
+
+m = Model()
+m.x = 10 # E: Cannot set field `x`
+"#,
+);
+
+pydantic_testcase!(
+    test_model_config_dict_display,
+    r#"
+from pydantic import BaseModel
+
+class Model(BaseModel):
+    model_config = {'frozen': True}
+
+    x: int = 42
+
+m = Model()
+m.x = 10 # E: Cannot set field `x`
+"#,
+);
+
+pydantic_testcase!(
     test_not_a_pydantic_model,
-    pydantic_env(),
     r#"
 from pydantic import ConfigDict
 
@@ -61,9 +82,8 @@ m.x = 10
 );
 
 // This is a corner case, but since y is annotated, we consider it a field
-testcase!(
+pydantic_testcase!(
     test_model_config_alias,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel, ConfigDict
 
@@ -78,10 +98,9 @@ m.x = 10
 "#,
 );
 
-testcase!(
+pydantic_testcase!(
     bug = "We should raise an error on y because all model fields require an annotation.",
     test_model_config_y,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel, ConfigDict
 
@@ -95,9 +114,8 @@ m.x = 10
 );
 
 // Only the last config is considered
-testcase!(
+pydantic_testcase!(
     test_model_two_config,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel, ConfigDict
 
@@ -111,9 +129,8 @@ m.x = 10
 "#,
 );
 
-testcase!(
+pydantic_testcase!(
     test_frozen_model_subclass,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel, ConfigDict
 
@@ -129,13 +146,15 @@ m.x = 10
 "#,
 );
 
-testcase!(
+pydantic_testcase!(
     test_frozen_model_default,
-    pydantic_env(),
     r#"
 from pydantic import BaseModel
 class A(BaseModel, frozen=True):
     x: int
+
+a = A(x=0)
+a.x = 1 # E: Cannot set field `x`
 
 class B(A):
     pass
@@ -145,21 +164,44 @@ b.x = 1 # E: Cannot set field `x`
 "#,
 );
 
-testcase!(
-    bug = "Nested config not supported yet. Fields should be frozen.",
-    test_nested_model_config,
-    pydantic_env(),
+pydantic_testcase!(
+    test_config_inheritance,
     r#"
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
-class Model(BaseModel):
-    class Config:
-        frozen = True
+class Base(BaseModel):
+    model_config = ConfigDict(extra='forbid')
 
-    x: int = 42
+class Sub(Base):
+    a: int
 
-m = Model()
-m.x = 10
+class Sub2(Sub):
+    a: int
+    
+Sub(a=1, y=2) # E: Unexpected keyword argument `y` in function `Sub.__init__`
+Sub2(a=1, y=2) # E: Unexpected keyword argument `y` in function `Sub2.__init__`
+
+
+class Base3(BaseModel):
+    model_config = ConfigDict(extra='allow')
+
+class Sub3(Base3):
+    a: int
+    
+Sub3(a=1, y=2) 
 
 "#,
+);
+
+pydantic_testcase!(
+    test_two_config_values,
+    r#"
+from pydantic import BaseModel, ConfigDict
+class A(BaseModel):
+    x: int
+    model_config = ConfigDict(frozen=True, strict=True)
+a = A(x=0)
+a.x = 1  # E: Cannot set field `x`
+A(x='oops')  # E: `Literal['oops']` is not assignable to parameter `x`
+    "#,
 );

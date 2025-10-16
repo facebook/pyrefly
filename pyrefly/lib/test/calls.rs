@@ -5,6 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::sys_info::PythonVersion;
+
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -88,6 +91,25 @@ testcase!(
     test_deprecated_call,
     r#"
 from warnings import deprecated
+@deprecated("function is deprecated")
+def old_function() -> None: ...
+old_function()  # E: `old_function` is deprecated
+    "#,
+);
+
+fn test_env_3_12() -> TestEnv {
+    TestEnv::new_with_version(PythonVersion {
+        major: 3,
+        minor: 12,
+        micro: 0,
+    })
+}
+
+testcase!(
+    test_deprecated_call_3_12,
+    test_env_3_12(),
+    r#"
+from typing_extensions import deprecated
 @deprecated("function is deprecated")
 def old_function() -> None: ...
 old_function()  # E: `old_function` is deprecated

@@ -16,6 +16,7 @@ pub mod expr;
 pub mod function;
 pub mod narrow;
 pub mod operators;
+pub mod overload;
 pub mod solve;
 pub mod special_calls;
 pub mod specials;

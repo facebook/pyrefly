@@ -81,11 +81,7 @@ pub struct DumpConfigArgs {
 impl DumpConfigArgs {
     pub fn run(self) -> anyhow::Result<CommandExitStatus> {
         // Pass on just the subset of args we use, the rest are irrelevant
-        dump_config(
-            self.args.files,
-            self.args.args.config_override,
-            self.max_files,
-        )
+        dump_config(self.args.files, self.args.config_override, self.max_files)
     }
 }
 
@@ -95,7 +91,7 @@ fn dump_config(
     max_files: MaxFiles,
 ) -> anyhow::Result<CommandExitStatus> {
     config_override.validate()?;
-    let (files_to_check, config_finder) = files.resolve(&config_override)?;
+    let (files_to_check, config_finder) = files.resolve(config_override)?;
 
     let mut configs_to_files: SmallMap<ArcId<ConfigFile>, Vec<ModulePath>> = SmallMap::new();
     let handles = Handles::new(config_finder.checkpoint(files_to_check.files())?);
@@ -140,9 +136,15 @@ fn dump_config(
                 break;
             }
         }
-        for path_part in config.structured_import_lookup_path() {
+        println!("  Resolving imports from:");
+        let origin = if files.len() == 1 {
+            files.first().map(|p| p.as_path())
+        } else {
+            None
+        };
+        for path_part in config.structured_import_lookup_path(origin) {
             if !path_part.is_empty() {
-                println!("  {path_part}");
+                println!("    {path_part}");
             }
         }
     }

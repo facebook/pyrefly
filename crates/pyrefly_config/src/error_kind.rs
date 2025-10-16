@@ -131,6 +131,8 @@ pub enum ErrorKind {
     DeleteError,
     /// Calling a function marked with `@deprecated`
     Deprecated,
+    /// This error is raised when Pyrefly infers an implicit `Any`
+    ImplicitAny,
     /// Usage of a module that was not actually imported, but does exist.
     ImplicitImport,
     /// An attribute was implicitly defined by assignment to `self` in a method that we
@@ -140,6 +142,8 @@ pub enum ErrorKind {
     /// An error related to the import machinery.
     /// e.g. failed to import a module.
     ImportError,
+    /// An inconsistency between inherited fields or methods from multiple base classes.
+    InconsistentInheritance,
     /// An inconsistency between the signature of a function overload and the implementation.
     InconsistentOverload,
     /// Attempting to access a container with an incorrect index.
@@ -203,6 +207,8 @@ pub enum ErrorKind {
     NotIterable,
     /// An error related to parsing or syntax.
     ParseError,
+    /// A protocol attribute was first defined inside a method instead of the class body.
+    ProtocolImplicitlyDefinedAttribute,
     /// The attribute exists but cannot be modified.
     ReadOnly,
     /// Warning when casting a value to a type it is already compatible with.
@@ -270,8 +276,18 @@ impl ErrorKind {
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::RedundantCast => Severity::Warn,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
+            ErrorKind::ImplicitAny => Severity::Ignore,
             _ => Severity::Error,
         }
+    }
+
+    /// Returns the public documentation URL for this error kind.
+    /// Example: https://pyrefly.org/en/docs/error-kinds/#bad-context-manager
+    pub fn docs_url(self) -> String {
+        format!(
+            "https://pyrefly.org/en/docs/error-kinds/#{}",
+            self.to_name()
+        )
     }
 }
 

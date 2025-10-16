@@ -25,10 +25,12 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::ordered_map::OrderedMap;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::solve::TypeFormContext;
+use crate::alt::types::abstract_class::AbstractClassMembers;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::DataclassMetadata;
@@ -39,16 +41,12 @@ use crate::alt::types::class_metadata::ProtocolMetadata;
 use crate::alt::types::class_metadata::TotalOrderingMetadata;
 use crate::alt::types::class_metadata::TypedDictMetadata;
 use crate::alt::types::pydantic::PydanticConfig;
-use crate::alt::types::pydantic::PydanticModelKind;
 use crate::binding::base_class::BaseClass;
 use crate::binding::base_class::BaseClassExpr;
 use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::base_class::BaseClassGenericKind;
 use crate::binding::binding::Key;
-use crate::binding::pydantic::FROZEN_DEFAULT;
 use crate::binding::pydantic::PydanticConfigDict;
-use crate::binding::pydantic::VALIDATE_BY_ALIAS;
-use crate::binding::pydantic::VALIDATE_BY_NAME;
 use crate::binding::pydantic::VALIDATION_ALIAS;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -242,9 +240,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let is_final = decorators.iter().any(|(decorator, _)| {
             decorator.ty().callee_kind() == Some(CalleeKind::Function(FunctionKind::Final))
         });
-        let is_deprecated = decorators.iter().any(|(decorator, _)| {
-             matches!(decorator.ty(), Type::ClassType(cls) if cls.has_qname("warnings", "deprecated"))
-        });
+        let is_deprecated = decorators
+            .iter()
+            .any(|(decorator, _)| decorator.ty().is_deprecation_marker());
 
         let total_ordering_metadata = decorators.iter().find_map(|(decorator, decorator_range)| {
             decorator.ty().callee_kind().and_then(|kind| {
@@ -286,6 +284,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             self.validate_frozen_dataclass_inheritance(cls, dm, &bases_with_metadata, errors);
         }
+        let extends_abc = self.extends_abc(&bases_with_metadata);
 
         // Compute final base class list.
         let bases = if is_typed_dict && bases_with_metadata.is_empty() {
@@ -320,6 +319,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             enum_metadata,
             protocol_metadata,
             dataclass_metadata,
+            extends_abc,
             has_generic_base_class,
             has_base_any,
             is_new_type,
@@ -421,145 +421,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     metadata.named_tuple_metadata().cloned()
                 }
             })
-    }
-
-    fn extract_bool_flag(
-        &self,
-        keywords: &[(Name, Annotation)],
-        key: &Name,
-        default: bool,
-    ) -> bool {
-        keywords
-            .iter()
-            .find(|(name, _)| name == key)
-            .map_or(default, |(_, ann)| {
-                ann.get_type().as_bool().unwrap_or(default)
-            })
-    }
-
-    fn pydantic_config(
-        &self,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
-        pydantic_config_dict: &PydanticConfigDict,
-        keywords: &[(Name, Annotation)],
-        errors: &ErrorCollector,
-        range: TextRange,
-    ) -> Option<PydanticConfig> {
-        let has_pydantic_base_model_base_class =
-            bases_with_metadata.iter().any(|(base_class_object, _)| {
-                base_class_object.has_toplevel_qname(ModuleName::pydantic().as_str(), "BaseModel")
-            });
-
-        let is_pydantic_base_model = has_pydantic_base_model_base_class
-            || bases_with_metadata
-                .iter()
-                .any(|(_, metadata)| metadata.is_pydantic_base_model());
-
-        if !is_pydantic_base_model {
-            return None;
-        }
-
-        let has_pydantic_root_model_base_class =
-            bases_with_metadata.iter().any(|(base_class_object, _)| {
-                base_class_object
-                    .has_toplevel_qname(ModuleName::pydantic_root_model().as_str(), "RootModel")
-            });
-
-        let has_root_model_kind = bases_with_metadata.iter().any(|(_, metadata)| {
-            matches!(
-                metadata.pydantic_model_kind(),
-                Some(PydanticModelKind::RootModel)
-            )
-        });
-
-        let pydantic_model_kind = if has_pydantic_root_model_base_class || has_root_model_kind {
-            PydanticModelKind::RootModel
-        } else {
-            PydanticModelKind::BaseModel
-        };
-
-        let PydanticConfigDict {
-            frozen,
-            extra,
-            validation_flags,
-        } = pydantic_config_dict;
-
-        // Note: class keywords take precedence over ConfigDict keywords.
-        // But another design choice is to error if there is a conflict. We can consider this design for v2.
-        let mut validation_flags = validation_flags.clone();
-        validation_flags.validate_by_alias = self.extract_bool_flag(
-            keywords,
-            &VALIDATE_BY_ALIAS,
-            validation_flags.validate_by_alias,
-        );
-        validation_flags.validate_by_name = self.extract_bool_flag(
-            keywords,
-            &VALIDATE_BY_NAME,
-            validation_flags.validate_by_name,
-        );
-
-        // Here, "ignore" and "allow" translate to true, while "forbid" translates to false.
-        // With no keyword, the default is "true" and I default to "false" on a wrong keyword.
-        // If we were to consider type narrowing in the "allow" case, we would need to propagate more data
-        // and narrow downstream. We are not following the narrowing approach in v1 though, but should discuss it
-        // for v2.
-        let extra = match keywords.iter().find(|(name, _)| name.as_str() == "extra") {
-            Some((_, ann)) => match ann.get_type() {
-                Type::Literal(Lit::Str(s)) => match s.as_str() {
-                    "allow" | "ignore" => true,
-                    "forbid" => false,
-                    _ => {
-                        self.error(
-                    errors,
-                    range,
-                    ErrorInfo::Kind(ErrorKind::InvalidLiteral),
-                    "Invalid value for `extra`. Expected one of 'allow', 'ignore', or 'forbid'"
-                        .to_owned(),
-                );
-                        true
-                    }
-                },
-                _ => {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::InvalidLiteral),
-                        "Invalid value for `extra`. Expected one of 'allow', 'ignore', or 'forbid'"
-                            .to_owned(),
-                    );
-                    true
-                }
-            },
-            None => {
-                // No "extra" keyword in the class-level keywords,
-                // so fallback to configdict
-                if let Some(configdict_extra) = extra {
-                    *configdict_extra
-                } else {
-                    true
-                }
-            }
-        };
-
-        let frozen = match frozen {
-            Some(value) => value,
-            None => &bases_with_metadata
-                .iter()
-                .find_map(|(_, metadata)| {
-                    metadata
-                        .dataclass_metadata()
-                        .as_ref()
-                        .map(|dm| dm.kws.frozen)
-                })
-                .unwrap_or(FROZEN_DEFAULT),
-        };
-
-        Some(PydanticConfig {
-            frozen: *frozen,
-            validation_flags,
-            extra,
-            pydantic_model_kind,
-        })
     }
 
     fn typed_dict_metadata(
@@ -809,7 +670,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // - it inherits from a base class decorated with `dataclass_transform(...)`, or
         // - it inherits from a base class whose metaclass is decorated with `dataclass_transform(...)`, or
         // - it is decorated with a decorator that is decorated with `dataclass_transform(...)`.
-        // - is a Pydantic model
         let mut dataclass_from_dataclass_transform = None;
         if let Some(defaults) = dataclass_defaults_from_base_class {
             // This class inherits from a dataclass_transform-ed base class, so its keywords are
@@ -820,10 +680,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .collect::<OrderedMap<_, _>>();
             let mut kws = DataclassKeywords::from_type_map(&TypeMap(map), &defaults);
 
-            // Inject frozen data from pydantic model
+            // Inject pydantic model configuration
             if let Some(pydantic) = pydantic_config {
-                kws.frozen = pydantic.frozen || kws.frozen;
+                kws.frozen = pydantic.frozen;
                 kws.extra = pydantic.extra;
+                kws.strict = pydantic.strict;
             }
 
             dataclass_from_dataclass_transform = Some((kws, defaults.field_specifiers));
@@ -1257,5 +1118,59 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
             .collect();
         ClassMro::new(cls, bases_with_mros, errors)
+    }
+
+    pub fn calculate_abstract_members(&self, cls: &Class) -> AbstractClassMembers {
+        let metadata = self.get_metadata_for_class(cls);
+        let mut fields_to_check: SmallSet<Name>;
+        if metadata.extends_abc() || metadata.is_protocol() {
+            fields_to_check = SmallSet::from_iter(cls.fields().cloned());
+        } else {
+            fields_to_check = SmallSet::new();
+        }
+        // Check inherited abstract methods + all fields defined in the current class
+        for base_class in metadata.base_class_objects() {
+            let base_class_metadata = self.get_metadata_for_class(base_class);
+            // For now, skip any non-protocols base classes that don't extend `ABC` or have metaclass `ABCMeta`
+            // Consider adding a stricter check in the future
+            if !base_class_metadata.extends_abc() && !base_class_metadata.is_protocol() {
+                continue;
+            }
+            let base_class_abstract_members = self.get_abstract_members_for_class(base_class);
+            fields_to_check.extend(
+                base_class_abstract_members
+                    .unimplemented_abstract_methods()
+                    .iter()
+                    .cloned(),
+            );
+        }
+        let mut abstract_members = SmallSet::new();
+        for field_name in fields_to_check {
+            if let Some(field) = self.get_non_synthesized_class_member(cls, &field_name)
+                && field.is_abstract()
+            {
+                abstract_members.insert(field_name.clone());
+            }
+        }
+        AbstractClassMembers::new(abstract_members)
+    }
+
+    fn extends_abc(&self, bases_with_metadata: &Vec<(Class, Arc<ClassMetadata>)>) -> bool {
+        for (base, base_metadata) in bases_with_metadata {
+            if base.has_toplevel_qname("abc", "ABC") {
+                return true;
+            }
+            if let Some(metaclass) = base_metadata.custom_metaclass()
+                && metaclass
+                    .class_object()
+                    .has_toplevel_qname("abc", "ABCMeta")
+            {
+                return true;
+            }
+            if base_metadata.extends_abc() {
+                return true;
+            }
+        }
+        false
     }
 }

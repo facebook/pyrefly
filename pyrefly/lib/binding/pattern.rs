@@ -280,10 +280,10 @@ impl<'a> BindingsBuilder<'a> {
             }
             Pattern::MatchOr(x) => {
                 let mut narrow_ops: Option<NarrowOps> = None;
-                let range = x.range;
-                let mut branches = Vec::new();
+                self.start_fork(x.range);
                 let n_subpatterns = x.patterns.len();
                 for (idx, pattern) in x.patterns.into_iter().enumerate() {
+                    self.start_branch();
                     if pattern.is_irrefutable() && idx != n_subpatterns - 1 {
                         self.error(
                             pattern.range(),
@@ -291,7 +291,6 @@ impl<'a> BindingsBuilder<'a> {
                             "Only the last subpattern in MatchOr may be irrefutable".to_owned(),
                         )
                     }
-                    let mut base = self.scopes.clone_current_flow();
                     let new_narrow_ops =
                         self.bind_pattern(match_subject.clone(), pattern, subject_idx);
                     if let Some(ref mut ops) = narrow_ops {
@@ -299,10 +298,9 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         narrow_ops = Some(new_narrow_ops);
                     }
-                    self.scopes.swap_current_flow_with(&mut base);
-                    branches.push(base);
+                    self.finish_branch();
                 }
-                self.set_current_flow_to_merged_branches(branches, range);
+                self.finish_match_or_fork();
                 narrow_ops.unwrap_or_default()
             }
             Pattern::MatchStar(_) => NarrowOps::new(),
@@ -316,8 +314,7 @@ impl<'a> BindingsBuilder<'a> {
             self.insert_binding_current(subject, Binding::Expr(None, *x.subject.clone()));
         let match_narrowing_subject = expr_to_subjects(&x.subject).first().cloned();
         let mut exhaustive = false;
-        let range = x.range;
-        let mut branches = Vec::new();
+        self.start_fork(x.range);
         // Type narrowing operations that are carried over from one case to the next. For example, in:
         //   match x:
         //     case None:
@@ -328,33 +325,29 @@ impl<'a> BindingsBuilder<'a> {
         // is carried over to the fallback case.
         let mut negated_prev_ops = NarrowOps::new();
         for case in x.cases {
-            let mut base = self.scopes.clone_current_flow();
+            self.start_branch();
             if case.pattern.is_wildcard() || case.pattern.is_irrefutable() {
                 exhaustive = true;
             }
-            let new_narrow_ops =
-                self.bind_pattern(match_narrowing_subject.clone(), case.pattern, subject_idx);
             self.bind_narrow_ops(&negated_prev_ops, case.range, &Usage::Narrowing(None));
+            let mut new_narrow_ops =
+                self.bind_pattern(match_narrowing_subject.clone(), case.pattern, subject_idx);
             self.bind_narrow_ops(&new_narrow_ops, case.range, &Usage::Narrowing(None));
-            negated_prev_ops.and_all(new_narrow_ops.negate());
             if let Some(mut guard) = case.guard {
                 self.ensure_expr(&mut guard, &mut Usage::Narrowing(None));
-                let narrow_ops = NarrowOps::from_expr(self, Some(guard.as_ref()));
-                self.bind_narrow_ops(&narrow_ops, case.range, &Usage::Narrowing(None));
+                let guard_narrow_ops = NarrowOps::from_expr(self, Some(guard.as_ref()));
+                self.bind_narrow_ops(&guard_narrow_ops, case.range, &Usage::Narrowing(None));
                 self.insert_binding(Key::Anon(guard.range()), Binding::Expr(None, *guard));
+                new_narrow_ops.and_all(guard_narrow_ops)
             }
+            negated_prev_ops.and_all(new_narrow_ops.negate());
             self.stmts(case.body, parent);
-            self.scopes.swap_current_flow_with(&mut base);
-            branches.push(base);
+            self.finish_branch();
         }
-        // If the match branches cover all possibilities, then the flow after the match
-        // is just the merged branch flows.
-        //
-        // Otherwise, we need to merge the branches with the original `base` flow (which is current).
         if exhaustive {
-            self.set_current_flow_to_merged_branches(branches, range);
+            self.finish_exhaustive_fork();
         } else {
-            self.merge_branches_into_current(branches, range);
+            self.finish_non_exhaustive_fork(&negated_prev_ops);
         }
     }
 }

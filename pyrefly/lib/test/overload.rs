@@ -335,7 +335,7 @@ class C(Base):
     # OK
     @override
     @overload
-    def f(x: int) -> int: ...  # E: Overloaded function must have an implementation 
+    def f(x: int) -> int: ...  # E: Overloaded function must have an implementation
     @overload
     def f(x: str) -> str: ...
 
@@ -466,7 +466,7 @@ badge: defaulty[bool, list[str]] = defaulty(list)
 testcase!(
     test_pass_generic_class_to_overload,
     r#"
-from typing import Iterable, Literal, overload, Self
+from typing import Iterable, Iterator, Literal, overload, Self
 from _typeshed import SupportsAdd
 
 @overload
@@ -477,6 +477,7 @@ def f(x) -> None: ...
 
 class C[T](Iterable[T]):
     def __new__(cls, x: T) -> Self: ...
+    def __iter__(self) -> Iterator[T]: ...
 
 def g(x: int):
     f(C(x))
@@ -541,7 +542,7 @@ testcase!(
 from typing import overload, Any
 
 @overload
-def foo(a: int) -> int: ...  
+def foo(a: int) -> int: ...
 @overload
 def foo(a: str) -> str:
     """Docstring"""
@@ -556,9 +557,9 @@ testcase!(
 from typing import overload, Any
 
 @overload
-def foo(a: int) -> int: ...  
+def foo(a: int) -> int: ...
 @overload
-def foo(a: str) -> str: 
+def foo(a: str) -> str:
     """Docstring"""
     return 123             # E: Returned type `Literal[123]` is not assignable to declared return type `str`
 def foo(*args, **kwargs) -> Any:
@@ -731,7 +732,6 @@ def test(x: Derp, m: Literal["y"] = "y") -> str:
 );
 
 testcase!(
-    bug = "We should split up `x: int | str` and evaluate each option in the union separately",
     test_expand_union,
     r#"
 from typing import assert_type, overload
@@ -743,7 +743,401 @@ def f(x: int | str) -> int | str:
     return x
 
 def g(x: int | str):
-    y = f(x)  # E: No matching overload
-    assert_type(y, int | str)  # E: assert_type(Any, int | str)
+    y = f(x)
+    assert_type(y, int | str)
+    "#,
+);
+
+testcase!(
+    test_expand_second_arg,
+    r#"
+from typing import assert_type, overload
+
+@overload
+def f(x: int, y: int) -> int: ...
+@overload
+def f(x: int, y: str) -> str: ...
+def f(x: int, y: int | str) -> int | str:
+    return y
+
+def g(y: int | str):
+    assert_type(f(0, y), int | str)
+    "#,
+);
+
+testcase!(
+    test_expand_twice,
+    r#"
+from typing import assert_type, overload
+
+@overload
+def f(x: int, y: int) -> int: ...
+@overload
+def f(x: int, y: str) -> int: ...
+@overload
+def f(x: str, y: int) -> str: ...
+@overload
+def f(x: str, y: str) -> str: ...
+def f(x: int | str, y: int | str) -> int | str:
+    return x
+
+def g(x: int | str, y: int | str):
+    assert_type(f(x, y), int | str)
+    "#,
+);
+
+testcase!(
+    test_expand_bool,
+    r#"
+from typing import assert_type, overload, Literal
+
+@overload
+def f(x: Literal[True]) -> Literal['True']: ...
+@overload
+def f(x: Literal[False]) -> Literal['False']: ...
+def f(x: bool) -> str:
+    return str(x)
+
+def g(x: bool):
+    assert_type(f(x), Literal['True', 'False'])
+    "#,
+);
+
+testcase!(
+    test_expand_enum,
+    r#"
+from enum import Enum
+from typing import assert_type, overload, Literal
+
+class E(Enum):
+    X = 1
+    Y = 2
+
+@overload
+def f(x: Literal[E.X]) -> Literal['X']: ...
+@overload
+def f(x: Literal[E.Y]) -> Literal['Y']: ...
+def f(x: E) -> str:
+    return x.name
+
+def g(x: E):
+    assert_type(f(x), Literal['X', 'Y'])
+    "#,
+);
+
+testcase!(
+    test_expand_one_member_enum,
+    r#"
+from enum import Enum
+from typing import assert_type, overload, Literal
+
+class E(Enum):
+    X = 1
+
+@overload
+def f(x: Literal[E.X]) -> Literal['X']: ...
+@overload
+def f(x: str) -> str: ...
+def f(x: E | str) -> str:
+    return str(x)
+
+def g(x: E):
+    assert_type(f(x), Literal['X'])
+    "#,
+);
+
+testcase!(
+    test_expand_type_union,
+    r#"
+from typing import assert_type, overload
+
+class A: ...
+class B: ...
+
+@overload
+def f(x: type[A]) -> A: ...
+@overload
+def f(x: type[B]) -> B: ...
+def f(x: type[A | B]) -> A | B:
+    return x()
+
+def g(x: type[A | B]):
+    assert_type(f(x), A | B)
+    "#,
+);
+
+testcase!(
+    test_expand_tuple,
+    r#"
+from typing import assert_type, overload, Literal
+
+@overload
+def f(x: tuple[int, Literal[True]]) -> str: ...
+@overload
+def f(x: tuple[int, Literal[False]]) -> int: ...
+def f(x: tuple[int, bool]) -> int | str:
+    return str(x[0]) if x[1] else x[0]
+
+def g(x: tuple[int, bool]):
+    assert_type(f(x), str | int)
+    "#,
+);
+
+testcase!(
+    test_wrong_arity,
+    r#"
+from typing import overload
+
+@overload
+def f(x: int) -> int: ...
+@overload
+def f(x: int, y: int) -> int: ...
+def f(x: int, y: int = 0) -> int:
+    return x + y
+
+f(0, 1, 2)  # E: (x: int, y: int) -> int [closest match]
+    "#,
+);
+
+testcase!(
+    test_unpack_nothing,
+    r#"
+from typing import assert_type, overload
+
+@overload
+def f(x: int, y: int) -> int: ...
+@overload
+def f(x: str) -> str: ...
+@overload
+def f(x: float) -> float: ...
+def f(x, y=0) -> int | str | float: ...
+
+assert_type(f("", *()), str)
+assert_type(f(0.0, **{}), float)
+    "#,
+);
+
+testcase!(
+    test_unpack_required,
+    r#"
+from typing import assert_type, overload
+
+@overload
+def f(x: str, /) -> str: ...
+@overload
+def f(x: int, y: int, /) -> int: ...
+def f(x, y=0) -> str | int: ...
+
+def g(*args: int):
+    assert_type(f(0, *args), int)
+    "#,
+);
+
+testcase!(
+    test_select_using_args,
+    r#"
+from typing import assert_type, overload
+
+@overload
+def f(x: int) -> int: ...
+@overload
+def f(x: int, *args: int) -> str: ...
+def f(x: int, *args: int) -> int | str: ...
+
+def g(x: int, y: tuple[()], z: tuple[int, ...]):
+    assert_type(f(x, *y), int)
+    assert_type(f(x, *z), str)
+    "#,
+);
+
+testcase!(
+    test_select_using_kwargs,
+    r#"
+from typing import assert_type, overload, TypedDict
+
+@overload
+def f(x: int) -> int: ...
+@overload
+def f(x: int, **kwargs: int) -> str: ...
+def f(x: int, **kwargs: int) -> int | str: ...
+
+class Empty(TypedDict):
+    pass
+
+def g(x: int, y: Empty, z: dict[str, int]):
+    assert_type(f(x, **y), int)
+    assert_type(f(x, **z), str)
+    "#,
+);
+
+testcase!(
+    test_materialization_eliminates_overload,
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f(x: list[Any]) -> int: ...
+@overload
+def f(x: list[str]) -> str: ...
+def f(x: list[Any]) -> int | str: ...
+
+def g(x: list[Any]):
+    # Because all materializations of `list[Any]` (the argument) are assignable to `list[Any]` (the
+    # type of parameter `x` in the first overload), we can eliminate the second overload, leaving
+    # us with the first overload with return type `int`.
+    assert_type(f(x), int)
+    "#,
+);
+
+testcase!(
+    test_materialization_does_not_eliminate_overload,
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f(x: list[int]) -> int: ...
+@overload
+def f(x: list[str]) -> str: ...
+def f(x: Any) -> int | str: ...
+
+def g(x: list[Any]):
+    # There's no overload for which all materializations of `list[Any]` are assignable to the
+    # parameter type, so we keep all overloads. Their return types are not equivalent, so we fall
+    # back to `Any`.
+    assert_type(f(x), Any)
+
+    "#,
+);
+
+testcase!(
+    test_callable_param_materialization,
+    r#"
+from typing import Any, assert_type, Callable, Never, overload
+
+@overload
+def f1(x: Callable[[int], None]) -> int: ...
+@overload
+def f1(x: Callable[[str], None]) -> str: ...
+def f1(x: Any) -> int | str: ...
+
+@overload
+def f2(x: Callable[[Any], None]) -> int: ...
+@overload
+def f2(x: Callable[[str], None]) -> str: ...
+def f2(x: Any) -> int | str: ...
+
+@overload
+def f3(x: Callable[[Never], None]) -> int: ...
+@overload
+def f3(x: Callable[[str], None]) -> str: ...
+def f3(x: Any) -> int | str: ...
+
+def g(x: Callable[[Any], None]):
+    assert_type(f1(x), Any)
+    assert_type(f2(x), int)
+    assert_type(f3(x), int)
+    "#,
+);
+
+testcase!(
+    test_callable_ellipsis_materialization,
+    r#"
+from typing import Any, assert_type, Callable, overload, Protocol
+
+class EverythingCallback(Protocol):
+    def __call__(self, *args, **kwargs) -> None: ...
+
+@overload
+def f1(x: EverythingCallback) -> int: ...
+@overload
+def f1(x: Callable[[], None]) -> str: ...
+def f1(x: Any) -> int | str: ...
+
+@overload
+def f2(x: Callable[[EverythingCallback], None]) -> int: ...
+@overload
+def f2(x: Callable[[Callable[[], None]], None]) -> str: ...
+def f2(x: Any) -> int | str: ...
+
+@overload
+def f3(x: Callable[..., None]) -> int: ...
+@overload
+def f3(x: Callable[[], None]) -> str: ...
+def f3(x: Any) -> int | str: ...
+
+def g(x: Callable[..., None], y: Callable[[Callable[..., None]], None]):
+    assert_type(f1(x), Any)
+    assert_type(f2(y), int)
+    assert_type(f3(x), int)
+    "#,
+);
+
+testcase!(
+    test_list_vs_sequence_materialization,
+    r#"
+from typing import Any, assert_type, overload, Sequence
+
+@overload
+def f1(x: list[object]) -> int: ...
+@overload
+def f1(x: list[Any]) -> str: ...
+def f1(x: Any) -> int | str: ...
+
+@overload
+def f2(x: Sequence[object]) -> int: ...
+@overload
+def f2(x: Sequence[Any]) -> str: ...
+def f2(x: Any) -> int | str: ...
+
+def g(x: list[Any]):
+    assert_type(f1(x), Any)
+    assert_type(f2(x), int)
+    "#,
+);
+
+testcase!(
+    test_tuple_materialization,
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f1(x: tuple[Any, ...]) -> int: ...
+@overload
+def f1(x: tuple[()]) -> str: ...
+def f1(x: Any) -> int | str: ...
+
+@overload
+def f2(x: tuple[int, ...]) -> int: ...
+@overload
+def f2(x: tuple[str, ...]) -> str: ...
+def f2(x: Any) -> int | str: ...
+
+def g(x: tuple[Any, ...]):
+    assert_type(f1(x), int)
+    assert_type(f2(x), Any)
+    "#,
+);
+
+testcase!(
+    test_abstractmethod_does_not_need_implementation,
+    r#"
+from typing import overload
+from abc import ABC, abstractmethod
+
+class A(ABC):
+    @overload
+    @abstractmethod
+    def f(self, x: int) -> int: ...
+    @overload
+    @abstractmethod
+    def f(self, x: str) -> str: ...
+
+class B(ABC):
+    @abstractmethod
+    @overload
+    def f(self, x: int) -> int: ...
+    @abstractmethod
+    @overload
+    def f(Self, x: str) -> str: ...
     "#,
 );

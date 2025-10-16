@@ -172,6 +172,8 @@ pub enum TypeCheckKind {
     OverloadInput(Callable, Callable),
     /// Check that the type a TypeVar is specialized with is compatible with its type restriction.
     TypeVarSpecialization(Name),
+    /// An `x in y` check
+    Container,
 }
 
 impl TypeCheckKind {
@@ -214,6 +216,7 @@ impl TypeCheckKind {
             Self::OverloadReturn => ErrorKind::InconsistentOverload,
             Self::OverloadInput(..) => ErrorKind::InconsistentOverload,
             Self::TypeVarSpecialization(..) => ErrorKind::BadSpecialization,
+            Self::Container => ErrorKind::UnsupportedOperation,
         }
     }
 }

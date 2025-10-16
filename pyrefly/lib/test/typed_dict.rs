@@ -1730,3 +1730,32 @@ def f(a: A, b: B):
     b.clear()  # E: `B` has no attribute `clear`
     "#,
 );
+
+testcase!(
+    test_builtins_dict_call,
+    r#"
+from typing import TypedDict
+class A(TypedDict):
+    x: int
+a1: A = dict(x=1)
+a2: A = dict(**{'x': 1})
+a3: A = dict(x='oops')  # E: `Literal['oops']` is not assignable to TypedDict key `x`
+a4: A = dict(**{'x': 'oops'})  # E: `Literal['oops']` is not assignable to TypedDict key `x`
+    "#,
+);
+
+testcase!(
+    bug = "This example should typecheck",
+    test_annotated_typeddict,
+    r#"
+from typing import TypedDict
+
+class MyDict(TypedDict):
+    x: int
+    y: str
+
+fieldsets: tuple[tuple[str, MyDict], ...] | None = ( # E: `tuple[tuple[Literal['A'], dict[str, int | str]]]` is not assignable to `tuple[tuple[str, TypedDict[MyDict]], ...] | None`
+    ("A", {"x": 1, "y": "2"}),
+)
+    "#,
+);

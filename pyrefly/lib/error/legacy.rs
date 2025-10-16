@@ -8,6 +8,7 @@
 use std::path::Path;
 
 use pyrefly_util::prelude::SliceExt;
+use serde::Deserialize;
 use serde::Serialize;
 
 use crate::error::error::Error;
@@ -16,16 +17,16 @@ use crate::error::error::Error;
 /// <https://www.internalfb.com/code/fbsource/fbcode/tools/pyre/facebook/arc/lib/error.rs>
 ///
 /// Used to serialize errors in a Pyre1-compatible format.
-#[derive(Serialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct LegacyError {
     line: usize,
-    column: usize,
+    pub column: usize,
     stop_line: usize,
     stop_column: usize,
-    path: String,
+    pub path: String,
     code: i32,
     /// The kebab-case name of the error kind.
-    name: &'static str,
+    pub name: String,
     description: String,
     concise_description: String,
 }
@@ -46,14 +47,14 @@ impl LegacyError {
                 .into_owned(),
             // -2 is chosen because it's an unused error code in Pyre1
             code: -2, // TODO: replace this dummy value
-            name: error.error_kind().to_name(),
+            name: error.error_kind().to_name().to_owned(),
             description: error.msg(),
             concise_description: error.msg_header().to_owned(),
         }
     }
 }
 
-#[derive(Serialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct LegacyErrors {
     pub errors: Vec<LegacyError>,
 }

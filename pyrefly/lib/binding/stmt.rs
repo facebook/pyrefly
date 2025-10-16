@@ -637,10 +637,11 @@ impl<'a> BindingsBuilder<'a> {
                 // loop iterator is only evaluated once before the loop begins.
                 self.setup_loop(x.range, &NarrowOps::new());
                 self.stmts(x.body, parent);
-                self.teardown_loop(x.range, &NarrowOps::new(), x.orelse, parent);
+                self.teardown_loop(x.range, &NarrowOps::new(), x.orelse, parent, false);
             }
             Stmt::While(mut x) => {
                 self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
+                let is_while_true = self.sys_info.evaluate_bool(&x.test) == Some(true);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
                 self.setup_loop(x.range, &narrow_ops);
                 // Note that it is important we ensure *after* we set up the loop, so that both the
@@ -649,12 +650,11 @@ impl<'a> BindingsBuilder<'a> {
                 // Typecheck the test condition during solving.
                 self.insert_binding(KeyExpect(x.test.range()), BindingExpect::Bool(*x.test));
                 self.stmts(x.body, parent);
-                self.teardown_loop(x.range, &narrow_ops, x.orelse, parent);
+                self.teardown_loop(x.range, &narrow_ops, x.orelse, parent, is_while_true);
             }
             Stmt::If(x) => {
-                let range = x.range;
                 let mut exhaustive = false;
-                let mut branches = Vec::new();
+                self.start_fork(x.range);
                 // Type narrowing operations that are carried over from one branch to the next. For example, in:
                 //   if x is None:
                 //     pass
@@ -663,62 +663,43 @@ impl<'a> BindingsBuilder<'a> {
                 // x is bound to Narrow(x, Is(None)) in the if branch, and the negation, Narrow(x, IsNot(None)),
                 // is carried over to the else branch.
                 let mut negated_prev_ops = NarrowOps::new();
-                let mut implicit_else = true;
                 for (range, mut test, body) in Ast::if_branches_owned(x) {
+                    self.start_branch();
+                    self.bind_narrow_ops(&negated_prev_ops, range, &Usage::Narrowing(None));
                     // If there is no test, it's an `else` clause and `this_branch_chosen` will be true.
                     let this_branch_chosen = match &test {
                         None => Some(true),
                         Some(x) => self.sys_info.evaluate_bool(x),
                     };
-                    if this_branch_chosen == Some(false) {
-                        // We definitely won't pick this branch. We still ensure the test
-                        // expression to pick up any names it defines.
-                        self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing(None));
-                        continue;
-                    }
-                    self.bind_narrow_ops(&negated_prev_ops, range, &Usage::Narrowing(None));
-                    let mut base = self.scopes.clone_current_flow();
                     self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing(None));
-                    let new_narrow_ops = NarrowOps::from_expr(self, test.as_ref());
+                    let new_narrow_ops = if this_branch_chosen == Some(false) {
+                        // Skip the body in this case - it typically means a check (e.g. a sys version,
+                        // platform, or TYPE_CHECKING check) where the body is not statically analyzable.
+                        self.abandon_branch();
+                        continue;
+                    } else {
+                        NarrowOps::from_expr(self, test.as_ref())
+                    };
                     if let Some(test_expr) = test {
                         // Typecheck the test condition during solving.
                         self.insert_binding(
                             KeyExpect(test_expr.range()),
                             BindingExpect::Bool(test_expr),
                         );
-                    } else {
-                        implicit_else = false;
                     }
                     self.bind_narrow_ops(&new_narrow_ops, range, &Usage::Narrowing(None));
                     negated_prev_ops.and_all(new_narrow_ops.negate());
                     self.stmts(body, parent);
-                    self.scopes.swap_current_flow_with(&mut base);
-                    branches.push(base);
+                    self.finish_branch();
                     if this_branch_chosen == Some(true) {
                         exhaustive = true;
                         break; // We definitely picked this branch if we got here, nothing below is reachable.
                     }
                 }
-                // If the conditions are exhaustive, then we only need to merge the branches.
-                //
-                // Otherwise, we need to merge branches with `base` (which was
-                // the flow above the `If`) because the if might be skipped
-                // entirely.
                 if exhaustive {
-                    self.set_current_flow_to_merged_branches(branches, range);
+                    self.finish_exhaustive_fork();
                 } else {
-                    if implicit_else {
-                        // If there is no explicit else branch, we still want to merge the negated ops
-                        // from the previous branches into the flow env.
-                        // Note, using a default use_range is OK. The range is only needed to make the
-                        // key distinct from other keys.
-                        self.bind_narrow_ops(
-                            &negated_prev_ops,
-                            TextRange::default(),
-                            &Usage::Narrowing(None),
-                        );
-                    }
-                    self.merge_branches_into_current(branches, range);
+                    self.finish_non_exhaustive_fork(&negated_prev_ops);
                 }
             }
             Stmt::With(x) => {
@@ -777,9 +758,7 @@ impl<'a> BindingsBuilder<'a> {
                 self.scopes.mark_flow_termination();
             }
             Stmt::Try(x) => {
-                let range = x.range;
-                let mut branches = Vec::new();
-                let mut base = self.scopes.clone_current_flow();
+                self.start_fork_and_branch(x.range);
 
                 // We branch before the body, conservatively assuming that any statement can fail
                 // entry -> try -> else -> finally
@@ -788,11 +767,10 @@ impl<'a> BindingsBuilder<'a> {
 
                 self.stmts(x.body, parent);
                 self.stmts(x.orelse, parent);
-                self.scopes.swap_current_flow_with(&mut base);
-                branches.push(base);
+                self.finish_branch();
 
                 for h in x.handlers {
-                    base = self.scopes.clone_current_flow();
+                    self.start_branch();
                     let range = h.range();
                     let h = h.except_handler().unwrap(); // Only one variant for now
                     match (&h.name, h.type_) {
@@ -841,11 +819,10 @@ impl<'a> BindingsBuilder<'a> {
                         self.scopes.mark_as_deleted(&name.id);
                     }
 
-                    self.scopes.swap_current_flow_with(&mut base);
-                    branches.push(base);
+                    self.finish_branch();
                 }
 
-                self.set_current_flow_to_merged_branches(branches, range);
+                self.finish_exhaustive_fork();
                 self.stmts(x.finalbody, parent);
             }
             Stmt::Assert(x) => {

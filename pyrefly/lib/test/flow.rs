@@ -712,7 +712,7 @@ match x:
     case [a] | a: # E: name capture `a` makes remaining patterns unreachable
         assert_type(a, list[int] | int)
     case [b] | _:
-        assert_type(b, int)
+        assert_type(b, int)  # E: `b` may be uninitialized
 
 match x:
     case _ | _:  # E: Only the last subpattern in MatchOr may be irrefutable
@@ -831,7 +831,6 @@ def test2() -> int:  # E: Function declared to return `int` but is missing an ex
 );
 
 testcase!(
-    bug = "Merge flow is lax about possibly-undefined locals, so we don't catch that `x` may be uninitialized.",
     test_if_defines_variable_in_one_side,
     r#"
 from typing import assert_type, Literal
@@ -840,21 +839,63 @@ if condition():
     x = 1
 else:
     pass
-assert_type(x, Literal[1])  # Here, we did not catch that `x` may not be initialized
+assert_type(x, Literal[1])  # E: `x` may be uninitialized
     "#,
 );
 
 testcase!(
-    bug = "Merge flow is lax about possibly-undefined locals, so we don't catch that `z` may be uninitialized.",
+    test_while_true_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    while True:
+        x = "a"
+        break
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+testcase!(
+    test_while_true_redefines_and_narrows_variable,
+    r#"
+from typing import assert_type, Literal
+def get_new_y() -> int | None: ...
+def foo():
+    y = None
+    while True:
+        if (y := get_new_y()):
+            break
+    assert_type(y, int)
+    "#,
+);
+
+testcase!(
+    test_nested_if_sometimes_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def condition() -> bool: ...
+if condition():
+    if condition():
+        x = "x"
+else:
+    x = "x"
+print(x)  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
     test_named_inside_boolean_op,
     r#"
 from typing import assert_type, Literal
 b: bool = True
 y = 5
 x0 = True or (y := b) and False
-assert_type(y, Literal[5, True])  # this is as expected
+assert_type(y, Literal[5] | bool)  # this is as expected
 x0 = True or (z := b) and False
-assert_type(z, bool)  # here, we did not catch that `z` may not be initialized
+# This is an intended false negative uninitialized local check: because we can't
+# distinguish different downstream uses fully, we disable uninitialized local
+# checks for names defined in bool ops.
+assert_type(z, bool)
 "#,
 );
 
@@ -971,6 +1012,39 @@ print([value for value in intList])
 );
 
 testcase!(
+    bug = "For now, we disabled uninitialized local check for walrus in bool op, see #1251",
+    test_walrus_names_in_bool_op_straight_line,
+    r#"
+def condition() -> bool: ...
+def f_and():
+    b = (z := condition()) and (y := condition())
+    print(z)
+    print(y)  # Intended false negative
+def f_or():
+    b = (z := condition()) or (y := condition())
+    print(z)
+    print(y)  # Intended false negative
+
+    "#,
+);
+
+testcase!(
+    bug = "For now, we disabled uninitialized local check for walrus in bool op, see #1251",
+    test_walrus_names_in_bool_op_as_guard,
+    r#"
+def condition() -> bool: ...
+def f_and():
+    if (z := condition()) or (y := condition()):
+        print(z)
+        print(y)  # Intended false negative
+def f_or():
+    if (z := condition()) and (y := condition()):
+        print(z)
+        print(y)  # Note this is *not* a false negative
+    "#,
+);
+
+testcase!(
     test_setitem_with_loop_and_walrus,
     r#"
 def f():
@@ -1010,13 +1084,26 @@ def f():
 );
 
 testcase!(
+    bug = "We approximate flow for tests in a lossy way - the first test actually runs in the base flow",
+    test_walrus_on_first_branch_of_if,
+    r#"
+def condition() -> bool: ...
+def f() -> bool:
+    if (b := condition()):
+        pass
+    # In our approximation, `b` is defined in the branch but actually the test always evaluates
+    return b  # E: `b` may be uninitialized
+    "#,
+);
+
+testcase!(
     test_false_and_walrus,
     r#"
 def f(v):
     if False and (value := v):
         print(value)
     else:
-        print(value)
+        print(value)  # E: `value` is uninitialized
     "#,
 );
 
@@ -1029,6 +1116,68 @@ def f() -> int:
     finally:
         pass
     "#,
+);
+
+testcase!(
+    test_merging_any,
+    r#"
+from typing import Any, assert_type
+def f(x: Any, y: Any):
+    if isinstance(x, int):
+        y = "y"
+    assert_type(x, Any)
+    assert_type(y, Any)
+    "#,
+);
+
+testcase!(
+    test_reducible_join_of_narrows,
+    r#"
+from typing import assert_type
+class A: pass
+class B(A): pass
+def f(x: A):
+    if isinstance(x, B):
+        pass
+    assert_type(x, A)
+    "#,
+);
+
+testcase!(
+    test_join_with_unrelated_narrow,
+    r#"
+from typing import assert_type
+class A: pass
+class B: pass
+def f(x: A):
+    if isinstance(x, B):
+        assert_type(x, B)
+    assert_type(x, A)
+# (Illustrating that all code in the body of `f` is reachable)
+class C(A, B): pass
+f(C())
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1246
+testcase!(
+    test_boolean_op_narrowing_example,
+    r#"
+from typing import Sequence, reveal_type
+class A: 
+    def foo(self) -> bool:
+        raise NotImplementedError()
+    def i(self) -> int:
+        raise NotImplementedError()
+class B:
+    def bar(self) -> bool:
+        raise NotImplementedError()
+def f(a: A) -> tuple[int, bool]:
+    return a.i(), (
+        (isinstance(a, B) and a.bar()) or
+        reveal_type(a).foo()  # E: revealed type: A
+    )
+"#,
 );
 
 // Regression test for https://github.com/facebook/pyrefly/issues/683
@@ -1327,7 +1476,7 @@ testcase!(
     r#"
 def f(x: list[int]) -> None:
     i: str = ""
-    for i in x: # E: Cannot use variable `i` with type `str` to iterate through `list[int]`
+    for i in x: # E: Cannot use variable `i` with type `str` to iterate over elements of type `int`
         pass
     "#,
 );

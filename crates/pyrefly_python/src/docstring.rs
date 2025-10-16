@@ -73,13 +73,32 @@ impl Docstring {
             .enumerate()
             .map(|(i, line)| {
                 if i == 0 {
-                    line
+                    line.to_owned()
                 } else {
-                    &line[min(min_indent, line.len())..]
+                    let trimmed = &line[min(min_indent, line.len())..];
+                    let mut without_blockquote = trimmed;
+                    while let Some(rest) = without_blockquote.strip_prefix('>') {
+                        without_blockquote = rest.strip_prefix(' ').unwrap_or(rest);
+                    }
+                    // Replace remaining leading spaces with &nbsp; or they might be ignored in markdown parsers
+                    let leading_spaces = without_blockquote
+                        .bytes()
+                        .take_while(|&c| c == b' ')
+                        .count();
+                    if leading_spaces > 0 {
+                        format!(
+                            "{}{}",
+                            "&nbsp;".repeat(leading_spaces),
+                            &without_blockquote[leading_spaces..]
+                        )
+                    } else {
+                        without_blockquote.to_owned()
+                    }
                 }
             })
             .collect::<Vec<_>>()
-            .join("\n")
+            // Note: markdown doesn't break on just `\n`
+            .join("  \n")
     }
 
     /// Resolve the docstring to a string. This involves parsing the file to get the contents of the docstring and then cleaning it.
@@ -150,10 +169,10 @@ mod tests {
     }
 
     #[test]
-    fn test_clean_trims_shortest_whitespace() {
+    fn test_clean_trims_shortest_whitespace_and_replaces_space_with_nbsp() {
         assert_eq!(
             Docstring::clean("\n  hello\n    world\n  test").as_str(),
-            "\nhello\n  world\ntest"
+            "  \nhello  \n&nbsp;&nbsp;world  \ntest"
         );
     }
 
@@ -166,7 +185,7 @@ mod tests {
     fn test_docstring_multiline_starts_at_first() {
         assert_eq!(
             Docstring::clean("\"\"\"hello\n  world\n  test\"\"\"").as_str(),
-            "hello\nworld\ntest"
+            "hello  \nworld  \ntest"
         );
     }
 }

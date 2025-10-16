@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::path::Path;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -14,6 +15,7 @@ use pyrefly_util::arc_id::ArcId;
 use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
+use crate::error::baseline::BaselineProcessor;
 use crate::error::collector::CollectedErrors;
 use crate::error::expectation::Expectation;
 use crate::state::load::Load;
@@ -36,6 +38,20 @@ impl Errors {
         for (load, config) in &self.loads {
             let error_config = config.get_error_config(load.module_info.path().as_path());
             load.errors.collect_into(&error_config, &mut errors);
+        }
+        errors
+    }
+
+    pub fn collect_errors_with_baseline(
+        &self,
+        baseline_path: Option<&Path>,
+        relative_to: &Path,
+    ) -> CollectedErrors {
+        let mut errors = self.collect_errors();
+        if let Some(baseline_path) = baseline_path
+            && let Ok(processor) = BaselineProcessor::from_file(baseline_path)
+        {
+            processor.process_errors(&mut errors.shown, &mut errors.baseline, relative_to);
         }
         errors
     }

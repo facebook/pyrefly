@@ -673,7 +673,7 @@ ExplicitAlias: TypeAlias = list[T]
 type ScopedAlias[S: int] = list[S]
 
 def f(
-    x: ImplicitAlias[str],  # E: Type `str` is not assignable to upper bound `int` of type variable `T`
+    x: ImplicitAlias[str],  # E: `str` is not assignable to upper bound `int` of type variable `T`
     y: ExplicitAlias[str],  # E: `str` is not assignable to upper bound `int`
     z: ScopedAlias[str],  # E: `str` is not assignable to upper bound `int`
 ): ...
@@ -692,7 +692,7 @@ ExplicitAlias: TypeAlias = list[T]
 type ScopedAlias[S: (int, bytes)] = list[S]
 
 def f(
-    x: ImplicitAlias[str],  # E: Type `str` is not assignable to upper bound `bytes | int` of type variable `T`
+    x: ImplicitAlias[str],  # E: `str` is not assignable to upper bound `bytes | int` of type variable `T`
     y: ExplicitAlias[str],  # E: `str` is not assignable to upper bound `bytes | int`
     z: ScopedAlias[str],  # E: `str` is not assignable to upper bound `bytes | int`
 ): ...

@@ -197,7 +197,6 @@ def get_pyrefly_command(executable: Path | None) -> list[str]:
     return [
         str(pyrefly_path),
         "check",
-        "--expectations",
         # We seem to be a bit non-deterministic in some places, so let's disable
         # parallelism for now.
         "--threads=1",

@@ -47,16 +47,15 @@ assert_type(list_view.get_context_object_name(1), str | None)
 );
 
 django_testcase!(
-    bug = "Example should typecheck.",
     test_user_passes_test_decorator,
     r#"
-from django.contrib.auth.decorators import user_passes_test 
-from django.http import HttpRequest, HttpResponse 
+from django.contrib.auth.decorators import user_passes_test
+from django.http import HttpRequest, HttpResponse
 from django.urls import reverse, reverse_lazy
 
 reversed_url = reverse("url")
 
-@user_passes_test(lambda user: user.is_active, login_url=reversed_url) # E: Argument `(user: AbstractBaseUser | AnonymousUser) -> BooleanField[Combinable | bool, bool] | bool` is not assignable to parameter `test_func` with type `(AbstractBaseUser | AnonymousUser) -> bool` in function `django.contrib.auth.decorators.user_passes_test`
+@user_passes_test(lambda user: user.is_active, login_url=reversed_url)
 def my_view1(request: HttpRequest) -> HttpResponse: ...
 "#,
 );

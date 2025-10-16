@@ -236,8 +236,6 @@ def test(x: A) -> None:
 );
 
 testcase!(
-    bug =
-        "Field names cannot start with an underscore, unless they were generated with rename=True",
     test_named_tuple_underscore_field_name,
     r#"
 from typing import NamedTuple
@@ -245,7 +243,8 @@ from collections import namedtuple
 class A(NamedTuple):
     a: int
     b: str
-    _c: str  # Not OK
+    _c: str  # E: NamedTuple field name may not start with an underscore
+    def _d(self) -> None: pass  # OK, methods are not fields
 B = namedtuple("B", ["a", "b", "_c"])  # E: NamedTuple field name may not start with an underscore
 C = namedtuple("C", ["a", "b", "_c"], rename=True)  # OK
 "#,
@@ -342,7 +341,7 @@ class A(NamedTuple):
 class B(A):
     def __new__(cls, x: int, y: str) -> Self:
         return super().__new__(cls, x, y)
-    
+
     def __init__(self, x: int, y: str) -> None:
         return super().__init__(x, y)
 "#,

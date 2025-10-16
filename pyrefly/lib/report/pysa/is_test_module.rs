@@ -10,26 +10,22 @@ use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::name::Name;
 
-use crate::alt::answers::Answers;
 use crate::alt::types::class_metadata::ClassMro;
-use crate::binding::bindings::Bindings;
 use crate::report::pysa::class::get_all_classes;
 use crate::report::pysa::class::get_class_mro;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::get_all_functions;
 
-fn is_unittest_module(bindings: &Bindings, answers: &Answers) -> bool {
-    get_all_classes(bindings, answers).any(|class| {
-        match &*get_class_mro(&class, bindings, answers) {
-            ClassMro::Resolved(mro) => mro
-                .iter()
-                .any(|base| base.has_qname("unittest.case", "TestCase")),
-            ClassMro::Cyclic => false,
-        }
+fn is_unittest_module(context: &ModuleContext) -> bool {
+    get_all_classes(context).any(|class| match &*get_class_mro(&class, context) {
+        ClassMro::Resolved(mro) => mro
+            .iter()
+            .any(|base| base.has_qname("unittest.case", "TestCase")),
+        ClassMro::Cyclic => false,
     })
 }
 
-fn is_pytest_module(bindings: &Bindings, answers: &Answers, ast: &ModModule) -> bool {
+fn is_pytest_module(context: &ModuleContext) -> bool {
     fn has_pytest_prefix(name: &Name) -> bool {
         name == "pytest" || name.starts_with("pytest.")
     }
@@ -46,8 +42,8 @@ fn is_pytest_module(bindings: &Bindings, answers: &Answers, ast: &ModModule) -> 
             _ => false,
         })
     }
-    fn has_test_function(bindings: &Bindings, answers: &Answers) -> bool {
-        get_all_functions(bindings, answers).any(|function| {
+    fn has_test_function(context: &ModuleContext) -> bool {
+        get_all_functions(context).any(|function| {
             function
                 .metadata()
                 .kind
@@ -56,7 +52,7 @@ fn is_pytest_module(bindings: &Bindings, answers: &Answers, ast: &ModModule) -> 
                 .starts_with("test_")
         })
     }
-    imports_pytest(ast) && has_test_function(bindings, answers)
+    imports_pytest(&context.ast) && has_test_function(context)
 }
 
 /// Returns true if the module is considered a test module for Pysa.
@@ -66,6 +62,5 @@ fn is_pytest_module(bindings: &Bindings, answers: &Answers, ast: &ModModule) -> 
 /// - If a class inherits from `unittest.TestCase`, we assume this is a test file.
 /// - If `pytest` is imported and at least one function starts with `test_`, we assume this is a test file.
 pub fn is_test_module(context: &ModuleContext) -> bool {
-    is_unittest_module(&context.bindings, &context.answers)
-        || is_pytest_module(&context.bindings, &context.answers, &context.ast)
+    is_unittest_module(context) || is_pytest_module(context)
 }

@@ -880,20 +880,7 @@ function getPyreflyEditor(
                 defaultValue={codeSample}
                 defaultLanguage="python"
                 theme={editorTheme}
-                onChange={(value) => {
-                    forceRecheck();
-                    if (typeof value === 'string' && !isCodeSnippet) {
-                        const allFiles: Record<string, string> = {};
-                        models.forEach((model, filename) => {
-                            if (filename === activeFileName) {
-                                allFiles[filename] = value;
-                            } else {
-                                allFiles[filename] = model.getValue();
-                            }
-                        });
-                        updateURL(allFiles, activeFileName);
-                    }
-                }}
+                onChange={forceRecheck}
                 onMount={onEditorMount}
                 keepCurrentModel={true}
                 height={sandboxHeight}
@@ -939,7 +926,7 @@ function getMonacoButtons(
                 pyodideStatus,
                 setPyodideStatus
             ),
-            getShareUrlButton(),
+            getShareUrlButton(models, activeFileName),
             getResetButton(model, forceRecheck, codeSample, isCodeSnippet, models, activeFileName),
             getGitHubIssuesButton(model, pythonVersion),
         ];
@@ -959,11 +946,21 @@ function getMonacoButtons(
 }
 
 // Monaco Editor Buttons
-function getShareUrlButton(): React.ReactElement {
+function getShareUrlButton(
+    models: Map<string, editor.ITextModel>,
+    activeFileName: string
+): React.ReactElement {
     return (
         <MonacoEditorButton
             id="share-url-button"
             onClick={() => {
+                // Update URL with current state before copying
+                const allFiles: Record<string, string> = {};
+                models.forEach((model, filename) => {
+                    allFiles[filename] = model.getValue();
+                });
+                updateURL(allFiles, activeFileName);
+
                 const currentURL = window.location.href;
                 return navigator.clipboard.writeText(currentURL);
             }}
@@ -1105,17 +1102,6 @@ function getResetButton(
             onClick={async () => {
                 if (model) {
                     model.setValue(codeSample);
-                    if (!isCodeSnippet) {
-                        const allFiles: Record<string, string> = {};
-                        models.forEach((model, filename) => {
-                            if (filename === activeFileName) {
-                                allFiles[filename] = codeSample;
-                            } else {
-                                allFiles[filename] = model.getValue();
-                            }
-                        });
-                        updateURL(allFiles, activeFileName);
-                    }
                     forceRecheck();
                 }
             }}

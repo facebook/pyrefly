@@ -164,6 +164,18 @@ impl ModuleName {
         Self::from_str("django.db.models.base")
     }
 
+    pub fn django_models_fields() -> Self {
+        Self::from_str("django.db.models.fields")
+    }
+
+    pub fn django_utils_functional() -> Self {
+        Self::from_str("django.utils.functional")
+    }
+
+    pub fn pydantic_types() -> Self {
+        Self::from_str("pydantic.types")
+    }
+
     /// The "unknown" module name, which corresponds to `__unknown__`.
     /// Used for files directly opened or passed on the command line which aren't on the search path.
     pub fn unknown() -> Self {

@@ -26,6 +26,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
@@ -90,7 +91,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         // Overloads in .pyi should not have an implementation.
         let skip_implementation = self.module().path().style() == ModuleStyle::Interface
-            || class_metadata.is_some_and(|idx| self.get_idx(*idx).is_protocol());
+            || class_metadata.is_some_and(|idx| self.get_idx(*idx).is_protocol())
+            || def.metadata().flags.is_abstract_method;
         if def.metadata().flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
             let successor = self.get_function_successor(&def);
@@ -287,10 +289,51 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         stmt: &StmtFunctionDef,
         errors: &ErrorCollector,
     ) -> Arc<Type> {
-        let ret = self
+        let mut ret = self
             .get(&Key::ReturnType(ShortIdentifier::new(&stmt.name)))
             .arc_clone_ty();
-
+        // `stmt.returns` is always set to None because the binding step calls `mem::take` on it
+        let has_return_annotation_or_infers_return = self
+            .bindings()
+            .function_has_return_annotation_or_infers_return(&stmt.name);
+        if stmt.is_async
+            && def.metadata.flags.is_abstract_method
+            && !ret.is_any()
+            && let Some((_, _, coroutine_ret)) = self.unwrap_coroutine(&ret)
+            && !coroutine_ret.is_any()
+            && self.unwrap_async_iterator(&coroutine_ret).is_some()
+        {
+            self.error(
+                errors,
+                stmt.name.range(),
+                ErrorInfo::Kind(ErrorKind::BadFunctionDefinition),
+                "Abstract methods for async generators should use `def`, not `async def`"
+                    .to_owned(),
+            );
+            ret = coroutine_ret;
+        }
+        if !has_return_annotation_or_infers_return {
+            self.error(
+                errors,
+                stmt.name.range(),
+                ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                format!("`{}` is missing a return annotation", stmt.name),
+            );
+        }
+        for p in stmt.parameters.iter() {
+            let name = p.name().as_str();
+            if p.annotation().is_none() && name != "cls" && name != "self" {
+                self.error(
+                    errors,
+                    p.name().range(),
+                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                    format!(
+                        "`{}` is missing an annotation for parameter `{name}`",
+                        stmt.name
+                    ),
+                );
+            }
+        }
         if matches!(&ret, Type::TypeGuard(_) | Type::TypeIs(_)) {
             self.validate_type_guard_positional_argument_count(
                 &def.params,
@@ -355,9 +398,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(CalleeKind::Class(ClassKind::EnumMember)) => Some(SpecialDecorator::EnumMember),
             Some(CalleeKind::Function(FunctionKind::Override)) => Some(SpecialDecorator::Override),
             Some(CalleeKind::Function(FunctionKind::Final)) => Some(SpecialDecorator::Final),
-            _ if matches!(decorator, Type::ClassType(cls) if cls.has_qname("warnings", "deprecated")) => {
-                Some(SpecialDecorator::Deprecated)
-            }
+            _ if decorator.is_deprecation_marker() => Some(SpecialDecorator::Deprecated),
             _ if decorator.is_property_setter_decorator() => {
                 Some(SpecialDecorator::PropertySetter(decorator))
             }
@@ -431,6 +472,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             SpecialDecorator::DataclassTransformCall(kws) => {
                 flags.dataclass_transform_metadata =
                     Some(DataclassTransformKeywords::from_type_map(kws));
+                true
+            }
+            SpecialDecorator::AbstractMethod => {
+                flags.is_abstract_method = true;
                 true
             }
             _ => false,

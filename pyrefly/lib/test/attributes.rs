@@ -1154,6 +1154,20 @@ def f[T: Foo](y: T, z: type[T]) -> T:
 );
 
 testcase!(
+    test_classmethod_on_instance_typevar_bound,
+    r#"
+from typing import Self
+
+class A:
+    @classmethod
+    def bar(cls) -> Self: ...
+
+def test[T: A](a: T) -> T:
+    return a.bar()
+    "#,
+);
+
+testcase!(
     test_attribute_access_on_quantified_bound_by_union,
     r#"
 from typing import assert_type

@@ -16,8 +16,10 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::type_info::JoinStyle;
 use pyrefly_types::types::Type;
 use pyrefly_util::display::DisplayWithCtx;
+use pyrefly_util::gas::Gas;
 use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::AnyParameterRef;
 use ruff_python_ast::Expr;
@@ -314,6 +316,24 @@ impl Bindings {
         }
     }
 
+    pub fn function_has_return_annotation_or_infers_return(&self, name: &Identifier) -> bool {
+        let b = self.get(self.key_to_idx(&Key::ReturnType(ShortIdentifier::new(name))));
+        if let Binding::ReturnType(box r) = b {
+            r.kind.has_return_annotation() || r.kind.should_infer_return()
+        } else if let Binding::Type(_) = b {
+            false
+        } else {
+            panic!(
+                "Internal error: unexpected binding for return type `{}` @  {:?}: {}, module={}, path={}",
+                &name.id,
+                name.range,
+                b.display_with(self),
+                self.module().name(),
+                self.module().path(),
+            )
+        }
+    }
+
     pub fn new(
         x: ModModule,
         module_info: ModuleInfo,
@@ -414,12 +434,10 @@ impl BindingTable {
     /// insert the Anywhere.
     fn record_bind_in_anywhere(&mut self, name: Name, range: TextRange, idx: Idx<Key>) {
         let phi_idx = self.types.0.insert(Key::Anywhere(name, range));
-        match self
-            .types
-            .1
-            .insert_if_missing(phi_idx, || Binding::Phi(SmallSet::new()))
-        {
-            Binding::Phi(phi) => {
+        match self.types.1.insert_if_missing(phi_idx, || {
+            Binding::Phi(JoinStyle::SimpleMerge, SmallSet::new())
+        }) {
+            Binding::Phi(_, phi) => {
                 phi.insert(idx);
             }
             _ => unreachable!(),
@@ -1138,12 +1156,11 @@ impl<'a> BindingsBuilder<'a> {
         // Follow Forwards to get to the actual original binding.
         // Short circuit if there are too many forwards - it may mean there's a cycle.
         let mut original_binding = self.table.types.1.get(original_idx);
-        let mut counter = 0;
+        let mut gas = Gas::new(100);
         while let Some(Binding::Forward(fwd_idx)) = original_binding {
-            if counter > 100 {
+            if gas.stop() {
                 return None;
             } else {
-                counter += 1;
                 original_idx = *fwd_idx;
                 original_binding = self.table.types.1.get(original_idx);
             }

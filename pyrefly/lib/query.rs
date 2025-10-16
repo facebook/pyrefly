@@ -408,6 +408,8 @@ impl<'a> CalleesWithLocation<'a> {
             && let Some(class_name) = &f.cls
         {
             format!("{}.{}", f.module, class_name)
+        } else if let FunctionKind::CallbackProtocol(c) = kind {
+            Self::qname_to_string(c.qname())
         } else {
             panic!("class_name_from_def_kind - unsupported function kind: {kind:?}");
         }
@@ -809,24 +811,13 @@ impl Query {
     pub fn change_files(&self, events: &CategorizedEvents) {
         let mut transaction = self
             .state
-            .new_committable_transaction(Require::Everything, None);
+            .new_committable_transaction(Require::Exports, None);
         let new_transaction_mut = transaction.as_mut();
         new_transaction_mut.invalidate_events(events);
-        new_transaction_mut.run(&[], Require::Everything);
+        new_transaction_mut.run(&[], Require::Exports);
         self.state.commit_transaction(transaction);
         let all_files = self.files.lock().iter().cloned().collect::<Vec<_>>();
         self.add_files(all_files);
-    }
-
-    pub fn change(&self, files: Vec<(ModuleName, std::path::PathBuf)>) {
-        let modified_paths = files.into_iter().map(|(_, path)| path).collect();
-        let events = CategorizedEvents {
-            created: Vec::new(),
-            modified: modified_paths,
-            removed: Vec::new(),
-            unknown: Vec::new(),
-        };
-        self.change_files(&events);
     }
 
     /// Load the given files and return any errors associated with them
@@ -1094,7 +1085,6 @@ impl Query {
         lt: &str,
         gt: &str,
     ) -> Result<bool, String> {
-        println!("At is_subtype top level");
         let mut t = self.state.transaction();
         let h = self.make_handle(name, ModulePath::memory(path.clone()));
 

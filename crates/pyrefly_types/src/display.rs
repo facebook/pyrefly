@@ -86,6 +86,7 @@ pub struct TypeDisplayContext<'a> {
     qnames: SmallMap<&'a Name, QNameInfo>,
     /// Should we display for IDE Hover? This makes type names more readable but less precise.
     hover: bool,
+    always_display_module_name: bool,
 }
 
 impl<'a> TypeDisplayContext<'a> {
@@ -121,6 +122,7 @@ impl<'a> TypeDisplayContext<'a> {
         for c in self.qnames.values_mut() {
             c.info.insert(fake_module, None);
         }
+        self.always_display_module_name = true;
     }
 
     /// Always display the module name, except for builtins.
@@ -139,6 +141,7 @@ impl<'a> TypeDisplayContext<'a> {
                 c.info.insert(fake_module, None);
             }
         }
+        self.always_display_module_name = true;
     }
 
     /// Set the context to display for hover. This makes type names more readable but less precise.
@@ -223,6 +226,19 @@ impl<'a> TypeDisplayContext<'a> {
         self.fmt_helper(t, f, true)
     }
 
+    fn maybe_fmt_with_module(
+        &self,
+        module: &str,
+        name: &str,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
+        if self.always_display_module_name {
+            write!(f, "{module}.{name}")
+        } else {
+            write!(f, "{name}")
+        }
+    }
+
     fn fmt_helper<'b>(
         &self,
         t: &'b Type,
@@ -280,17 +296,18 @@ impl<'a> TypeDisplayContext<'a> {
                 write!(f, "]")
             }
             Type::SelfType(cls) => {
-                write!(f, "Self@")?;
+                self.maybe_fmt_with_module("typing", "Self@", f)?;
                 self.fmt_qname(cls.qname(), f)
             }
 
             // Other things
             Type::Literal(lit) => {
-                write!(f, "Literal[")?;
+                self.maybe_fmt_with_module("typing", "Literal", f)?;
+                write!(f, "[")?;
                 self.fmt_lit(lit, f)?;
                 write!(f, "]")
             }
-            Type::LiteralString => write!(f, "LiteralString"),
+            Type::LiteralString => self.maybe_fmt_with_module("typing", "LiteralString", f),
             Type::Callable(box c) => {
                 if self.hover && is_toplevel {
                     c.fmt_with_type_with_newlines(f, &|t| self.display_internal(t))
@@ -312,14 +329,13 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::Overload(overload) => {
                 if self.hover && is_toplevel {
-                    let func_name = overload.metadata.kind.as_func_id().func;
                     write!(
                         f,
-                        "@overload\ndef {func_name}{}",
-                        self.display_internal(&overload.signatures.first().as_type())
+                        "\n@overload\n{}",
+                        self.display(&overload.signatures.first().as_type())
                     )?;
                     for sig in overload.signatures.iter().skip(1) {
-                        write!(f, "\ndef {func_name}{}", self.display(&sig.as_type()))?;
+                        write!(f, "\n{}", self.display(&sig.as_type()))?;
                     }
                     Ok(())
                 } else {
@@ -378,9 +394,13 @@ impl<'a> TypeDisplayContext<'a> {
                     )
                 }
             }
-            Type::Never(NeverStyle::NoReturn) => write!(f, "NoReturn"),
-            Type::Never(NeverStyle::Never) => write!(f, "Never"),
-            Type::Union(types) if types.is_empty() => write!(f, "Never"),
+            Type::Never(NeverStyle::NoReturn) => {
+                self.maybe_fmt_with_module("typing", "NoReturn", f)
+            }
+            Type::Never(NeverStyle::Never) => self.maybe_fmt_with_module("typing", "Never", f),
+            Type::Union(types) if types.is_empty() => {
+                self.maybe_fmt_with_module("typing", "Never", f)
+            }
             Type::Union(types) => {
                 // All Literals will be collected into a single Literal at the index of the first Literal.
                 let mut literal_idx = None;
@@ -401,7 +421,12 @@ impl<'a> TypeDisplayContext<'a> {
                     }
                 }
                 if let Some(i) = literal_idx {
-                    display_types.insert(i, format!("Literal[{}]", commas_iter(|| &literals)));
+                    if self.always_display_module_name {
+                        display_types
+                            .insert(i, format!("typing.Literal[{}]", commas_iter(|| &literals)));
+                    } else {
+                        display_types.insert(i, format!("Literal[{}]", commas_iter(|| &literals)));
+                    }
                 }
                 // This is mainly to prettify types for functions with different names but the same signature
                 let display_types_deduped = display_types
@@ -469,17 +494,23 @@ impl<'a> TypeDisplayContext<'a> {
                 }
             }
             Type::Type(ty) => write!(f, "type[{}]", self.display_internal(ty)),
-            Type::TypeGuard(ty) => write!(f, "TypeGuard[{}]", self.display_internal(ty)),
-            Type::TypeIs(ty) => write!(f, "TypeIs[{}]", self.display_internal(ty)),
+            Type::TypeGuard(ty) => {
+                self.maybe_fmt_with_module("typing", "TypeGuard", f)?;
+                write!(f, "[{}]", self.display_internal(ty))
+            }
+            Type::TypeIs(ty) => {
+                self.maybe_fmt_with_module("typing", "TypeIs", f)?;
+                write!(f, "[{}]", self.display_internal(ty))
+            }
             Type::Unpack(box ty @ Type::TypedDict(_)) => {
-                write!(f, "Unpack[{}]", self.display_internal(ty))
+                self.maybe_fmt_with_module("typing", "Unpack", f)?;
+                write!(f, "[{}]", self.display_internal(ty))
             }
             Type::Unpack(ty) => write!(f, "*{}", self.display_internal(ty)),
-            Type::Concatenate(args, pspec) => write!(
-                f,
-                "Concatenate[{}]",
-                commas_iter(|| append(args.iter(), [pspec]))
-            ),
+            Type::Concatenate(args, pspec) => {
+                self.maybe_fmt_with_module("typing", "Concatenate", f)?;
+                write!(f, "[{}]", commas_iter(|| append(args.iter(), [pspec])))
+            }
             Type::Module(m) => write!(f, "Module[{m}]"),
             Type::Var(var) => write!(f, "{var}"),
             Type::Quantified(var) => write!(f, "{var}"),
@@ -499,7 +530,7 @@ impl<'a> TypeDisplayContext<'a> {
             Type::SpecialForm(x) => write!(f, "{x}"),
             Type::Ellipsis => write!(f, "Ellipsis"),
             Type::Any(style) => match style {
-                AnyStyle::Explicit => write!(f, "Any"),
+                AnyStyle::Explicit => self.maybe_fmt_with_module("typing", "Any", f),
                 AnyStyle::Implicit | AnyStyle::Error => write!(f, "Unknown"),
             },
             Type::TypeAlias(ta) => {
@@ -525,6 +556,7 @@ impl<'a> TypeDisplayContext<'a> {
                 write!(f, "]")
             }
             Type::KwCall(call) => self.fmt_helper(&call.return_ty, f, false),
+            Type::Materialization => write!(f, "Materialization"),
             Type::None => write!(f, "None"),
         }
     }
@@ -864,9 +896,21 @@ pub mod tests {
         let t = Type::ClassType(ClassType::new(c, TArgs::default()));
         let mut ctx = TypeDisplayContext::new(&[&t]);
         assert_eq!(ctx.display(&t).to_string(), "foo");
+        assert_eq!(
+            ctx.display(&Type::LiteralString).to_string(),
+            "LiteralString"
+        );
+        assert_eq!(ctx.display(&Type::any_explicit()).to_string(), "Any");
+        assert_eq!(ctx.display(&Type::never()).to_string(), "Never");
 
         ctx.always_display_module_name();
         assert_eq!(ctx.display(&t).to_string(), "mod.ule.foo");
+        assert_eq!(
+            ctx.display(&Type::LiteralString).to_string(),
+            "typing.LiteralString"
+        );
+        assert_eq!(ctx.display(&Type::any_explicit()).to_string(), "typing.Any");
+        assert_eq!(ctx.display(&Type::never()).to_string(), "typing.Never");
     }
 
     #[test]
@@ -935,7 +979,10 @@ pub mod tests {
         assert_eq!(ctx.display(&t).to_string(), "Literal[MyEnum.X]");
 
         ctx.always_display_module_name();
-        assert_eq!(ctx.display(&t).to_string(), "Literal[mod.ule.MyEnum.X]");
+        assert_eq!(
+            ctx.display(&t).to_string(),
+            "typing.Literal[mod.ule.MyEnum.X]"
+        );
     }
 
     #[test]
@@ -1062,11 +1109,12 @@ pub mod tests {
 
     #[test]
     fn test_display_type_alias() {
-        let alias = Type::TypeAlias(TypeAlias::new(
+        let alias = Type::TypeAlias(Box::new(TypeAlias::new(
             Name::new_static("MyAlias"),
             Type::None,
             TypeAliasStyle::LegacyImplicit,
-        ));
+            Vec::new(),
+        )));
         let wrapped = Type::tuple(vec![alias.clone()]);
         let type_of = Type::type_form(alias.clone());
         let mut ctx = TypeDisplayContext::new(&[]);
@@ -1232,6 +1280,7 @@ pub mod tests {
 
     #[test]
     fn test_display_overload() {
+        let uniques = UniqueFactory::new();
         let sig1 = Function {
             signature: Callable::list(
                 ParamList::new(vec![Param::Pos(
@@ -1274,7 +1323,14 @@ pub mod tests {
         let overload = Type::Overload(Overload {
             signatures: vec1![
                 OverloadType::Function(sig1.clone()),
-                OverloadType::Function(sig2.clone())
+                OverloadType::Forall(Forall {
+                    tparams: fake_tparams(vec![fake_tparam(
+                        &uniques,
+                        "T",
+                        QuantifiedKind::TypeVar
+                    )]),
+                    body: sig2
+                })
             ],
             metadata: Box::new(sig1.metadata),
         });
@@ -1283,7 +1339,7 @@ pub mod tests {
         let ctx = TypeDisplayContext::new(&[&overload]);
         assert_eq!(
             ctx.display(&overload).to_string(),
-            "Overload[(x: Any) -> None, (x: Any, y: Any) -> None]"
+            "Overload[(x: Any) -> None, [T](x: Any, y: Any) -> None]"
         );
 
         // Test hover display mode (with @overload decorators)
@@ -1291,9 +1347,10 @@ pub mod tests {
         hover_ctx.set_display_mode_to_hover();
         assert_eq!(
             hover_ctx.display(&overload).to_string(),
-            r#"@overload
+            r#"
+@overload
 def overloaded_func(x: Any) -> None
-def overloaded_func(
+def overloaded_func[T](
     x: Any,
     y: Any
 ) -> None"#

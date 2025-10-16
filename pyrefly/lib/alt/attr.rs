@@ -68,7 +68,7 @@ struct LookupResult {
     pub internal_error: Vec<InternalError>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AttrSubsetError {
     // `got` is not accessible, but `want` is
     NoAccess,
@@ -399,6 +399,7 @@ struct AttributeBase(Vec1<AttributeBase1>);
 #[derive(Clone, Debug)]
 enum AttributeBase1 {
     EnumLiteral(LitEnum),
+    LiteralString,
     ClassInstance(ClassType),
     ClassObject(ClassBase),
     Module(ModuleType),
@@ -950,7 +951,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         got: &Type,
         protocol: &ClassType,
-        name: &Name,
+        attr_name: &Name,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> Result<(), SubsetError> {
         if let Some(got_attrs) = self
@@ -961,7 +962,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .0
                         .mapped(|base| AttributeBase1::ProtocolSubset(Box::new(base))),
                 );
-                self.lookup_attr_from_base(got_base, name)
+                self.lookup_attr_from_base(got_base, attr_name)
             })
             .and_then(|lookup_result| {
                 if lookup_result.not_found.is_empty() && lookup_result.internal_error.is_empty() {
@@ -972,20 +973,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
         {
             if (!got_attrs.is_empty())
-                && let Some(want) = self.get_protocol_attribute(protocol, got.clone(), name)
+                && let Some(want) = self.get_protocol_attribute(protocol, got.clone(), attr_name)
             {
+                let got_type_display = self.for_display(got.clone());
                 for (got_attr, _) in got_attrs.iter() {
                     self.is_attribute_subset(got_attr, &want, &mut |got, want| {
                         is_subset(got, want)
                     })
-                    .map_err(|_| SubsetError::Other)?;
+                    .map_err(|err| {
+                        SubsetError::IncompatibleAttribute(Box::new((
+                            protocol.name().clone(),
+                            got_type_display.clone(),
+                            attr_name.clone(),
+                            err,
+                        )))
+                    })?;
                 }
                 Ok(())
             } else {
-                Err(SubsetError::Other)
+                Err(SubsetError::MissingAttribute(
+                    protocol.name().clone(),
+                    attr_name.clone(),
+                ))
             }
         } else {
-            Err(SubsetError::Other)
+            Err(SubsetError::MissingAttribute(
+                protocol.name().clone(),
+                attr_name.clone(),
+            ))
         }
     }
 
@@ -1073,7 +1088,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         }
         let metadata = self.get_metadata_for_class(cls.class_object());
-        let attr = self.get_metaclass_attribute(cls, metadata.metaclass(self.stdlib), attr_name)?;
+        let metaclass = metadata.metaclass(self.stdlib);
+        let attr = self.get_metaclass_attribute(cls, metaclass, attr_name)?;
         attr.clone().as_instance_method().map(|_| attr)
     }
 
@@ -1097,12 +1113,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AttributeBase1::EnumLiteral(e) if matches!(attr_name.as_str(), "name" | "_name_") => {
                 acc.found_type(Type::Literal(Lit::Str(e.member.as_str().into())), base)
             }
+            AttributeBase1::LiteralString => match self.get_literal_string_attribute(attr_name) {
+                Some(attr) => acc.found_class_attribute(attr, base),
+                None => acc.not_found(NotFoundOn::ClassInstance(
+                    self.stdlib.str().class_object().dupe(),
+                    base,
+                )),
+            },
             AttributeBase1::ClassInstance(class)
             | AttributeBase1::EnumLiteral(LitEnum { class, .. }) => {
                 let metadata = self.get_metadata_for_class(class.class_object());
-                let attr_lookup_result = self
-                    .special_case_enum_attr_lookup(class, &metadata, attr_name)
-                    .or_else(|| self.get_instance_attribute(class, attr_name));
+                let attr_lookup_result =
+                    self.get_enum_or_instance_attribute(class, &metadata, attr_name);
                 match attr_lookup_result {
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None if metadata.has_base_any() => {
@@ -1161,6 +1183,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                 }
             }
+            AttributeBase1::ProtocolSubset(protocol_base) => {
+                // When checking protocols, we need special handling for TypeQuantified to prioritize
+                // metaclass methods (like __iter__ on EnumMeta) over regular class methods.
+                if let AttributeBase1::TypeQuantified(_quantified, class) = &**protocol_base
+                    && let Some(attr) = self
+                        .try_get_magic_dunder_attr(&ClassBase::ClassType(class.clone()), attr_name)
+                {
+                    acc.found_class_attribute(attr, base);
+                } else if let AttributeBase1::ClassObject(class) = &**protocol_base
+                    && let Some(attr) = self.try_get_magic_dunder_attr(class, attr_name)
+                {
+                    // When looking up a magic dunder method as part of checking a class object
+                    // against a protocol, we prefer methods on the metaclass over methods on the
+                    // class object. See test::enums::test_iterate for why we need to do this.
+                    acc.found_class_attribute(attr, base)
+                } else {
+                    self.lookup_attr_from_attribute_base1((**protocol_base).clone(), attr_name, acc)
+                }
+            }
             AttributeBase1::TypeQuantified(quantified, class) => {
                 if let Some(attr) = self.get_bounded_quantified_class_attribute(
                     quantified.clone(),
@@ -1172,18 +1213,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     acc.not_found(NotFoundOn::ClassObject(class.class_object().dupe(), base));
                 }
             }
-            AttributeBase1::ProtocolSubset(protocol_base) => {
-                if let AttributeBase1::ClassObject(class) = &**protocol_base
-                    && let Some(attr) = self.try_get_magic_dunder_attr(class, attr_name)
-                {
-                    // When looking up a magic dunder method as part of checking a class object
-                    // against a protocol, we prefer methods on the metaclass over methods on the
-                    // class object. See test::enums::test_iterate for why we need to do this.
-                    acc.found_class_attribute(attr, base)
-                } else {
-                    self.lookup_attr_from_attribute_base1((**protocol_base).clone(), attr_name, acc)
-                }
-            }
+
             AttributeBase1::ClassObject(class) => {
                 match self.get_class_attribute(class, attr_name) {
                     Some(attr) => acc.found_class_attribute(attr, base),
@@ -1303,7 +1333,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let metadata = self.get_metadata_for_class(class.class_object());
                 let metaclass = metadata.metaclass(self.stdlib);
                 if *dunder_name == dunder::GETATTRIBUTE
-                    && self.field_is_inherited_from_object(metaclass.class_object(), dunder_name)
+                    && self.field_is_inherited_from(
+                        metaclass.class_object(),
+                        dunder_name,
+                        (ModuleName::builtins().as_str(), "object"),
+                    )
                 {
                     acc.not_found(NotFoundOn::ClassInstance(
                         metaclass.class_object().clone(),
@@ -1327,9 +1361,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if (*dunder_name == dunder::SETATTR
                     || *dunder_name == dunder::DELATTR
                     || *dunder_name == dunder::GETATTRIBUTE)
-                    && self.field_is_inherited_from_object(cls.class_object(), dunder_name) =>
+                    && self.field_is_inherited_from(
+                        cls.class_object(),
+                        dunder_name,
+                        (ModuleName::builtins().as_str(), "object"),
+                    ) =>
             {
                 acc.not_found(NotFoundOn::ClassInstance(cls.class_object().clone(), base))
+            }
+            AttributeBase1::LiteralString
+                if *dunder_name == dunder::SETATTR
+                    || *dunder_name == dunder::DELATTR
+                    || *dunder_name == dunder::GETATTRIBUTE =>
+            {
+                acc.not_found(NotFoundOn::ClassInstance(
+                    self.stdlib.str().class_object().clone(),
+                    base,
+                ))
             }
             AttributeBase1::TypedDict(typed_dict) if *dunder_name == dunder::GETATTRIBUTE => acc
                 .not_found(NotFoundOn::ClassInstance(
@@ -1482,8 +1530,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Tuple(tuple) => {
                 acc.push(AttributeBase1::ClassInstance(self.erase_tuple_type(tuple)))
             }
-            Type::LiteralString => {
-                acc.push(AttributeBase1::ClassInstance(self.stdlib.str().clone()))
+            Type::LiteralString | Type::Literal(Lit::Str(_)) => {
+                acc.push(AttributeBase1::LiteralString)
             }
             Type::Literal(Lit::Enum(lit_enum)) => acc.push(AttributeBase1::EnumLiteral(*lit_enum)),
             Type::Literal(lit) => acc.push(AttributeBase1::ClassInstance(
@@ -1716,7 +1764,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Type::Intersect(_)
             | Type::Unpack(_)
             | Type::Concatenate(_, _)
-            | Type::ParamSpecValue(_) => {}
+            | Type::ParamSpecValue(_)
+            | Type::Materialization => {}
         }
     }
 
@@ -1783,7 +1832,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AttrDefinition {
     FullyResolved(TextRangeWithModule),
     PartiallyResolvedImportedModuleAttribute { module_name: ModuleName },
@@ -1795,6 +1844,9 @@ pub struct AttrInfo {
     pub ty: Option<Type>,
     pub is_deprecated: bool,
     pub definition: Option<AttrDefinition>,
+    pub docstring_range: Option<TextRange>,
+    /// is this defined in another module (true) or in this module (false)?
+    pub is_reexport: bool,
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -1821,6 +1873,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 definition: Some(AttrDefinition::FullyResolved(
                                     TextRangeWithModule::new(c.module().dupe(), range),
                                 )),
+                                docstring_range: c.field_docstring_range(fld),
+                                is_reexport: false,
                             });
                         }
                     }
@@ -1834,6 +1888,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             definition: Some(AttrDefinition::FullyResolved(
                                 TextRangeWithModule::new(c.module().dupe(), range),
                             )),
+                            docstring_range: c.field_docstring_range(expected_attribute_name),
+                            is_reexport: false,
                         });
                     }
                 }
@@ -1908,6 +1964,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         module_name,
                                     },
                                 ),
+                                docstring_range: match export_location {
+                                    ExportLocation::ThisModule(Export {
+                                        docstring_range, ..
+                                    }) => *docstring_range,
+                                    _ => None,
+                                },
+                                is_reexport: matches!(
+                                    export_location,
+                                    ExportLocation::OtherModule(..)
+                                ),
                             }),
                     );
                 }
@@ -1930,6 +1996,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     module_name,
                                 },
                             ),
+                            docstring_range: match export_location {
+                                ExportLocation::ThisModule(Export {
+                                    docstring_range, ..
+                                }) => *docstring_range,
+                                _ => None,
+                            },
+                            is_reexport: matches!(export_location, ExportLocation::OtherModule(..)),
                         });
                     }
                 }
@@ -2008,6 +2081,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | AttributeBase1::EnumLiteral(LitEnum { class, .. })
             | AttributeBase1::Quantified(_, class) => {
                 self.completions_class_type(class, expected_attribute_name, res)
+            }
+            AttributeBase1::LiteralString => {
+                self.completions_class_type(self.stdlib.str(), expected_attribute_name, res)
             }
             AttributeBase1::TypedDict(_) => self.completions_class_type(
                 self.stdlib.typed_dict_fallback(),

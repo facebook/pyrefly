@@ -101,6 +101,35 @@ my_export
 }
 
 #[test]
+fn insertion_test_module_import() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("my_module", "my_export = 3\n"), ("b", "my_module\n# ^")],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# my_module.py
+
+# b.py
+1 | my_module
+      ^
+Code Actions Results:
+# Title: Insert import: `import my_module`
+
+## Before:
+my_module
+# ^
+## After:
+import my_module
+my_module
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
 fn insertion_test_comments() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[

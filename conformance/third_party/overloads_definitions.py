@@ -173,7 +173,7 @@ class Child(Base):  # E[override-final]
     # questions of override LSP compatibility and focus only on the override):
 
     @overload  # E[override-final]
-    def final_method(self, x: int) -> int: ...
+    def final_method(self, x: int) -> int: ...  # E[override-final]
 
     @overload
     def final_method(self, x: str) -> str: ...

@@ -16,7 +16,7 @@
 
 import type { SidebarsConfig } from '@docusaurus/plugin-content-docs';
 
-const docsSidebar = [
+let docsSidebar = [
     {
         type: 'doc' as const,
         id: 'index',
@@ -25,29 +25,40 @@ const docsSidebar = [
     {
         type: 'category' as const,
         label: 'Learn Python Typing',
-        description: "Never used a type system before or just new to Pyrefly? Start here!",
-        items: ['typing-for-python-developers', 'python-typing-for-beginners', 'python-features-and-peps']
+        description:
+            'Never used a type system before or just new to Pyrefly? Start here!',
+        items: [
+            'typing-for-python-developers',
+            'python-typing-for-beginners',
+            'python-features-and-peps',
+        ],
     },
     {
         type: 'category' as const,
         label: 'Getting Started',
-        description: "Never used a type system before or just new to Pyrefly? Start here!",
+        description:
+            'Never used a type system before or just new to Pyrefly? Start here!',
         collapsed: false,
         items: ['installation', 'configuration'],
     },
     {
         type: 'category' as const,
         label: 'Migrating to Pyrefly',
-        description: "Never used a type system before or just new to Pyrefly? Start here!",
+        description:
+            'Never used a type system before or just new to Pyrefly? Start here!',
         collapsed: false,
-        items: ['migrating-to-pyrefly', 'migrating-from-mypy',  'migrating-from-pyright']
+        items: [
+            'migrating-to-pyrefly',
+            'migrating-from-mypy',
+            'migrating-from-pyright',
+        ],
     },
     {
         type: 'category' as const,
         label: 'Language Server',
-        description: "Learn how to use Pyrefly in your IDE",
+        description: 'Learn how to use Pyrefly in your IDE',
         collapsed: false,
-        items: ['IDE', 'IDE-features']
+        items: ['IDE', 'IDE-features'],
     },
     {
         type: 'doc' as const,
@@ -80,6 +91,16 @@ const docsSidebar = [
         label: 'FAQ',
     },
 ];
+
+if (process.env.INTERNAL_STATIC_DOCS) {
+    docsSidebar.push({
+        type: 'category' as const,
+        label: 'Internal Docs',
+        description: 'Documentation for Meta-internal usages of Pyrefly only',
+        collapsed: false,
+        items: ['fb/instagram'],
+    });
+}
 
 const sidebars: SidebarsConfig = {
     docsSidebar,

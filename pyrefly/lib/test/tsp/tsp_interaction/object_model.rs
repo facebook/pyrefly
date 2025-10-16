@@ -119,6 +119,15 @@ impl TestTspServer {
         }));
     }
 
+    pub fn get_snapshot(&mut self) {
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "typeServer/getSnapshot".to_owned(),
+            params: serde_json::json!(null),
+        }));
+    }
+
     pub fn did_open(&self, file: &'static str) {
         let path = self.get_root_or_panic().join(file);
         self.send_message(Message::Notification(Notification {
@@ -130,6 +139,41 @@ impl TestTspServer {
                     "version": 1,
                     "text": read_to_string(&path).unwrap(),
                 },
+            }),
+        }));
+    }
+
+    pub fn did_change(&self, file: &'static str, content: &str, version: i32) {
+        let path = self.get_root_or_panic().join(file);
+        self.send_message(Message::Notification(Notification {
+            method: "textDocument/didChange".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&path).unwrap().to_string(),
+                    "version": version
+                },
+                "contentChanges": [{
+                    "text": content
+                }]
+            }),
+        }));
+    }
+
+    pub fn did_change_watched_files(&self, file: &'static str, change_type: &str) {
+        let path = self.get_root_or_panic().join(file);
+        let file_change_type = match change_type {
+            "created" => 1, // FileChangeType::CREATED
+            "changed" => 2, // FileChangeType::CHANGED
+            "deleted" => 3, // FileChangeType::DELETED
+            _ => 2,         // Default to changed
+        };
+        self.send_message(Message::Notification(Notification {
+            method: "workspace/didChangeWatchedFiles".to_owned(),
+            params: serde_json::json!({
+                "changes": [{
+                    "uri": Url::from_file_path(&path).unwrap().to_string(),
+                    "type": file_change_type
+                }]
             }),
         }));
     }
@@ -251,6 +295,22 @@ impl TestTspClient {
             }
         }
     }
+
+    #[expect(dead_code)]
+    pub fn receive_any_message(&self) -> Message {
+        match self.receiver.recv_timeout(self.timeout) {
+            Ok(msg) => {
+                eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
+                msg
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                panic!("Timeout waiting for response");
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                panic!("Channel disconnected");
+            }
+        }
+    }
 }
 
 pub struct TspInteraction {
@@ -266,7 +326,7 @@ impl TspInteraction {
         let (language_server_sender, language_server_receiver) = bounded::<Message>(0);
 
         let args = TspArgs {
-            indexing_mode: IndexingMode::None,
+            indexing_mode: IndexingMode::LazyBlocking,
             workspace_indexing_limit: 0,
         };
         let connection = Connection {

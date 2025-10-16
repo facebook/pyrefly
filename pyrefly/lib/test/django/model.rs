@@ -8,7 +8,6 @@
 use crate::django_testcase;
 
 django_testcase!(
-    bug = "Discover django models and discover the correct field type",
     test_model,
     r#"
 from typing import assert_type
@@ -19,7 +18,7 @@ class Person(models.Model):
     first_name = models.CharField(max_length=30)
 
 p = Person(first_name="Alice")
-assert_type(p.first_name, str) # E: assert_type(Any, str) failed
+assert_type(p.first_name, str)
 "#,
 );
 
