@@ -411,6 +411,22 @@ async def test() -> None:
 );
 
 testcase!(
+    test_async_generator_comprehension_with_await,
+    r#"
+from typing import AsyncIterable, AsyncGenerator, assert_type, reveal_type
+
+async def some_async_func(x: int) -> bool:
+    return x % 2 == 0
+
+async def main() -> None:
+    generator = (x for x in [1, 2, 3] if await some_async_func(x))
+    reveal_type(generator)  # E: revealed type: AsyncGenerator[int, None]
+    async_iterable: AsyncIterable[int] = generator
+    assert_type(generator, AsyncGenerator[int, None])
+"#,
+);
+
+testcase!(
     bug = "We don't understand yield in lambda, and misattribute the yield to the surrounding function",
     test_lambda_yield,
     r#"
