@@ -137,8 +137,6 @@ pub enum ErrorKind {
     /// do not recognize as always executing (we recognize constructors and some test setup
     /// methods).
     ImplicitlyDefinedAttribute,
-    /// A protocol attribute was first defined inside a method instead of the class body.
-    ProtocolImplicitlyDefinedAttribute,
     /// An error related to the import machinery.
     /// e.g. failed to import a module.
     ImportError,
@@ -207,6 +205,8 @@ pub enum ErrorKind {
     NotIterable,
     /// An error related to parsing or syntax.
     ParseError,
+    /// A protocol attribute was first defined inside a method instead of the class body.
+    ProtocolImplicitlyDefinedAttribute,
     /// The attribute exists but cannot be modified.
     ReadOnly,
     /// Warning when casting a value to a type it is already compatible with.
