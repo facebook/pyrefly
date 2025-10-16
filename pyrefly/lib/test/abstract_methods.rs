@@ -93,7 +93,7 @@ class Base(ABC):
     def method(self) -> None:
         pass
 
-class Child(Base):
+class Child(Base):  # E: Class `Child` must implement abstract members: `method`
     # Child doesn't implement method, so it's still abstract
     pass
 
@@ -132,7 +132,7 @@ class Base(ABC):
     def method2(self) -> None:
         pass
 
-class Partial(Base):
+class Partial(Base):  # E: Class `Partial` must implement abstract members: `method2`
     def method1(self) -> None:
         print("implemented")
 
@@ -215,7 +215,7 @@ class Base(ABC):
     @abstractmethod
     def processor(self) -> bool: pass
 
-class Child(Base):
+class Child(Base):  # E: Class `Child` must implement abstract members: `processor`
     def __init__(self) -> None:
         super().__init__()
 
@@ -250,7 +250,7 @@ class C(ABC):
     async def bar(self) -> Any:
         pass
 
-class D(C):
+class D(C):  # E: Class `D` must implement abstract members: `bar`
     async def foo(self) -> AsyncIterator[int]:
         yield 1
     "#,

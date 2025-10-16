@@ -318,14 +318,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Arc<AbstractClassMembers> {
         let metadata = self.get_metadata_for_class(cls);
         let abstract_members = self.calculate_abstract_members(cls);
-        if metadata.is_final() {
-            let unimplemented = abstract_members.unimplemented_abstract_methods();
-            if !unimplemented.is_empty() {
-                let members = unimplemented
-                    .iter()
-                    .map(|member| format!("`{member}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+        let unimplemented = abstract_members.unimplemented_abstract_methods();
+        if !unimplemented.is_empty() {
+            let members = unimplemented
+                .iter()
+                .map(|member| format!("`{member}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if metadata.is_final() {
                 self.error(
                     errors,
                     cls.range(),
@@ -336,6 +336,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         members
                     ),
                 );
+            } else if !metadata.is_protocol() {
+                let has_direct_abc_base = metadata
+                    .base_class_objects()
+                    .iter()
+                    .any(|base| base.has_toplevel_qname("abc", "ABC"));
+                let has_explicit_abc_metaclass = metadata.has_explicit_metaclass()
+                    && metadata.custom_metaclass().is_some_and(|meta| {
+                        meta.class_object()
+                            .has_toplevel_qname("abc", "ABCMeta")
+                    });
+                let defines_abstract_member = cls.fields().any(|name| {
+                    self.get_field_from_current_class_only(cls, name)
+                        .is_some_and(|field| field.is_abstract())
+                });
+                if !has_direct_abc_base
+                    && !has_explicit_abc_metaclass
+                    && !defines_abstract_member
+                {
+                    self.error(
+                        errors,
+                        cls.range(),
+                        ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                        format!(
+                            "Class `{}` must implement abstract members: {}",
+                            cls.name(),
+                            members
+                        ),
+                    );
+                }
             }
         }
         Arc::new(abstract_members)

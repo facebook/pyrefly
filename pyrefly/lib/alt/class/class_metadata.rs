@@ -146,6 +146,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 "metaclass" => Either::Left(x),
                 _ => Either::Right((n.clone(), self.expr_class_keyword(x, errors))),
             });
+        let has_explicit_metaclass = !metaclasses.is_empty();
 
         let base_metaclasses = bases_with_metadata
             .iter()
@@ -313,6 +314,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ClassMetadata::new(
             bases,
             metaclass,
+            has_explicit_metaclass,
             keywords,
             typed_dict_metadata,
             named_tuple_metadata,
