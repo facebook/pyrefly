@@ -973,16 +973,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ErrorInfo::Kind(ErrorKind::InvalidArgument),
                                 "Second argument to NewType cannot be a protocol".to_owned(),
                             );
+                            None
+                        } else {
+                            Some((class_object, metadata))
                         }
-                    } else if metadata.is_new_type() {
-                        self.error(
-                            errors,
-                            range,
-                            ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                            "Subclassing a NewType not allowed".to_owned(),
-                        );
+                    } else {
+                        if metadata.is_new_type() {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                                "Subclassing a NewType not allowed".to_owned(),
+                            );
+                        }
+                        Some((class_object, metadata))
                     }
-                    Some((class_object, metadata))
                 }
             })
             .collect::<Vec<_>>()
