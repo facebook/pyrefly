@@ -204,7 +204,7 @@ impl ModuleName {
             None => {}
             Some(file_name) => {
                 let splits: Vec<&str> = file_name.rsplitn(2, '.').collect();
-                if splits.len() != 2 || !(splits[0] == "py" || splits[0] == "pyi") {
+                if splits.len() != 2 || !(splits[0] == "py" || splits[0] == "pyi" || splits[0] == "ipynb") {
                     return Err(anyhow::anyhow!(PathConversionError::InvalidExtension {
                         file_name: file_name.to_owned(),
                     }));
@@ -407,8 +407,10 @@ mod tests {
         }
         assert_module_name("foo.py", "foo");
         assert_module_name("foo.pyi", "foo");
+        assert_module_name("foo.ipynb", "foo");
         assert_module_name("foo/bar.py", "foo.bar");
         assert_module_name("foo/bar.pyi", "foo.bar");
+        assert_module_name("foo/bar.ipynb", "foo.bar");
         assert_module_name("foo/bar/__init__.py", "foo.bar");
         assert_module_name("foo/bar/__init__.pyi", "foo.bar");
 

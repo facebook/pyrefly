@@ -67,6 +67,10 @@ use lsp_types::InlayHint;
 use lsp_types::InlayHintLabel;
 use lsp_types::InlayHintParams;
 use lsp_types::Location;
+use lsp_types::Notebook;
+use lsp_types::NotebookCellSelector;
+use lsp_types::NotebookDocumentSyncOptions;
+use lsp_types::NotebookSelector;
 use lsp_types::NumberOrString;
 use lsp_types::OneOf;
 use lsp_types::Position;
@@ -149,6 +153,7 @@ use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::notebook::extract_python_from_notebook;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::globs::Globs;
@@ -390,6 +395,15 @@ pub fn capabilities(
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
             TextDocumentSyncKind::INCREMENTAL,
         )),
+        notebook_document_sync: Some(OneOf::Left(NotebookDocumentSyncOptions {
+            notebook_selector: vec![NotebookSelector::ByNotebook {
+                notebook: Notebook::String("jupyter-notebook".to_owned()),
+                cells: Some(vec![NotebookCellSelector {
+                    language: "python".to_owned(),
+                }]),
+            }],
+            save: Some(false),
+        })),
         definition_provider: Some(OneOf::Left(true)),
         type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
         code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
@@ -515,6 +529,28 @@ pub fn lsp_loop(
 
 impl Server {
     const FILEWATCHER_ID: &str = "FILEWATCHER";
+
+    /// Extract the notebook file path from a vscode-notebook-cell URI.
+    /// These URIs have the format: vscode-notebook-cell:/path/to/notebook.ipynb#W0sZmlsZQ%3D%3D
+    /// We extract the path before the fragment (#).
+    fn notebook_cell_uri_to_path(uri: &Url) -> Option<PathBuf> {
+        if uri.scheme() == "vscode-notebook-cell" {
+            // Extract the path portion without the fragment
+            let path_str = uri.path();
+            PathBuf::from(path_str).into()
+        } else {
+            None
+        }
+    }
+
+    /// Convert a URI to a file path, handling both regular file:// URIs and vscode-notebook-cell:// URIs
+    fn uri_to_file_path(uri: &Url) -> Result<PathBuf, ()> {
+        if uri.scheme() == "vscode-notebook-cell" {
+            Self::notebook_cell_uri_to_path(uri).ok_or(())
+        } else {
+            uri.to_file_path()
+        }
+    }
 
     fn extract_request_params_or_send_err_response<T>(
         &self,
@@ -887,11 +923,17 @@ impl Server {
                     }
                 } else if &x.method == "pyrefly/textDocument/typeErrorDisplayStatus" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
+                    let Ok(path) = Self::uri_to_file_path(&text_document.uri) else {
+                        self.send_response(Response::new_err(
+                            x.id,
+                            ErrorCode::InvalidParams as i32,
+                            format!("Could not convert uri to filepath: {}", text_document.uri),
+                        ));
+                        return Ok(ProcessEvent::Continue);
+                    };
                     self.send_response(new_response(
                         x.id,
-                        Ok(self.type_error_display_status(
-                            text_document.uri.to_file_path().unwrap().as_path(),
-                        )),
+                        Ok(self.type_error_display_status(path.as_path())),
                     ));
                 } else {
                     self.send_response(Response::new_err(
@@ -919,7 +961,7 @@ impl Server {
         {
             folders
                 .iter()
-                .map(|x| x.uri.to_file_path().unwrap())
+                .filter_map(|x| Self::uri_to_file_path(&x.uri).ok())
                 .collect()
         } else {
             Vec::new()
@@ -1289,7 +1331,13 @@ impl Server {
     }
 
     fn did_save(&self, params: DidSaveTextDocumentParams) {
-        let file = params.text_document.uri.to_file_path().unwrap();
+        let Ok(file) = Self::uri_to_file_path(&params.text_document.uri) else {
+            eprintln!(
+                "Could not convert uri to filepath: {}",
+                params.text_document.uri
+            );
+            return;
+        };
         self.invalidate(move |t| t.invalidate_disk(&[file]));
     }
 
@@ -1299,7 +1347,7 @@ impl Server {
         subsequent_mutation: bool,
         params: DidOpenTextDocumentParams,
     ) -> anyhow::Result<()> {
-        let uri = params.text_document.uri.to_file_path().map_err(|_| {
+        let uri = Self::uri_to_file_path(&params.text_document.uri).map_err(|_| {
             anyhow::anyhow!(
                 "Could not convert uri to filepath: {}",
                 params.text_document.uri
@@ -1315,9 +1363,25 @@ impl Server {
         self.version_info
             .lock()
             .insert(uri.clone(), params.text_document.version);
-        self.open_files
-            .write()
-            .insert(uri, Arc::new(params.text_document.text));
+
+        // Handle .ipynb files by extracting Python code
+        // Skip extraction for notebook cells (vscode-notebook-cell:// URIs) as their content is already Python
+        let text_content = if uri.extension() == Some("ipynb".as_ref())
+            && params.text_document.uri.scheme() != "vscode-notebook-cell"
+        {
+            match extract_python_from_notebook(&params.text_document.text) {
+                Ok(python_code) => python_code,
+                Err(err) => {
+                    eprintln!("Failed to parse notebook {}: {}", uri.display(), err);
+                    // Fall back to empty string if parsing fails
+                    String::new()
+                }
+            }
+        } else {
+            params.text_document.text
+        };
+
+        self.open_files.write().insert(uri, Arc::new(text_content));
         if !subsequent_mutation {
             self.validate_in_memory(ide_transaction_manager);
         }
@@ -1335,7 +1399,8 @@ impl Server {
         params: DidChangeTextDocumentParams,
     ) -> anyhow::Result<()> {
         let VersionedTextDocumentIdentifier { uri, version } = params.text_document;
-        let file_path = uri.to_file_path().unwrap();
+        let file_path = Self::uri_to_file_path(&uri)
+            .map_err(|_| anyhow::anyhow!("Could not convert uri to filepath: {}", uri))?;
 
         let mut version_info = self.version_info.lock();
         let old_version = version_info.get(&file_path).unwrap_or(&0);
@@ -1347,10 +1412,26 @@ impl Server {
         version_info.insert(file_path.clone(), version);
         let mut lock = self.open_files.write();
         let original = lock.get_mut(&file_path).unwrap();
-        *original = Arc::new(apply_change_events(
-            original.as_str(),
-            params.content_changes,
-        ));
+        let updated_content = apply_change_events(original.as_str(), params.content_changes);
+
+        // Handle .ipynb files by extracting Python code
+        // Skip extraction for notebook cells (vscode-notebook-cell:// URIs) as their content is already Python
+        let text_content = if file_path.extension() == Some("ipynb".as_ref())
+            && uri.scheme() != "vscode-notebook-cell"
+        {
+            match extract_python_from_notebook(&updated_content) {
+                Ok(python_code) => python_code,
+                Err(err) => {
+                    eprintln!("Failed to parse notebook {}: {}", file_path.display(), err);
+                    // Fall back to empty string if parsing fails
+                    String::new()
+                }
+            }
+        } else {
+            updated_content
+        };
+
+        *original = Arc::new(text_content);
         drop(lock);
         if !subsequent_mutation {
             self.validate_in_memory(ide_transaction_manager);
@@ -1392,7 +1473,13 @@ impl Server {
     }
 
     fn did_close(&self, params: DidCloseTextDocumentParams) {
-        let uri = params.text_document.uri.to_file_path().unwrap();
+        let Ok(uri) = Self::uri_to_file_path(&params.text_document.uri) else {
+            eprintln!(
+                "Could not convert uri to filepath: {}",
+                params.text_document.uri
+            );
+            return;
+        };
         self.version_info.lock().remove(&uri);
         self.open_files.write().remove(&uri);
         self.connection
@@ -1472,7 +1559,7 @@ impl Server {
         &self,
         uri: &Url,
     ) -> Option<(Handle, Option<LspAnalysisConfig>)> {
-        let path = uri.to_file_path().unwrap();
+        let path = Self::uri_to_file_path(uri).ok()?;
         self.workspaces.get_with(path.clone(), |workspace| {
             if workspace.disable_language_services {
                 eprintln!("Skipping request - language services disabled");
@@ -1896,11 +1983,10 @@ impl Server {
         params: DocumentSymbolParams,
     ) -> Option<Vec<DocumentSymbol>> {
         let uri = &params.text_document.uri;
+        let path = Self::uri_to_file_path(uri).ok()?;
         if self
             .workspaces
-            .get_with(uri.to_file_path().unwrap(), |workspace| {
-                workspace.disable_language_services
-            })
+            .get_with(path, |workspace| workspace.disable_language_services)
             || !self
                 .initialize_params
                 .capabilities
@@ -1944,10 +2030,20 @@ impl Server {
         transaction: &Transaction<'_>,
         params: DocumentDiagnosticParams,
     ) -> DocumentDiagnosticReport {
-        let handle = make_open_handle(
-            &self.state,
-            &params.text_document.uri.to_file_path().unwrap(),
-        );
+        let path = match Self::uri_to_file_path(&params.text_document.uri) {
+            Ok(path) => path,
+            Err(_) => {
+                // If we can't convert the URI to a path, return empty diagnostics
+                return DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
+                    full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                        items: Vec::new(),
+                        result_id: None,
+                    },
+                    related_documents: None,
+                });
+            }
+        };
+        let handle = make_open_handle(&self.state, &path);
         let mut items = Vec::new();
         let open_files = &self.open_files.read();
         for e in transaction.get_errors(once(&handle)).collect_errors().shown {
