@@ -336,7 +336,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         members
                     ),
                 );
-            } else if !metadata.is_protocol() {
+            } else if !metadata.is_protocol() && !metadata.is_new_type() {
                 let has_direct_abc_base = metadata
                     .base_class_objects()
                     .iter()
@@ -353,7 +353,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         cls.range(),
-                        ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                        ErrorInfo::Kind(ErrorKind::ImplicitAbstractClass),
                         format!(
                             "Class `{}` must implement abstract members: {}",
                             cls.name(),

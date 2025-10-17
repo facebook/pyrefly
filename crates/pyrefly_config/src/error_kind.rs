@@ -131,6 +131,9 @@ pub enum ErrorKind {
     DeleteError,
     /// Calling a function marked with `@deprecated`
     Deprecated,
+    /// Raised when a class implicitly becomes abstract by defining abstract members without
+    /// inheriting from `abc.ABC` or using `abc.ABCMeta`.
+    ImplicitAbstractClass,
     /// This error is raised when Pyrefly infers an implicit `Any`
     ImplicitAny,
     /// Usage of a module that was not actually imported, but does exist.
@@ -276,6 +279,7 @@ impl ErrorKind {
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::RedundantCast => Severity::Warn,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
+            ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
             _ => Severity::Error,
         }

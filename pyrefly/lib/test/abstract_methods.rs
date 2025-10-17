@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -85,6 +86,7 @@ drawable = Drawable()  # E: Cannot instantiate `Drawable`
 
 testcase!(
     test_inherited_abstract_method,
+    TestEnv::new().enable_implicit_abstract_class_error(),
     r#"
 from abc import ABC, abstractmethod
 
@@ -120,6 +122,7 @@ x = BadClass()  # E: Cannot instantiate `BadClass`
 
 testcase!(
     test_partial_implementation,
+    TestEnv::new().enable_implicit_abstract_class_error(),
     r#"
 from abc import ABC, abstractmethod
 
@@ -205,6 +208,7 @@ c = Child()
 
 testcase!(
     test_abstract_property,
+    TestEnv::new().enable_implicit_abstract_class_error(),
     r#"
 from typing import *
 from abc import ABC, abstractmethod
@@ -225,6 +229,7 @@ x = Child()  # E: Cannot instantiate `Child`
 
 testcase!(
     test_abstract_async_iterator,
+    TestEnv::new().enable_implicit_abstract_class_error(),
     r#"
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
