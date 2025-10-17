@@ -13,7 +13,7 @@ anyhow = "1.0.98"
 dupe = "0.9.1"
 equivalent = "1.0"
 itertools = "0.14.0"
-lsp-types = "0.94.1"
+lsp-types = "0.97.0"
 parse-display = "0.8.2"
 pathdiff = "0.2"
 pyrefly_util = { path = "../pyrefly_util" }
