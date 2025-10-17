@@ -146,7 +146,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 "metaclass" => Either::Left(x),
                 _ => Either::Right((n.clone(), self.expr_class_keyword(x, errors))),
             });
-        let has_explicit_metaclass = !metaclasses.is_empty();
 
         let base_metaclasses = bases_with_metadata
             .iter()
@@ -285,7 +284,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             self.validate_frozen_dataclass_inheritance(cls, dm, &bases_with_metadata, errors);
         }
-        let extends_abc = self.extends_abc(&bases_with_metadata);
+        let extends_abc = self.extends_abc(&bases_with_metadata, metaclass.as_ref());
 
         // Compute final base class list.
         let bases = if is_typed_dict && bases_with_metadata.is_empty() {
@@ -314,7 +313,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ClassMetadata::new(
             bases,
             metaclass,
-            has_explicit_metaclass,
             keywords,
             typed_dict_metadata,
             named_tuple_metadata,
@@ -1160,7 +1158,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         AbstractClassMembers::new(abstract_members)
     }
 
-    fn extends_abc(&self, bases_with_metadata: &Vec<(Class, Arc<ClassMetadata>)>) -> bool {
+    fn extends_abc(
+        &self,
+        bases_with_metadata: &Vec<(Class, Arc<ClassMetadata>)>,
+        metaclass: Option<&ClassType>,
+    ) -> bool {
         for (base, base_metadata) in bases_with_metadata {
             if base.has_toplevel_qname("abc", "ABC") {
                 return true;

@@ -79,7 +79,6 @@ impl ClassMetadata {
     pub fn new(
         bases: Vec<Class>,
         metaclass: Option<ClassType>,
-        has_explicit_metaclass: bool,
         keywords: Vec<(Name, Type)>,
         typed_dict_metadata: Option<TypedDictMetadata>,
         named_tuple_metadata: Option<NamedTupleMetadata>,
@@ -98,7 +97,7 @@ impl ClassMetadata {
         is_django_model: bool,
     ) -> ClassMetadata {
         ClassMetadata {
-            metaclass: Metaclass::new(metaclass, has_explicit_metaclass),
+            metaclass: Metaclass(metaclass),
             keywords: Keywords(keywords),
             typed_dict_metadata,
             named_tuple_metadata,
@@ -144,17 +143,13 @@ impl ClassMetadata {
 
     /// The class's custom (non-`type`) metaclass, if it has one.
     pub fn custom_metaclass(&self) -> Option<&ClassType> {
-        self.metaclass.value.as_ref()
+        self.metaclass.0.as_ref()
     }
 
     /// The class's metaclass.
     pub fn metaclass<'a>(&'a self, stdlib: &'a Stdlib) -> &'a ClassType {
         self.custom_metaclass()
             .unwrap_or_else(|| stdlib.builtins_type())
-    }
-
-    pub fn has_explicit_metaclass(&self) -> bool {
-        self.metaclass.explicit
     }
 
     #[allow(dead_code)] // This is used in tests now, and will be needed later in production.
@@ -336,20 +331,11 @@ impl Display for ClassSynthesizedFields {
 /// A struct representing a class's metaclass. A value of `None` indicates
 /// no explicit metaclass, in which case the default metaclass is `type`.
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
-struct Metaclass {
-    value: Option<ClassType>,
-    explicit: bool,
-}
-
-impl Metaclass {
-    fn new(value: Option<ClassType>, explicit: bool) -> Self {
-        Self { value, explicit }
-    }
-}
+struct Metaclass(Option<ClassType>);
 
 impl Display for Metaclass {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match &self.value {
+        match &self.0 {
             Some(metaclass) => write!(f, "{metaclass}"),
             None => write!(f, "type"),
         }

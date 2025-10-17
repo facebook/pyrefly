@@ -337,19 +337,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                 );
             } else if !metadata.is_protocol() && !metadata.is_new_type() {
-                let has_direct_abc_base = metadata
-                    .base_class_objects()
-                    .iter()
-                    .any(|base| base.has_toplevel_qname("abc", "ABC"));
-                let has_explicit_abc_metaclass = metadata.has_explicit_metaclass()
-                    && metadata.custom_metaclass().is_some_and(|meta| {
-                        meta.class_object().has_toplevel_qname("abc", "ABCMeta")
-                    });
+                let extends_abc = metadata.extends_abc();
                 let defines_abstract_member = cls.fields().any(|name| {
                     self.get_field_from_current_class_only(cls, name)
                         .is_some_and(|field| field.is_abstract())
                 });
-                if !has_direct_abc_base && !has_explicit_abc_metaclass && !defines_abstract_member {
+                if !extends_abc && !defines_abstract_member {
                     self.error(
                         errors,
                         cls.range(),
