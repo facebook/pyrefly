@@ -973,9 +973,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ErrorInfo::Kind(ErrorKind::InvalidArgument),
                                 "Second argument to NewType cannot be a protocol".to_owned(),
                             );
-                            None
+                            return None;
                         } else {
-                            Some((class_object, metadata))
+                            return Some((class_object, metadata));
                         }
                     } else if metadata.is_new_type() {
                         self.error(
