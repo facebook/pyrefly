@@ -28,13 +28,14 @@ pub mod module;
 pub mod module_name;
 pub mod module_path;
 pub mod nesting_context;
+pub mod notebook;
 pub mod qname;
 pub mod short_identifier;
 pub mod symbol_kind;
 pub mod sys_info;
 
 /// Suffixes of python files that we can be processed.
-pub const PYTHON_EXTENSIONS: &[&str] = &["py", "pyi"];
+pub const PYTHON_EXTENSIONS: &[&str] = &["py", "pyi", "ipynb"];
 
 /// Suffixes of compiled python modules
 pub const COMPILED_FILE_SUFFIXES: &[&str] = &["pyc", "pyx", "pyd"];
