@@ -318,14 +318,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Arc<AbstractClassMembers> {
         let metadata = self.get_metadata_for_class(cls);
         let abstract_members = self.calculate_abstract_members(cls);
-        if metadata.is_final() {
-            let unimplemented = abstract_members.unimplemented_abstract_methods();
-            if !unimplemented.is_empty() {
-                let members = unimplemented
-                    .iter()
-                    .map(|member| format!("`{member}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+        let unimplemented = abstract_members.unimplemented_abstract_methods();
+        if !unimplemented.is_empty() {
+            let members = unimplemented
+                .iter()
+                .map(|member| format!("`{member}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if metadata.is_final() {
                 self.error(
                     errors,
                     cls.range(),
@@ -336,6 +336,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         members
                     ),
                 );
+            } else if !metadata.is_protocol() && !metadata.is_new_type() {
+                let extends_abc = metadata.extends_abc();
+                let defines_abstract_member = cls.fields().any(|name| {
+                    self.get_field_from_current_class_only(cls, name)
+                        .is_some_and(|field| field.is_abstract())
+                });
+                if !extends_abc && !defines_abstract_member {
+                    self.error(
+                        errors,
+                        cls.range(),
+                        ErrorInfo::Kind(ErrorKind::ImplicitAbstractClass),
+                        format!(
+                            "Class `{}` must implement abstract members: {}",
+                            cls.name(),
+                            members
+                        ),
+                    );
+                }
             }
         }
         Arc::new(abstract_members)

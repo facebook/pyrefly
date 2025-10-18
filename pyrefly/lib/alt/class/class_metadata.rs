@@ -284,7 +284,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             self.validate_frozen_dataclass_inheritance(cls, dm, &bases_with_metadata, errors);
         }
-        let extends_abc = self.extends_abc(&bases_with_metadata);
+        let extends_abc = self.extends_abc(&bases_with_metadata, metaclass.as_ref());
 
         // Compute final base class list.
         let bases = if is_typed_dict && bases_with_metadata.is_empty() {
@@ -971,6 +971,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ErrorInfo::Kind(ErrorKind::InvalidArgument),
                                 "Second argument to NewType cannot be a protocol".to_owned(),
                             );
+                            return None;
+                        } else {
+                            return Some((class_object, metadata));
                         }
                     } else if metadata.is_new_type() {
                         self.error(
@@ -1155,7 +1158,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         AbstractClassMembers::new(abstract_members)
     }
 
-    fn extends_abc(&self, bases_with_metadata: &Vec<(Class, Arc<ClassMetadata>)>) -> bool {
+    fn extends_abc(
+        &self,
+        bases_with_metadata: &Vec<(Class, Arc<ClassMetadata>)>,
+        metaclass: Option<&ClassType>,
+    ) -> bool {
         for (base, base_metadata) in bases_with_metadata {
             if base.has_toplevel_qname("abc", "ABC") {
                 return true;
