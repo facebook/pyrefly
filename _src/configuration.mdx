@@ -465,7 +465,7 @@ will always, unconditionally replace the import with `typing.Any`.
 - Flag equivalent: `--ignore-missing-imports`
 - Equivalent configs: `ignore_missing_imports` in mypy
 - Notes:
-  - `errors = {import-error = false}` (TOML inline table for `errors`) has similar behavior in Pyrefly, but ignores
+  - `errors = {missing-import = false}` (TOML inline table for `errors`) has similar behavior in Pyrefly, but ignores
     *all* import errors instead of import errors from specific modules.
   - When a `.pyc` file is encountered and no source/stub files are available, Pyrefly automatically treats module as `typing.Any`.
     This behavior ensures that compiled Python files without available source code do not cause import errors and are handled permissively.

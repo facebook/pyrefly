@@ -34,8 +34,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.409aac25.css">
-<script src="/assets/js/runtime~main.a548c370.js" defer="defer"></script>
-<script src="/assets/js/main.91a36be4.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.3ef642a4.js" defer="defer"></script>
+<script src="/assets/js/main.23036e00.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -472,7 +472,7 @@ will always, unconditionally replace the import with <code>typing.Any</code>.</p
 <li>Equivalent configs: <code>ignore_missing_imports</code> in mypy</li>
 <li>Notes:<!-- -->
 <ul>
-<li><code>errors = {import-error = false}</code> (TOML inline table for <code>errors</code>) has similar behavior in Pyrefly, but ignores
+<li><code>errors = {missing-import = false}</code> (TOML inline table for <code>errors</code>) has similar behavior in Pyrefly, but ignores
 <em>all</em> import errors instead of import errors from specific modules.</li>
 <li>When a <code>.pyc</code> file is encountered and no source/stub files are available, Pyrefly automatically treats module as <code>typing.Any</code>.
 This behavior ensures that compiled Python files without available source code do not cause import errors and are handled permissively.</li>

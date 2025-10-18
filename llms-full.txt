@@ -1009,7 +1009,7 @@ will always, unconditionally replace the import with `typing.Any`.
 - Flag equivalent: `--ignore-missing-imports`
 - Equivalent configs: `ignore_missing_imports` in mypy
 - Notes:
-  - `errors = {import-error = false}` (TOML inline table for `errors`) has similar behavior in Pyrefly, but ignores
+  - `errors = {missing-import = false}` (TOML inline table for `errors`) has similar behavior in Pyrefly, but ignores
     *all* import errors instead of import errors from specific modules.
   - When a `.pyc` file is encountered and no source/stub files are available, Pyrefly automatically treats module as `typing.Any`.
     This behavior ensures that compiled Python files without available source code do not cause import errors and are handled permissively.
@@ -1597,25 +1597,6 @@ An `assert-type` error is raised when a `typing.assert_type()` call fails.
 This error kind should never be suppressed, since that rather defeats the point
 of of `typing.assert_type()`.
 
-## async-error
-
-`async-error` is reported when attempting to `await` on something that is not
-awaitable. This may indicate that a function should have been marked `async` but
-wasn't.
-
-```python
-def some_func() -> None:
-  ...
-
-await some_func() # Expression is not awaitable [async-error]
-```
-
-This will also arise if the context manager used in an `async with` statement
-has `__aenter__` and `__aexit__` methods that are not marked `async`.
-
-The fix is to use an `async` function in the `await`. This may mean making the
-function `async` or finding an existing `async` function to use instead.
-
 ## bad-argument-count
 
 This error arises when a function is called with the wrong number of arguments.
@@ -1725,6 +1706,18 @@ with A(): ...  # `A` is missing an `__exit__` method!
 Like `bad-class-definition`, this error kind is uncommon because other error kinds are used for more specific issues.
 For example, argument order is enforced by the parser, so `def f(x: int = 1, y: str)` is a `parse-error`.
 
+## bad-index
+
+Attempting to access a container with an incorrect index.
+This only occurs when Pyrefly can statically verify that the index is incorrect, such as with a fixed-length tuple.
+
+```python
+def add_three(x: tuple[int, int]) -> int:
+  return x[0] + x[1] + x[2]
+```
+
+Pyrefly also knows the keys of `TypedDict`s, but those have their own error kind.
+
 ## bad-instantiation
 
 This error occurs when attempting to instantiate a class that cannot be instantiated, such as a protocol:
@@ -1746,6 +1739,28 @@ f(x=1, x=2)
 ```
 
 However, this is often accompanied by a `parse-error` for the same issue.
+
+## bad-match
+
+This error is used in two cases.
+
+The first is when there is an issue with a `match` statement. For example, `Ex` only has 2 fields but the `case` lists 3:
+
+```python
+class Ex:
+  __match_args__ = ('a', 'b')
+  def __init__(self, a: int, b: str) -> None:
+    self.a = a
+    self.b = b
+
+def do(x: Ex) -> None:
+  match x:
+    case Ex(a, b, c):
+      print("This is an error")
+```
+
+It is also used when `__match_args__` is defined incorrectly. It must be a tuple of the names of the class's attributes as literal strings.
+For class `Ex` in the previous example, `__match_args__ = ('a', 'c')` would be an error because `Ex.c` does not exist.
 
 ## bad-override
 
@@ -1886,13 +1901,6 @@ def two_elems() -> tuple:
 a, b, c = two_elems()
 ```
 
-## delete-error
-
-This error occurs when attempting to `del` something that cannot be deleted.
-
-Besides obvious things like built-in values (you can't `del True`!), some object attributes are protected from deletion.
-For example, read-only and required `TypedDict` fields cannot be deleted.
-
 ## deprecated
 
 This error occurs on usage of a deprecated class or function:
@@ -1950,13 +1958,6 @@ class C:
         self.y = 0  # error, `y` may be undefined if `f` does not execute
 ```
 
-## import-error
-
-An error related to the import mechanism, such as when a module cannot be found.
-
-The error message will include which paths were searched, such as the site package paths.
-You may be missing a dependency, or you may need to inform Pyrefly where the module lives. See [Configuration](configuration.mdx) for further information.
-
 ## inconsistent-inheritance
 
 When a class inherits from multiple base classes, the inherited fields must be consistent.
@@ -1986,18 +1987,6 @@ def f(x: str) -> str: ...  # error, overload accepts `str` but implementation on
 def f(x: int) -> int | str:
     return x
 ```
-
-## index-error
-
-Attempting to access a container with an incorrect index.
-This only occurs when Pyrefly can statically verify that the index is incorrect, such as with a fixed-length tuple.
-
-```python
-def add_three(x: tuple[int, int]) -> int:
-  return x[0] + x[1] + x[2]
-```
-
-Pyrefly also knows the keys of `TypedDict`s, but those have their own error kind.
 
 ## internal-error
 
@@ -2164,6 +2153,17 @@ x[0]: int = 1
 
 It's not a parse error for an assignment to have an annotation, but it is forbidden by the type checker to annotate assignment to a subscript like `x[0]`.
 
+## invalid-type-alias
+
+An error related to the definition or usage of a `typing.TypeAlias`. Many of these cases are covered by [`invalid-annotation`](#invalid-annotation), so this error
+specifically handles illegal type alias values:
+
+```python
+from typing import TypeAlias
+x = 2
+Bad: TypeAlias = x
+```
+
 ## invalid-type-var
 
 An error caused by incorrect usage or definition of a TypeVar. A few examples:
@@ -2218,28 +2218,6 @@ def bad_yield_from() -> Generator[int, None, None]:
   yield from 1
 ```
 
-## match-error
-
-This error is used in two cases.
-
-The first is when there is an issue with a `match` statement. For example, `Ex` only has 2 fields but the `case` lists 3:
-
-```python
-class Ex:
-  __match_args__ = ('a', 'b')
-  def __init__(self, a: int, b: str) -> None:
-    self.a = a
-    self.b = b
-
-def do(x: Ex) -> None:
-  match x:
-    case Ex(a, b, c):
-      print("This is an error")
-```
-
-It is also used when `__match_args__` is defined incorrectly. It must be a tuple of the names of the class's attributes as literal strings.
-For class `Ex` in the previous example, `__match_args__ = ('a', 'c')` would be an error because `Ex.c` does not exist.
-
 ## missing-argument
 
 An error caused by calling a function without all the required arguments.
@@ -2265,21 +2243,33 @@ os.jongleur()  # missing-attribute
 
 Note that objects with type `Any` will never raise this error.
 
+## missing-import
+
+A module could not be found.
+
+The error message will include which paths were searched, such as the site package paths.
+You may be missing a dependency, or you may need to inform Pyrefly where the module lives. See [Configuration](configuration.mdx) for further information.
+
 ## missing-module-attribute
 
 Arises when attempting to import a name that does not exist from a module.
 
-This is distinct from [`import-error`](#import-error), which is used when the module being imported does not exist, and [`missing-attribute`](#missing-attribute), when access attributes of the module.
+This is distinct from [`missing-import`](#missing-import), which is used when the module being imported does not exist, and [`missing-attribute`](#missing-attribute), when access attributes of the module.
 
 ```python
-import this_does_not_exist  # import-error
-import os.bacarat  # import-error
+import this_does_not_exist  # missing-import
+import os.bacarat  # missing-import
 from os import joker  # missing-module-attribute
 os.perkeo  # missing-attribute
 ```
 
-In this example, `os.bacarat` is treated as a module name, so failing to find it results in an `import-error`.
+In this example, `os.bacarat` is treated as a module name, so failing to find it results in an `missing-import`.
 `from os import joker` does not tell us if `joker` is a module, class, function, etc., so it is treated as the more general `missing-module-attribute`.
+
+## missing-source
+
+Pyrefly was able to find a stubs package but no corresponding source package. For example, this can
+happen if you install the `types-requests` package but forget to install `requests`.
 
 ## no-access
 
@@ -2332,6 +2322,25 @@ class A:
 X = "A"
 x: X = ...  # X is not a type alias, so this is illegal
 ```
+
+## not-async
+
+`not-async` is reported when attempting to `await` on something that is not
+awaitable. This may indicate that a function should have been marked `async` but
+wasn't.
+
+```python
+def some_func() -> None:
+  ...
+
+await some_func() # Expression is not awaitable [not-async]
+```
+
+This will also arise if the context manager used in an `async with` statement
+has `__aenter__` and `__aexit__` methods that are not marked `async`.
+
+The fix is to use an `async` function in the `await`. This may mean making the
+function `async` or finding an existing `async` function to use instead.
 
 ## not-callable
 
@@ -2431,17 +2440,6 @@ if "abc":
 
 Pyrefly uses this error to communicate the output of the [`reveal_type`](https://typing.python.org/en/latest/spec/directives.html#reveal-type) function.
 
-## type-alias-error
-
-An error related to the definition or usage of a `typing.TypeAlias`. Many of these cases are covered by [`invalid-annotation`](#invalid-annotation), so this error
-specifically handles illegal type alias values:
-
-```python
-from typing import TypeAlias
-x = 2
-Bad: TypeAlias = x
-```
-
 ## typed-dict-key-error
 
 This error arises when `TypedDict`s are used with incorrect keys, such as a key that does not exist in the `TypedDict`.
@@ -2507,6 +2505,13 @@ def where() -> None:
 ## unsupported
 
 This error indicates that pyrefly does not currently support a typing feature.
+
+## unsupported-delete
+
+This error occurs when attempting to `del` something that cannot be deleted.
+
+Besides obvious things like built-in values (you can't `del True`!), some object attributes are protected from deletion.
+For example, read-only and required `TypedDict` fields cannot be deleted.
 
 ## unsupported-operation
 
@@ -3245,7 +3250,7 @@ To suppress all instances of an error, disable that error in the config:
 
 ```
 [errors]
-import-error = false
+missing-import = false
 ```
 
 This is equivalent to mypy's `disable_error_code`, though of course the [error codes](error-kinds.mdx) are different!
@@ -3351,7 +3356,7 @@ To suppress all instances of an error, disable that error in the config:
 
 ```
 [errors]
-import-error = false
+missing-import = false
 ```
 
 This is similar to pyright's [type check rule overrides](https://microsoft.github.io/pyright/#/configuration?id=type-check-rule-overrides), though of course the [error codes](error-kinds.mdx) are different!
@@ -3373,8 +3378,8 @@ This table will be expanded as more diagnostics are supported.
 
 | Pyright | Pyrefly |
 | ------- | ------- |
-| reportMissingImports | import-error |
-| reportMissingModuleSource | import-error |
+| reportMissingImports | missing-import |
+| reportMissingModuleSource | missing-import |
 
 
 ---

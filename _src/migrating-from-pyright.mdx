@@ -84,7 +84,7 @@ To suppress all instances of an error, disable that error in the config:
 
 ```
 [errors]
-import-error = false
+missing-import = false
 ```
 
 This is similar to pyright's [type check rule overrides](https://microsoft.github.io/pyright/#/configuration?id=type-check-rule-overrides), though of course the [error codes](error-kinds.mdx) are different!
@@ -106,5 +106,5 @@ This table will be expanded as more diagnostics are supported.
 
 | Pyright | Pyrefly |
 | ------- | ------- |
-| reportMissingImports | import-error |
-| reportMissingModuleSource | import-error |
+| reportMissingImports | missing-import |
+| reportMissingModuleSource | missing-import |
