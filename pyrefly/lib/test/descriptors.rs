@@ -133,6 +133,23 @@ def f(c: C):
     "#,
 );
 
+testcase!(
+    test_cached_property_assignment_allowed,
+    r#"
+from functools import cached_property
+from typing import assert_type
+
+class C:
+    @cached_property
+    def foo(self) -> int:
+        return 42
+
+def f(c: C) -> None:
+    assert_type(c.foo, int)
+    c.foo = 42
+    "#,
+);
+
 // Make sure we don't crash.
 testcase!(
     test_staticmethod_class,

@@ -1074,6 +1074,10 @@ impl Type {
         self.check_toplevel_func_metadata(&|meta| meta.flags.is_property_getter)
     }
 
+    pub fn is_cached_property(&self) -> bool {
+        self.check_toplevel_func_metadata(&|meta| meta.flags.is_cached_property)
+    }
+
     pub fn is_property_setter_decorator(&self) -> bool {
         self.check_toplevel_func_metadata(&|meta| meta.flags.is_property_setter_decorator)
     }
