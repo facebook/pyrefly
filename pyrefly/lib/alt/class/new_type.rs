@@ -23,10 +23,21 @@ use crate::types::class::Class;
 use crate::types::types::Type;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn new_type_base_type(&self, cls: &Class, base: &Class) -> Type {
+        let class_bases = self.get_base_types_for_class(cls);
+        if let Some(tuple_base) = class_bases.tuple_base() {
+            return Type::Tuple(tuple_base.clone());
+        }
+        let mut base_iter = class_bases.iter();
+        if let Some(base_class_type) = base_iter.next().cloned() {
+            return Type::ClassType(base_class_type);
+        }
+        self.promote_nontypeddict_silently_to_classtype(base)
+            .to_type()
+    }
+
     fn get_new_type_init(&self, cls: &Class, base: Class) -> ClassSynthesizedField {
-        let base_type = self
-            .promote_nontypeddict_silently_to_classtype(&base)
-            .to_type();
+        let base_type = self.new_type_base_type(cls, &base);
         let params = vec![
             self.class_self_param(cls, false),
             Param::Pos(Name::new_static("_x"), base_type, Required::Required),
@@ -39,9 +50,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn get_new_type_new(&self, cls: &Class, base: Class) -> ClassSynthesizedField {
-        let base_type = self
-            .promote_nontypeddict_silently_to_classtype(&base)
-            .to_type();
+        let base_type = self.new_type_base_type(cls, &base);
         let params = vec![
             Param::Pos(
                 Name::new_static("cls"),

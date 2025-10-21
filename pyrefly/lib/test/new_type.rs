@@ -114,7 +114,7 @@ Foo = NewType("Foo", tuple[int, int])
 Bar = NewType("Bar", tuple[int, ...])
 
 Foo((1, 2))  # OK
-Foo((1, 2, 3))  # this shouldn't be allowed
+Foo((1, 2, 3))  # E: Argument `tuple[Literal[1], Literal[2], Literal[3]]` is not assignable to parameter `_x` with type `tuple[int, int]` in function `Foo.__new__`
      "#,
 );
 
