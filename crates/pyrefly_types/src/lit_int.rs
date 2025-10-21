@@ -102,6 +102,23 @@ impl LitInt {
         }
     }
 
+    fn to_bigint(&self) -> BigInt {
+        match &self.0 {
+            LitIntInner::Small(x) => BigInt::from(*x),
+            LitIntInner::Big(x) => (**x).clone(),
+        }
+    }
+
+    pub fn add(&self, other: &Self) -> Self {
+        match (&self.0, &other.0) {
+            (LitIntInner::Small(x), LitIntInner::Small(y)) => match x.checked_add(*y) {
+                Some(sum) => Self::new(sum),
+                None => Self::new_big(BigInt::from(*x) + BigInt::from(*y)),
+            },
+            _ => Self::new_big(self.to_bigint() + other.to_bigint()),
+        }
+    }
+
     pub fn negate(&self) -> Self {
         match &self.0 {
             LitIntInner::Small(x) => match x.checked_neg() {

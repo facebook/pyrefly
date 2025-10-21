@@ -20,6 +20,25 @@ def f(a: int, b: int) -> None:
 );
 
 testcase!(
+    test_literal_int_add,
+    r#"
+from typing import Literal, assert_type
+
+a: Literal[1] = 1
+b: Literal[2] = 2
+c = a + b
+assert_type(c, Literal[3])
+d: Literal[3] = c
+
+e = a + 5
+assert_type(e, Literal[6])
+
+f = 5 + b
+assert_type(f, Literal[7])
+"#,
+);
+
+testcase!(
     test_bounded_type_var_comparison,
     r#"
 def compare[T: int](x: T, y: T) -> bool:
