@@ -34,8 +34,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.409aac25.css">
-<script src="/assets/js/runtime~main.b834def5.js" defer="defer"></script>
-<script src="/assets/js/main.c5a2baae.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.bd225160.js" defer="defer"></script>
+<script src="/assets/js/main.e0e0f2df.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -270,12 +270,14 @@ resolution, after <a href="#search-path"><code>search-path</code></a> and <code>
 <p>See more on <a href="/en/docs/import-resolution/">how Pyrefly does import resolution</a>.</p>
 <ul>
 <li>Type: list of directories</li>
-<li>Default: result from <a href="#environment-autoconfiguration">Environment Autoconfiguration</a>, or
+<li>Default: <code>./typings</code> + the result from <a href="#environment-autoconfiguration">Environment Autoconfiguration</a>, or
 <code>[]</code> if the Python interpreter cannot be queried</li>
 <li>Flag equivalent: <code>--site-package-path</code></li>
 <li>Equivalent configs: none</li>
 <li>Notes:<!-- -->
 <ul>
+<li>The queried interpreter&#x27;s site package paths will always be included in addition to any user-specified value,
+unless environment auto-configuration is turned off.</li>
 <li>Ideally, this should not be set manually, unless you&#x27;re using a venv, running one-off tests,
 testing specific behavior, or having trouble with <a href="#environment-autoconfiguration">Environment Autoconfiguration</a>.
 Setting this explicitly, especially when not using a venv, will make it difficult for your configuration

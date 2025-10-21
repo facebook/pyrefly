@@ -323,6 +323,25 @@ class ValidTD(TypedDict, total=False):
     x: int
 ```
 
+## bad-typed-dict-key
+
+This error arises when `TypedDict`s are used with incorrect keys, such as a key that does not exist in the `TypedDict`.
+
+```python
+from typing import TypedDict
+
+class Ex(TypedDict):
+    a: int
+    b: str
+
+def test(x: Ex) -> None:
+    # These two keys don't exist
+    x.nope
+    x["wrong"]
+    # TypedDict keys must be strings!
+    x[1]
+```
+
 ## bad-unpacking
 
 An error caused by unpacking, such as attempting to unpack a list, tuple, or iterable into the wrong number of variables.
@@ -882,25 +901,6 @@ if "abc":
 ## reveal-type
 
 Pyrefly uses this error to communicate the output of the [`reveal_type`](https://typing.python.org/en/latest/spec/directives.html#reveal-type) function.
-
-## typed-dict-key-error
-
-This error arises when `TypedDict`s are used with incorrect keys, such as a key that does not exist in the `TypedDict`.
-
-```python
-from typing import TypedDict
-
-class Ex(TypedDict):
-    a: int
-    b: str
-
-def test(x: Ex) -> None:
-    # These two keys don't exist
-    x.nope
-    x["wrong"]
-    # TypedDict keys must be strings!
-    x[1]
-```
 
 ## unbound-name
 
