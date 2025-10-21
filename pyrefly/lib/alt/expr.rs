@@ -1856,7 +1856,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Type::ClassDef(cls) => {
-                    let class_getitem_result = if self.get_class_tparams(&cls).is_empty() {
+                    let metadata = self.get_metadata_for_class(&cls);
+                    let class_getitem_result = if self.get_class_tparams(&cls).is_empty()
+                        && !metadata.has_base_any()
+                        && !metadata.is_new_type()
+                    {
                         let class_ty = Type::ClassDef(cls.dupe());
                         if self.has_attr(&class_ty, &dunder::CLASS_GETITEM) {
                             let cls_value = self.promote_silently(&cls);
