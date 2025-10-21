@@ -1855,12 +1855,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         )
                     }
                 }
-                Type::ClassDef(cls) => Type::type_form(self.specialize(
-                    &cls,
-                    xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors)),
-                    range,
-                    errors,
-                )),
+                Type::ClassDef(cls) => {
+                    let class_getitem_result = if self.get_class_tparams(&cls).is_empty() {
+                        let class_ty = Type::ClassDef(cls.dupe());
+                        if self.has_attr(&class_ty, &dunder::CLASS_GETITEM) {
+                            let cls_value = self.promote_silently(&cls);
+                            let call_args = [CallArg::ty(&cls_value, range), CallArg::expr(slice)];
+                            Some(self.call_method_or_error(
+                                &class_ty,
+                                &dunder::CLASS_GETITEM,
+                                range,
+                                &call_args,
+                                &[],
+                                errors,
+                                Some(&|| ErrorContext::Index(self.for_display(class_ty.clone()))),
+                            ))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(result) = class_getitem_result {
+                        result
+                    } else {
+                        Type::type_form(self.specialize(
+                            &cls,
+                            xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors)),
+                            range,
+                            errors,
+                        ))
+                    }
+                }
                 Type::Type(box Type::SpecialForm(special)) => {
                     self.apply_special_form(special, slice, range, errors)
                 }
