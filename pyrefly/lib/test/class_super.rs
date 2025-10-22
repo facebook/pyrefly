@@ -114,6 +114,20 @@ class C:
 );
 
 testcase!(
+    test_super_protocol_stub_method,
+    r#"
+from typing import Protocol
+
+class PColor(Protocol):
+    def draw(self) -> str: ...
+
+class BadColor(PColor):
+    def draw(self) -> str:
+        return super().draw()  # E: Method `draw` inherited from protocol `PColor` has no implementation and cannot be accessed via `super()`
+    "#,
+);
+
+testcase!(
     test_illegal_location,
     r#"
 class A:

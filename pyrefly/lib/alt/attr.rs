@@ -239,6 +239,8 @@ pub enum NoAccessReason {
     /// We do not allow class-level mutation of descriptors (this is conservative,
     /// it is unspecified whether monkey-patching descriptors should be permitted).
     SettingDescriptorOnClass(Class),
+    /// Calling a protocol method via `super()` when the protocol provides no implementation.
+    SuperProtocolStubMethod(Class),
 }
 
 #[derive(Debug)]
@@ -292,6 +294,12 @@ impl NoAccessReason {
                 let class_name = class.name();
                 format!(
                     "Attribute `{attr_name}` of class `{class_name}` is a read-only descriptor with no `__set__` and cannot be set"
+                )
+            }
+            NoAccessReason::SuperProtocolStubMethod(class) => {
+                let class_name = class.name();
+                format!(
+                    "Method `{attr_name}` inherited from protocol `{class_name}` has no implementation and cannot be accessed via `super()`"
                 )
             }
         }

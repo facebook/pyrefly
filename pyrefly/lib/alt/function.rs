@@ -247,6 +247,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .map(|(idx, range)| (self.get_idx(*idx).arc_clone_ty(), *range)),
         );
 
+        if stub_or_impl == FunctionStubOrImpl::Stub {
+            flags.is_stub = true;
+        }
+
         // Look for a @classmethod or @staticmethod decorator and change the "self" type
         // accordingly. This is not totally correct, since it doesn't account for chaining
         // decorators, or weird cases like both decorators existing at the same time.
