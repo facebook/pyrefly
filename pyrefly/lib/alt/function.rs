@@ -195,6 +195,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
 
         if def.is_stub()
+            && self.module().path().style() != ModuleStyle::Interface
             && let Some(cls) = def.defining_cls()
             && self.get_metadata_for_class(cls).is_protocol()
         {
