@@ -275,6 +275,27 @@ impl TestServer {
         }));
     }
 
+    pub fn references(&mut self, file: &str, line: u32, col: u32, include_declaration: bool) {
+        let path = self.get_root_or_panic().join(file);
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/references".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&path).unwrap().to_string()
+                },
+                "position": {
+                    "line": line,
+                    "character": col
+                },
+                "context": {
+                    "includeDeclaration": include_declaration
+                },
+            }),
+        }));
+    }
+
     pub fn inlay_hint(
         &mut self,
         file: &'static str,

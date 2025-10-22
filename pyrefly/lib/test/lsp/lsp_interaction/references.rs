@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Message;
 use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_types::Url;
@@ -37,24 +36,7 @@ fn test_references_for_usage_with_config() {
     interaction.server.did_open("with_synthetic_bindings.py");
     interaction.server.did_open("bar.py");
 
-    interaction
-        .server
-        .send_message(Message::Request(lsp_server::Request {
-            id: RequestId::from(2),
-            method: "textDocument/references".to_owned(),
-            params: serde_json::json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
-                },
-                "position": {
-                    "line": 10,
-                    "character": 1
-                },
-                "context": {
-                    "includeDeclaration": true
-                },
-            }),
-        }));
+    interaction.server.references("bar.py", 10, 1, true);
 
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
@@ -125,27 +107,10 @@ fn test_references_for_definition_with_config() {
     interaction.server.did_open("with_synthetic_bindings.py");
     interaction.server.did_open("bar.py");
 
-    interaction
-        .server
-        .send_message(Message::Request(lsp_server::Request {
-            id: RequestId::from(3),
-            method: "textDocument/references".to_owned(),
-            params: serde_json::json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
-                },
-                "position": {
-                    "line": 6,
-                    "character": 7
-                },
-                "context": {
-                    "includeDeclaration": true
-                },
-            }),
-        }));
+    interaction.server.references("bar.py", 6, 7, true);
 
     interaction.client.expect_response(Response {
-        id: RequestId::from(3),
+        id: RequestId::from(2),
         result: Some(serde_json::json!([
             {
                 "range": {"start":{"line":6,"character":6},"end":{"character":9,"line":6}},
@@ -213,27 +178,10 @@ fn test_references_for_import_with_config() {
     interaction.server.did_open("with_synthetic_bindings.py");
     interaction.server.did_open("bar.py");
 
-    interaction
-        .server
-        .send_message(Message::Request(lsp_server::Request {
-            id: RequestId::from(4),
-            method: "textDocument/references".to_owned(),
-            params: serde_json::json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
-                },
-                "position": {
-                    "line": 6,
-                    "character": 17
-                },
-                "context": {
-                    "includeDeclaration": true
-                },
-            }),
-        }));
+    interaction.server.references("foo.py", 6, 17, true);
 
     interaction.client.expect_response(Response {
-        id: RequestId::from(4),
+        id: RequestId::from(2),
         result: Some(serde_json::json!([
             {
                 "range": {"start":{"line":6,"character":6},"end":{"character":9,"line":6}},
@@ -300,25 +248,10 @@ fn test_references_for_aliased_import_with_config() {
 
     interaction
         .server
-        .send_message(Message::Request(lsp_server::Request {
-            id: RequestId::from(5),
-            method: "textDocument/references".to_owned(),
-            params: serde_json::json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
-                },
-                "position": {
-                    "line": 7,
-                    "character": 0
-                },
-                "context": {
-                    "includeDeclaration": true
-                },
-            }),
-        }));
+        .references("various_imports.py", 7, 0, true);
 
     interaction.client.expect_response(Response {
-        id: RequestId::from(5),
+        id: RequestId::from(2),
         result: Some(serde_json::json!([
             {
                 "range": {"start":{"line":5,"character":23},"end":{"line":5,"character":24}},
@@ -358,32 +291,13 @@ fn test_references_after_file_modification_with_config() {
     interaction.server.did_open("with_synthetic_bindings.py");
     interaction.server.did_open("bar.py");
 
-    interaction.server.did_change(
-        "bar.py",
-        &format!("n\n{}", std::fs::read_to_string(bar.clone()).unwrap()),
-    );
+    let modified_contents = format!("\n\n{}", std::fs::read_to_string(bar.clone()).unwrap());
+    interaction.server.did_change("bar.py", &modified_contents);
 
-    interaction
-        .server
-        .send_message(Message::Request(lsp_server::Request {
-            id: RequestId::from(6),
-            method: "textDocument/references".to_owned(),
-            params: serde_json::json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
-                },
-                "position": {
-                    "line": 6,
-                    "character": 17
-                },
-                "context": {
-                    "includeDeclaration": true
-                },
-            }),
-        }));
+    interaction.server.references("foo.py", 6, 17, true);
 
     interaction.client.expect_response(Response {
-        id: RequestId::from(6),
+        id: RequestId::from(2),
         result: Some(serde_json::json!([
             {
                 "range": {"start":{"line":6,"character":6},"end":{"character":9,"line":6}},
@@ -448,32 +362,13 @@ fn test_references_after_file_modification_with_line_offset_with_config() {
     interaction.server.did_open("with_synthetic_bindings.py");
     interaction.server.did_open("bar.py");
 
-    interaction.server.did_change(
-        "bar.py",
-        &format!("\n\n{}", std::fs::read_to_string(bar.clone()).unwrap()),
-    );
+    let modified_contents = format!("\n\n{}", std::fs::read_to_string(bar.clone()).unwrap());
+    interaction.server.did_change("bar.py", &modified_contents);
 
-    interaction
-        .server
-        .send_message(Message::Request(lsp_server::Request {
-            id: RequestId::from(7),
-            method: "textDocument/references".to_owned(),
-            params: serde_json::json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
-                },
-                "position": {
-                    "line": 8,
-                    "character": 7
-                },
-                "context": {
-                    "includeDeclaration": true
-                },
-            }),
-        }));
+    interaction.server.references("bar.py", 8, 7, true);
 
     interaction.client.expect_response(Response {
-        id: RequestId::from(7),
+        id: RequestId::from(2),
         result: Some(serde_json::json!([
             {
                 "range": {"start":{"line":8,"character":6},"end":{"character":9,"line":8}},
