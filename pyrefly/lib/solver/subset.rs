@@ -815,13 +815,23 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             .typed_dict_extra_items(want.class_object())
             .extra_item(self.type_order.stdlib())
             .ty;
-        all(want_fields.iter(), |(k, want_v)| {
-            let got_ty = got_fields.get(k).map_or(&got_extra_item, |got_v| &got_v.ty);
-            if want_v.is_read_only() {
-                // ReadOnly can only be updated with Never (i.e., no update)
-                self.is_subset_eq(got_ty, &Type::never())
+        // Iterate over fields actually present in `got`. Each field present in `got` must be
+        // allowed by the Partial[`want`] semantics: if `want` marks the field ReadOnly then it
+        // cannot appear in a Partial (enforce by requiring Never), otherwise the type of the
+        // `got` field must be a subset of the corresponding `want` field type (or the `want`
+        // extra_item type if `want` doesn't declare the key).
+        all(got_fields.iter(), |(k, got_v)| {
+            let want_ty = want_fields
+                .get(k)
+                .map_or(&want_extra_item, |want_v| &want_v.ty);
+            if want_fields
+                .get(k)
+                .map_or(false, |want_v| want_v.is_read_only())
+            {
+                // ReadOnly keys in `want` cannot be present in Partial[want].
+                self.is_subset_eq(&got_v.ty, &Type::never())
             } else {
-                self.is_subset_eq(got_ty, &want_v.ty)
+                self.is_subset_eq(&got_v.ty, want_ty)
             }
         })?;
         self.is_subset_eq(&got_extra_item, &want_extra_item)
