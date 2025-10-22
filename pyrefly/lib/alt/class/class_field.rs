@@ -3107,7 +3107,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
 
             let lhs_type = parent.clone().to_type();
-            let mut forward_arg_ty = subclass_type.clone();
+            let forward_arg_ty = subclass_type.clone();
             let forward_args = [CallArg::ty(&forward_arg_ty, range)];
             let forward_errors = self.error_collector();
             let forward_ret = self.call_magic_dunder_method(
@@ -3130,7 +3130,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
 
             let method_receiver_ty = subclass_type.clone();
-            let mut method_arg_ty = lhs_type.clone();
+            let method_arg_ty = lhs_type.clone();
             let method_args = [CallArg::ty(&method_arg_ty, range)];
             let method_errors = self.error_collector();
             let method_ret = self.call_magic_dunder_method(
