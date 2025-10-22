@@ -19,6 +19,7 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::absolutize::Absolutize as _;
 use tracing::warn;
 
+use crate::module::bundled::BundledStub;
 use crate::module::module_info::ModuleInfo;
 use crate::module::typeshed::typeshed;
 use crate::module::typeshed_third_party::typeshed_third_party;
