@@ -413,6 +413,39 @@ assert_type(a, A)
     "#,
 );
 
+testcase!(
+    test_reflected_operator_incompatible_return,
+    r#"
+from typing import assert_type
+
+class A:
+    def __add__(self, other: "A") -> int:
+        return 1
+
+class B(A):
+    def __radd__(self, other: "A") -> str:  # E: Class member `B.__radd__` returns `str` which is incompatible with the return type `int` of parent operator `A.__add__` when the reflected operator may be selected
+        return "B"
+
+assert_type(A() + B(), str)
+    "#,
+);
+
+testcase!(
+    test_inplace_operator_incompatible_return,
+    r#"
+class A:
+    def __add__(self, other: "A") -> int:
+        return 1
+
+class B(A):
+    def __iadd__(self, other: "A") -> str:  # E: Class member `B.__iadd__` returns `str` which is incompatible with the return type `int` of parent operator `A.__add__` used for augmented assignment
+        return "a"
+
+def f(a: B, b: A) -> None:
+    a += b  # E: Augmented assignment produces a value of type `int | str`, which is not assignable to `B`
+    "#,
+);
+
 // We try __iadd__ and some fallback dunders. When all fail, the least confusing option is to use __iadd__.
 testcase!(
     test_iadd_error,

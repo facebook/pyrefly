@@ -63,6 +63,7 @@ use crate::types::callable::Param;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::display::TypeDisplayContext;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::literal::Lit;
 use crate::types::quantified::Quantified;
@@ -155,6 +156,51 @@ impl ClassAttribute {
             | ClassAttribute::Property(..)
             | ClassAttribute::Descriptor(..) => None,
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OperatorCompatibilityKind {
+    Reflected,
+    InPlace,
+}
+
+fn reflected_operator_forward_name(name: &Name) -> Option<&'static str> {
+    match name.as_str() {
+        "__radd__" => Some("__add__"),
+        "__rsub__" => Some("__sub__"),
+        "__rmul__" => Some("__mul__"),
+        "__rmatmul__" => Some("__matmul__"),
+        "__rtruediv__" => Some("__truediv__"),
+        "__rfloordiv__" => Some("__floordiv__"),
+        "__rmod__" => Some("__mod__"),
+        "__rdivmod__" => Some("__divmod__"),
+        "__rpow__" => Some("__pow__"),
+        "__rlshift__" => Some("__lshift__"),
+        "__rrshift__" => Some("__rshift__"),
+        "__rand__" => Some("__and__"),
+        "__rxor__" => Some("__xor__"),
+        "__ror__" => Some("__or__"),
+        _ => None,
+    }
+}
+
+fn inplace_operator_forward_name(name: &Name) -> Option<&'static str> {
+    match name.as_str() {
+        "__iadd__" => Some("__add__"),
+        "__isub__" => Some("__sub__"),
+        "__imul__" => Some("__mul__"),
+        "__imatmul__" => Some("__matmul__"),
+        "__itruediv__" => Some("__truediv__"),
+        "__ifloordiv__" => Some("__floordiv__"),
+        "__imod__" => Some("__mod__"),
+        "__ipow__" => Some("__pow__"),
+        "__ilshift__" => Some("__lshift__"),
+        "__irshift__" => Some("__rshift__"),
+        "__iand__" => Some("__and__"),
+        "__ixor__" => Some("__xor__"),
+        "__ior__" => Some("__or__"),
+        _ => None,
     }
 }
 
@@ -1829,6 +1875,150 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         true
     }
 
+    fn check_operator_compatibility_for_field(
+        &self,
+        cls: &Class,
+        field_name: &Name,
+        bases: &ClassBases,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if let Some(forward) = reflected_operator_forward_name(field_name) {
+            self.check_operator_compatibility_with_forward(
+                OperatorCompatibilityKind::Reflected,
+                forward,
+                cls,
+                field_name,
+                bases,
+                range,
+                errors,
+            );
+        }
+        if let Some(forward) = inplace_operator_forward_name(field_name) {
+            self.check_operator_compatibility_with_forward(
+                OperatorCompatibilityKind::InPlace,
+                forward,
+                cls,
+                field_name,
+                bases,
+                range,
+                errors,
+            );
+        }
+    }
+
+    fn check_operator_compatibility_with_forward(
+        &self,
+        kind: OperatorCompatibilityKind,
+        forward_str: &'static str,
+        cls: &Class,
+        field_name: &Name,
+        bases: &ClassBases,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if bases.is_empty() {
+            return;
+        }
+
+        let forward_name = Name::new_static(forward_str);
+        let subclass_class_type = self.as_class_type_unchecked(cls);
+        let subclass_type = Type::ClassType(subclass_class_type.clone());
+
+        for parent in bases.iter() {
+            let parent_cls = parent.class_object();
+            if self.get_class_member(parent_cls, field_name).is_some() {
+                continue;
+            }
+
+            let Some(_) = self.get_class_member(parent_cls, &forward_name) else {
+                continue;
+            };
+
+            let lhs_type = parent.clone().to_type();
+            let mut forward_arg_ty = subclass_type.clone();
+            let forward_args = [CallArg::ty(&forward_arg_ty, range)];
+            let forward_errors = self.error_collector();
+            let forward_ret = self.call_magic_dunder_method(
+                &lhs_type,
+                &forward_name,
+                range,
+                &forward_args,
+                &[],
+                &forward_errors,
+                None,
+            );
+            if !forward_errors.is_empty() {
+                continue;
+            }
+            let Some(forward_ret) = forward_ret else {
+                continue;
+            };
+            if forward_ret.is_error() {
+                continue;
+            }
+
+            let method_receiver_ty = subclass_type.clone();
+            let mut method_arg_ty = lhs_type.clone();
+            let method_args = [CallArg::ty(&method_arg_ty, range)];
+            let method_errors = self.error_collector();
+            let method_ret = self.call_magic_dunder_method(
+                &method_receiver_ty,
+                field_name,
+                range,
+                &method_args,
+                &[],
+                &method_errors,
+                None,
+            );
+            if !method_errors.is_empty() {
+                continue;
+            }
+            let Some(method_ret) = method_ret else {
+                continue;
+            };
+            if method_ret.is_error() {
+                continue;
+            }
+
+            if self.is_subset_eq(&method_ret, &forward_ret) {
+                continue;
+            }
+
+            let method_ret_display = self.for_display(method_ret.clone());
+            let forward_ret_display = self.for_display(forward_ret.clone());
+            let ctx = TypeDisplayContext::new(&[&method_ret_display, &forward_ret_display]);
+
+            let message = match kind {
+                OperatorCompatibilityKind::Reflected => format!(
+                    "Class member `{}.{}` returns `{}` which is incompatible with the return type `{}` of parent operator `{}.{}` when the reflected operator may be selected",
+                    cls.name().as_str(),
+                    field_name.as_str(),
+                    ctx.display(&method_ret_display),
+                    ctx.display(&forward_ret_display),
+                    parent.name().as_str(),
+                    forward_name.as_str(),
+                ),
+                OperatorCompatibilityKind::InPlace => format!(
+                    "Class member `{}.{}` returns `{}` which is incompatible with the return type `{}` of parent operator `{}.{}` used for augmented assignment",
+                    cls.name().as_str(),
+                    field_name.as_str(),
+                    ctx.display(&method_ret_display),
+                    ctx.display(&forward_ret_display),
+                    parent.name().as_str(),
+                    forward_name.as_str(),
+                ),
+            };
+
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::BadOverride),
+                message,
+            );
+        }
+    }
+
     pub fn check_consistent_override_for_field(
         &self,
         cls: &Class,
@@ -2001,6 +2191,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                 );
         }
+
+        self.check_operator_compatibility_for_field(cls, field_name, bases, range, errors);
     }
 
     /// For classes with multiple inheritance, check that fields inherited from multiple base classes are consistent.
