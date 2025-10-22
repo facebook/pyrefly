@@ -1758,3 +1758,20 @@ fieldsets: tuple[tuple[str, MyDict], ...] | None = (
 )
     "#,
 );
+
+testcase!(
+    test_unpack_inherited_typeddict,
+    r#"
+import typing_extensions as te
+    
+class InheritFromMe(te.TypedDict):
+    foo: bool
+    
+class TestBadUnpackingError(InheritFromMe):
+    bar: bool
+    
+unpack_this: InheritFromMe = {"foo": True}
+test1: TestBadUnpackingError = {"bar": True, **unpack_this}
+test2: TestBadUnpackingError = {"bar": True, "foo": True}
+    "#,
+);
