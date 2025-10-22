@@ -139,9 +139,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             None => {
                 has_expansion = true;
+                let full_td = self.as_typed_dict_unchecked(typed_dict.class_object());
+                let partial_td_ty = Type::PartialTypedDict(full_td);
                 self.expr_with_separate_check_errors(
                     &x.value,
-                    Some((&Type::TypedDict(typed_dict.clone()), check_errors, &|| {
+                    Some((&partial_td_ty, check_errors, &|| {
                         TypeCheckContext::of_kind(TypeCheckKind::TypedDictUnpacking)
                     })),
                     item_errors,
