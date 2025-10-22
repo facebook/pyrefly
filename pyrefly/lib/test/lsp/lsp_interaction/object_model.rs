@@ -827,7 +827,7 @@ impl LspInteraction {
 
         let args = LspArgs {
             indexing_mode,
-            workspace_indexing_limit: 0,
+            workspace_indexing_limit: 50,
         };
         let connection = Connection {
             sender: language_client_sender,
