@@ -374,6 +374,12 @@ def f(): ...
 f()  # deprecated!
 ```
 
+## implicit-abstract-class
+
+Pyrefly emits this error when a class defines abstract members but is not declared abstract (for example, it does not inherit from `abc.ABC` or use `abc.ABCMeta`). Such classes cannot be instantiated because they have unimplemented abstract methods. Add `ABC` as a base class, adjust the metaclass, or provide concrete implementations to resolve the issue.
+
+This error defaults to `Ignore`, so opt in by enabling it in your configuration if you want to enforce explicit abstract base classes.
+
 ## implicit-any
 
 This error is emitted when a Pyrefly infers an implicit `Any` type in your code. This is common in gradually-typed code, but reduces type safety so we provide this error for users that want to enforce fully-typed codebases.
