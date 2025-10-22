@@ -97,6 +97,7 @@ use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::style::ErrorStyle;
+use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::solver::solver::SubsetError;
 use crate::types::annotation::Annotation;
@@ -2518,9 +2519,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.expr(e, None, errors)
                 }
             },
-            Binding::StmtExpr(e, is_assert_type) => {
+            Binding::StmtExpr(e, special_export) => {
                 let result = self.expr(e, None, errors);
-                if !is_assert_type
+                if *special_export != Some(SpecialExport::AssertType)
                     && let Type::ClassType(cls) = &result
                     && self.is_coroutine(&result)
                     && !self.extends_any(cls.class_object())

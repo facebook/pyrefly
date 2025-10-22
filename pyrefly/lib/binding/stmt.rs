@@ -1031,11 +1031,15 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Expr(mut x) => {
                 let mut current = self.declare_current_idx(Key::StmtExpr(x.value.range()));
                 self.ensure_expr(&mut x.value, current.usage());
-                let is_assert_type = matches!(&*x.value,
-                    Expr::Call(ExprCall { func, .. })
-                    if self.as_special_export(func) == Some(SpecialExport::AssertType)
-                );
-                self.insert_binding_current(current, Binding::StmtExpr(*x.value, is_assert_type));
+                let special_export = if let Expr::Call(ExprCall { func, .. }) = &*x.value {
+                    self.as_special_export(func)
+                } else {
+                    None
+                };
+                self.insert_binding_current(current, Binding::StmtExpr(*x.value, special_export));
+                if special_export == Some(SpecialExport::PytestNoReturn) {
+                    self.scopes.mark_flow_termination();
+                }
             }
             Stmt::Pass(_) => { /* no-op */ }
             Stmt::Break(x) => {
