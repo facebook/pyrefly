@@ -229,15 +229,15 @@ pub fn get_all_classes(context: &ModuleContext) -> impl Iterator<Item = Class> {
         .map(|idx| context.answers.get_idx(idx).unwrap().0.dupe().unwrap())
 }
 
-fn get_class_field(
+pub fn get_class_field(
     class: &Class,
-    field: &Name,
+    field_name: &Name,
     context: &ModuleContext,
 ) -> Option<Arc<ClassField>> {
     context
         .transaction
         .ad_hoc_solve(&context.handle, |solver| {
-            solver.get_field_from_current_class_only(class, field)
+            solver.get_field_from_current_class_only(class, field_name)
         })
         .unwrap()
 }
@@ -256,11 +256,11 @@ pub fn get_context_from_class<'a>(
 
 pub fn get_class_field_declaration<'a>(
     class: &Class,
-    field: &Name,
+    field_name: &Name,
     context: &'a ModuleContext,
 ) -> Option<&'a BindingClassField> {
     assert_eq!(class.module(), &context.module_info);
-    let key_class_field = KeyClassField(class.index(), field.clone());
+    let key_class_field = KeyClassField(class.index(), field_name.clone());
     // We use `key_to_idx_hashed_opt` below because the key might not be valid (could be a synthesized field).
     context
         .bindings

@@ -32,23 +32,20 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use serde::Serialize;
 
-use crate::binding::binding::Binding;
-use crate::binding::binding::BindingClassField;
-use crate::binding::binding::ClassFieldDefinition;
 use crate::report::pysa::ast_visitor::AstScopedVisitor;
 use crate::report::pysa::ast_visitor::Scopes;
 use crate::report::pysa::ast_visitor::visit_module_ast;
 use crate::report::pysa::class::ClassRef;
-use crate::report::pysa::class::get_class_field_declaration;
+use crate::report::pysa::class::get_class_field;
 use crate::report::pysa::class::get_context_from_class;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionBaseDefinition;
+use crate::report::pysa::function::FunctionNode;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::function::WholeProgramFunctionDefinitions;
 use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleId;
 use crate::report::pysa::override_graph::OverrideGraph;
-use crate::report::pysa::override_graph::get_last_definition;
 use crate::report::pysa::types::ScalarTypeProperties;
 use crate::report::pysa::types::has_superclass;
 use crate::state::lsp::FindPreference;
@@ -611,25 +608,14 @@ impl<'a> CallGraphVisitor<'a> {
         field_name: &Name,
     ) -> Option<FunctionRef> {
         let context = get_context_from_class(class, self.module_context);
-        get_class_field_declaration(class, field_name, &context).and_then(|field_binding| {
-            match field_binding {
-                BindingClassField {
-                    definition: ClassFieldDefinition::MethodLike { definition, .. },
-                    ..
-                } => {
-                    let binding = context.bindings.get(*definition);
-                    if let Binding::Function(key_decorated_function, ..) = binding {
-                        Some(FunctionRef::from_decorated_function(
-                            &get_last_definition(*key_decorated_function, &context),
-                            &context,
-                        ))
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            }
-        })
+        let class_field = get_class_field(class, field_name, &context)?;
+        let function = FunctionNode::exported_function_from_class_field(
+            class,
+            field_name,
+            class_field,
+            &context,
+        )?;
+        Some(function.as_function_ref(&context))
     }
 
     // Figure out what target to pick for an indirect call that resolves to implementation_target.

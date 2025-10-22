@@ -41,13 +41,17 @@ struct Inner {
     /// - if a path exists in `path_lookup`, its target's `srcs` must have a
     ///   module name with `path` as a module path.
     path_lookup: SmallMap<PathBuf, Target>,
-    /// An index for doing fast lookups of an implicid dunder init package's path to its owning
-    /// targets.
-    /// Invariants:
-    /// - if a path exists in `path_lookup`, its target must exist in `db`.
-    /// - if a path exists in `path_lookup`, its target's `srcs` must have a
-    ///   module name with `path` as a module path.
-    implicit_init_lookup: SmallMap<PathBuf, SmallSet<Target>>,
+    /// An index for doing fast lookups of a package to possible owning targets.
+    /// We keep this, since it's possible an init file is defined in one target, but not
+    /// a dependency or dependent target in the same directory. We also need to
+    /// perform a search through all synthesized packages, since the import we're looking
+    /// for could be in any relevant target there as well. This will happen in directories
+    /// defining multiple Python targets, but that don't have any init files.
+    ///
+    /// The key in this map will always point to an `__init__` file if *any*
+    /// target pointing to the "regular package" contains a real `__init__` file on
+    /// disk. Otherwise, the key will point to a synthesized package's directory.
+    package_lookup: SmallMap<PathBuf, SmallSet<Target>>,
 }
 
 impl Inner {
@@ -55,7 +59,7 @@ impl Inner {
         Inner {
             db: SmallMap::new(),
             path_lookup: SmallMap::new(),
-            implicit_init_lookup: SmallMap::new(),
+            package_lookup: SmallMap::new(),
         }
     }
 }
@@ -94,7 +98,7 @@ impl QuerySourceDatabase {
         }
         drop(read);
         let mut path_lookup: SmallMap<PathBuf, Target> = SmallMap::new();
-        let mut implicit_init_lookup: SmallMap<PathBuf, SmallSet<Target>> = SmallMap::new();
+        let mut package_lookup: SmallMap<PathBuf, SmallSet<Target>> = SmallMap::new();
         for (target, manifest) in new_db.iter() {
             for source in manifest.srcs.values().flatten() {
                 if let Some(old_target) = path_lookup.get_mut(&**source) {
@@ -104,11 +108,13 @@ impl QuerySourceDatabase {
                     path_lookup.insert(source.clone(), target.dupe());
                 }
             }
-            for path in manifest.implicit_dunder_inits.values() {
-                implicit_init_lookup
-                    .entry(path.to_path_buf())
-                    .or_default()
-                    .insert(target.dupe());
+            for paths in manifest.packages.values() {
+                for path in paths {
+                    package_lookup
+                        .entry(path.to_path_buf())
+                        .or_default()
+                        .insert(target.dupe());
+                }
             }
         }
         let read = self.inner.read();
@@ -123,7 +129,7 @@ impl QuerySourceDatabase {
         let mut write = self.inner.write();
         write.db = new_db;
         write.path_lookup = path_lookup;
-        write.implicit_init_lookup = implicit_init_lookup;
+        write.package_lookup = package_lookup;
         debug!("Finished updating source DB with Buck response");
         true
     }

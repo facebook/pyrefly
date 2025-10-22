@@ -161,12 +161,13 @@ print(b"world")
 
 "#;
 
-    let type_lit_str = r#"class B:
+    let type_lit_str = r#"from typing import Union
+class B:
     class A:
         pass
 
-    def other(self, x: "B") -> "list[B]|A":
-        return [x]
+    def other(self, x: "B") -> "Union[list[B], A, bool]":
+        return False
 "#;
 
     let files = [

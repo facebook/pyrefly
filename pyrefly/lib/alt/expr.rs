@@ -1855,12 +1855,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         )
                     }
                 }
-                Type::ClassDef(cls) => Type::type_form(self.specialize(
-                    &cls,
-                    xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors)),
-                    range,
-                    errors,
-                )),
+                Type::ClassDef(cls) => {
+                    let metadata = self.get_metadata_for_class(&cls);
+                    let class_getitem_result = if self.get_class_tparams(&cls).is_empty()
+                        && !metadata.has_base_any()
+                        && !metadata.is_new_type()
+                    {
+                        let class_ty = Type::ClassDef(cls.dupe());
+                        // TODO(stroxler): Add a new API, similar to `type_of_attr_get` but returning a
+                        // LookupResult or an Optional type, that we could use here to avoid the double lookup.
+                        if self.has_attr(&class_ty, &dunder::CLASS_GETITEM) {
+                            let cls_value = self.promote_silently(&cls);
+                            let call_args = [CallArg::ty(&cls_value, range), CallArg::expr(slice)];
+                            Some(self.call_method_or_error(
+                                &class_ty,
+                                &dunder::CLASS_GETITEM,
+                                range,
+                                &call_args,
+                                &[],
+                                errors,
+                                Some(&|| ErrorContext::Index(self.for_display(class_ty.clone()))),
+                            ))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(result) = class_getitem_result {
+                        result
+                    } else {
+                        Type::type_form(self.specialize(
+                            &cls,
+                            xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors)),
+                            range,
+                            errors,
+                        ))
+                    }
+                }
                 Type::Type(box Type::SpecialForm(special)) => {
                     self.apply_special_form(special, slice, range, errors)
                 }

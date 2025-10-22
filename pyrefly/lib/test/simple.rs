@@ -1737,6 +1737,19 @@ def f(condition: bool):
     "#,
 );
 
+testcase!(
+    test_class_getitem_magic_dunder,
+    r#"
+from typing import assert_type
+
+class Foo:
+    def __class_getitem__(cls, item: int) -> str:
+        return str(item)
+
+assert_type(Foo[0], str)
+"#,
+);
+
 testcase!(test_panic_docstring, "\"\"\" F\n\u{85}\"\"\"",);
 
 testcase!(

@@ -45,14 +45,17 @@ pub mod bundled {
         Ok(())
     }
 
-    pub fn find_bundled_stub_module_path(
-        bundled_typeshed: BundledTypeshedStdlib,
-        module: ModuleName,
-    ) -> Option<ModulePath> {
-        bundled_typeshed
-            .find
-            .get(&module)
-            .map(|path| ModulePath::bundled_typeshed(path.clone()))
+    pub fn find_bundled_stub_module_path(stub: Stub, module: ModuleName) -> Option<ModulePath> {
+        match stub {
+            Stub::BundledTypeshedStdlib(stdlib) => stdlib
+                .find
+                .get(&module)
+                .map(|path| ModulePath::bundled_typeshed(path.clone())),
+            Stub::BundledTypeshedThirdParty(third_party) => third_party
+                .find
+                .get(&module)
+                .map(|path| ModulePath::bundled_typeshed_third_party(path.clone())),
+        }
     }
 
     pub fn get_modules(stub: &Stub) -> impl Iterator<Item = ModuleName> {

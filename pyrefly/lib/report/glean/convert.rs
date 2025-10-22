@@ -401,15 +401,17 @@ impl GleanState<'_> {
     fn fq_names_for_name_or_attr(&self, expr: &Expr) -> Vec<String> {
         match expr {
             Expr::Attribute(attr) => self.fq_names_for_attribute(attr),
-            Expr::Name(name) => self.fq_name_for_name_use(name).map_or(vec![], |x| vec![x]),
+            Expr::Name(name) => self.fq_name_for_expr_name(name).map_or(vec![], |x| vec![x]),
             _ => vec![],
         }
     }
 
-    fn fq_name_for_name_use(&self, expr_name: &ExprName) -> Option<String> {
-        let name = expr_name.id();
+    fn fq_name_for_expr_name(&self, expr_name: &ExprName) -> Option<String> {
         let identifier = Ast::expr_name_identifier(expr_name.clone());
+        self.fq_name_for_name_use(identifier)
+    }
 
+    fn fq_name_for_name_use(&self, identifier: Identifier) -> Option<String> {
         let definition = self.transaction.find_definition_for_name_use(
             self.handle,
             &identifier,
@@ -420,17 +422,22 @@ impl GleanState<'_> {
         );
 
         definition.and_then(|def| {
-            self.fq_name_for_xref_definition(name, def.definition_range, &def.module)
+            self.fq_name_for_xref_definition(identifier.id(), def.definition_range, &def.module)
         })
     }
 
-    fn fq_name_for_type(&self, ty: Type) -> Option<String> {
-        if let Some(module) = ty.as_module() {
-            Some(module.parts().join("."))
-        } else {
-            ty.qname().and_then(|qname| {
+    fn fq_name_for_type(&self, ty: Type, range: TextRange) -> Option<String> {
+        match ty {
+            Type::Module(module) => Some(module.parts().join(".")),
+            Type::None => Some("None".to_owned()),
+            Type::Type(inner_ty) => self.fq_name_for_type(*inner_ty, range),
+            Type::SpecialForm(x) => {
+                let identifier = Identifier::new(x.to_string(), range);
+                self.fq_name_for_name_use(identifier)
+            }
+            _ => ty.qname().and_then(|qname| {
                 self.fq_name_for_xref_definition(qname.id(), qname.range(), qname.module())
-            })
+            }),
         }
     }
 
@@ -454,7 +461,7 @@ impl GleanState<'_> {
             ranges
                 .filter_map(|range| {
                     if let Some(ty) = answers.get_type_trace(range)
-                        && let Some(name) = self.fq_name_for_type(ty)
+                        && let Some(name) = self.fq_name_for_type(ty, range)
                     {
                         Some((name, range))
                     } else {
@@ -499,7 +506,7 @@ impl GleanState<'_> {
             base_types
                 .into_iter()
                 .filter_map(|ty| {
-                    self.fq_name_for_type(ty)
+                    self.fq_name_for_type(ty, base_expr.range())
                         .as_deref()
                         .map(|base| join_names(base, name))
                 })
@@ -569,15 +576,21 @@ impl GleanState<'_> {
             }
             Expr::Name(name) => {
                 if name.ctx.is_load() {
-                    self.fq_name_for_name_use(name)
+                    self.fq_name_for_expr_name(name)
                         .map_or(vec![], |x| vec![(x, name.range())])
                 } else {
                     vec![]
                 }
             }
             Expr::StringLiteral(str_lit) => self.get_xrefs_types_for_str_lit(str_lit),
+            Expr::BooleanLiteral(bool_lit) => {
+                let name = if bool_lit.value { "True" } else { "False" };
+                vec![(name.to_owned(), bool_lit.range())]
+            }
             Expr::NoneLiteral(none) => vec![("None".to_owned(), none.range())],
-            _ => vec![],
+            _ => {
+                vec![]
+            }
         };
 
         xrefs

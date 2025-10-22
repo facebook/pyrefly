@@ -319,6 +319,8 @@ pub struct FuncFlags {
     pub is_deprecated: bool,
     /// A function decorated with `@property`
     pub is_property_getter: bool,
+    /// A function decorated with `functools.cached_property` or equivalent.
+    pub is_cached_property: bool,
     /// A `foo.setter` function, where `foo` is some `@property`-decorated function.
     /// When used to decorate a function, turns the decorated function into a property setter.
     pub is_property_setter_decorator: bool,

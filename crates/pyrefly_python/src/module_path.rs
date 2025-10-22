@@ -83,8 +83,10 @@ pub enum ModulePathDetails {
     Memory(ModulePathBuf),
     /// The module source comes from typeshed bundled with Pyrefly (which gets stored in-memory).
     /// The path is relative to the root of the typeshed/stdlib directory.
-    /// The path is relative to the root of the typeshed directory.
     BundledTypeshed(ModulePathBuf),
+    /// The module source comes from typeshed bundled with Pyrefly (which gets stored in-memory).
+    /// Although the module root is the same the third party stubs are stored in a subdirectory called stubs.
+    BundledTypeshedThirdParty(ModulePathBuf),
 }
 
 impl PartialOrd for ModulePath {
@@ -125,6 +127,13 @@ impl Display for ModulePath {
                     relative_path.display()
                 )
             }
+            ModulePathDetails::BundledTypeshedThirdParty(relative_path) => {
+                write!(
+                    f,
+                    "bundled /crates/pyrefly_bundled/third_party/typeshed/stubs/{}",
+                    relative_path.display()
+                )
+            }
         }
     }
 }
@@ -135,7 +144,10 @@ impl Serialize for ModulePath {
             ModulePathDetails::FileSystem(path)
             | ModulePathDetails::Memory(path)
             | ModulePathDetails::Namespace(path) => path.serialize(serializer),
-            ModulePathDetails::BundledTypeshed(_) => self.to_string().serialize(serializer),
+            ModulePathDetails::BundledTypeshed(_)
+            | ModulePathDetails::BundledTypeshedThirdParty(_) => {
+                self.to_string().serialize(serializer)
+            }
         }
     }
 }
@@ -161,6 +173,12 @@ impl ModulePath {
         Self::new(ModulePathDetails::BundledTypeshed(ModulePathBuf::new(
             relative_path,
         )))
+    }
+
+    pub fn bundled_typeshed_third_party(relative_path: PathBuf) -> Self {
+        Self::new(ModulePathDetails::BundledTypeshedThirdParty(
+            ModulePathBuf::new(relative_path),
+        ))
     }
 
     pub fn is_init(&self) -> bool {
@@ -226,6 +244,7 @@ impl ModulePath {
         match &self.0 {
             ModulePathDetails::FileSystem(path)
             | ModulePathDetails::BundledTypeshed(path)
+            | ModulePathDetails::BundledTypeshedThirdParty(path)
             | ModulePathDetails::Memory(path)
             | ModulePathDetails::Namespace(path) => path,
         }
@@ -244,6 +263,9 @@ impl ModulePath {
             }
             ModulePathDetails::BundledTypeshed(path) => {
                 ModulePath::new(ModulePathDetails::BundledTypeshed(*path))
+            }
+            ModulePathDetails::BundledTypeshedThirdParty(path) => {
+                ModulePath::new(ModulePathDetails::BundledTypeshedThirdParty(*path))
             }
         }
     }

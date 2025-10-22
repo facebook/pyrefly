@@ -275,3 +275,99 @@ impl HeavyTaskQueue {
             .expect("Failed to stop the queue");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use pyrefly_util::lock::Mutex;
+
+    use super::*;
+
+    #[test]
+    fn test_get_last_task_heavy_task_queue_stops_immediately() {
+        let queue = HeavyTaskQueue::new(true);
+
+        let called_tasks: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(vec![]));
+        for task in 0..4 {
+            let called_ids2 = called_tasks.dupe();
+            queue.queue_task(Box::new(move || {
+                called_ids2.lock().push(task);
+            }));
+        }
+        // add a stop immediately and make sure we don't run anything
+        queue.stop();
+
+        queue.run_until_stopped();
+
+        // no tasks should be processed, since we'll hit stop while dropping
+        // all tasks but the last
+        assert_eq!(*called_tasks.lock(), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn test_get_last_task_heavy_task_queue_only_processes_last() {
+        let queue = HeavyTaskQueue::new(true);
+
+        let called_tasks: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(vec![]));
+        for task in 0..4 {
+            let called_ids2 = called_tasks.dupe();
+            let queue2 = queue.dupe();
+            queue.queue_task(Box::new(move || {
+                called_ids2.lock().push(task);
+                if task == 3 {
+                    // stop the queue after the last task is run
+                    queue2.stop();
+                }
+            }));
+        }
+
+        queue.run_until_stopped();
+
+        // only the last task should be processed
+        assert_eq!(*called_tasks.lock(), vec![3]);
+    }
+
+    #[test]
+    fn test_get_next_task_heavy_task_queue() {
+        let queue = HeavyTaskQueue::new(false);
+
+        let called_tasks: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(vec![]));
+        for task in 0..4 {
+            let called_ids2 = called_tasks.dupe();
+            let queue2 = queue.dupe();
+            queue.queue_task(Box::new(move || {
+                called_ids2.lock().push(task);
+                if task == 3 {
+                    // stop the queue after the last task is run
+                    queue2.stop();
+                }
+            }));
+        }
+
+        queue.run_until_stopped();
+
+        assert_eq!(*called_tasks.lock(), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn test_get_next_task_heavy_task_queue_will_finish_once_stopped() {
+        let queue = HeavyTaskQueue::new(false);
+
+        let called_tasks: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(vec![]));
+        let tasks = 4;
+        for task in 0..tasks {
+            let called_ids2 = called_tasks.dupe();
+            let queue2 = queue.dupe();
+            queue.queue_task(Box::new(move || {
+                called_ids2.lock().push(task);
+                if task == 1 {
+                    // stop the queue after the second task is run (halfway through)
+                    queue2.stop();
+                }
+            }));
+        }
+
+        queue.run_until_stopped();
+
+        assert_eq!(*called_tasks.lock(), vec![0, 1]);
+    }
+}

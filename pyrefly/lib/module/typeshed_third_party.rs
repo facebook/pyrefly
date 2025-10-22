@@ -14,14 +14,17 @@ use anyhow::anyhow;
 use pyrefly_bundled::bundled_third_party_stubs;
 use pyrefly_config::config::ConfigFile;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use starlark_map::small_map::SmallMap;
 
 use crate::module::bundled::bundled::Stub;
+use crate::module::bundled::bundled::find_bundled_stub_module_path;
 use crate::module::bundled::bundled::get_config_file;
 use crate::module::bundled::bundled::get_materialized_path_on_disk;
 use crate::module::bundled::bundled::get_modules;
 use crate::module::bundled::bundled::load_stubs_from_path;
+#[cfg(test)]
 use crate::module::bundled::bundled::write_stub_files;
 
 #[allow(dead_code)]
@@ -48,6 +51,10 @@ impl BundledTypeshedThirdParty {
     }
 
     #[allow(dead_code)]
+    pub fn find(&self, module: ModuleName) -> Option<ModulePath> {
+        find_bundled_stub_module_path(Stub::BundledTypeshedThirdParty(self.clone()), module)
+    }
+
     pub fn load(&self, path: &Path) -> Option<Arc<String>> {
         load_stubs_from_path(Stub::BundledTypeshedThirdParty(self.clone()), path)
     }
@@ -76,11 +83,9 @@ impl BundledTypeshedThirdParty {
     }
 }
 
-#[cfg(test)]
 static BUNDLED_TYPESHED_THIRD_PARTY: LazyLock<anyhow::Result<BundledTypeshedThirdParty>> =
     LazyLock::new(BundledTypeshedThirdParty::new);
 
-#[cfg(test)]
 pub fn typeshed_third_party() -> anyhow::Result<&'static BundledTypeshedThirdParty> {
     match &*BUNDLED_TYPESHED_THIRD_PARTY {
         Ok(typeshed) => Ok(typeshed),

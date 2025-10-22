@@ -93,7 +93,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let skip_implementation = self.module().path().style() == ModuleStyle::Interface
             || class_metadata.is_some_and(|idx| self.get_idx(*idx).is_protocol())
             || def.metadata().flags.is_abstract_method;
-        if def.metadata().flags.is_overload {
+        let mut ty = if def.metadata().flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
             let successor = self.get_function_successor(&def);
             if successor.is_none() {
@@ -192,7 +192,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 (*def.ty).clone()
             }
+        };
+
+        if def.is_stub()
+            && self.module().path().style() != ModuleStyle::Interface
+            && let Some(cls) = def.defining_cls()
+            && self.get_metadata_for_class(cls).is_protocol()
+        {
+            ty.transform_toplevel_func_metadata(|meta| {
+                meta.flags.is_abstract_method = true;
+            });
         }
+
+        ty
     }
 
     pub fn undecorated_function(
@@ -399,6 +411,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(CalleeKind::Class(ClassKind::Property(name))) => {
                 Some(SpecialDecorator::Property(name))
             }
+            Some(CalleeKind::Class(ClassKind::CachedProperty(name))) => {
+                Some(SpecialDecorator::CachedProperty(name))
+            }
             Some(CalleeKind::Class(ClassKind::EnumMember)) => Some(SpecialDecorator::EnumMember),
             Some(CalleeKind::Function(FunctionKind::Override)) => Some(SpecialDecorator::Override),
             Some(CalleeKind::Function(FunctionKind::Final)) => Some(SpecialDecorator::Final),
@@ -442,6 +457,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             SpecialDecorator::Property(_) => {
                 flags.is_property_getter = true;
+                true
+            }
+            SpecialDecorator::CachedProperty(_) => {
+                flags.is_property_getter = true;
+                flags.is_cached_property = true;
                 true
             }
             SpecialDecorator::EnumMember => {
@@ -743,6 +763,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             SpecialDecorator::StaticMethod(name) => name.as_str(),
             SpecialDecorator::ClassMethod(name) => name.as_str(),
             SpecialDecorator::Property(name) => name.as_str(),
+            SpecialDecorator::CachedProperty(name) => name.as_str(),
             SpecialDecorator::EnumMember => "member",
             SpecialDecorator::Override => "override",
             SpecialDecorator::Final => "final",

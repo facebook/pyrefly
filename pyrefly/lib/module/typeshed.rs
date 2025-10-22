@@ -50,7 +50,7 @@ impl BundledTypeshedStdlib {
     }
 
     pub fn find(&self, module: ModuleName) -> Option<ModulePath> {
-        find_bundled_stub_module_path(self.clone(), module)
+        find_bundled_stub_module_path(Stub::BundledTypeshedStdlib(self.clone()), module)
     }
 
     pub fn load(&self, path: &Path) -> Option<Arc<String>> {
