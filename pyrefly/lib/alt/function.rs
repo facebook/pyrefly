@@ -93,7 +93,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let skip_implementation = self.module().path().style() == ModuleStyle::Interface
             || class_metadata.is_some_and(|idx| self.get_idx(*idx).is_protocol())
             || def.metadata().flags.is_abstract_method;
-        if def.metadata().flags.is_overload {
+        let mut ty = if def.metadata().flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
             let successor = self.get_function_successor(&def);
             if successor.is_none() {
@@ -192,7 +192,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 (*def.ty).clone()
             }
+        };
+
+        if def.is_stub()
+            && let Some(cls) = def.defining_cls()
+            && self.get_metadata_for_class(cls).is_protocol()
+        {
+            ty.transform_toplevel_func_metadata(|meta| {
+                meta.flags.is_abstract_method = true;
+            });
         }
+
+        ty
     }
 
     pub fn undecorated_function(
