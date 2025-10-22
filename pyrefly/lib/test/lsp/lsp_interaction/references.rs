@@ -85,7 +85,6 @@ fn test_references_for_usage_with_config() {
     interaction.shutdown();
 }
 
-// todo(kylei): bar should find the references in foo
 #[test]
 fn test_references_cross_file_no_config() {
     let root = get_test_files_root();
@@ -99,6 +98,8 @@ fn test_references_cross_file_no_config() {
     });
 
     let bar = root_path.join("bar.py");
+    let foo = root_path.join("foo.py");
+    let foo_relative = root_path.join("foo_relative.py");
 
     interaction.server.did_open("bar.py");
 
@@ -107,6 +108,30 @@ fn test_references_cross_file_no_config() {
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
         result: Some(serde_json::json!([
+            {
+                "range": {"start":{"line":6,"character":16},"end":{"character":19,"line":6}},
+                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+            },
+            {
+                "range":{"end":{"character":3,"line":8},"start":{"character":0,"line":8}},
+                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+            },
+            {
+                "range":{"end":{"character":7,"line":9},"start":{"character":4,"line":9}},
+                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":6,"character":17},"end":{"character":20,"line":6}},
+                "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
+            },
+            {
+                "range":{"end":{"character":3,"line":8},"start":{"character":0,"line":8}},
+                "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
+            },
+            {
+                "range":{"end":{"character":7,"line":9},"start":{"character":4,"line":9}},
+                "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
+            },
             {
                 "range": {"start":{"line":6,"character":6},"end":{"character":9,"line":6}},
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()

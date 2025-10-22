@@ -304,7 +304,26 @@ fn test_will_rename_files_without_config_with_workspace_folder() {
     // Expect a response with edits to update imports in foo.py using "changes" format
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!(null)),
+        result: Some(serde_json::json!({
+            "changes": {
+                Url::from_file_path(root.path().join("foo.py")).unwrap().to_string(): [
+                    {
+                        "newText": "baz",
+                        "range": {
+                            "start": {"line": 5, "character": 7},
+                            "end": {"line": 5, "character": 10}
+                        }
+                    },
+                    {
+                        "newText": "baz",
+                        "range": {
+                            "start": {"line": 6, "character": 5},
+                            "end": {"line": 6, "character": 8}
+                        }
+                    }
+                ],
+            }
+        })),
         error: None,
     });
 

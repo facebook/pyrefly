@@ -19,7 +19,6 @@ use pyrefly_util::lock::Mutex;
 use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
-use crate::config::config::ProjectLayout;
 use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::config::finder::debug_log;
@@ -123,8 +122,18 @@ pub fn default_config_finder_with_overrides(
 /// Create a standard `ConfigFinder`, using the provided [`ConfigConfigurer`] to finalize
 /// the config before caching/returning it.
 pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFinder {
+    standard_config_finder_with_workspace_root(configure, None)
+}
+
+/// Create a standard `ConfigFinder` with an optional workspace root finder function.
+/// If provided, the workspace root will be used instead of path heuristics.
+pub fn standard_config_finder_with_workspace_root(
+    configure: Arc<dyn ConfigConfigurer>,
+    workspace_root_finder: Option<Arc<dyn Fn(&Path) -> Option<PathBuf> + Send + Sync>>,
+) -> ConfigFinder {
     let configure2 = configure.dupe();
     let configure3 = configure.dupe();
+    let configure4 = configure.dupe();
 
     // A cache where path `p` maps to config file with `search_path = [p]`. If we can find the root.
     let cache_one: Arc<Mutex<SmallMap<PathBuf, ArcId<ConfigFile>>>> =
@@ -132,13 +141,18 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
     // A cache where path `p` maps to config file with `search_path = [p, p/.., p/../.., ...]`.
     let cache_parents: Arc<Mutex<SmallMap<PathBuf, ArcId<ConfigFile>>>> =
         Arc::new(Mutex::new(SmallMap::new()));
+    // A cache where workspace root `p` maps to a config file with ancestors from that root
+    let cache_workspace: Arc<Mutex<SmallMap<PathBuf, ArcId<ConfigFile>>>> =
+        Arc::new(Mutex::new(SmallMap::new()));
 
     let clear_extra_caches = {
         let cache_one = cache_one.dupe();
         let cache_parents = cache_parents.dupe();
+        let cache_workspace = cache_workspace.dupe();
         Box::new(move || {
             cache_one.lock().clear();
             cache_parents.lock().clear();
+            cache_workspace.lock().clear();
         })
     };
 
@@ -158,43 +172,54 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
         }),
         // Fall back to using a default config, but let's see if we can make the `search_path` somewhat useful
         // based on a few heuristics.
-        Box::new(move |name, path| match path.root_of(name) {
-            // We were able to walk up `path` and match each component of `name` to a directory until we ran out.
-            // That means the resulting path is likely the root of the 'project', and should therefore be its `search_path`.
-            Some(path) => cache_one
-                .lock()
-                .entry(path.clone())
-                .or_insert_with(|| {
-                    let (config, errors) = configure2.configure(
-                        path.parent(),
-                        ConfigFile::init_at_root(&path, &ProjectLayout::Flat, true),
-                        vec![],
-                    );
-                    // Since this is a config we generated, these are likely internal errors.
-                    debug_log(errors);
-                    config
-                })
-                .dupe(),
-
-            // We couldn't walk up and find a possible root of the project, so let's try to create a search
-            // path that is still useful for this import by including all of its parents.
-            None => {
-                let path = match path.details() {
+        Box::new(move |name, path| {
+            // First check if we have a workspace root finder
+            if let Some(ref finder) = workspace_root_finder {
+                let file_path = match path.details() {
                     ModulePathDetails::FileSystem(x) | ModulePathDetails::Memory(x) => {
-                        if let Some(path) = x.parent() {
-                            path
-                        } else {
-                            return empty.dupe();
-                        }
+                        Some(x.as_path())
                     }
-                    ModulePathDetails::Namespace(x) => x.as_path(),
-                    ModulePathDetails::BundledTypeshed(_) => {
-                        return BundledTypeshedStdlib::config();
-                    }
+                    ModulePathDetails::Namespace(x) => Some(x.as_path()),
+                    ModulePathDetails::BundledTypeshed(_) => None,
                 };
-                cache_parents
+
+                if let Some(file_path) = file_path
+                    && let Some(workspace_root) = finder(file_path)
+                {
+                    // Use the workspace root to create ancestors-based fallback search path
+                    return cache_workspace
+                        .lock()
+                        .entry(workspace_root.clone())
+                        .or_insert_with(|| {
+                            let (config, errors) = configure4.configure(
+                                Some(&workspace_root),
+                                ConfigFile {
+                                    // We use `fallback_search_path` because otherwise a user with `/sys` on their
+                                    // computer (all of them) will override `sys.version` in preference to typeshed.
+                                    fallback_search_path: workspace_root
+                                        .ancestors()
+                                        .map(|x| x.to_owned())
+                                        .collect::<Vec<_>>(),
+                                    root: ConfigBase::default_for_ide_without_config(),
+                                    ..Default::default()
+                                },
+                                vec![],
+                            );
+                            // Since this is a config we generated, these are likely internal errors.
+                            debug_log(errors);
+                            config
+                        })
+                        .dupe();
+                }
+            }
+
+            // Fall back to existing heuristics if no workspace root is available
+            match path.root_of(name) {
+                // We were able to walk up `path` and match each component of `name` to a directory until we ran out.
+                // That means the resulting path is likely the root of the 'project', and should therefore be its `search_path`.
+                Some(path) => cache_parents
                     .lock()
-                    .entry(path.to_owned())
+                    .entry(path.clone())
                     .or_insert_with(|| {
                         let (config, errors) = configure2.configure(
                             path.parent(),
@@ -214,7 +239,48 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
                         debug_log(errors);
                         config
                     })
-                    .dupe()
+                    .dupe(),
+
+                // We couldn't walk up and find a possible root of the project, so let's try to create a search
+                // path that is still useful for this import by including all of its parents.
+                None => {
+                    let path = match path.details() {
+                        ModulePathDetails::FileSystem(x) | ModulePathDetails::Memory(x) => {
+                            if let Some(path) = x.parent() {
+                                path
+                            } else {
+                                return empty.dupe();
+                            }
+                        }
+                        ModulePathDetails::Namespace(x) => x.as_path(),
+                        ModulePathDetails::BundledTypeshed(_) => {
+                            return BundledTypeshedStdlib::config();
+                        }
+                    };
+                    cache_parents
+                        .lock()
+                        .entry(path.to_owned())
+                        .or_insert_with(|| {
+                            let (config, errors) = configure2.configure(
+                                path.parent(),
+                                ConfigFile {
+                                    // We use `fallback_search_path` because otherwise a user with `/sys` on their
+                                    // computer (all of them) will override `sys.version` in preference to typeshed.
+                                    fallback_search_path: path
+                                        .ancestors()
+                                        .map(|x| x.to_owned())
+                                        .collect::<Vec<_>>(),
+                                    root: ConfigBase::default_for_ide_without_config(),
+                                    ..Default::default()
+                                },
+                                vec![],
+                            );
+                            // Since this is a config we generated, these are likely internal errors.
+                            debug_log(errors);
+                            config
+                        })
+                        .dupe()
+                }
             }
         }),
         clear_extra_caches,

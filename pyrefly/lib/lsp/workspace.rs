@@ -23,7 +23,7 @@ use starlark_map::small_set::SmallSet;
 use tracing::error;
 
 use crate::commands::config_finder::ConfigConfigurer;
-use crate::commands::config_finder::standard_config_finder;
+use crate::commands::config_finder::standard_config_finder_with_workspace_root;
 use crate::config::config::ConfigFile;
 use crate::config::environment::environment::PythonEnvironment;
 use crate::config::finder::ConfigFinder;
@@ -84,6 +84,7 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
                 if let Some(search_path) = w.search_path.clone() {
                     config.search_path_from_args = search_path;
                 }
+                config.import_root = Some(dir.to_owned());
                 if let Some(PythonInfo {
                     interpreter,
                     mut env,
@@ -227,7 +228,23 @@ impl Workspaces {
     }
 
     pub fn config_finder(workspaces: &Arc<Workspaces>) -> ConfigFinder {
-        standard_config_finder(Arc::new(WorkspaceConfigConfigurer(workspaces.dupe())))
+        let workspaces_clone = workspaces.dupe();
+        let workspace_root_finder = Arc::new(move |path: &std::path::Path| -> Option<PathBuf> {
+            let workspaces_read = workspaces_clone.workspaces.read();
+            workspaces_read
+                .iter()
+                .filter(|(key, _)| path.starts_with(key))
+                // select the LONGEST match (most specific workspace folder)
+                .max_by(|(key1, _), (key2, _)| {
+                    key1.ancestors().count().cmp(&key2.ancestors().count())
+                })
+                .map(|(key, _)| key.clone())
+        });
+
+        standard_config_finder_with_workspace_root(
+            Arc::new(WorkspaceConfigConfigurer(workspaces.dupe())),
+            Some(workspace_root_finder),
+        )
     }
 
     pub fn roots(&self) -> Vec<PathBuf> {
