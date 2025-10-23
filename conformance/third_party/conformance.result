@@ -331,10 +331,7 @@
   "typeddicts_readonly.py": [],
   "typeddicts_readonly_consistency.py": [],
   "typeddicts_readonly_inheritance.py": [
-    "Line 98: Expected 1 errors",
-    "Line 106: Expected 1 errors",
-    "Line 119: Expected 1 errors",
-    "Line 132: Expected 1 errors"
+    "Line 119: Expected 1 errors"
   ],
   "typeddicts_readonly_kwargs.py": [],
   "typeddicts_readonly_update.py": [],

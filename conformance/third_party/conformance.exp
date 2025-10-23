@@ -11242,13 +11242,46 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Class member `F3.a` overrides parent class `F1` in an inconsistent manner",
-      "description": "Class member `F3.a` overrides parent class `F1` in an inconsistent manner\n  `F3.a` is read-only, but `F1.a` is read-write",
+      "concise_description": "TypedDict field `a` in `F3` cannot be marked read-only; parent TypedDict `F1` defines it as mutable",
+      "description": "TypedDict field `a` in `F3` cannot be marked read-only; parent TypedDict `F1` defines it as mutable",
       "line": 94,
-      "name": "bad-override",
+      "name": "bad-typed-dict-key",
       "severity": "error",
       "stop_column": 6,
       "stop_line": 94
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "TypedDict field `a` in `F4` must remain required because parent TypedDict `F1` defines it as required",
+      "description": "TypedDict field `a` in `F4` must remain required because parent TypedDict `F1` defines it as required",
+      "line": 98,
+      "name": "bad-typed-dict-key",
+      "severity": "error",
+      "stop_column": 6,
+      "stop_line": 98
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "TypedDict field `c` in `F6` cannot be made non-required; parent TypedDict `F1` defines it as required",
+      "description": "TypedDict field `c` in `F6` cannot be made non-required; parent TypedDict `F1` defines it as required",
+      "line": 106,
+      "name": "bad-typed-dict-key",
+      "severity": "error",
+      "stop_column": 6,
+      "stop_line": 106
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "TypedDict field `x` in `TD_B` cannot be made non-required; parent TypedDict `TD_B2` defines it as required",
+      "description": "TypedDict field `x` in `TD_B` cannot be made non-required; parent TypedDict `TD_B2` defines it as required",
+      "line": 132,
+      "name": "bad-typed-dict-key",
+      "severity": "error",
+      "stop_column": 11,
+      "stop_line": 132
     }
   ],
   "typeddicts_readonly_kwargs.py": [
