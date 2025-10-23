@@ -34,8 +34,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.409aac25.css">
-<script src="/assets/js/runtime~main.ef1e0837.js" defer="defer"></script>
-<script src="/assets/js/main.ac539efd.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.76351198.js" defer="defer"></script>
+<script src="/assets/js/main.2af91e4c.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -163,9 +163,11 @@ argument, try wrapping the glob in quotes to prevent eager shell glob expansion.
 <p>The glob patterns used to describe which files to avoid
 type checking as way to filter files that match <code>project-includes</code>,
 but we don&#x27;t want to type check.</p>
+<p>The default here is <em>always</em> included in your <code>project-excludes</code>, even if you override
+it to something else.</p>
 <ul>
 <li>Type: list of <a href="#filesystem-globbing">filesystem glob patterns</a></li>
-<li>Default: <code>[&quot;**/node_modules&quot;, &quot;**/__pycache__&quot;, &quot;**/*venv/**&quot;, &quot;**/.[!/.]*/**&quot;]</code></li>
+<li>Default: <code>[&quot;**/node_modules&quot;, &quot;**/__pycache__&quot;, &quot;**/venv/**&quot;, &quot;**/.[!/.]*/**&quot;]</code></li>
 <li>Flag equivalent: <code>--project-excludes</code></li>
 <li>Equivalent configs: <code>exclude</code> in Pyright and mypy</li>
 <li>Notes:<!-- -->

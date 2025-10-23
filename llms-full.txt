@@ -206,7 +206,7 @@ Rich syntax highlighting based on token type and origin.
 Inline hints for types, parameter names, and return values.
 
 :::info
-If you have the default VS Code Python extension installed at the same time as Pyrefly, inlay hints will be turned off by default. In all other cases, inlay hints will be on by default.
+We reuse Pyright's `pyright.analysis.inlayHints.<>` settings for backwards compatibility. If you have or had Pyright, check these settings if inlay hints do not appear.
 :::
 
 You can turn inlay hints on or off using the [VSCode Setting](https://code.visualstudio.com/docs/editing/editingevolved#_inlay-hints) `editor.inlayHints.enabled`.
@@ -702,8 +702,11 @@ The glob patterns used to describe which files to avoid
 type checking as way to filter files that match `project-includes`,
 but we don't want to type check.
 
+The default here is *always* included in your `project-excludes`, even if you override
+it to something else.
+
 - Type: list of [filesystem glob patterns](#filesystem-globbing)
-- Default: `["**/node_modules", "**/__pycache__", "**/*venv/**", "**/.[!/.]*/**"]`
+- Default: `["**/node_modules", "**/__pycache__", "**/venv/**", "**/.[!/.]*/**"]`
 - Flag equivalent: `--project-excludes`
 - Equivalent configs: `exclude` in Pyright and mypy
 - Notes:

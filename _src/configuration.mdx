@@ -157,8 +157,11 @@ The glob patterns used to describe which files to avoid
 type checking as way to filter files that match `project-includes`,
 but we don't want to type check.
 
+The default here is *always* included in your `project-excludes`, even if you override
+it to something else.
+
 - Type: list of [filesystem glob patterns](#filesystem-globbing)
-- Default: `["**/node_modules", "**/__pycache__", "**/*venv/**", "**/.[!/.]*/**"]`
+- Default: `["**/node_modules", "**/__pycache__", "**/venv/**", "**/.[!/.]*/**"]`
 - Flag equivalent: `--project-excludes`
 - Equivalent configs: `exclude` in Pyright and mypy
 - Notes:
