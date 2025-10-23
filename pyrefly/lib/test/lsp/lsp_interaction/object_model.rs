@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use crossbeam_channel::RecvTimeoutError;
 use crossbeam_channel::bounded;
+use itertools::Itertools;
 use lsp_server::Connection;
 use lsp_server::Message;
 use lsp_server::Notification;
@@ -27,6 +28,7 @@ use lsp_types::Url;
 use lsp_types::notification::Exit;
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
+use pretty_assertions::assert_eq;
 use pyrefly_util::fs_anyhow::read_to_string;
 use serde_json::Value;
 
@@ -53,6 +55,8 @@ pub struct InitializeSettings {
     // When Some(None), empty configuration will be sent
     pub configuration: Option<Option<serde_json::Value>>,
     pub file_watch: bool,
+    // Additional capabilities to merge into the initialize params
+    pub capabilities: Option<serde_json::Value>,
 }
 
 pub struct TestServer {
@@ -180,10 +184,45 @@ impl TestServer {
         }));
     }
 
+    pub fn did_change(&self, file: &str, contents: &str) {
+        let path = self.get_root_or_panic().join(file);
+        self.send_message(Message::Notification(Notification {
+            method: "textDocument/didChange".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&path).unwrap().to_string(),
+                    "languageId": "python",
+                    "version": 2
+                },
+                "contentChanges": [{
+                    "text": contents.to_owned()
+                }],
+            }),
+        }));
+    }
+
     pub fn did_change_configuration(&self) {
         self.send_message(Message::Notification(Notification {
             method: lsp_types::notification::DidChangeConfiguration::METHOD.to_owned(),
             params: serde_json::json!({"settings": {}}),
+        }));
+    }
+
+    pub fn completion(&mut self, file: &'static str, line: u32, col: u32) {
+        let path = self.get_root_or_panic().join(file);
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/completion".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&path).unwrap().to_string()
+                },
+                "position": {
+                    "line": line,
+                    "character": col
+                }
+            }),
         }));
     }
 
@@ -236,6 +275,27 @@ impl TestServer {
         }));
     }
 
+    pub fn references(&mut self, file: &str, line: u32, col: u32, include_declaration: bool) {
+        let path = self.get_root_or_panic().join(file);
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/references".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&path).unwrap().to_string()
+                },
+                "position": {
+                    "line": line,
+                    "character": col
+                },
+                "context": {
+                    "includeDeclaration": include_declaration
+                },
+            }),
+        }));
+    }
+
     pub fn inlay_hint(
         &mut self,
         file: &'static str,
@@ -272,6 +332,65 @@ impl TestServer {
             id: RequestId::from(id),
             result: Some(result),
             error: None,
+        }));
+    }
+
+    pub fn will_rename_files(&mut self, old_file: &'static str, new_file: &'static str) {
+        let root = self.get_root_or_panic();
+        let old_path = root.join(old_file);
+        let new_path = root.join(new_file);
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "workspace/willRenameFiles".to_owned(),
+            params: serde_json::json!({
+                "files": [{
+                    "oldUri": Url::from_file_path(&old_path).unwrap().to_string(),
+                    "newUri": Url::from_file_path(&new_path).unwrap().to_string()
+                }]
+            }),
+        }));
+    }
+
+    /// Send a file creation event notification
+    pub fn file_created(&self, file: &str) {
+        let path = self.get_root_or_panic().join(file);
+        self.send_message(Message::Notification(Notification {
+            method: "workspace/didChangeWatchedFiles".to_owned(),
+            params: serde_json::json!({
+                "changes": [{
+                    "uri": Url::from_file_path(&path).unwrap().to_string(),
+                    "type": 1,  // FileChangeType::CREATED
+                }],
+            }),
+        }));
+    }
+
+    /// Send a file modification event notification
+    pub fn file_modified(&self, file: &str) {
+        let path = self.get_root_or_panic().join(file);
+        self.send_message(Message::Notification(Notification {
+            method: "workspace/didChangeWatchedFiles".to_owned(),
+            params: serde_json::json!({
+                "changes": [{
+                    "uri": Url::from_file_path(&path).unwrap().to_string(),
+                    "type": 2,  // FileChangeType::CHANGED
+                }],
+            }),
+        }));
+    }
+
+    /// Send a file deletion event notification
+    pub fn file_deleted(&self, file: &str) {
+        let path = self.get_root_or_panic().join(file);
+        self.send_message(Message::Notification(Notification {
+            method: "workspace/didChangeWatchedFiles".to_owned(),
+            params: serde_json::json!({
+                "changes": [{
+                    "uri": Url::from_file_path(&path).unwrap().to_string(),
+                    "type": 3,  // FileChangeType::DELETED
+                }],
+            }),
         }));
     }
 
@@ -313,7 +432,32 @@ impl TestServer {
             params["capabilities"]["workspace"]["configuration"] = serde_json::json!(true);
         }
 
+        // Merge custom capabilities if provided
+        if let Some(custom_capabilities) = &settings.capabilities {
+            Self::merge_json(&mut params["capabilities"], custom_capabilities);
+        }
+
         params
+    }
+
+    /// Helper function to merge JSON values, with the source taking precedence
+    fn merge_json(target: &mut Value, source: &Value) {
+        if let (Some(target_obj), Some(source_obj)) = (target.as_object_mut(), source.as_object()) {
+            for (key, value) in source_obj {
+                if let Some(target_value) = target_obj.get_mut(key) {
+                    // If both are objects, merge recursively
+                    if target_value.is_object() && value.is_object() {
+                        Self::merge_json(target_value, value);
+                    } else {
+                        // Otherwise, overwrite with source value
+                        *target_value = value.clone();
+                    }
+                } else {
+                    // Key doesn't exist in target, insert it
+                    target_obj.insert(key.clone(), value.clone());
+                }
+            }
+        }
     }
 
     fn next_request_id(&mut self) -> RequestId {
@@ -530,6 +674,24 @@ impl TestClient {
         );
     }
 
+    pub fn expect_response_with_item(&self, item: Value, description: &str) {
+        self.expect_response_with(
+            |response| {
+                if response.id != RequestId::from(2) {
+                    return false;
+                }
+                if let Some(result) = &response.result
+                    && let Some(items) = result.get("items")
+                    && let Some(items_array) = items.as_array()
+                {
+                    return items_array.iter().contains(&item);
+                }
+                false
+            },
+            description,
+        );
+    }
+
     pub fn expect_any_message(&self) {
         match self.receiver.recv_timeout(self.timeout) {
             Ok(msg) => {
@@ -586,6 +748,60 @@ impl TestClient {
         );
     }
 
+    /// Expect a file watcher registration request.
+    /// Validates that the request is specifically registering the file watcher (ID: "FILEWATCHER").
+    pub fn expect_file_watcher_register(&self) {
+        self.expect_message_helper(
+            |msg| match msg {
+                Message::Request(req)
+                    if req.method == "client/registerCapability"
+                        && req
+                            .params
+                            .get("registrations")
+                            .and_then(|r| r.as_array())
+                            .map(|arr| {
+                                arr.iter().any(|reg| {
+                                    reg.get("id").and_then(|id| id.as_str()) == Some("FILEWATCHER")
+                                })
+                            })
+                            .unwrap_or(false) =>
+                {
+                    ValidationResult::Pass
+                }
+                Message::Notification(_) => ValidationResult::Skip,
+                _ => ValidationResult::Fail,
+            },
+            "Expected file watcher registerCapability",
+        );
+    }
+
+    /// Expect a file watcher unregistration request.
+    /// Validates that the request is specifically unregistering the file watcher (ID: "FILEWATCHER").
+    pub fn expect_file_watcher_unregister(&self) {
+        self.expect_message_helper(
+            |msg| match msg {
+                Message::Request(req)
+                    if req.method == "client/unregisterCapability"
+                        && req
+                            .params
+                            .get("unregisterations")
+                            .and_then(|r| r.as_array())
+                            .map(|arr| {
+                                arr.iter().any(|reg| {
+                                    reg.get("id").and_then(|id| id.as_str()) == Some("FILEWATCHER")
+                                })
+                            })
+                            .unwrap_or(false) =>
+                {
+                    ValidationResult::Pass
+                }
+                Message::Notification(_) => ValidationResult::Skip,
+                _ => ValidationResult::Fail,
+            },
+            "Expected file watcher unregisterCapability",
+        );
+    }
+
     fn get_root_or_panic(&self) -> PathBuf {
         self.root
             .clone()
@@ -600,14 +816,18 @@ pub struct LspInteraction {
 
 impl LspInteraction {
     pub fn new() -> Self {
+        Self::new_with_indexing_mode(IndexingMode::None)
+    }
+
+    pub fn new_with_indexing_mode(indexing_mode: IndexingMode) -> Self {
         init_test();
 
         let (language_client_sender, language_client_receiver) = bounded::<Message>(0);
         let (language_server_sender, language_server_receiver) = bounded::<Message>(0);
 
         let args = LspArgs {
-            indexing_mode: IndexingMode::None,
-            workspace_indexing_limit: 0,
+            indexing_mode,
+            workspace_indexing_limit: 50,
         };
         let connection = Connection {
             sender: language_client_sender,

@@ -324,15 +324,21 @@ pub struct TypeAlias {
     pub name: Box<Name>,
     ty: Box<Type>,
     pub style: TypeAliasStyle,
+    annotated_metadata: Box<[Type]>,
 }
 
 impl TypeAlias {
-    pub fn new(name: Name, ty: Type, style: TypeAliasStyle) -> Self {
+    pub fn new(name: Name, ty: Type, style: TypeAliasStyle, annotated_metadata: Vec<Type>) -> Self {
         Self {
             name: Box::new(name),
             ty: Box::new(ty),
             style,
+            annotated_metadata: annotated_metadata.into_boxed_slice(),
         }
+    }
+
+    pub fn annotated_metadata(&self) -> &[Type] {
+        &self.annotated_metadata
     }
 
     /// Gets the type contained within the type alias for use in a value
@@ -568,7 +574,7 @@ impl Forallable {
         match self {
             Self::Function(func) => Type::Function(Box::new(func)),
             Self::Callable(callable) => Type::Callable(Box::new(callable)),
-            Self::TypeAlias(ta) => Type::TypeAlias(ta),
+            Self::TypeAlias(ta) => Type::TypeAlias(Box::new(ta)),
         }
     }
 
@@ -676,7 +682,7 @@ pub enum Type {
     Ellipsis,
     Any(AnyStyle),
     Never(NeverStyle),
-    TypeAlias(TypeAlias),
+    TypeAlias(Box<TypeAlias>),
     /// Represents the result of a super() call. The first ClassType is the point in the MRO that attribute lookup
     /// on the super instance should start at (*not* the class passed to the super() call), and the second
     /// ClassType is the second argument (implicit or explicit) to the super() call. For example, in:
@@ -1066,6 +1072,10 @@ impl Type {
 
     pub fn is_property_getter(&self) -> bool {
         self.check_toplevel_func_metadata(&|meta| meta.flags.is_property_getter)
+    }
+
+    pub fn is_cached_property(&self) -> bool {
+        self.check_toplevel_func_metadata(&|meta| meta.flags.is_cached_property)
     }
 
     pub fn is_property_setter_decorator(&self) -> bool {

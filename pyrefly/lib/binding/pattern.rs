@@ -287,7 +287,7 @@ impl<'a> BindingsBuilder<'a> {
                     if pattern.is_irrefutable() && idx != n_subpatterns - 1 {
                         self.error(
                             pattern.range(),
-                            ErrorInfo::Kind(ErrorKind::MatchError),
+                            ErrorInfo::Kind(ErrorKind::BadMatch),
                             "Only the last subpattern in MatchOr may be irrefutable".to_owned(),
                         )
                     }

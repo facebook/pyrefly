@@ -270,7 +270,7 @@ mod tests {
         add(
             &errors,
             TextRange::new(TextSize::new(1), TextSize::new(3)),
-            ErrorKind::AsyncError,
+            ErrorKind::NotAsync,
             "b".to_owned(),
         );
         add(
@@ -282,7 +282,7 @@ mod tests {
         add(
             &errors,
             TextRange::new(TextSize::new(2), TextSize::new(3)),
-            ErrorKind::MatchError,
+            ErrorKind::BadMatch,
             "d".to_owned(),
         );
         add(
@@ -293,7 +293,7 @@ mod tests {
         );
 
         let display_config = ErrorDisplayConfig::new(HashMap::from([
-            (ErrorKind::AsyncError, Severity::Error),
+            (ErrorKind::NotAsync, Severity::Error),
             (ErrorKind::BadAssignment, Severity::Ignore),
             (ErrorKind::NotIterable, Severity::Ignore),
         ]));

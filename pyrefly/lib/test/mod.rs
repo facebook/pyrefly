@@ -7,7 +7,7 @@
 
 #![cfg(test)]
 
-mod abstract_class_instantiation;
+mod abstract_methods;
 mod assign;
 mod attribute_narrow;
 mod attributes;
@@ -41,6 +41,7 @@ mod lsp;
 mod mro;
 mod named_tuple;
 mod narrow;
+mod natural;
 mod new_type;
 mod operators;
 mod overload;

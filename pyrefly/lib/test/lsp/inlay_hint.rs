@@ -15,7 +15,7 @@ use crate::test::util::mk_multi_file_state_assert_no_errors;
 
 fn generate_inlay_hint_report(code: &str, hint_config: InlayHintConfig) -> String {
     let files = [("main", code)];
-    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Indexing);
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::indexing());
     let mut report = String::new();
     for (name, code) in &files {
         report.push_str("# ");
@@ -48,6 +48,9 @@ yyy = f([1, 2, 3], "test", 42)
 
 def g() -> int:
     return 42
+
+def h(*args):
+    return args[0]
 "#;
     assert_eq!(
         r#"

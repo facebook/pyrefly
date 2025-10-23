@@ -22,9 +22,47 @@ use starlark_map::smallmap;
 use vec1::Vec1;
 
 use crate::facet::FacetKind;
+use crate::types::AnyStyle;
 use crate::types::Type;
 
 assert_bytes!(TypeInfo, 40);
+
+/// The style of a phi.
+///
+/// When present, the base may be used to simplify the result and to
+/// eliminate narrows that we don't want included (e.g. any narrow of `Any`
+/// should be dropped in flow merging).
+#[derive(Clone, Debug)]
+pub enum JoinStyle<T> {
+    // A simple merge (including Anywhere lookup), there's no base flow to compare against.
+    SimpleMerge,
+    // A merge where the name was already defined in the base flow, but was reassigned.
+    ReassignmentOf(T),
+    // A merge where the name was already defined in the base flow, and was only narrowed.
+    NarrowOf(T),
+}
+
+impl<T> JoinStyle<T> {
+    pub fn map<S>(&self, f: impl FnOnce(&T) -> S) -> JoinStyle<S> {
+        match self {
+            JoinStyle::SimpleMerge => JoinStyle::SimpleMerge,
+            JoinStyle::ReassignmentOf(x) => JoinStyle::ReassignmentOf(f(x)),
+            JoinStyle::NarrowOf(x) => JoinStyle::NarrowOf(f(x)),
+        }
+    }
+
+    // Flat map - used for type info joins where the base in a join style may not
+    // have data in all facet subtrees.
+    fn flat_map<S>(&self, f: impl FnOnce(&T) -> Option<S>) -> JoinStyle<S> {
+        match self {
+            JoinStyle::SimpleMerge => JoinStyle::SimpleMerge,
+            JoinStyle::ReassignmentOf(x) => {
+                f(x).map_or(JoinStyle::SimpleMerge, JoinStyle::ReassignmentOf)
+            }
+            JoinStyle::NarrowOf(x) => f(x).map_or(JoinStyle::SimpleMerge, JoinStyle::NarrowOf),
+        }
+    }
+}
 
 /// The `TypeInfo` datatype represents type information associated with a
 /// name or expression in a control flow context.
@@ -97,7 +135,12 @@ impl TypeInfo {
     /// - Drop narrowing for facet chains where at least one branch does not narrow
     ///
     /// In the case where there are no branches, we get `Never` with no narrows.
-    pub fn join(mut branches: Vec<Self>, union_types: &impl Fn(Vec<Type>) -> Type) -> Self {
+    pub fn join(
+        mut branches: Vec<Self>,
+        union_types: &impl Fn(Vec<Type>) -> Type,
+        is_subset_eq: &impl Fn(&Type, &Type) -> bool,
+        join_style: JoinStyle<Arc<TypeInfo>>,
+    ) -> Self {
         match branches.len() {
             0 => Self::of_ty(Type::never()),
             1 => branches.pop().unwrap(),
@@ -106,10 +149,22 @@ impl TypeInfo {
                     .into_iter()
                     .map(|TypeInfo { ty, facets }| (ty, facets.map(|x| *x)))
                     .unzip();
-                let ty = union_types(tys);
+                let ty = join_types(
+                    tys,
+                    union_types,
+                    is_subset_eq,
+                    join_style.map(|base_type_info| base_type_info.ty.clone()),
+                );
                 let branches = facets_branches.into_iter().flatten().collect::<Vec<_>>();
                 let facets = if branches.len() == n {
-                    NarrowedFacets::join(branches, union_types)
+                    NarrowedFacets::join(
+                        branches,
+                        union_types,
+                        is_subset_eq,
+                        join_style.map(|base_type_info| {
+                            base_type_info.facets.as_ref().map(|f| f.as_ref().clone())
+                        }),
+                    )
                 } else {
                     // at least one branch had empty facets, we should drop facets from the join
                     None
@@ -294,7 +349,12 @@ impl NarrowedFacets {
         Self(smallmap! {facet => NarrowedFacet::new(more_facets, ty)})
     }
 
-    fn join(mut branches: Vec<Self>, union_types: &impl Fn(Vec<Type>) -> Type) -> Option<Self> {
+    fn join(
+        mut branches: Vec<Self>,
+        union_types: &impl Fn(Vec<Type>) -> Type,
+        is_subset_eq: &impl Fn(&Type, &Type) -> bool,
+        join_style: JoinStyle<Option<NarrowedFacets>>,
+    ) -> Option<Self> {
         match branches.len() {
             0 => None,
             1 => Some(branches.pop().unwrap()),
@@ -311,8 +371,15 @@ impl NarrowedFacets {
                             .extend(tail.iter().filter_map(|facets| facets.get(&facet).cloned()));
                         // If any map lacked this facet, we just drop it. Only join if all maps have it.
                         if facet_branches.len() == n {
-                            NarrowedFacet::join(facet_branches, union_types)
-                                .map(move |narrowed_facet| (facet, narrowed_facet))
+                            NarrowedFacet::join(
+                                facet_branches,
+                                union_types,
+                                is_subset_eq,
+                                join_style.map(|base_facets| {
+                                    base_facets.as_ref().and_then(|f| f.get(&facet)).cloned()
+                                }),
+                            )
+                            .map(move |narrowed_facet| (facet, narrowed_facet))
                         } else {
                             None
                         }
@@ -473,7 +540,12 @@ impl NarrowedFacet {
         }
     }
 
-    fn join(branches: Vec<Self>, union_types: &impl Fn(Vec<Type>) -> Type) -> Option<Self> {
+    fn join(
+        branches: Vec<Self>,
+        union_types: &impl Fn(Vec<Type>) -> Type,
+        is_subset_eq: &impl Fn(&Type, &Type) -> bool,
+        join_style: JoinStyle<Option<NarrowedFacet>>,
+    ) -> Option<Self> {
         fn monadic_push_option<T>(acc: &mut Option<Vec<T>>, item: Option<T>) {
             match item {
                 None => *acc = None,
@@ -499,15 +571,92 @@ impl NarrowedFacet {
                 return None;
             }
         }
-        let ty = ty_branches.map(union_types);
-        let facets = facets_branches
-            .and_then(|facets_branches| NarrowedFacets::join(facets_branches, union_types));
+        let ty = ty_branches.map(|tys| {
+            join_types(
+                tys,
+                union_types,
+                is_subset_eq,
+                join_style.flat_map(|base_facet| {
+                    base_facet.as_ref().and_then(|f| match f {
+                        NarrowedFacet::WithRoot(ty, _) | NarrowedFacet::Leaf(ty) => {
+                            Some(ty.clone())
+                        }
+                        NarrowedFacet::WithoutRoot(_) => None,
+                    })
+                }),
+            )
+        });
+        let facets = facets_branches.and_then(|facets_branches| {
+            NarrowedFacets::join(
+                facets_branches,
+                union_types,
+                is_subset_eq,
+                join_style.map(|base_facet| {
+                    base_facet.as_ref().and_then(|f| match f {
+                        NarrowedFacet::WithRoot(_, facets) | NarrowedFacet::WithoutRoot(facets) => {
+                            Some(facets.clone())
+                        }
+                        NarrowedFacet::Leaf(_) => None,
+                    })
+                }),
+            )
+        });
         match (ty, facets) {
             (None, None) => None,
             (Some(ty), None) => Some(Self::Leaf(ty)),
             (Some(ty), Some(facets)) => Some(Self::WithRoot(ty, facets)),
             (None, Some(facets)) => Some(Self::WithoutRoot(facets)),
         }
+    }
+}
+
+/// Join types. The result is typically a union, but if we have a base type available (which
+/// occurs when the join is from control flow and there was a type before the branch), we
+/// may be able to get a better result.
+fn join_types(
+    types: Vec<Type>,
+    union_types: &impl Fn(Vec<Type>) -> Type,
+    is_subset_eq: &impl Fn(&Type, &Type) -> bool,
+    join_style: JoinStyle<Type>,
+) -> Type {
+    match join_style {
+        JoinStyle::SimpleMerge => union_types(types),
+        JoinStyle::NarrowOf(base_ty) => {
+            simplify_join(union_types(types), base_ty, true, is_subset_eq)
+        }
+        JoinStyle::ReassignmentOf(base_ty) => {
+            simplify_join(union_types(types), base_ty, false, is_subset_eq)
+        }
+    }
+}
+
+/// Given a base flow type and a naive join of control flow branches, try to simplify
+/// the join.
+/// - If the base type is `Any`, and `Any` is still present in the join, just use `Any`.
+///   This avoids creating union types like `Any | int` on gradual code that assigns or
+///   narrows a gradually-typed variable. We only do this for explicit and implicit any,
+///   not for `Any` that resulted from a type error.
+/// - If the merge involves only narrows of base *and* the base type is a subset
+///   of the resulting union, simplify the union. This would not be needed if we
+///   had general union simplification, but it is useful today because:
+///   - general union simplification is quadratic given our current architecture
+///   - but this particular simplification is linear, since we have an initial guess
+///   - the simplified join types are much more readable and performant downstream
+fn simplify_join(
+    joined_ty: Type,
+    base_ty: Type,
+    is_narrow: bool,
+    is_subset_eq: &impl Fn(&Type, &Type) -> bool,
+) -> Type {
+    if matches!(base_ty, Type::Any(AnyStyle::Explicit | AnyStyle::Implicit))
+        && let Type::Union(tys) = &joined_ty
+        && tys.iter().any(|t| t.is_any())
+    {
+        base_ty
+    } else if is_narrow && is_subset_eq(&base_ty, &joined_ty) {
+        base_ty
+    } else {
+        joined_ty
     }
 }
 
@@ -520,6 +669,7 @@ mod tests {
     use crate::class::ClassType;
     use crate::display::tests::fake_class;
     use crate::facet::FacetKind;
+    use crate::type_info::JoinStyle;
     use crate::type_info::TypeInfo;
     use crate::types::TArgs;
     use crate::types::Type;
@@ -617,13 +767,18 @@ mod tests {
 
     #[test]
     fn test_type_info_empty_join() {
-        let type_info = TypeInfo::join(Vec::new(), &|ts| {
-            if ts.is_empty() {
-                fake_class_type("Never")
-            } else {
-                fake_class_type("FakeUnionType")
-            }
-        });
+        let type_info = TypeInfo::join(
+            Vec::new(),
+            &|ts| {
+                if ts.is_empty() {
+                    fake_class_type("Never")
+                } else {
+                    fake_class_type("FakeUnionType")
+                }
+            },
+            &|_, _| false,
+            JoinStyle::SimpleMerge,
+        );
         assert_eq!(type_info.to_string(), "Never");
     }
 

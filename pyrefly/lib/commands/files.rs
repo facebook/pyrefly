@@ -7,7 +7,6 @@
 
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::Context as _;
 use clap::Parser;
@@ -20,9 +19,9 @@ use pyrefly_util::globs::Globs;
 use pyrefly_util::includes::Includes;
 use tracing::debug;
 use tracing::info;
+use tracing::warn;
 
-use crate::commands::config_finder::ConfigConfigurer;
-use crate::commands::config_finder::standard_config_finder;
+use crate::commands::config_finder::default_config_finder_with_overrides;
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
 use crate::config::config::ProjectLayout;
@@ -56,32 +55,13 @@ pub struct FilesArgs {
     config: Option<PathBuf>,
 }
 
-struct FilesConfigConfigurer(ConfigOverrideArgs);
-
-impl ConfigConfigurer for FilesConfigConfigurer {
-    fn configure(
-        &self,
-        _: Option<&Path>,
-        config: ConfigFile,
-        mut errors: Vec<ConfigError>,
-    ) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
-        let (c, mut configure_errors) = self.0.override_config(config);
-        errors.append(&mut configure_errors);
-        (c, errors)
-    }
-}
-
-fn config_finder(args: ConfigOverrideArgs) -> ConfigFinder {
-    standard_config_finder(Arc::new(FilesConfigConfigurer(args)))
-}
-
 fn absolutize(globs: Globs) -> Globs {
     globs.from_root(&PathBuf::new().absolutize())
 }
 
 fn get_explicit_config(
     path: &Path,
-    args: &ConfigOverrideArgs,
+    args: ConfigOverrideArgs,
 ) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
     let (file_config, parse_errors) = ConfigFile::from_file(path);
     let (config, validation_errors) = args.override_config(file_config);
@@ -112,14 +92,15 @@ fn add_config_errors(config_finder: &ConfigFinder, errors: Vec<ConfigError>) -> 
 /// a config with a build system in project type checking mode, but should be done
 /// by [`FilesArgs::resolve`].
 pub fn get_project_config_for_current_dir(
-    args: &ConfigOverrideArgs,
+    args: ConfigOverrideArgs,
 ) -> anyhow::Result<(ArcId<ConfigFile>, Vec<ConfigError>)> {
     let current_dir = std::env::current_dir().context("cannot identify current dir")?;
-    let config_finder = config_finder(args.clone());
+    let config_finder = default_config_finder_with_overrides(args.clone(), false);
     let config = config_finder.directory(&current_dir).unwrap_or_else(|| {
         let (config, errors) = args.override_config(ConfigFile::init_at_root(
             &current_dir,
             &ProjectLayout::new(&current_dir),
+            false,
         ));
         // Since this is a config we generated, these are likely internal errors.
         debug_log(errors);
@@ -132,7 +113,7 @@ pub fn get_project_config_for_current_dir(
 fn get_globs_and_config_for_project(
     config: Option<PathBuf>,
     project_excludes: Option<Globs>,
-    args: &ConfigOverrideArgs,
+    args: ConfigOverrideArgs,
 ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder)> {
     let (config, mut errors) = match config {
         Some(explicit) => get_explicit_config(&explicit, args),
@@ -151,6 +132,18 @@ fn get_globs_and_config_for_project(
         ConfigSource::Synthetic => {
             info!("Checking current directory with default configuration");
         }
+    }
+    let current_dir = std::env::current_dir().ok();
+    if let Some(project_dir) = config.source.root().or(current_dir.as_deref())
+        && let Some(home_dir) = std::env::home_dir()
+        && home_dir.starts_with(project_dir)
+        && config.project_includes == ConfigFile::default_project_includes().from_root(project_dir)
+    {
+        // Trying to type-check your entire home directory doesn't usually end well.
+        warn!(
+            "Pyrefly is checking everything under `{}`. This may take a while...",
+            project_dir.display()
+        );
     }
 
     if config.build_system.is_some() {
@@ -182,9 +175,10 @@ fn get_globs_and_config_for_files(
     config: Option<PathBuf>,
     files_to_check: Globs,
     project_excludes: Option<Globs>,
-    args: &ConfigOverrideArgs,
+    args: ConfigOverrideArgs,
 ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder)> {
-    let project_excludes = project_excludes.unwrap_or_else(ConfigFile::default_project_excludes);
+    let mut project_excludes = project_excludes.unwrap_or_default();
+    project_excludes.append(ConfigFile::required_project_excludes().globs());
     let files_to_check = absolutize(files_to_check);
     let (config_finder, errors) = match config {
         Some(explicit) => {
@@ -193,7 +187,7 @@ fn get_globs_and_config_for_files(
             (config_finder, errors)
         }
         None => {
-            let config_finder = config_finder(args.clone());
+            let config_finder = default_config_finder_with_overrides(args, false);
             // If there is only one input and one root, we treat config parse errors as fatal,
             // so that `pyrefly check .` exits immediately on an unparsable config, matching the
             // behavior of `pyrefly check` (see get_globs_and_config_for_project).
@@ -222,7 +216,7 @@ fn get_globs_and_config_for_files(
 impl FilesArgs {
     pub fn resolve(
         self,
-        config_override: &ConfigOverrideArgs,
+        config_override: ConfigOverrideArgs,
     ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder)> {
         let project_excludes = if let Some(project_excludes) = self.project_excludes {
             Some(absolutize(Globs::new(project_excludes)?))
@@ -244,7 +238,7 @@ impl FilesArgs {
     pub fn get(
         files: Vec<String>,
         config: Option<PathBuf>,
-        args: &ConfigOverrideArgs,
+        args: ConfigOverrideArgs,
     ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder)> {
         FilesArgs {
             files,

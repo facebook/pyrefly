@@ -1109,11 +1109,12 @@ pub mod tests {
 
     #[test]
     fn test_display_type_alias() {
-        let alias = Type::TypeAlias(TypeAlias::new(
+        let alias = Type::TypeAlias(Box::new(TypeAlias::new(
             Name::new_static("MyAlias"),
             Type::None,
             TypeAliasStyle::LegacyImplicit,
-        ));
+            Vec::new(),
+        )));
         let wrapped = Type::tuple(vec![alias.clone()]);
         let type_of = Type::type_form(alias.clone());
         let mut ctx = TypeDisplayContext::new(&[]);

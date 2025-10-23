@@ -27,7 +27,7 @@ use crate::report::pysa::function::FunctionSignature;
 use crate::report::pysa::function::collect_function_base_definitions;
 use crate::report::pysa::function::export_function_definitions;
 use crate::report::pysa::module::ModuleIds;
-use crate::report::pysa::override_graph::WholeProgramReversedOverrideGraph;
+use crate::report::pysa::override_graph::build_reversed_override_graph;
 use crate::report::pysa::scope::ScopeParent;
 use crate::report::pysa::types::PysaType;
 use crate::test::pysa::utils::create_location;
@@ -36,6 +36,7 @@ use crate::test::pysa::utils::get_class;
 use crate::test::pysa::utils::get_class_ref;
 use crate::test::pysa::utils::get_function_ref;
 use crate::test::pysa::utils::get_handle_for_module_name;
+use crate::test::pysa::utils::get_method_ref;
 
 fn create_function_definition(
     name: &str,
@@ -52,6 +53,7 @@ fn create_function_definition(
             is_property_getter: false,
             is_property_setter: false,
             is_stub: false,
+            is_def_statement: true,
             defining_class: None,
             overridden_base_method: None,
         },
@@ -87,7 +89,8 @@ fn test_exported_functions(
 
     let expected_function_definitions = create_expected_function_definitions(&context);
 
-    let reversed_override_graph = WholeProgramReversedOverrideGraph::new();
+    let reversed_override_graph =
+        build_reversed_override_graph(&handles, &transaction, &module_ids);
     let captured_variables = ModuleCapturedVariables::new();
     let actual_function_definitions = export_function_definitions(
         &collect_function_base_definitions(
@@ -659,6 +662,493 @@ def foo(x: int) -> int:
                     vec![Target::Function(get_function_ref("test", "d2", context))],
                 ),
             ])),
+        ]
+    },
+);
+
+exported_functions_testcase!(
+    test_export_dataclass_methods,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Foo:
+    x: int
+    y: str
+"#,
+    &|context: &ModuleContext| {
+        vec![
+            create_function_definition(
+                "__hash__",
+                ScopeParent::Class {
+                    location: create_location(5, 7, 5, 10),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "self".into(),
+                        annotation: PysaType::from_class(
+                            &get_class("test", "Foo", context),
+                            context,
+                        ),
+                        required: true,
+                    }],
+                    PysaType::from_class_type(context.stdlib.int(), context),
+                )],
+            )
+            .with_is_def_statement(false)
+            .with_defining_class(get_class_ref("test", "Foo", context))
+            .with_overridden_base_method(get_method_ref("builtins", "object", "__hash__", context)),
+            create_function_definition(
+                "__init__",
+                ScopeParent::Class {
+                    location: create_location(5, 7, 5, 10),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::Pos {
+                            name: "self".into(),
+                            annotation: PysaType::from_class(
+                                &get_class("test", "Foo", context),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::Pos {
+                            name: "x".into(),
+                            annotation: PysaType::from_class_type(context.stdlib.int(), context),
+                            required: true,
+                        },
+                        FunctionParameter::Pos {
+                            name: "y".into(),
+                            annotation: PysaType::from_class_type(context.stdlib.str(), context),
+                            required: true,
+                        },
+                    ],
+                    PysaType::none(),
+                )],
+            )
+            .with_is_def_statement(false)
+            .with_defining_class(get_class_ref("test", "Foo", context))
+            .with_overridden_base_method(get_method_ref("builtins", "object", "__init__", context)),
+        ]
+    },
+);
+
+exported_functions_testcase!(
+    test_export_callable_field,
+    r#"
+import typing
+class Foo:
+    x: typing.Callable[[int], int] = lambda x: x
+"#,
+    &|context: &ModuleContext| {
+        vec![
+            create_function_definition(
+                "x",
+                ScopeParent::Class {
+                    location: create_location(3, 7, 3, 10),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::PosOnly {
+                        name: None,
+                        annotation: PysaType::from_class_type(context.stdlib.int(), context),
+                        required: true,
+                    }],
+                    PysaType::from_class_type(context.stdlib.int(), context),
+                )],
+            )
+            .with_is_def_statement(false)
+            .with_defining_class(get_class_ref("test", "Foo", context)),
+        ]
+    },
+);
+
+exported_functions_testcase!(
+    test_export_field_alias_function,
+    r#"
+import typing
+class Foo:
+    def x(self, x: int) -> int:
+        return x
+
+    y = x
+"#,
+    &|context: &ModuleContext| {
+        vec![
+            create_function_definition(
+                "x",
+                ScopeParent::Class {
+                    location: create_location(3, 7, 3, 10),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::Pos {
+                            name: "self".into(),
+                            annotation: PysaType::from_class(
+                                &get_class("test", "Foo", context),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::Pos {
+                            name: "x".into(),
+                            annotation: PysaType::from_class_type(context.stdlib.int(), context),
+                            required: true,
+                        },
+                    ],
+                    PysaType::from_class_type(context.stdlib.int(), context),
+                )],
+            )
+            .with_defining_class(get_class_ref("test", "Foo", context)),
+            create_function_definition(
+                "y",
+                ScopeParent::Class {
+                    location: create_location(3, 7, 3, 10),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::Pos {
+                            name: "self".into(),
+                            annotation: PysaType::from_class(
+                                &get_class("test", "Foo", context),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::Pos {
+                            name: "x".into(),
+                            annotation: PysaType::from_class_type(context.stdlib.int(), context),
+                            required: true,
+                        },
+                    ],
+                    PysaType::from_class_type(context.stdlib.int(), context),
+                )],
+            )
+            .with_is_def_statement(false)
+            .with_defining_class(get_class_ref("test", "Foo", context)),
+        ]
+    },
+);
+
+exported_functions_testcase!(
+    test_export_overriden_base_method,
+    r#"
+class A:
+    def method(self):
+        pass
+
+class B(A):
+    def method(self):
+        pass
+"#,
+    &|context: &ModuleContext| {
+        vec![
+            create_function_definition(
+                "method",
+                ScopeParent::Class {
+                    location: create_location(2, 7, 2, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "self".into(),
+                        annotation: PysaType::from_class(&get_class("test", "A", context), context),
+                        required: true,
+                    }],
+                    PysaType::none(),
+                )],
+            )
+            .with_defining_class(get_class_ref("test", "A", context)),
+            create_function_definition(
+                "method",
+                ScopeParent::Class {
+                    location: create_location(6, 7, 6, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "self".into(),
+                        annotation: PysaType::from_class(&get_class("test", "B", context), context),
+                        required: true,
+                    }],
+                    PysaType::none(),
+                )],
+            )
+            .with_defining_class(get_class_ref("test", "B", context))
+            .with_overridden_base_method(get_method_ref("test", "A", "method", context)),
+        ]
+    },
+);
+
+exported_functions_testcase!(
+    test_export_overriden_base_method_with_indirection,
+    r#"
+class A:
+    def method(self):
+        pass
+
+class B(A):
+    pass
+
+class C(A):
+    def method(self):
+        pass
+"#,
+    &|context: &ModuleContext| {
+        vec![
+            create_function_definition(
+                "method",
+                ScopeParent::Class {
+                    location: create_location(2, 7, 2, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "self".into(),
+                        annotation: PysaType::from_class(&get_class("test", "A", context), context),
+                        required: true,
+                    }],
+                    PysaType::none(),
+                )],
+            )
+            .with_defining_class(get_class_ref("test", "A", context)),
+            create_function_definition(
+                "method",
+                ScopeParent::Class {
+                    location: create_location(9, 7, 9, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "self".into(),
+                        annotation: PysaType::from_class(&get_class("test", "C", context), context),
+                        required: true,
+                    }],
+                    PysaType::none(),
+                )],
+            )
+            .with_defining_class(get_class_ref("test", "C", context))
+            .with_overridden_base_method(get_method_ref("test", "A", "method", context)),
+        ]
+    },
+);
+
+exported_functions_testcase!(
+    test_export_overriden_base_method_with_multi_inheritance,
+    r#"
+class A:
+    def method(self):
+        pass
+
+class B:
+    def method(self):
+        pass
+
+class C(A, B):
+    def method(self):
+        pass
+"#,
+    &|context: &ModuleContext| {
+        vec![
+            create_function_definition(
+                "method",
+                ScopeParent::Class {
+                    location: create_location(2, 7, 2, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "self".into(),
+                        annotation: PysaType::from_class(&get_class("test", "A", context), context),
+                        required: true,
+                    }],
+                    PysaType::none(),
+                )],
+            )
+            .with_defining_class(get_class_ref("test", "A", context)),
+            create_function_definition(
+                "method",
+                ScopeParent::Class {
+                    location: create_location(6, 7, 6, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "self".into(),
+                        annotation: PysaType::from_class(&get_class("test", "B", context), context),
+                        required: true,
+                    }],
+                    PysaType::none(),
+                )],
+            )
+            .with_defining_class(get_class_ref("test", "B", context)),
+            create_function_definition(
+                "method",
+                ScopeParent::Class {
+                    location: create_location(10, 7, 10, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "self".into(),
+                        annotation: PysaType::from_class(&get_class("test", "C", context), context),
+                        required: true,
+                    }],
+                    PysaType::none(),
+                )],
+            )
+            .with_defining_class(get_class_ref("test", "C", context))
+            .with_overridden_base_method(get_method_ref("test", "A", "method", context)),
+        ]
+    },
+);
+
+exported_functions_testcase!(
+    test_export_overriden_base_method_depth_two,
+    r#"
+class A:
+    def method(self):
+        pass
+
+class B(A):
+    def method(self):
+        pass
+
+class C(B):
+    def method(self):
+        pass
+"#,
+    &|context: &ModuleContext| {
+        vec![
+            create_function_definition(
+                "method",
+                ScopeParent::Class {
+                    location: create_location(2, 7, 2, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "self".into(),
+                        annotation: PysaType::from_class(&get_class("test", "A", context), context),
+                        required: true,
+                    }],
+                    PysaType::none(),
+                )],
+            )
+            .with_defining_class(get_class_ref("test", "A", context)),
+            create_function_definition(
+                "method",
+                ScopeParent::Class {
+                    location: create_location(6, 7, 6, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "self".into(),
+                        annotation: PysaType::from_class(&get_class("test", "B", context), context),
+                        required: true,
+                    }],
+                    PysaType::none(),
+                )],
+            )
+            .with_defining_class(get_class_ref("test", "B", context))
+            .with_overridden_base_method(get_method_ref("test", "A", "method", context)),
+            create_function_definition(
+                "method",
+                ScopeParent::Class {
+                    location: create_location(10, 7, 10, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "self".into(),
+                        annotation: PysaType::from_class(&get_class("test", "C", context), context),
+                        required: true,
+                    }],
+                    PysaType::none(),
+                )],
+            )
+            .with_defining_class(get_class_ref("test", "C", context))
+            .with_overridden_base_method(get_method_ref("test", "B", "method", context)),
+        ]
+    },
+);
+
+exported_functions_testcase!(
+    test_export_overriden_base_method_class_field,
+    r#"
+from dataclasses import dataclass
+
+@dataclass
+class A:
+    x: int
+
+class B(A):
+    def __init__(self, x: int) -> None:
+        super().__init__(x=x)
+"#,
+    &|context: &ModuleContext| {
+        vec![
+            create_function_definition(
+                "__init__",
+                ScopeParent::Class {
+                    location: create_location(8, 7, 8, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::Pos {
+                            name: "self".into(),
+                            annotation: PysaType::from_class(
+                                &get_class("test", "B", context),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::Pos {
+                            name: "x".into(),
+                            annotation: PysaType::from_class_type(context.stdlib.int(), context),
+                            required: true,
+                        },
+                    ],
+                    PysaType::none(),
+                )],
+            )
+            .with_defining_class(get_class_ref("test", "B", context))
+            .with_overridden_base_method(get_method_ref("test", "A", "__init__", context)),
+            create_function_definition(
+                "__init__",
+                ScopeParent::Class {
+                    location: create_location(5, 7, 5, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::Pos {
+                            name: "self".into(),
+                            annotation: PysaType::from_class(
+                                &get_class("test", "A", context),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::Pos {
+                            name: "x".into(),
+                            annotation: PysaType::from_class_type(context.stdlib.int(), context),
+                            required: true,
+                        },
+                    ],
+                    PysaType::none(),
+                )],
+            )
+            .with_is_def_statement(false)
+            .with_defining_class(get_class_ref("test", "A", context))
+            .with_overridden_base_method(get_method_ref("builtins", "object", "__init__", context)),
         ]
     },
 );

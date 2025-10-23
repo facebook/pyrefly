@@ -24,6 +24,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use vec1::Vec1;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -261,15 +262,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(m) = metadata
                     && m.flags.is_deprecated
                 {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::new(ErrorKind::Deprecated, context),
-                        format!(
-                            "`{}` is deprecated",
-                            m.kind.as_func_id().format(self.module().name())
-                        ),
+                    // We manually construct an error using the message from the context but a
+                    // Deprecated error kind so that the error is shown at the Deprecated severity
+                    // (default: WARN) rather than the severity of the context's error kind.
+                    let msg = format!(
+                        "`{}` is deprecated",
+                        m.kind.as_func_id().format(self.module().name())
                     );
+                    let full_msg = if let Some(ctx) = context {
+                        vec1![ctx().format(), msg]
+                    } else {
+                        vec1![msg]
+                    };
+                    errors.add(range, ErrorInfo::Kind(ErrorKind::Deprecated), full_msg);
                 }
                 target
             }
@@ -343,6 +348,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             errors,
             context,
             "Expr::call_method",
+            true,
         )?;
         Some(self.make_call_target_and_call(
             callee_ty,
@@ -988,7 +994,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.get_hashed_opt(Hashed::new(&Key::SuperInstance(x.range)))
                 .map_or_else(Type::any_implicit, |type_info| type_info.arc_clone_ty())
         } else {
-            self.expand_type_mut(&mut callee_ty);
+            self.expand_vars_mut(&mut callee_ty);
 
             let args;
             let kws;

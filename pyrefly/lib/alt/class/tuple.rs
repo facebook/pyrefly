@@ -8,6 +8,7 @@
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::types::class::ClassType;
+use crate::types::simplify::simplify_tuples;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 
@@ -27,7 +28,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .map(Type::Tuple)
             .map(|ty| cls.targs().substitute_into(ty))
         {
-            return Some(tuple);
+            return Some(simplify_tuples(tuple));
         }
         None
     }

@@ -279,6 +279,18 @@ impl<'a> BindingsBuilder<'a> {
         self.scopes.mark_flow_termination();
     }
 
+    fn find_error(&self, error: &FindError, range: TextRange) {
+        let kind = match error {
+            FindError::NotFound(..) => ErrorKind::MissingImport,
+            FindError::NoSource(..) => ErrorKind::MissingSource,
+            FindError::Ignored => {
+                return;
+            }
+        };
+        let (ctx, msg) = error.display();
+        self.error_multiline(range, ErrorInfo::new(kind, ctx.as_deref()), msg);
+    }
+
     /// Evaluate the statements and update the bindings.
     /// Every statement should end up in the bindings, perhaps with a location that is never used.
     pub fn stmt(&mut self, x: Stmt, parent: &NestingContext) {
@@ -831,13 +843,8 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Import(x) => {
                 for x in x.names {
                     let m = ModuleName::from_name(&x.name.id);
-                    if let Err(err @ FindError::NotFound(..)) = self.lookup.get(m) {
-                        let (ctx, msg) = err.display();
-                        self.error_multiline(
-                            x.range,
-                            ErrorInfo::new(ErrorKind::ImportError, ctx.as_deref()),
-                            msg,
-                        );
+                    if let Err(err) = self.lookup.get(m) {
+                        self.find_error(&err, x.range);
                     }
                     match x.asname {
                         Some(asname) => {
@@ -968,19 +975,14 @@ impl<'a> BindingsBuilder<'a> {
                         }
                         Err(FindError::Ignored) => self.bind_unimportable_names(&x, false),
                         Err(err @ (FindError::NoSource(_) | FindError::NotFound(..))) => {
-                            let (ctx, msg) = err.display();
-                            self.error_multiline(
-                                x.range,
-                                ErrorInfo::new(ErrorKind::ImportError, ctx.as_deref()),
-                                msg,
-                            );
+                            self.find_error(&err, x.range);
                             self.bind_unimportable_names(&x, true);
                         }
                     }
                 } else {
                     self.error(
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::ImportError),
+                        ErrorInfo::Kind(ErrorKind::MissingImport),
                         format!(
                             "Could not resolve relative import `{}`",
                             ".".repeat(x.level as usize)
@@ -1029,11 +1031,15 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Expr(mut x) => {
                 let mut current = self.declare_current_idx(Key::StmtExpr(x.value.range()));
                 self.ensure_expr(&mut x.value, current.usage());
-                let is_assert_type = matches!(&*x.value,
-                    Expr::Call(ExprCall { func, .. })
-                    if self.as_special_export(func) == Some(SpecialExport::AssertType)
-                );
-                self.insert_binding_current(current, Binding::StmtExpr(*x.value, is_assert_type));
+                let special_export = if let Expr::Call(ExprCall { func, .. }) = &*x.value {
+                    self.as_special_export(func)
+                } else {
+                    None
+                };
+                self.insert_binding_current(current, Binding::StmtExpr(*x.value, special_export));
+                if special_export == Some(SpecialExport::PytestNoReturn) {
+                    self.scopes.mark_flow_termination();
+                }
             }
             Stmt::Pass(_) => { /* no-op */ }
             Stmt::Break(x) => {

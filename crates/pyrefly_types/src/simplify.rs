@@ -222,42 +222,38 @@ fn flatten_unpacked_concrete_tuples(elts: Vec<Type>) -> Vec<Type> {
 }
 
 // After a TypeVarTuple gets substituted with a tuple type, try to simplify the type
-pub fn simplify_tuples(tuple: Tuple) -> Type {
+pub fn simplify_tuples(tuple: Tuple) -> Tuple {
     match tuple {
-        Tuple::Concrete(elts) => {
-            Type::Tuple(Tuple::Concrete(flatten_unpacked_concrete_tuples(elts)))
-        }
-        Tuple::Unpacked(box (prefix, middle @ Type::Tuple(_), suffix))
+        Tuple::Concrete(elts) => Tuple::Concrete(flatten_unpacked_concrete_tuples(elts)),
+        Tuple::Unpacked(box (prefix, Type::Tuple(middle), suffix))
             if prefix.is_empty() && suffix.is_empty() =>
         {
             middle
         }
         Tuple::Unpacked(box (prefix, middle, suffix)) => match middle {
             Type::Tuple(Tuple::Concrete(elts)) => {
-                Type::Tuple(Tuple::Concrete(flatten_unpacked_concrete_tuples(
+                Tuple::Concrete(flatten_unpacked_concrete_tuples(
                     prefix
                         .into_iter()
                         .chain(elts)
                         .chain(suffix)
                         .collect::<Vec<_>>(),
-                )))
+                ))
             }
             Type::Tuple(Tuple::Unpacked(box (m_prefix, m_middle, m_suffix))) => {
                 let mut new_prefix = flatten_unpacked_concrete_tuples(prefix);
                 new_prefix.extend(flatten_unpacked_concrete_tuples(m_prefix));
                 let mut new_suffix = flatten_unpacked_concrete_tuples(m_suffix);
                 new_suffix.extend(flatten_unpacked_concrete_tuples(suffix));
-                Type::Tuple(Tuple::Unpacked(Box::new((
-                    new_prefix, m_middle, new_suffix,
-                ))))
+                Tuple::unpacked(new_prefix, m_middle, new_suffix)
             }
-            _ => Type::Tuple(Tuple::Unpacked(Box::new((
+            _ => Tuple::unpacked(
                 flatten_unpacked_concrete_tuples(prefix),
                 middle,
                 flatten_unpacked_concrete_tuples(suffix),
-            )))),
+            ),
         },
-        _ => Type::Tuple(tuple),
+        _ => tuple,
     }
 }
 

@@ -117,7 +117,7 @@ pub fn suppress_errors(errors: Vec<Error>, same_line: bool) {
         if e.severity() >= Severity::Warn
             && let ModulePathDetails::FileSystem(path) = e.path().details()
         {
-            path_errors.entry(path.clone()).or_default().push(e);
+            path_errors.entry((**path).clone()).or_default().push(e);
         }
     }
     info!("Inserting error suppressions...");
@@ -161,7 +161,7 @@ pub fn find_unused_ignores<'a>(
     all_unused_ignores
 }
 
-pub fn remove_unused_ignores(loads: &Errors, all: bool) {
+pub fn remove_unused_ignores(loads: &Errors, all: bool) -> usize {
     let errors = loads.collect_errors();
     let mut all_ignores: SmallMap<&PathBuf, SmallSet<LineNumber>> = SmallMap::new();
     for (module_path, ignore) in loads.collect_ignores() {
@@ -192,12 +192,10 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) {
         let mut unused_ignore_count = 0;
         let mut ignore_locations: SmallSet<usize> = SmallSet::new();
         for ignore in ignores {
-            let above_line = ignore
-                .decrement()
-                .expect("Invalid error suppression location")
-                .to_zero_indexed() as usize;
+            if let Some(above_line) = ignore.decrement() {
+                ignore_locations.insert(above_line.to_zero_indexed() as usize);
+            }
             let same_line = ignore.to_zero_indexed() as usize;
-            ignore_locations.insert(above_line);
             ignore_locations.insert(same_line);
         }
         if let Ok(file) = read_and_validate_file(path) {
@@ -205,11 +203,16 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) {
             let lines = file.lines();
             for (idx, line) in lines.enumerate() {
                 if ignore_locations.contains(&idx) {
-                    unused_ignore_count += 1;
-                    let new_string = regex.replace_all(line, "");
-                    if !new_string.trim().is_empty() {
-                        buf.push_str(new_string.trim_end());
+                    if regex.is_match(line) {
+                        unused_ignore_count += 1;
+                        let new_string = regex.replace_all(line, "");
+                        if !new_string.trim().is_empty() {
+                            buf.push_str(new_string.trim_end());
+                        }
+                        buf.push('\n');
+                        continue;
                     }
+                    buf.push_str(line);
                     buf.push('\n');
                     continue;
                 }
@@ -223,11 +226,13 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) {
             }
         }
     }
+    let removals = removed_ignores.values().sum::<usize>();
     info!(
         "Removed {} unused error suppression(s) in {} file(s)",
-        removed_ignores.values().sum::<usize>(),
+        removals,
         removed_ignores.len(),
     );
+    removals
 }
 
 #[cfg(test)]
@@ -252,41 +257,38 @@ mod tests {
     use crate::state::require::Require;
     use crate::state::state::State;
 
-    #[derive(PartialEq)]
-    enum SuppressFlag {
-        Remove,
-        Add,
-    }
-
     fn get_path(tdir: &TempDir) -> PathBuf {
         tdir.path().join("test.py")
     }
 
     fn assert_suppress_errors(before: &str, after: &str) {
-        assert_suppressions(before, after, SuppressFlag::Add, false, false)
+        let (errors, tdir) = get_errors(before);
+        suppress::suppress_errors(errors.collect_errors().shown, false);
+        let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
+        assert_eq!(after, got_file);
     }
 
     fn assert_suppress_same_line(before: &str, after: &str) {
-        assert_suppressions(before, after, SuppressFlag::Add, false, true)
+        let (errors, tdir) = get_errors(before);
+        suppress::suppress_errors(errors.collect_errors().shown, true);
+        let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
+        assert_eq!(after, got_file);
     }
 
-    fn assert_remove_ignores(before: &str, after: &str, all: bool) {
-        assert_suppressions(before, after, SuppressFlag::Remove, all, false)
+    fn assert_remove_ignores(before: &str, after: &str, all: bool, expected_removals: usize) {
+        let (errors, tdir) = get_errors(before);
+        let removals = suppress::remove_unused_ignores(&errors, all);
+        let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
+        assert_eq!(after, got_file);
+        assert_eq!(removals, expected_removals);
     }
 
-    fn assert_suppressions(
-        before: &str,
-        after: &str,
-        kind: SuppressFlag,
-        all: bool,
-        same_line: bool,
-    ) {
+    fn get_errors(contents: &str) -> (Errors, TempDir) {
         let tdir = tempfile::tempdir().unwrap();
 
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
         let name = "test";
-        let contents = before;
         fs_anyhow::write(&get_path(&tdir), contents).unwrap();
         config.configure();
 
@@ -304,15 +306,7 @@ mod tests {
             Some(Arc::new((*contents).to_owned())),
         )]);
         transaction.run(&[handle.dupe()], Require::Everything);
-        let loads = transaction.get_errors([handle.clone()].iter());
-        if kind == SuppressFlag::Add {
-            suppress::suppress_errors(loads.collect_errors().shown, same_line);
-        } else {
-            suppress::remove_unused_ignores(&loads, all);
-        }
-
-        let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
-        assert_eq!(after, got_file);
+        (transaction.get_errors([handle.clone()].iter()), tdir)
     }
 
     #[test]
@@ -448,7 +442,7 @@ def f() -> int:
 
     return 1
 "#;
-        assert_remove_ignores(input, want, false);
+        assert_remove_ignores(input, want, false, 1);
     }
 
     #[test]
@@ -463,7 +457,7 @@ def g() -> str:
 
     return "hello"
 "#;
-        assert_remove_ignores(input, want, false);
+        assert_remove_ignores(input, want, false, 1);
     }
 
     #[test]
@@ -476,7 +470,7 @@ def g() -> str:
 def g() -> str:
     return "hello"
 "#;
-        assert_remove_ignores(input, want, false);
+        assert_remove_ignores(input, want, false, 1);
     }
 
     #[test]
@@ -495,7 +489,16 @@ def f() -> int:
 
     return 1
 "##;
-        assert_remove_ignores(input, output, false);
+        assert_remove_ignores(input, output, false, 2);
+    }
+
+    #[test]
+    fn test_remove_suppression_first_line() {
+        let input = r#"x = 1 + 1  # pyrefly: ignore
+"#;
+        let want = r#"x = 1 + 1
+"#;
+        assert_remove_ignores(input, want, false, 1);
     }
 
     #[test]
@@ -510,7 +513,7 @@ def f() -> int:
     return 1
 "#,
         );
-        assert_remove_ignores(&input, &input, false);
+        assert_remove_ignores(&input, &input, false, 0);
     }
 
     #[test]
@@ -519,7 +522,7 @@ def f() -> int:
 def g() -> int:
     return "hello" # pyrefly: ignore # bad-return
 "#;
-        assert_remove_ignores(input, input, false);
+        assert_remove_ignores(input, input, false, 0);
     }
     #[test]
     fn test_remove_generic_suppression() {
@@ -531,7 +534,7 @@ def g() -> str:
 def g() -> str:
     return "hello"
 "#;
-        assert_remove_ignores(before, after, true);
+        assert_remove_ignores(before, after, true, 1);
     }
     #[test]
     fn test_remove_generic_suppression_error_type() {
@@ -543,7 +546,7 @@ def g() -> str:
 def g() -> str:
     return "hello"
 "#;
-        assert_remove_ignores(before, after, true);
+        assert_remove_ignores(before, after, true, 1);
     }
     #[test]
     fn test_add_suppressions_same_line() {

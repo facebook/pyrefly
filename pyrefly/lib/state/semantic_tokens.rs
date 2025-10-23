@@ -17,6 +17,7 @@ use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::types::Type;
 use pyrefly_util::visit::Visit as _;
 use ruff_python_ast::Arguments;
+use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
@@ -231,6 +232,7 @@ impl SemanticTokenBuilder {
                 let kind = match get_type_of_attribute(attr.range()) {
                     Some(Type::BoundMethod(_)) => SemanticTokenType::METHOD,
                     Some(Type::Function(_) | Type::Callable(_)) => SemanticTokenType::FUNCTION,
+                    Some(Type::ClassDef(_)) => SemanticTokenType::CLASS,
                     _ => SemanticTokenType::PROPERTY,
                 };
                 self.push_if_in_range(attr.attr.range(), kind, Vec::new());
@@ -245,6 +247,20 @@ impl SemanticTokenBuilder {
 
     fn process_stmt(&mut self, x: &Stmt) {
         match x {
+            Stmt::Try(stmt_try) => {
+                for ExceptHandler::ExceptHandler(handler) in stmt_try.handlers.iter() {
+                    if let Some(name) = &handler.name {
+                        self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, vec![]);
+                    }
+                }
+            }
+            Stmt::With(with) => {
+                for with_item in with.items.iter() {
+                    if let Some(box name) = &with_item.optional_vars {
+                        self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, vec![]);
+                    }
+                }
+            }
             Stmt::Import(StmtImport { names, .. }) => {
                 for alias in names {
                     self.push_if_in_range(alias.name.range, SemanticTokenType::NAMESPACE, vec![]);
@@ -259,7 +275,13 @@ impl SemanticTokenBuilder {
             }) => {
                 self.push_if_in_range(module.range, SemanticTokenType::NAMESPACE, vec![]);
             }
-            _ => {}
+            Stmt::AnnAssign(ann_assign) => {
+                if let Expr::Name(name) = &*ann_assign.target {
+                    self.push_if_in_range(name.range, SemanticTokenType::VARIABLE, vec![]);
+                }
+                x.recurse(&mut |x| self.process_stmt(x));
+            }
+            _ => x.recurse(&mut |x| self.process_stmt(x)),
         }
     }
 

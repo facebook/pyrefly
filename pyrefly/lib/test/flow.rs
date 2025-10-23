@@ -1118,6 +1118,68 @@ def f() -> int:
     "#,
 );
 
+testcase!(
+    test_merging_any,
+    r#"
+from typing import Any, assert_type
+def f(x: Any, y: Any):
+    if isinstance(x, int):
+        y = "y"
+    assert_type(x, Any)
+    assert_type(y, Any)
+    "#,
+);
+
+testcase!(
+    test_reducible_join_of_narrows,
+    r#"
+from typing import assert_type
+class A: pass
+class B(A): pass
+def f(x: A):
+    if isinstance(x, B):
+        pass
+    assert_type(x, A)
+    "#,
+);
+
+testcase!(
+    test_join_with_unrelated_narrow,
+    r#"
+from typing import assert_type
+class A: pass
+class B: pass
+def f(x: A):
+    if isinstance(x, B):
+        assert_type(x, B)
+    assert_type(x, A)
+# (Illustrating that all code in the body of `f` is reachable)
+class C(A, B): pass
+f(C())
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1246
+testcase!(
+    test_boolean_op_narrowing_example,
+    r#"
+from typing import Sequence, reveal_type
+class A:
+    def foo(self) -> bool:
+        raise NotImplementedError()
+    def i(self) -> int:
+        raise NotImplementedError()
+class B:
+    def bar(self) -> bool:
+        raise NotImplementedError()
+def f(a: A) -> tuple[int, bool]:
+    return a.i(), (
+        (isinstance(a, B) and a.bar()) or
+        reveal_type(a).foo()  # E: revealed type: A
+    )
+"#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/683
 testcase!(
     test_loop_with_sized_in_inner_iteration,
@@ -1414,8 +1476,29 @@ testcase!(
     r#"
 def f(x: list[int]) -> None:
     i: str = ""
-    for i in x: # E: Cannot use variable `i` with type `str` to iterate through `list[int]`
+    for i in x: # E: Cannot use variable `i` with type `str` to iterate over elements of type `int`
         pass
+    "#,
+);
+
+testcase!(
+    test_for_implicit_return,
+    r#"
+def test1(match: float) -> float:
+    for i in range(10):
+        if i == match:
+            return 3.14
+    else:
+        msg = "No value found"
+        raise ValueError(msg)
+
+def test2(match: float) -> float:  # E: Function declared to return `float` but is missing an explicit `return`
+    for i in range(10):
+        if i == match:
+            break
+    else:
+        msg = "No value found"
+        raise ValueError(msg)
     "#,
 );
 
@@ -1643,5 +1726,33 @@ while True:
     break
 else:
     exit(1)
+"#,
+);
+
+fn env_pytest() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "pytest",
+        "pytest.pyi",
+        r#"
+from typing import NoReturn
+def fail(x: str) -> NoReturn: ...
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_pytest_noreturn,
+    env_pytest(),
+    r#"
+import pytest
+
+def test_oops() -> None:
+    try:
+        val = True
+    except:
+        pytest.fail("execution stops here")
+    assert val, "oops"
 "#,
 );

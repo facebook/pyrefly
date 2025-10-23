@@ -547,3 +547,17 @@ class C[T, U]:
 assert_type(C(0, ""), C[int, str])
     "#,
 );
+
+testcase!(
+    test_deprecated_new,
+    r#"
+from warnings import deprecated
+class A:
+    @deprecated("old old old")
+    def __new__(cls, x: int):
+        return super().__new__(cls)
+    def __init__(self, x: str):
+        pass
+A(0) # E: `A.__new__` is deprecated # E: `Literal[0]` is not assignable to parameter `x` with type `str`
+    "#,
+);

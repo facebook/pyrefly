@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -187,7 +186,7 @@ class P1(Protocol):
 class C1:
     @property
     def foo(self) -> int:
-        return 1 
+        return 1
 a: P1 = C1()
 
 class P2(Protocol):
@@ -197,7 +196,7 @@ class P2(Protocol):
 class C2:
     @property
     def foo(self) -> object:
-        return 1 
+        return 1
 b: P2 = C2()  # E: `C2` is not assignable to `P2`
 
 class P3(Protocol):
@@ -210,7 +209,7 @@ class P3(Protocol):
 class C3:
     @property
     def foo(self) -> int:
-        return 1 
+        return 1
     @foo.setter
     def foo(self, val: int) -> None:
         pass
@@ -226,7 +225,7 @@ class P4(Protocol):
 class C4:
     @property
     def foo(self) -> int:
-        return 1 
+        return 1
     @foo.setter
     def foo(self, val: object) -> None:
         pass
@@ -239,7 +238,7 @@ class P5(Protocol):
 class C5:
     @property
     def foo(self) -> int:
-        return 1 
+        return 1
     @foo.setter
     def foo(self, val: object) -> None:
         pass
@@ -309,6 +308,21 @@ a: A = A()  # E: Cannot instantiate `A` because it is a protocol
 );
 
 testcase!(
+    test_protocol_stub_method_instantiation_error,
+    r#"
+from typing import Protocol
+
+class Proto(Protocol):
+    def method(self) -> int: ...
+
+class Concrete(Proto):
+    pass
+
+Concrete()  # E: Cannot instantiate `Concrete`
+"#,
+);
+
+testcase!(
     test_protocol_getattr,
     r#"
 from typing import Protocol
@@ -356,15 +370,17 @@ assert_type(f.x, int)
 );
 
 testcase!(
-    bug = "According to the spec, should complain here specifically about implicit attribute definition in protocols. The current error is too general.",
     test_protocol_with_implicit_attr_assigned_in_method,
-    TestEnv::new().enable_implicitly_defined_attribute_error(),
     r#"
 from typing import Protocol
 class P(Protocol):
     x: int
-    def f(self, y: str):
-        self.y = y  # E: Attribute `y` is implicitly defined by assignment in method `f`, which is not a constructor
+    def __init__(self, x: int, z: str):
+        self.x = x  # ok
+        self.z = z  # E: Instance or class variables within a Protocol class must be explicitly declared within the class body
+    def f(self, x: int, y: str):
+        self.x = x  # ok
+        self.y = y  # E: Instance or class variables within a Protocol class must be explicitly declared within the class body
     "#,
 );
 
@@ -528,10 +544,10 @@ class DataOnlyProtocol(Protocol):
 class Implementation:
     name: str = "test"
     value: int = 42
-    
+
     def process(self) -> None:
         pass
-    
+
     def validate(self) -> bool:
         return True
 
@@ -559,7 +575,7 @@ class RegularClass:
         return 42
 
 # This should also fail
-@runtime_checkable  # E: @runtime_checkable can only be applied to Protocol classes  
+@runtime_checkable  # E: @runtime_checkable can only be applied to Protocol classes
 class AnotherClass:
     x: int = 5
 "#,

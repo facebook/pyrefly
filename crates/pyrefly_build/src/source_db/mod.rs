@@ -13,11 +13,14 @@ use std::path::PathBuf;
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_util::lock::RwLock;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
+use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use static_interner::Intern;
 use static_interner::Interner;
@@ -65,6 +68,28 @@ impl Target {
     }
 }
 
+#[derive(Debug)]
+pub struct ModulePathCache(RwLock<SmallMap<PathBuf, ModulePath>>);
+
+impl ModulePathCache {
+    pub fn new() -> Self {
+        ModulePathCache(RwLock::new(SmallMap::new()))
+    }
+
+    pub fn get(&self, path: &Path) -> ModulePath {
+        let read = self.0.read();
+        if let Some(module_path) = read.get(path) {
+            return module_path.dupe();
+        }
+        drop(read);
+        let mut write = self.0.write();
+        write
+            .entry(path.to_path_buf())
+            .or_insert_with(|| ModulePath::filesystem(path.to_path_buf()))
+            .dupe()
+    }
+}
+
 /// Represents a virtual filesystem provided by a build system. A build system
 /// should understand the relationship between targets and importable qualified
 /// paths to the files contained in the build system.
@@ -87,7 +112,7 @@ pub trait SourceDatabase: Send + Sync + fmt::Debug {
     /// Returns `Err` if the shellout to the build system failed
     /// The resulting bool represents whether find caches
     /// related to this sourcedb should be invalidated.
-    fn requery_source_db(&self, files: SmallSet<PathBuf>) -> anyhow::Result<bool>;
+    fn requery_source_db(&self, files: SmallSet<ModulePathBuf>) -> anyhow::Result<bool>;
     /// The source database-related configuration files a watcher should wait for
     /// changes on. Changes to one of these returned watchfiles should force
     /// a sourcedb rebuild.

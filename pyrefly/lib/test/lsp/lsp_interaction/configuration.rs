@@ -9,6 +9,10 @@
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 
 use lsp_server::Message;
 use lsp_server::Notification;
@@ -48,14 +52,8 @@ fn test_did_change_configuration() {
     interaction.shutdown();
 }
 
-// Only run this test on unix since windows has no way to mock a .exe without compiling something
-// (we call python with python.exe)
 #[cfg(unix)]
-#[test]
-fn test_pythonpath_change() {
-    let test_files_root = get_test_files_root();
-    let custom_interpreter_path = test_files_root.path().join("custom_interpreter");
-
+fn setup_dummy_interpreter(custom_interpreter_path: &Path) -> PathBuf {
     // Create a mock Python interpreter script that returns the environment info
     // This simulates what a real Python interpreter would return when queried with the env script
     let python_script = format!(
@@ -75,12 +73,31 @@ fi
             .unwrap()
     );
 
-    let interpreter_suffix = if cfg!(windows) { ".exe" } else { "" };
-    let python_path = custom_interpreter_path.join(format!("bin/python{interpreter_suffix}"));
-    write(&python_path, python_script).unwrap();
-    let mut perms = fs::metadata(&python_path).unwrap().permissions();
+    let interpreter_path = custom_interpreter_path.join("bin/python");
+    write(&interpreter_path, python_script).unwrap();
+    let mut perms = fs::metadata(&interpreter_path).unwrap().permissions();
     perms.set_mode(0o755); // rwxr-xr-x
-    fs::set_permissions(&python_path, perms).unwrap();
+    fs::set_permissions(&interpreter_path, perms).unwrap();
+
+    interpreter_path
+}
+
+// Only run this test on unix since windows has no way to mock a .exe without compiling something
+// (we call python with python.exe)
+#[cfg(unix)]
+#[test]
+fn test_pythonpath_change() {
+    let test_files_root = get_test_files_root();
+    let custom_interpreter_path = test_files_root.path().join("custom_interpreter");
+    let bad_interpreter_root = test_files_root.path().join("bad_interpreter_bin");
+
+    // Interpreter path that should be able to find an expected import in site packages
+    let interpreter_path = setup_dummy_interpreter(&custom_interpreter_path);
+    // Interpreter path that should *not* be able to find an expected import in site packages.
+    // This is more to make sure that the test in
+    // [`test_workspace_pythonpath_ignored_when_set_in_config_file`] works correctly by proving
+    // in this test that we will fail to find an import using this interpreter.
+    let bad_interpreter_path = setup_dummy_interpreter(&bad_interpreter_root);
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
@@ -119,7 +136,7 @@ fi
         2,
         serde_json::json!([
             {
-                "pythonPath": python_path.to_str().unwrap()
+                "pythonPath": interpreter_path.to_str().unwrap()
             }
         ]),
     );
@@ -134,6 +151,126 @@ fi
         .definition("custom_interpreter/src/foo.py", 5, 31);
     interaction.client.expect_definition_response_from_root(
         "custom_interpreter/bin/site-packages/custom_module.py",
+        6,
+        6,
+        6,
+        17,
+    );
+
+    // Try setting the interpreter back to a bad interpreter, and make sure it fails
+    // successfully
+    interaction.server.did_change_configuration();
+    interaction.client.expect_request(Request {
+        id: RequestId::from(3),
+        method: "workspace/configuration".to_owned(),
+        params: serde_json::json!({"items":[{"section":"python"}]}),
+    });
+    interaction.server.send_configuration_response(
+        3,
+        serde_json::json!([
+            {
+                "pythonPath": bad_interpreter_path.to_str().unwrap()
+            }
+        ]),
+    );
+    // After the bad config takes effect, publish diagnostics should have 1 error
+    interaction.client.expect_publish_diagnostics_error_count(
+        test_files_root.path().join("custom_interpreter/src/foo.py"),
+        1,
+    );
+    // The definition should not be found in site-packages
+    interaction
+        .server
+        .definition("custom_interpreter/src/foo.py", 5, 31);
+    interaction.client.expect_definition_response_from_root(
+        "custom_interpreter/src/foo.py",
+        5,
+        26,
+        5,
+        37,
+    );
+
+    interaction.shutdown();
+}
+
+// Only run this test on unix since windows has no way to mock a .exe without compiling something
+// (we call python with python.exe)
+#[cfg(unix)]
+#[test]
+fn test_workspace_pythonpath_ignored_when_set_in_config_file() {
+    let test_files_root = get_test_files_root();
+    let custom_interpreter_path = test_files_root.path().join("custom_interpreter_config");
+    let bad_interpreter_root = test_files_root.path().join("bad_interpreter_bin");
+
+    // Interpreter path that should be able to find an expected import in site packages.
+    // This is set in a pyrefly.toml, so we don't actually need to use the value here, but it
+    // still needs to be set up.
+    let _ = setup_dummy_interpreter(&custom_interpreter_path);
+    // Interpreter path that should *not* be able to find an expected import in site packages.
+    // We try to pass this in but make sure we still use the interpreter set in the config,
+    // which is proven when the import is able to be found. The [`test_pythonpath_change`] test
+    // above proves that setting this interpreter will fail to find anything.
+    let bad_interpreter_path = setup_dummy_interpreter(&bad_interpreter_root);
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(Some(
+            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+        )),
+        ..Default::default()
+    });
+
+    interaction
+        .server
+        .did_open("custom_interpreter_config/src/foo.py");
+    // Prior to the config taking effect, things should work with the interpreter in the provided
+    // config
+    interaction.client.expect_publish_diagnostics_error_count(
+        test_files_root
+            .path()
+            .join("custom_interpreter_config/src/foo.py"),
+        0,
+    );
+    interaction
+        .server
+        .definition("custom_interpreter_config/src/foo.py", 5, 31);
+    // The definition response is in the same file
+    interaction.client.expect_definition_response_from_root(
+        "custom_interpreter_config/bin/site-packages/custom_module.py",
+        6,
+        6,
+        6,
+        17,
+    );
+
+    interaction.server.did_change_configuration();
+    interaction.client.expect_request(Request {
+        id: RequestId::from(2),
+        method: "workspace/configuration".to_owned(),
+        params: serde_json::json!({"items":[{"section":"python"}]}),
+    });
+    interaction.server.send_configuration_response(
+        2,
+        serde_json::json!([
+            {
+                "pythonPath": bad_interpreter_path.to_str().unwrap()
+            }
+        ]),
+    );
+    // After the new config takes effect, results should stay the same
+    interaction.client.expect_publish_diagnostics_error_count(
+        test_files_root
+            .path()
+            .join("custom_interpreter_config/src/foo.py"),
+        0,
+    );
+    // The definition can still be found in site-packages
+    interaction
+        .server
+        .definition("custom_interpreter_config/src/foo.py", 5, 31);
+    interaction.client.expect_definition_response_from_root(
+        "custom_interpreter_config/bin/site-packages/custom_module.py",
         6,
         6,
         6,
@@ -272,7 +409,7 @@ fn test_did_change_workspace_folder() {
 
 fn get_diagnostics_result() -> serde_json::Value {
     serde_json::json!({"items": [
-            {"code":"unsupported-operation","message":"`+` is not supported between `Literal[1]` and `Literal['']`\n  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`",
+            {"code":"unsupported-operation","codeDescription":{"href":"https://pyrefly.org/en/docs/error-kinds/#unsupported-operation"},"message":"`+` is not supported between `Literal[1]` and `Literal['']`\n  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`",
             "range":{"end":{"character":6,"line":5},"start":{"character":0,"line":5}},"severity":1,"source":"Pyrefly"}],"kind":"full"
     })
 }

@@ -94,8 +94,9 @@ use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
+use crate::module::bundled::BundledStub;
 use crate::module::finder::find_import_prefixes;
-use crate::module::typeshed::BundledTypeshed;
+use crate::module::typeshed::BundledTypeshedStdlib;
 use crate::solver::solver::VarRecurser;
 use crate::state::dirty::Dirty;
 use crate::state::epoch::Epoch;
@@ -408,6 +409,45 @@ impl<'a> Transaction<'a> {
         .rev()
         .map(|(_, handle, name, export)| (handle, name, export))
         .collect()
+    }
+
+    pub fn search_modules_fuzzy(&self, pattern: &str) -> Vec<ModuleName> {
+        // Make sure all the modules are in updated_modules.
+        for x in self.readable.modules.keys() {
+            self.get_module(x);
+        }
+
+        let matcher = SkimMatcherV2::default().smart_case();
+        let mut results = Vec::new();
+
+        // Collect unique module names from all known modules
+        let mut seen_modules = SmallSet::new();
+        for module_handle in self.data.updated_modules.keys() {
+            let module_name = module_handle.module();
+            let module_name_str = module_name.as_str();
+
+            // Skip builtins module
+            if module_name_str == "builtins" {
+                continue;
+            }
+
+            // Skip if we've already seen this module name
+            if !seen_modules.insert(module_name) {
+                continue;
+            }
+
+            let components = module_name.components();
+            let last_component = components.last().map(|name| name.as_str()).unwrap_or("");
+            if let Some(score) = matcher.fuzzy_match(last_component, pattern) {
+                results.push((score, module_name));
+            }
+        }
+
+        results.sort_by_key(|(score, _)| -score);
+        results
+            .into_iter()
+            .map(|(_, module_name)| module_name)
+            .collect()
     }
 
     fn search_exports_helper<V: Send + Sync>(
@@ -874,10 +914,12 @@ impl<'a> Transaction<'a> {
         // being checked, and only use Require::Exports as the "default" require level, for files
         // reached _only_ through imports.
         //
-        // However, this only works for "check" and does not effect laziness in the IDE, which uses
-        // the default level Require::Indexing. It also does not effect laziness for glean, pysa, or
-        // other "tracing" check modes. This is by design, since those modes currently require all
-        // modules to have completed Solutions to operate correctly.
+        // However, this only works for "check" and the IDE. The latter uses the default level
+        // Require::Indexing but falls back to Require::Exports as a performance optimization.
+        //
+        // This does not affect laziness for glean, pysa, or other "tracing" check modes. This is
+        // by design, since those modes currently require all modules to have completed Solutions
+        // to operate correctly.
         //
         // TODO: It would be much nicer to identify when a module is a 3rd party dependency directly
         // instead of approximating it using require levels.
@@ -924,6 +966,26 @@ impl<'a> Transaction<'a> {
 
     fn get_module(&self, handle: &Handle) -> ArcId<ModuleDataMut> {
         self.get_module_ex(handle, self.data.default_require).0
+    }
+
+    /// Get a module discovered via an import.
+    fn get_imported_module(&self, handle: &Handle, require: Require) -> ArcId<ModuleDataMut> {
+        let require = match require {
+            Require::Indexing(i) => {
+                // If we're building an index to power IDE features, limit the number of times
+                // we'll follow imports for performance reasons. When we hit our limit, we switch
+                // to requiring only exports, which tells Transaction::demand() to stop eagerly
+                // computing results.
+                if i == 0 {
+                    Require::Exports
+                } else {
+                    Require::Indexing(i - 1)
+                }
+            }
+            Require::Exports => Require::Exports,
+            _ => self.data.default_require,
+        };
+        self.get_module_ex(handle, require).0
     }
 
     /// Return the module, plus true if the module was newly created.
@@ -1102,7 +1164,7 @@ impl<'a> Transaction<'a> {
     }
 
     fn compute_stdlib(&mut self, sys_infos: SmallSet<SysInfo>) {
-        let loader = self.get_cached_loader(&BundledTypeshed::config());
+        let loader = self.get_cached_loader(&BundledTypeshedStdlib::config());
         let thread_state = ThreadState::new();
         for k in sys_infos.into_iter_hashed() {
             self.data
@@ -1531,16 +1593,17 @@ impl<'a> TransactionHandle<'a> {
         module: ModuleName,
         path: Option<&ModulePath>,
     ) -> Result<ArcId<ModuleDataMut>, FindError> {
+        let require = self.module_data.state.read().require;
         if let Some(res) = self.module_data.deps.read().get(&module).map(|x| x.first())
             && path.is_none_or(|path| path == res.path())
         {
-            return Ok(self.transaction.get_module(res));
+            return Ok(self.transaction.get_imported_module(res, require));
         }
 
         let handle = self
             .transaction
             .import_handle(&self.module_data.handle, module, path)?;
-        let res = self.transaction.get_module(&handle);
+        let res = self.transaction.get_imported_module(&handle, require);
         let mut write = self.module_data.deps.write();
         let did_insert = match write.entry(module) {
             Entry::Vacant(e) => {
@@ -1694,7 +1757,7 @@ impl State {
 
     fn get_config(&self, name: ModuleName, path: &ModulePath) -> ArcId<ConfigFile> {
         if matches!(path.details(), ModulePathDetails::BundledTypeshed(_)) {
-            BundledTypeshed::config()
+            BundledTypeshedStdlib::config()
         } else {
             self.config_finder.python_file(name, path)
         }
@@ -1736,11 +1799,11 @@ impl State {
 
     pub fn new_committable_transaction<'a>(
         &'a self,
-        require: Require,
+        default_require: Require,
         subscriber: Option<Box<dyn Subscriber>>,
     ) -> CommittingTransaction<'a> {
         let committing_transaction_guard = self.committing_transaction_lock.lock();
-        let transaction = self.new_transaction(require, subscriber);
+        let transaction = self.new_transaction(default_require, subscriber);
         CommittingTransaction {
             transaction,
             committing_transaction_guard,
@@ -1749,11 +1812,11 @@ impl State {
 
     pub fn try_new_committable_transaction<'a>(
         &'a self,
-        require: Require,
+        default_require: Require,
         subscriber: Option<Box<dyn Subscriber>>,
     ) -> Option<CommittingTransaction<'a>> {
         if let Some(committing_transaction_guard) = self.committing_transaction_lock.try_lock() {
-            let transaction = self.new_transaction(require, subscriber);
+            let transaction = self.new_transaction(default_require, subscriber);
             Some(CommittingTransaction {
                 transaction,
                 committing_transaction_guard,
@@ -1816,10 +1879,10 @@ impl State {
         &self,
         handles: &[Handle],
         require: Require,
-        new_require: Require,
+        default_require: Require,
         subscriber: Option<Box<dyn Subscriber>>,
     ) {
-        let mut transaction = self.new_committable_transaction(new_require, subscriber);
+        let mut transaction = self.new_committable_transaction(default_require, subscriber);
         transaction.transaction.run(handles, require);
         self.commit_transaction(transaction);
     }

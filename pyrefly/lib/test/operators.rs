@@ -531,3 +531,56 @@ assert_type(B + B, int)
 assert_type(B.__add__(B), str)
     "#,
 );
+
+testcase!(
+    test_iter_var_annotation_with_getitem,
+    r#"
+class A:
+    def __getitem__(self, i: int):
+        return 0
+
+x: int
+for x in A():
+    pass
+
+y: str
+for y in A():  # E: Cannot use variable `y` with type `str` to iterate over elements of type `Literal[0]`
+    pass
+    "#,
+);
+
+testcase!(
+    test_contains_bad_getitem,
+    r#"
+class A:
+    def __getitem__(self):
+        return 0
+0 in A()  # E: Expected 0 positional arguments, got 1 in function `A.__getitem__`
+    "#,
+);
+
+testcase!(
+    test_contains_getitem_wrong_type,
+    r#"
+class A:
+    def __getitem__(self, i) -> int:
+        return 0
+"" in A()  # E: `Literal['']` is not assignable to contained type `int`
+    "#,
+);
+
+testcase!(
+    test_deprecated,
+    r#"
+from typing import assert_type, Self
+from warnings import deprecated
+class A:
+    @deprecated("Super deprecated")
+    def __add__(self, other) -> Self:
+        return self
+class B:
+    def __radd__(self, other) -> Self:
+        return self
+assert_type(A() + B(), A)  # E: `A.__add__` is deprecated
+    "#,
+);

@@ -691,10 +691,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn create_recursive(&self, binding: &Binding) -> Var {
         let t = match binding {
-            Binding::LoopPhi(default, _) => self
-                .get_calculation(*default)
-                .get()
-                .map(|t| t.arc_clone_ty().promote_literals(self.stdlib)),
+            Binding::LoopPhi(default, _) => Some(
+                self.get_idx(*default)
+                    .arc_clone_ty()
+                    .promote_literals(self.stdlib),
+            ),
             _ => None,
         };
         self.solver().fresh_recursive(self.uniques, t)
@@ -756,11 +757,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         tcc: &dyn Fn() -> TypeCheckContext,
     ) -> bool {
-        if got.is_error() || self.is_subset_eq(got, want) {
+        if got.is_error() {
             true
         } else {
-            self.solver().error(got, want, errors, loc, tcc);
-            false
+            match self.is_subset_eq_with_reason(got, want) {
+                Ok(()) => true,
+                Err(error) => {
+                    self.solver().error(got, want, errors, loc, tcc, error);
+                    false
+                }
+            }
         }
     }
 

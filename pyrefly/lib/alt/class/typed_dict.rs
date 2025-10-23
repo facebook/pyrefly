@@ -87,7 +87,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 check_errors,
                                 key.range(),
-                                ErrorInfo::Kind(ErrorKind::TypedDictKeyError),
+                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
                                 format!("Cannot update read-only field `{key_name}`"),
                             );
                         }
@@ -115,7 +115,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 check_errors,
                                 key.range(),
-                                ErrorInfo::Kind(ErrorKind::TypedDictKeyError),
+                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
                                 format!(
                                     "Key `{}` is not defined in TypedDict `{}`",
                                     key_name,
@@ -129,7 +129,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         check_errors,
                         key.range(),
-                        ErrorInfo::Kind(ErrorKind::TypedDictKeyError),
+                        ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
                         format!(
                             "Expected string literal key, got `{}`",
                             self.for_display(key_type)
@@ -155,7 +155,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         check_errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::TypedDictKeyError),
+                        ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
                         format!(
                             "Missing required key `{}` for TypedDict `{}`",
                             key,

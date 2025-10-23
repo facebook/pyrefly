@@ -17,6 +17,7 @@ use crate::binding::binding::KeyClass;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::context::ModuleContext;
+use crate::report::pysa::function::FunctionNode;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::function::get_all_functions;
 use crate::report::pysa::location::PysaLocation;
@@ -80,10 +81,36 @@ pub fn get_function_ref(
     let context = ModuleContext::create(handle, context.transaction, context.module_ids).unwrap();
 
     // This is slow, but we don't care in tests.
-    let function = get_all_functions(&context)
-        .find(|function| function.metadata().kind.as_func_id().func == function_name)
-        .expect("valid function name");
-    FunctionRef::from_decorated_function(&function, &context)
+    get_all_functions(&context)
+        .find(|function| function.name().as_str() == function_name)
+        .expect("valid function name")
+        .as_function_ref(&context)
+}
+
+pub fn get_method_ref(
+    module_name: &str,
+    class_name: &str,
+    function_name: &str,
+    context: &ModuleContext,
+) -> FunctionRef {
+    let handle = get_handle_for_module_name(module_name, context.transaction);
+    let context = ModuleContext::create(handle, context.transaction, context.module_ids).unwrap();
+
+    // This is slow, but we don't care in tests.
+    get_all_functions(&context)
+        .find(|function| match function {
+            FunctionNode::DecoratedFunction(decorated_function) => {
+                function.name().as_str() == function_name
+                    && decorated_function
+                        .defining_cls()
+                        .is_some_and(|class| class.name().as_str() == class_name)
+            }
+            FunctionNode::ClassField { class, name, .. } => {
+                class.name().as_str() == class_name && name.as_str() == function_name
+            }
+        })
+        .expect("valid method name")
+        .as_function_ref(&context)
 }
 
 pub fn create_location(

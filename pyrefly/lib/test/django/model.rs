@@ -23,7 +23,6 @@ assert_type(p.first_name, str)
 );
 
 django_testcase!(
-    bug = "We error on the definition of PersonFieldsetTupleAdmin, which is wrong.",
     test_model_admin_tuple,
     r#"
 from django.contrib import admin
@@ -35,7 +34,7 @@ class Person(models.Model):
     birthday = models.DateField()
 
 class PersonFieldsetTupleAdmin(admin.ModelAdmin[Person]):
-    fieldsets = ( # E: `tuple[tuple[Literal['Personal Details'], dict[str, str | tuple[tuple[str, str], str]]]]` is not assignable to attribute `fieldsets` with type `list[tuple[_StrPromise | str | None, TypedDict[_FieldOpts]]] | tuple[()] | tuple[tuple[_StrPromise | str | None, TypedDict[_FieldOpts]], ...] | None`
+    fieldsets = (
         (
             "Personal Details",
             {

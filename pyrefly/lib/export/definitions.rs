@@ -233,8 +233,12 @@ impl Definitions {
     }
 
     /// Add an implicit `from builtins import *` to the definitions.
+    /// Additional user-defined builtins are imported from `__builtins__.pyi`
     pub fn inject_builtins(&mut self) {
         self.import_all.entry(ModuleName::builtins()).or_default();
+        self.import_all
+            .entry(ModuleName::extra_builtins())
+            .or_default();
     }
 
     pub fn inject_implicit_globals(&mut self) {

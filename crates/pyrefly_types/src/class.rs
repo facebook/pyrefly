@@ -38,7 +38,7 @@ use crate::types::TParams;
 use crate::types::Type;
 
 /// The name of a nominal type, e.g. `str`
-#[derive(Debug, Clone, TypeEq, Display, Dupe)]
+#[derive(Debug, Clone, Display, Dupe)]
 pub struct Class(Arc<ClassInner>);
 
 impl Hash for Class {
@@ -54,6 +54,7 @@ impl PartialEq for Class {
 }
 
 impl Eq for Class {}
+impl TypeEq for Class {}
 
 impl Ord for Class {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -88,19 +89,9 @@ pub struct ClassFieldProperties {
     docstring_range: Option<TextRange>,
 }
 
-impl PartialEq for ClassFieldProperties {
-    fn eq(&self, other: &Self) -> bool {
-        self.is_annotated == other.is_annotated
-            && self.is_initialized_on_class == other.is_initialized_on_class
-    }
-}
-
-impl Eq for ClassFieldProperties {}
-impl TypeEq for ClassFieldProperties {}
-
 /// The index of a class within the file, used as a reference to data associated with the class.
 #[derive(Debug, Clone, Dupe, Copy, Eq, PartialEq, Hash, PartialOrd, Ord)]
-#[derive(TypeEq, Display)]
+#[derive(Display)]
 pub struct ClassDefIndex(pub u32);
 
 impl ClassFieldProperties {
@@ -127,7 +118,6 @@ impl ClassFieldProperties {
     }
 }
 
-#[derive(TypeEq, Eq, PartialEq)]
 struct ClassInner {
     def_index: ClassDefIndex,
     qname: QName,
@@ -156,6 +146,7 @@ pub enum ClassKind {
     StaticMethod(Name),
     ClassMethod(Name),
     Property(Name),
+    CachedProperty(Name),
     Class,
     EnumMember,
     EnumNonmember,
@@ -172,10 +163,10 @@ impl ClassKind {
             ("abc", "abstractclassmethod") => Self::ClassMethod(name.clone()),
             ("builtins", "property") => Self::Property(name.clone()),
             ("abc", "abstractproperty") => Self::Property(name.clone()),
-            ("functools", "cached_property") => Self::Property(name.clone()),
-            ("cached_property", "cached_property") => Self::Property(name.clone()),
-            ("cinder", "cached_property") => Self::Property(name.clone()),
-            ("cinder", "async_cached_property") => Self::Property(name.clone()),
+            ("functools", "cached_property") => Self::CachedProperty(name.clone()),
+            ("cached_property", "cached_property") => Self::CachedProperty(name.clone()),
+            ("cinder", "cached_property") => Self::CachedProperty(name.clone()),
+            ("cinder", "async_cached_property") => Self::CachedProperty(name.clone()),
             ("enum", "property") => Self::Property(name.clone()),
             ("enum", "member") => Self::EnumMember,
             ("enum", "nonmember") => Self::EnumNonmember,
@@ -298,11 +289,11 @@ impl Class {
 
     /// Key to use for equality purposes. If we have the same module and index,
     /// we must point at the same class underneath.
-    fn key_eq(&self) -> (ClassDefIndex, ModuleName, &ModulePath) {
+    fn key_eq(&self) -> (ClassDefIndex, ModuleName, ModulePath) {
         (
             self.0.def_index,
             self.0.qname.module_name(),
-            self.0.qname.module_path(),
+            self.0.qname.module_path().to_key_eq(),
         )
     }
 

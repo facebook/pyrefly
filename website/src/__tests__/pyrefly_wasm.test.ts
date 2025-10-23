@@ -110,7 +110,7 @@ movie: Movie = {'name': 'Blade Runner',
                 "`Literal['1982']` is not assignable to TypedDict key `year` with type `int`"
             );
             expect(typedDictError).toBeDefined();
-            expect(typedDictError.kind).toBe('typed-dict-key-error');
+            expect(typedDictError.kind).toBe('bad-typed-dict-key');
         });
     });
 
@@ -157,15 +157,14 @@ tes
             // Set active file to main.py
             pyreService.setActiveFile('main.py');
             // Position of "test(42)" in reveal_type
-            const hoverInfo = pyreService.queryType(18, 13);
+            const hoverInfo = pyreService.hover(18, 13);
 
             expect(hoverInfo).toBeDefined();
             expect(hoverInfo.contents).toBeDefined();
             expect(hoverInfo.contents).toHaveLength(1);
 
             const hoverInfoContent = hoverInfo.contents[0];
-            expect(hoverInfoContent.language).toEqual('python');
-            expect(hoverInfoContent.value).toEqual('(x: int) -> str');
+            expect(hoverInfoContent.value).toEqual('```python\n(function) test: def test(x: int) -> str\n```');
         });
     });
 

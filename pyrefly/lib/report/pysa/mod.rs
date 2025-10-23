@@ -17,6 +17,7 @@ pub mod location;
 pub mod module;
 pub mod override_graph;
 pub mod scope;
+pub mod slow_fun_monitor;
 pub mod step_logger;
 pub mod type_of_expression;
 pub mod types;
@@ -41,6 +42,7 @@ use rayon::prelude::*;
 use ruff_python_ast::name::Name;
 use serde::Serialize;
 
+use crate::module::bundled::BundledStub;
 use crate::module::typeshed::typeshed;
 use crate::report::pysa::call_graph::CallGraph;
 use crate::report::pysa::call_graph::export_call_graphs;
@@ -65,6 +67,7 @@ use crate::report::pysa::module::ModuleIds;
 use crate::report::pysa::module::ModuleKey;
 use crate::report::pysa::override_graph::OverrideGraph;
 use crate::report::pysa::override_graph::build_reversed_override_graph;
+use crate::report::pysa::slow_fun_monitor::slow_fun_monitor_scope;
 use crate::report::pysa::step_logger::StepLogger;
 use crate::report::pysa::type_of_expression::export_type_of_expressions;
 use crate::report::pysa::types::PysaType;
@@ -261,19 +264,26 @@ fn write_module_definitions_files(
     );
 
     ThreadPool::new().install(|| -> anyhow::Result<()> {
-        module_work_list.par_iter().try_for_each(
-            |(handle, _, info_filename)| -> anyhow::Result<()> {
-                let context =
-                    ModuleContext::create(handle.clone(), transaction, module_ids).unwrap();
-                let writer =
-                    BufWriter::new(File::create(definitions_directory.join(info_filename))?);
-                serde_json::to_writer(
-                    writer,
-                    &export_module_definitions(&context, function_base_definitions),
-                )?;
-                Ok(())
-            },
-        )
+        slow_fun_monitor_scope(|slow_function_monitor| {
+            module_work_list.par_iter().try_for_each(
+                |(handle, _, info_filename)| -> anyhow::Result<()> {
+                    let context =
+                        ModuleContext::create(handle.clone(), transaction, module_ids).unwrap();
+                    let module_definitions = slow_function_monitor.monitor_function(
+                        || export_module_definitions(&context, function_base_definitions),
+                        format!(
+                            "Exporting module definitions for `{}`",
+                            handle.module().as_str()
+                        ),
+                        /* max_time_in_seconds */ 4,
+                    );
+                    let writer =
+                        BufWriter::new(File::create(definitions_directory.join(info_filename))?);
+                    serde_json::to_writer(writer, &module_definitions)?;
+                    Ok(())
+                },
+            )
+        })
     })?;
 
     step.finish();
@@ -292,19 +302,27 @@ fn write_module_type_of_expressions_files(
     );
 
     ThreadPool::new().install(|| -> anyhow::Result<()> {
-        module_work_list.par_iter().try_for_each(
-            |(handle, _, info_filename)| -> anyhow::Result<()> {
-                let context =
-                    ModuleContext::create(handle.clone(), transaction, module_ids).unwrap();
-
-                let writer = BufWriter::new(File::create(
-                    type_of_expressions_directory.join(info_filename),
-                )?);
-                serde_json::to_writer(writer, &export_module_type_of_expressions(&context))?;
-
-                Ok(())
-            },
-        )
+        slow_fun_monitor_scope(|slow_function_monitor| {
+            module_work_list.par_iter().try_for_each(
+                |(handle, _, info_filename)| -> anyhow::Result<()> {
+                    let context =
+                        ModuleContext::create(handle.clone(), transaction, module_ids).unwrap();
+                    let module_type_of_expressions = slow_function_monitor.monitor_function(
+                        || export_module_type_of_expressions(&context),
+                        format!(
+                            "Exporting type of expressions for `{}`",
+                            handle.module().as_str()
+                        ),
+                        /* max_time_in_seconds */ 4,
+                    );
+                    let writer = BufWriter::new(File::create(
+                        type_of_expressions_directory.join(info_filename),
+                    )?);
+                    serde_json::to_writer(writer, &module_type_of_expressions)?;
+                    Ok(())
+                },
+            )
+        })
     })?;
 
     step.finish();
@@ -325,20 +343,29 @@ fn write_module_call_graph_files(
     );
 
     ThreadPool::new().install(|| -> anyhow::Result<()> {
-        module_work_list.par_iter().try_for_each(
-            |(handle, _, info_filename)| -> anyhow::Result<()> {
-                let context =
-                    ModuleContext::create(handle.clone(), transaction, module_ids).unwrap();
-
-                let writer =
-                    BufWriter::new(File::create(call_graphs_directory.join(info_filename))?);
-                serde_json::to_writer(
-                    writer,
-                    &export_module_call_graphs(&context, function_base_definitions, override_graph),
-                )?;
-                Ok(())
-            },
-        )
+        slow_fun_monitor_scope(|slow_function_monitor| {
+            module_work_list.par_iter().try_for_each(
+                |(handle, _, info_filename)| -> anyhow::Result<()> {
+                    let context =
+                        ModuleContext::create(handle.clone(), transaction, module_ids).unwrap();
+                    let module_call_graphs = slow_function_monitor.monitor_function(
+                        || {
+                            export_module_call_graphs(
+                                &context,
+                                function_base_definitions,
+                                override_graph,
+                            )
+                        },
+                        format!("Exporting call graphs for `{}`", handle.module().as_str()),
+                        /* max_time_in_seconds */ 4,
+                    );
+                    let writer =
+                        BufWriter::new(File::create(call_graphs_directory.join(info_filename))?);
+                    serde_json::to_writer(writer, &module_call_graphs)?;
+                    Ok(())
+                },
+            )
+        })
     })?;
 
     step.finish();
@@ -355,23 +382,32 @@ fn add_module_is_test_flags(
 
     let project_modules = Arc::new(Mutex::new(project_modules));
     ThreadPool::new().install(|| -> anyhow::Result<()> {
-        module_work_list
-            .par_iter()
-            .try_for_each(|(handle, module_id, _)| -> anyhow::Result<()> {
-                let context =
-                    ModuleContext::create(handle.clone(), transaction, module_ids).unwrap();
-
-                if is_test_module::is_test_module(&context) {
-                    project_modules
-                        .lock()
-                        .unwrap()
-                        .get_mut(module_id)
-                        .unwrap()
-                        .is_test = true;
-                }
-
-                Ok(())
-            })
+        slow_fun_monitor_scope(|slow_function_monitor| {
+            module_work_list.par_iter().try_for_each(
+                |(handle, module_id, _)| -> anyhow::Result<()> {
+                    let context =
+                        ModuleContext::create(handle.clone(), transaction, module_ids).unwrap();
+                    slow_function_monitor.monitor_function(
+                        || {
+                            if is_test_module::is_test_module(&context) {
+                                project_modules
+                                    .lock()
+                                    .unwrap()
+                                    .get_mut(module_id)
+                                    .unwrap()
+                                    .is_test = true;
+                            }
+                        },
+                        format!(
+                            "Checking if `{}` is a test module",
+                            handle.module().as_str()
+                        ),
+                        /* max_time_in_seconds */ 4,
+                    );
+                    Ok(())
+                },
+            )
+        })
     })?;
 
     step.finish();
@@ -389,7 +425,7 @@ fn write_typeshed_files(results_directory: &Path) -> anyhow::Result<()> {
     for typeshed_module in typeshed.modules() {
         let module_path = typeshed.find(typeshed_module).unwrap();
         let relative_path = match module_path.details() {
-            ModulePathDetails::BundledTypeshed(path) => path,
+            ModulePathDetails::BundledTypeshed(path) => &**path,
             _ => panic!("unexpected module path for typeshed module"),
         };
         let content = typeshed.load(relative_path).unwrap();

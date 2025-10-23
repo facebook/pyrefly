@@ -14,7 +14,7 @@ use crate::alt::types::class_metadata::ClassMro;
 use crate::report::pysa::class::get_all_classes;
 use crate::report::pysa::class::get_class_mro;
 use crate::report::pysa::context::ModuleContext;
-use crate::report::pysa::function::get_all_functions;
+use crate::report::pysa::function::get_all_decorated_functions;
 
 fn is_unittest_module(context: &ModuleContext) -> bool {
     get_all_classes(context).any(|class| match &*get_class_mro(&class, context) {
@@ -43,7 +43,7 @@ fn is_pytest_module(context: &ModuleContext) -> bool {
         })
     }
     fn has_test_function(context: &ModuleContext) -> bool {
-        get_all_functions(context).any(|function| {
+        get_all_decorated_functions(context).any(|function| {
             function
                 .metadata()
                 .kind

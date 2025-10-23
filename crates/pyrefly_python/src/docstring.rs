@@ -76,16 +76,23 @@ impl Docstring {
                     line.to_owned()
                 } else {
                     let trimmed = &line[min(min_indent, line.len())..];
+                    let mut without_blockquote = trimmed;
+                    while let Some(rest) = without_blockquote.strip_prefix('>') {
+                        without_blockquote = rest.strip_prefix(' ').unwrap_or(rest);
+                    }
                     // Replace remaining leading spaces with &nbsp; or they might be ignored in markdown parsers
-                    let leading_spaces = trimmed.bytes().take_while(|&c| c == b' ').count();
+                    let leading_spaces = without_blockquote
+                        .bytes()
+                        .take_while(|&c| c == b' ')
+                        .count();
                     if leading_spaces > 0 {
                         format!(
                             "{}{}",
                             "&nbsp;".repeat(leading_spaces),
-                            &trimmed[leading_spaces..]
+                            &without_blockquote[leading_spaces..]
                         )
                     } else {
-                        trimmed.to_owned()
+                        without_blockquote.to_owned()
                     }
                 }
             })

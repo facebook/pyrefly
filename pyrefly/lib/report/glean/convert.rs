@@ -25,6 +25,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Parameter;
 use ruff_python_ast::ParameterWithDefault;
@@ -45,6 +46,8 @@ use crate::report::glean::schema::*;
 use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
 use crate::types::types::Type;
+
+const TYPE_SEPARATORS: [char; 12] = [',', '|', '[', ']', '{', '}', '(', ')', '=', ':', '\'', '"'];
 
 fn hash(x: &[u8]) -> String {
     // Glean uses blake3
@@ -398,15 +401,17 @@ impl GleanState<'_> {
     fn fq_names_for_name_or_attr(&self, expr: &Expr) -> Vec<String> {
         match expr {
             Expr::Attribute(attr) => self.fq_names_for_attribute(attr),
-            Expr::Name(name) => self.fq_name_for_name_use(name).map_or(vec![], |x| vec![x]),
+            Expr::Name(name) => self.fq_name_for_expr_name(name).map_or(vec![], |x| vec![x]),
             _ => vec![],
         }
     }
 
-    fn fq_name_for_name_use(&self, expr_name: &ExprName) -> Option<String> {
-        let name = expr_name.id();
+    fn fq_name_for_expr_name(&self, expr_name: &ExprName) -> Option<String> {
         let identifier = Ast::expr_name_identifier(expr_name.clone());
+        self.fq_name_for_name_use(identifier)
+    }
 
+    fn fq_name_for_name_use(&self, identifier: Identifier) -> Option<String> {
         let definition = self.transaction.find_definition_for_name_use(
             self.handle,
             &identifier,
@@ -417,17 +422,55 @@ impl GleanState<'_> {
         );
 
         definition.and_then(|def| {
-            self.fq_name_for_xref_definition(name, def.definition_range, &def.module)
+            self.fq_name_for_xref_definition(identifier.id(), def.definition_range, &def.module)
         })
     }
 
-    fn fq_name_for_type(&self, ty: Type) -> Option<String> {
-        if let Some(module) = ty.as_module() {
-            Some(module.parts().join("."))
-        } else {
-            ty.qname().and_then(|qname| {
+    fn fq_name_for_type(&self, ty: Type, range: TextRange) -> Option<String> {
+        match ty {
+            Type::Module(module) => Some(module.parts().join(".")),
+            Type::None => Some("None".to_owned()),
+            Type::Type(inner_ty) => self.fq_name_for_type(*inner_ty, range),
+            Type::SpecialForm(x) => {
+                let identifier = Identifier::new(x.to_string(), range);
+                self.fq_name_for_name_use(identifier)
+            }
+            _ => ty.qname().and_then(|qname| {
                 self.fq_name_for_xref_definition(qname.id(), qname.range(), qname.module())
+            }),
+        }
+    }
+
+    fn get_xrefs_types_for_str_lit(&self, expr: &ExprStringLiteral) -> Vec<(String, TextRange)> {
+        let sep_indexes: Vec<usize> = self
+            .module
+            .code_at(expr.range())
+            .match_indices(|x: char| x.is_whitespace() || TYPE_SEPARATORS.contains(&x))
+            .map(|m| m.0)
+            .collect();
+
+        let ranges = (1..sep_indexes.len())
+            .map(|i| {
+                let start = TextSize::try_from(sep_indexes[i - 1] + 1).ok().unwrap();
+                let end = TextSize::try_from(sep_indexes[i]).ok().unwrap();
+                TextRange::new(start, end) + expr.range().start()
             })
+            .filter(|range| !range.is_empty());
+
+        if let Some(answers) = self.transaction.get_answers(self.handle) {
+            ranges
+                .filter_map(|range| {
+                    if let Some(ty) = answers.get_type_trace(range)
+                        && let Some(name) = self.fq_name_for_type(ty, range)
+                    {
+                        Some((name, range))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            vec![]
         }
     }
 
@@ -463,7 +506,7 @@ impl GleanState<'_> {
             base_types
                 .into_iter()
                 .filter_map(|ty| {
-                    self.fq_name_for_type(ty)
+                    self.fq_name_for_type(ty, base_expr.range())
                         .as_deref()
                         .map(|base| join_names(base, name))
                 })
@@ -472,10 +515,9 @@ impl GleanState<'_> {
     }
 
     fn make_decorators(&self, decorators: &[Decorator]) -> Option<Vec<String>> {
-        let lined_buffer = self.module.lined_buffer();
         let glean_decorators: Vec<String> = decorators
             .iter()
-            .map(|x| lined_buffer.code_at(x.range()).to_owned())
+            .map(|x| self.module.code_at(x.range()).to_owned())
             .collect();
 
         if glean_decorators.is_empty() {
@@ -521,30 +563,39 @@ impl GleanState<'_> {
     }
 
     fn make_xrefs(&self, expr: &Expr, offset: Option<TextSize>) -> Vec<python::XRefViaName> {
-        let (names, range) = match expr {
+        let xrefs = match expr {
             Expr::Attribute(attr) => {
-                let fq_names = if attr.ctx.is_load() {
+                if attr.ctx.is_load() {
                     self.fq_names_for_attribute(attr)
+                        .into_iter()
+                        .map(|name| (name, attr.attr.range()))
+                        .collect()
                 } else {
                     vec![]
-                };
-                (fq_names, attr.attr.range())
+                }
             }
             Expr::Name(name) => {
-                let fq_names = if name.ctx.is_load() {
-                    self.fq_name_for_name_use(name).map_or(vec![], |x| vec![x])
+                if name.ctx.is_load() {
+                    self.fq_name_for_expr_name(name)
+                        .map_or(vec![], |x| vec![(x, name.range())])
                 } else {
                     vec![]
-                };
-                (fq_names, name.range())
+                }
             }
-            Expr::NoneLiteral(none) => (vec!["None".to_owned()], none.range()),
-            _ => (vec![], expr.range()),
+            Expr::StringLiteral(str_lit) => self.get_xrefs_types_for_str_lit(str_lit),
+            Expr::BooleanLiteral(bool_lit) => {
+                let name = if bool_lit.value { "True" } else { "False" };
+                vec![(name.to_owned(), bool_lit.range())]
+            }
+            Expr::NoneLiteral(none) => vec![("None".to_owned(), none.range())],
+            _ => {
+                vec![]
+            }
         };
 
-        names
+        xrefs
             .into_iter()
-            .map(|name| python::XRefViaName {
+            .map(|(name, range)| python::XRefViaName {
                 target: python::Name::new(name),
                 source: to_span_with_offset(range, offset),
             })
@@ -574,14 +625,13 @@ impl GleanState<'_> {
     }
 
     fn display_type_info(&self, range: TextRange) -> python::Type {
-        let lined_buffer = self.module.lined_buffer();
-        let separators = [',', '|', '[', ']', '{', '}', '(', ')', '=', ':'];
-        let parts: Vec<&str> = lined_buffer
+        let parts: Vec<&str> = self
+            .module
             .code_at(range)
             .split_whitespace()
-            .flat_map(|x| x.split_inclusive(separators))
+            .flat_map(|x| x.split_inclusive(TYPE_SEPARATORS))
             .flat_map(|x| {
-                if x.ends_with(separators) {
+                if x.ends_with(TYPE_SEPARATORS) {
                     let (name, sep) = x.split_at(x.len() - 1);
                     vec![name, sep].into_iter()
                 } else {
@@ -685,11 +735,10 @@ impl GleanState<'_> {
         context: &NodeContext,
         decl_infos: &mut Vec<DeclarationInfo>,
     ) -> python::Parameter {
-        let lined_buffer = self.module.lined_buffer();
         let value: Option<String> = parameter_with_default
             .default
             .as_ref()
-            .map(|x| lined_buffer.code_at(x.range()).to_owned());
+            .map(|x| self.module.code_at(x.range()).to_owned());
         self.parameter_info(
             &parameter_with_default.parameter,
             value,

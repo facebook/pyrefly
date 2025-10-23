@@ -85,8 +85,13 @@ impl Display for Interpreters {
 impl Interpreters {
     const DEFAULT_INTERPRETERS: &[&str] = &["python3", "python"];
 
+    /// Checks if any interpreter is currently set, typically used when determining
+    /// if the config or CLI overrides explicitly specified a config to figure out
+    /// if we should respect an IDE-supplied interpreter preference.
     pub fn is_empty(&self) -> bool {
-        self.python_interpreter_path.is_none() && self.conda_environment.is_none()
+        self.python_interpreter_path.is_none()
+            && self.conda_environment.is_none()
+            && self.fallback_python_interpreter_name.is_none()
     }
 
     pub fn set_lsp_python_interpreter(&mut self, interpreter: PathBuf) {

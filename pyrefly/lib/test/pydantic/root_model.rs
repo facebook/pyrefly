@@ -13,8 +13,8 @@ pydantic_testcase!(
 from pydantic import RootModel
 class IntRootModel(RootModel[int]):
    pass
-m1 = IntRootModel(123) 
-m2 = IntRootModel("abc") # E: Argument `Literal['abc']` is not assignable to parameter `root` with type `int` in function `IntRootModel.__init__`
+m1 = IntRootModel(123)
+m2 = IntRootModel("abc")
 m3 = IntRootModel(root=123)
 m4 = IntRootModel()  # E: Missing argument `root`
 m5 = IntRootModel(123, 456)  # E: Expected 1 positional argument, got 2
@@ -80,7 +80,7 @@ class B(A):
     pass
 
 m1 = B(3)
-m2 = B("abc") # E: Argument `Literal['abc']` is not assignable to parameter `root` with type `int` in function `B.__init__`
+m2 = B("abc")
 "#,
 );
 
@@ -96,12 +96,14 @@ class B(A):
     pass
 
 m1 = B(root=3)
-m2 = B(root="abc") # E: Argument `Literal['abc']` is not assignable to parameter `root` with type `int` in function `B.__init__`
+m2 = B(root="abc")
 m3 = B(3)
 "#,
 );
 
 pydantic_testcase!(
+    bug =
+        "we should not error on the call with a str argument because it could be coercible to int ",
     test_directly_use_root_model,
     r#"
 from typing import Any, assert_type
@@ -115,13 +117,13 @@ RootModel(5, extra=6)  # E: Unexpected keyword argument `extra`
 
 m3 = RootModel[int](5)
 assert_type(m3, RootModel[int])
-RootModel[int]("")  # E: `Literal['']` is not assignable to parameter `root` with type `int`
+RootModel[int]("") # E: Argument `Literal['']` is not assignable to parameter `root` with type `int` in function `pydantic.root_model.RootModel.__init__` 
 RootModel[int](5, extra=6)  # E: Unexpected keyword argument `extra`
     "#,
 );
 
 pydantic_testcase!(
-    bug = "We should allow populating root model fields using the root type",
+    bug = "We should allow populating root model fields using the root type; we are emitting errors in places where runtime coersion is happening",
     test_root_model_field,
     r#"
 from typing import assert_type
@@ -152,6 +154,23 @@ assert_type(m5.x, RootModel[int])
 m6 = Model3(x=RootModel(0))
 assert_type(m6.x, RootModel[int])
 Model3(x='oops')  # E: `Literal['oops']` is not assignable to parameter `x`
-Model3(x=RootModel('oops'))  # E: `Literal['oops']` is not assignable to parameter `root`
+Model3(x=RootModel('oops')) # E: Argument `Literal['oops']` is not assignable to parameter `root` with type `int` in function `pydantic.root_model.RootModel.__init__`
     "#,
+);
+
+pydantic_testcase!(
+    test_strict_basic,
+    r#"
+from pydantic import RootModel, StrictInt 
+
+class A(RootModel[StrictInt]):
+    pass
+
+class B(A):
+    pass
+
+m1 = B(3)
+m2 = B("1") # E: Argument `Literal['1']` is not assignable to parameter `root` with type `int` in function `B.__init__`
+m3 = A("1") # E: Argument `Literal['1']` is not assignable to parameter `root` with type `int` in function `A.__init__
+"#,
 );

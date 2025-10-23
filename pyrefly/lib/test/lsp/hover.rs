@@ -11,7 +11,7 @@ use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
 
-use crate::lsp::features::hover::get_hover;
+use crate::lsp_features::hover::get_hover;
 use crate::state::state::State;
 use crate::test::util::get_batched_lsp_operations_report;
 
@@ -91,5 +91,103 @@ from lib import foo_renamed
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn hover_over_inline_ignore_comment() {
+    let code = r#"
+a: int = "test"  # pyrefly: ignore
+#                                ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | a: int = "test"  # pyrefly: ignore
+                                     ^
+**Suppressed Error**
+
+`bad-assignment`: `Literal['test']` is not assignable to `int`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_over_ignore_on_function_call() {
+    let code = r#"
+def foo(x: str) -> None:
+    pass
+
+x: int = foo("hello")  # pyrefly: ignore
+#                                     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // Should show the suppressed error from function call assignment
+    assert!(report.contains("**Suppressed Error"));
+    assert!(report.contains("`bad-assignment`"));
+}
+
+#[test]
+fn hover_over_generic_type_ignore() {
+    let code = r#"
+a: int = "test"  # type: ignore
+#                            ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | a: int = "test"  # type: ignore
+                                 ^
+**Suppressed Error**
+
+`bad-assignment`: `Literal['test']` is not assignable to `int`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_over_string_with_hash_character() {
+    let code = r#"
+x = "hello # world"  # pyrefly: ignore
+#                                    ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // The # inside the string should be ignored, only the comment # matters
+    // Since there's no error on this line, should show "No errors suppressed"
+    assert!(report.contains("No errors suppressed"));
+}
+
+#[test]
+fn hover_over_ignore_with_no_actual_errors() {
+    let code = r#"
+x: int = 5  # pyrefly: ignore[bad-return]
+#                                       ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(report.contains("No errors suppressed"));
+}
+
+#[test]
+fn hover_over_code_with_ignore_shows_type() {
+    let code = r#"
+a: int = "test"  # pyrefly: ignore
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // Should show the type of 'a', not the suppressed error
+    assert!(
+        report.contains("int"),
+        "Expected type hover, got: {}",
+        report
+    );
+    assert!(
+        !report.contains("Suppressed"),
+        "Should not show suppressed error when hovering over code"
     );
 }

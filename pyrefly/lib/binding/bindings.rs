@@ -16,6 +16,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::type_info::JoinStyle;
 use pyrefly_types::types::Type;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::gas::Gas;
@@ -315,6 +316,24 @@ impl Bindings {
         }
     }
 
+    pub fn function_has_return_annotation_or_infers_return(&self, name: &Identifier) -> bool {
+        let b = self.get(self.key_to_idx(&Key::ReturnType(ShortIdentifier::new(name))));
+        if let Binding::ReturnType(box r) = b {
+            r.kind.has_return_annotation() || r.kind.should_infer_return()
+        } else if let Binding::Type(_) = b {
+            false
+        } else {
+            panic!(
+                "Internal error: unexpected binding for return type `{}` @  {:?}: {}, module={}, path={}",
+                &name.id,
+                name.range,
+                b.display_with(self),
+                self.module().name(),
+                self.module().path(),
+            )
+        }
+    }
+
     pub fn new(
         x: ModModule,
         module_info: ModuleInfo,
@@ -342,7 +361,10 @@ impl Bindings {
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
-            builder.inject_builtins();
+            builder.inject_builtins(ModuleName::builtins(), false);
+            if module_info.name() != ModuleName::extra_builtins() {
+                builder.inject_builtins(ModuleName::extra_builtins(), true);
+            }
         }
         builder.inject_globals();
         builder.stmts(x.body, &NestingContext::toplevel());
@@ -415,12 +437,10 @@ impl BindingTable {
     /// insert the Anywhere.
     fn record_bind_in_anywhere(&mut self, name: Name, range: TextRange, idx: Idx<Key>) {
         let phi_idx = self.types.0.insert(Key::Anywhere(name, range));
-        match self
-            .types
-            .1
-            .insert_if_missing(phi_idx, || Binding::Phi(SmallSet::new()))
-        {
-            Binding::Phi(phi) => {
+        match self.types.1.insert_if_missing(phi_idx, || {
+            Binding::Phi(JoinStyle::SimpleMerge, SmallSet::new())
+        }) {
+            Binding::Phi(_, phi) => {
                 phi.insert(idx);
             }
             _ => unreachable!(),
@@ -604,8 +624,7 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    fn inject_builtins(&mut self) {
-        let builtins_module = ModuleName::builtins();
+    fn inject_builtins(&mut self, builtins_module: ModuleName, ignore_if_missing: bool) {
         match self.lookup.get(builtins_module) {
             Ok(builtins_export) => {
                 for name in builtins_export.wildcard(self.lookup).iter() {
@@ -617,12 +636,14 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             Err(err @ FindError::NotFound(..)) => {
-                let (ctx, msg) = err.display();
-                self.error_multiline(
-                    TextRange::default(),
-                    ErrorInfo::new(ErrorKind::InternalError, ctx.as_deref()),
-                    msg,
-                );
+                if !ignore_if_missing {
+                    let (ctx, msg) = err.display();
+                    self.error_multiline(
+                        TextRange::default(),
+                        ErrorInfo::new(ErrorKind::InternalError, ctx.as_deref()),
+                        msg,
+                    );
+                }
             }
             Err(FindError::Ignored | FindError::NoSource(_)) => (),
         }

@@ -37,9 +37,9 @@ testcase!(
 from typing import assert_type
 def f(x: type[int] | type[str], y: type[int | str]) -> None:
     assert_type(x, type[int] | type[str])
-    assert_type(x, type[int | str])  
+    assert_type(x, type[int | str])
     assert_type(y, type[int] | type[str])
-    assert_type(y, type[int | str])  
+    assert_type(y, type[int | str])
 "#,
 );
 
@@ -1365,6 +1365,9 @@ class NotBoolable:
 # bool()
 y = bool(NotBoolable())  # E: has type `int`, which is not callable
 
+# unary not
+z = not NotBoolable()  # E: has type `int`, which is not callable
+
 # if expressions
 x = 0 if NotBoolable() else 1  # E: has type `int`, which is not callable  # E: Expected `__bool__` to be a callable, got `int`
 
@@ -1379,6 +1382,13 @@ def f() -> NotBoolable:
   return NotBoolable()
 
 if (f() if True else None): ...  # E: has type `int`, which is not callable
+
+class C:
+    def __getattr__(self, x: str) -> object: ...
+
+def test(o: C):
+    if o: # should not fail
+        pass
 "#,
 );
 
@@ -1727,6 +1737,19 @@ def f(condition: bool):
     "#,
 );
 
+testcase!(
+    test_class_getitem_magic_dunder,
+    r#"
+from typing import assert_type
+
+class Foo:
+    def __class_getitem__(cls, item: int) -> str:
+        return str(item)
+
+assert_type(Foo[0], str)
+"#,
+);
+
 testcase!(test_panic_docstring, "\"\"\" F\n\u{85}\"\"\"",);
 
 testcase!(
@@ -1828,5 +1851,24 @@ async def wait(n: int) -> int:
 async def main() -> None:
     a = await asyncio.gather(*[wait(i) for i in range(10)])
     assert_type(a, list[int])
+    "#,
+);
+
+testcase!(
+    test_int_supports_index,
+    r#"
+from typing import SupportsIndex
+x: SupportsIndex = 3
+    "#,
+);
+
+// This error kind was renamed from async-error to not-async.
+testcase!(
+    test_disable_with_old_error_kind,
+    r#"
+def f():
+    pass
+async def g():
+    await f()  # pyrefly: ignore[async-error]
     "#,
 );

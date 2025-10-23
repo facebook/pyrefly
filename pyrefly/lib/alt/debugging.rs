@@ -31,7 +31,6 @@ use crate::graph::index::Idx;
 ///   if debug {
 ///      ... dump some information that would be too verbose if printed for stdlib modules ...
 ///   }
-#[expect(dead_code)]
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn show_idx<K>(&self, idx: Idx<K>) -> String
     where

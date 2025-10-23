@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use pretty_assertions::assert_eq;
 use pyrefly_types::class::ClassType;
+use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::Type;
 
 use crate::report::pysa::call_graph::Target;
@@ -215,7 +216,7 @@ class Foo:
     &|context: &ModuleContext| {
         vec![
             create_simple_class("Foo", 0, ScopeParent::TopLevel).with_fields(HashMap::from([(
-                "Bar".to_owned(),
+                "Bar".into(),
                 PysaClassField {
                     type_: PysaType::from_type(
                         &Type::Type(Box::new(Type::ClassType(ClassType::new(
@@ -294,7 +295,7 @@ Point = namedtuple('Point', ['x', 'y'])
             is_typed_dict: false,
             fields: HashMap::from([
                 (
-                    "x".to_owned(),
+                    "x".into(),
                     PysaClassField {
                         type_: PysaType::any_implicit(),
                         explicit_annotation: None,
@@ -305,7 +306,7 @@ Point = namedtuple('Point', ['x', 'y'])
                     },
                 ),
                 (
-                    "y".to_owned(),
+                    "y".into(),
                     PysaClassField {
                         type_: PysaType::any_implicit(),
                         explicit_annotation: None,
@@ -313,6 +314,21 @@ Point = namedtuple('Point', ['x', 'y'])
                         declaration_kind: Some(
                             PysaClassFieldDeclaration::DeclaredWithoutAnnotation,
                         ),
+                    },
+                ),
+                (
+                    "__match_args__".into(),
+                    PysaClassField {
+                        type_: PysaType::from_type(
+                            &Type::Tuple(Tuple::Concrete(vec![
+                                context.stdlib.str().clone().to_type(),
+                                context.stdlib.str().clone().to_type(),
+                            ])),
+                            context,
+                        ),
+                        explicit_annotation: None,
+                        location: None,
+                        declaration_kind: None,
                     },
                 ),
             ]),
@@ -333,7 +349,7 @@ class Foo:
     &|context: &ModuleContext| {
         create_simple_class("Foo", 0, ScopeParent::TopLevel).with_fields(HashMap::from([
             (
-                "x".to_owned(),
+                "x".into(),
                 PysaClassField {
                     type_: PysaType::from_class_type(context.stdlib.int(), context),
                     explicit_annotation: Some("int".to_owned()),
@@ -342,7 +358,7 @@ class Foo:
                 },
             ),
             (
-                "y".to_owned(),
+                "y".into(),
                 PysaClassField {
                     type_: PysaType::from_class_type(context.stdlib.str(), context),
                     explicit_annotation: Some("str".to_owned()),
@@ -351,7 +367,7 @@ class Foo:
                 },
             ),
             (
-                "z".to_owned(),
+                "z".into(),
                 PysaClassField {
                     type_: PysaType::from_class_type(context.stdlib.bool(), context),
                     explicit_annotation: Some(
@@ -378,7 +394,7 @@ class Foo:
     &|context: &ModuleContext| {
         create_simple_class("Foo", 0, ScopeParent::TopLevel).with_fields(HashMap::from([
             (
-                "x".to_owned(),
+                "x".into(),
                 PysaClassField {
                     type_: PysaType::from_class_type(context.stdlib.int(), context),
                     explicit_annotation: Some("int".to_owned()),
@@ -387,7 +403,7 @@ class Foo:
                 },
             ),
             (
-                "y".to_owned(),
+                "y".into(),
                 PysaClassField {
                     type_: PysaType::from_class_type(context.stdlib.str(), context),
                     explicit_annotation: Some("str".to_owned()),
@@ -396,7 +412,7 @@ class Foo:
                 },
             ),
             (
-                "z".to_owned(),
+                "z".into(),
                 PysaClassField {
                     type_: PysaType::from_class_type(context.stdlib.bool(), context),
                     explicit_annotation: Some(
@@ -414,17 +430,20 @@ exported_class_testcase!(
     test_export_dataclass,
     r#"
 from dataclasses import dataclass
-@dataclass
+@dataclass(frozen=True)
 class Foo:
     x: int
     y: str
+
+    def get(self) -> int:
+        return self.x
 "#,
     &|context: &ModuleContext| {
         create_simple_class("Foo", 0, ScopeParent::TopLevel)
             .with_is_dataclass(true)
             .with_fields(HashMap::from([
                 (
-                    "x".to_owned(),
+                    "x".into(),
                     PysaClassField {
                         type_: PysaType::from_class_type(context.stdlib.int(), context),
                         explicit_annotation: Some("int".to_owned()),
@@ -433,12 +452,42 @@ class Foo:
                     },
                 ),
                 (
-                    "y".to_owned(),
+                    "y".into(),
                     PysaClassField {
                         type_: PysaType::from_class_type(context.stdlib.str(), context),
                         explicit_annotation: Some("str".to_owned()),
                         location: Some(create_location(6, 5, 6, 6)),
                         declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
+                    },
+                ),
+                (
+                    "__dataclass_fields__".into(),
+                    PysaClassField {
+                        type_: PysaType::from_type(
+                            &Type::ClassType(context.stdlib.dict(
+                                context.stdlib.str().clone().to_type(),
+                                Type::any_implicit(),
+                            )),
+                            context,
+                        ),
+                        explicit_annotation: None,
+                        location: None,
+                        declaration_kind: None,
+                    },
+                ),
+                (
+                    "__match_args__".into(),
+                    PysaClassField {
+                        type_: PysaType::from_type(
+                            &Type::Tuple(Tuple::Concrete(vec![
+                                context.stdlib.str().clone().to_type(),
+                                context.stdlib.str().clone().to_type(),
+                            ])),
+                            context,
+                        ),
+                        explicit_annotation: None,
+                        location: None,
+                        declaration_kind: None,
                     },
                 ),
             ]))

@@ -110,7 +110,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match ty {
             Type::Any(style) => Type::Any(*style),
             Type::Never(style) => Type::Never(*style),
-            _ => self.solver().expand(var.to_type()),
+            _ => self.solver().expand_vars(var.to_type()),
         }
     }
 
@@ -205,6 +205,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub fn unwrap_async_iterator(&self, ty: &Type) -> Option<Type> {
+        let var = self.fresh_var();
+        let iterator_ty = self.stdlib.async_iterator(var.to_type()).to_type();
+        if self.is_subset_eq(ty, &iterator_ty) {
+            Some(self.resolve_var(ty, var))
+        } else {
+            None
+        }
+    }
+
     pub fn decompose_dict<'b>(
         &self,
         hint: HintRef<'b, '_>,
@@ -235,6 +245,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let elem = self.fresh_var();
         let list_type = self.stdlib.list(elem.to_type()).to_type();
         if self.is_subset_eq(&list_type, hint.ty()) {
+            hint.map_ty_opt(|ty| self.resolve_var_opt(ty, elem))
+        } else {
+            None
+        }
+    }
+
+    pub fn decompose_tuple<'b>(&self, hint: HintRef<'b, '_>) -> Option<Hint<'b>> {
+        let elem = self.fresh_var();
+        let tuple_type = self.stdlib.tuple(elem.to_type()).to_type();
+        if self.is_subset_eq(&tuple_type, hint.ty()) {
             hint.map_ty_opt(|ty| self.resolve_var_opt(ty, elem))
         } else {
             None

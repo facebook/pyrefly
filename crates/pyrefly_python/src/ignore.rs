@@ -31,6 +31,30 @@ use pyrefly_util::lined_buffer::LineNumber;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+/// Finds the byte offset of the first '#' character that starts a comment.
+/// Returns None if no comment is found or if all '#' are inside strings.
+/// Handles escape sequences and single/double quotes.
+///
+/// This is string-aware parsing that avoids treating '#' inside strings as comments.
+/// For example: `x = "hello # world"  # real comment` correctly identifies the second '#'.
+pub fn find_comment_start_in_line(line: &str) -> Option<usize> {
+    let mut chars = line.char_indices().peekable();
+    let mut in_string = None; // None, Some('"'), or Some('\'')
+
+    while let Some((idx, ch)) = chars.next() {
+        match (ch, in_string) {
+            ('\\', Some(_)) => {
+                chars.next();
+            } // Skip next char if escaped
+            ('"' | '\'', None) => in_string = Some(ch), // Enter string
+            (q, Some(quote)) if q == quote => in_string = None, // Exit string
+            ('#', None) => return Some(idx),            // Found comment!
+            _ => {}
+        }
+    }
+    None
+}
+
 /// The name of the tool that is being suppressed.
 #[derive(PartialEq, Debug, Clone, Hash, Eq, Dupe, Copy)]
 pub enum Tool {
@@ -122,7 +146,7 @@ impl<'a> Lexer<'a> {
 #[derive(PartialEq, Debug, Clone, Hash, Eq)]
 pub struct Suppression {
     tool: Tool,
-    /// The permissible error kinds, use empty Vec to many any are allowed
+    /// The permissible error kinds, use empty Vec to mean any are allowed
     kind: Vec<String>,
 }
 
@@ -243,7 +267,10 @@ impl Ignore {
             let inside = rest.split_once(']').map_or(rest, |x| x.0);
             return Some(Suppression {
                 tool,
-                kind: inside.split(',').map(|x| x.trim().to_owned()).collect(),
+                kind: inside
+                    .split(',')
+                    .map(|x| Self::map_old_error_kinds(x.trim()).to_owned())
+                    .collect(),
             });
         } else if gap || lex.word_boundary() {
             return Some(Suppression {
@@ -252,6 +279,20 @@ impl Ignore {
             });
         }
         None
+    }
+
+    /// For backwards compatibility, allow renamed error kinds to continue to be suppressed via their old names.
+    fn map_old_error_kinds(old: &str) -> &str {
+        match old {
+            "async-error" => "not-async",
+            "delete-error" => "unsupported-delete",
+            "import-error" => "missing-import",
+            "index-error" => "bad-index",
+            "match-error" => "bad-match",
+            "type-alias-error" => "invalid-type-alias",
+            "typed-dict-key-error" => "bad-typed-dict-key",
+            _ => old,
+        }
     }
 
     pub fn is_ignored(
@@ -270,7 +311,7 @@ impl Ignore {
         for line in start_line.to_zero_indexed()..=end_line.to_zero_indexed() {
             if let Some(suppressions) = self.ignores.get(&LineNumber::from_zero_indexed(line))
                 && suppressions.iter().any(|supp| match supp.tool {
-                    // We only check the subkind if they do `# ignore: pyrefly`
+                    // We only check the subkind if they do `# pyrefly: ignore`
                     Tool::Pyrefly => supp.kind.is_empty() || supp.kind.iter().any(|x| x == kind),
                     Tool::Any => true,
                     _ => permissive_ignores,
@@ -297,6 +338,17 @@ impl Ignore {
             Box::new(ignore_iter.filter(|ignore| ignore.1.iter().any(|s| s.tool == Tool::Pyrefly)))
         };
         filtered_ignores.map(|(line, _)| *line).collect()
+    }
+
+    /// Returns an iterator over all suppressions in the file.
+    /// Each item is a (line_number, suppressions) pair where line_number is where the suppression applies.
+    pub fn iter(&self) -> impl Iterator<Item = (&LineNumber, &Vec<Suppression>)> {
+        self.ignores.iter()
+    }
+
+    /// Gets the suppressions for a specific line.
+    pub fn get(&self, line: &LineNumber) -> Option<&Vec<Suppression>> {
+        self.ignores.get(line)
     }
 }
 
@@ -383,6 +435,32 @@ mod tests {
 
         // For a malformed comment, at least do something with it (works well incrementally)
         f("type: ignore[hello", Some(Tool::Any), &["hello"]);
+    }
+
+    #[test]
+    fn test_find_comment_start_in_line() {
+        // Test basic comment finding
+        assert_eq!(find_comment_start_in_line("x = 1  # comment"), Some(7));
+        assert_eq!(find_comment_start_in_line("no comment here"), None);
+
+        // Test string-aware parsing
+        assert_eq!(
+            find_comment_start_in_line(r#"x = "hello # world"  # real"#),
+            Some(21)
+        );
+        assert_eq!(
+            find_comment_start_in_line(r#"x = 'hello # world'  # real"#),
+            Some(21)
+        );
+
+        // Test escaped quotes
+        assert_eq!(
+            find_comment_start_in_line(r#"x = "she said \"hi\" # not" # real"#),
+            Some(28)
+        );
+
+        // Test multiple hashes
+        assert_eq!(find_comment_start_in_line("# first # second"), Some(0));
     }
 
     #[test]

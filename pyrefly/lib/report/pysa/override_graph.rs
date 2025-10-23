@@ -14,23 +14,16 @@ use pyrefly_util::thread_pool::ThreadPool;
 use rayon::prelude::*;
 use ruff_python_ast::name::Name;
 
-use crate::alt::types::decorated_function::DecoratedFunction;
-use crate::binding::binding::Binding;
-use crate::binding::binding::ClassFieldDefinition;
-use crate::binding::binding::KeyDecoratedFunction;
-use crate::graph::index::Idx;
 use crate::report::pysa::class::ClassRef;
-use crate::report::pysa::class::get_class_field_declaration;
 use crate::report::pysa::class::get_context_from_class;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionBaseDefinition;
-use crate::report::pysa::function::FunctionId;
+use crate::report::pysa::function::FunctionNode;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::function::WholeProgramFunctionDefinitions;
 use crate::report::pysa::function::get_all_functions;
-use crate::report::pysa::function::should_export_function;
-use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleIds;
+use crate::report::pysa::slow_fun_monitor::slow_fun_monitor_scope;
 use crate::report::pysa::step_logger::StepLogger;
 use crate::state::state::Transaction;
 
@@ -97,74 +90,30 @@ impl WholeProgramReversedOverrideGraph {
     }
 }
 
-// Requires `context` to be the module context of the decorated function.
-pub fn get_last_definition(
-    key_decorated_function: Idx<KeyDecoratedFunction>,
-    context: &ModuleContext,
-) -> DecoratedFunction {
-    // Follow the successor chain to find the last function
-    let mut last_decorated_function = key_decorated_function;
-    loop {
-        let successor = context.bindings.get(last_decorated_function).successor;
-        if let Some(successor) = successor {
-            last_decorated_function = successor;
-        } else {
-            break;
-        }
-    }
-    DecoratedFunction::from_bindings_answers(
-        last_decorated_function,
-        &context.bindings,
-        &context.answers,
-    )
-}
-
 fn get_super_class_member(
     class: &Class,
-    field: &Name,
+    field_name: &Name,
     context: &ModuleContext,
 ) -> Option<FunctionRef> {
     assert_eq!(class.module(), &context.module_info);
+
     let super_class_member = context
         .transaction
         .ad_hoc_solve(&context.handle, |solver| {
-            solver.get_super_class_member(class, None, field)
+            solver.get_super_class_member(class, None, field_name)
         })
         .flatten()?;
 
     // Important: we need to use the module context of the class.
     let context = get_context_from_class(&super_class_member.defining_class, context);
 
-    get_class_field_declaration(&super_class_member.defining_class, field, &context)
-        .and_then(|binding_class_field| {
-            if let ClassFieldDefinition::MethodLike { definition, .. } =
-                binding_class_field.definition
-            {
-                let binding = context.bindings.get(definition);
-                if let Binding::Function(key_decorated_function, _pred, _class_meta) = binding {
-                    Some(*key_decorated_function)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .map(|key_decorated_function| {
-            let last_function = get_last_definition(key_decorated_function, &context);
-            let class =
-                ClassRef::from_class(&super_class_member.defining_class, context.module_ids);
-            FunctionRef {
-                module_id: class.module_id,
-                module_name: class.class.module_name(),
-                function_id: FunctionId::Function {
-                    location: PysaLocation::new(
-                        context.module_info.display_range(last_function.id_range()),
-                    ),
-                },
-                function_name: field.clone(),
-            }
-        })
+    let function = FunctionNode::exported_function_from_class_field(
+        &super_class_member.defining_class,
+        field_name,
+        super_class_member.value,
+        &context,
+    )?;
+    Some(function.as_function_ref(&context))
 }
 
 pub fn create_reversed_override_graph_for_module(
@@ -172,16 +121,16 @@ pub fn create_reversed_override_graph_for_module(
 ) -> ModuleReversedOverrideGraph {
     let mut graph = ModuleReversedOverrideGraph(HashMap::new());
     for function in get_all_functions(context) {
-        if !should_export_function(&function, context) {
+        if !function.should_export(context) {
             continue;
         }
-        let name = function.metadata().kind.as_func_id().func;
+        let name = function.name();
         let overridden_base_method = function
             .defining_cls()
             .and_then(|class| get_super_class_member(class, &name, context));
         match overridden_base_method {
             Some(overridden_base_method) => {
-                let current_function = FunctionRef::from_decorated_function(&function, context);
+                let current_function = function.as_function_ref(context);
                 assert!(
                     graph
                         .0
@@ -210,12 +159,24 @@ pub fn build_reversed_override_graph(
     let reversed_override_graph = dashmap::DashMap::new();
 
     ThreadPool::new().install(|| {
-        handles.par_iter().for_each(|handle| {
-            let context = ModuleContext::create(handle.clone(), transaction, module_ids).unwrap();
-            for (key, value) in create_reversed_override_graph_for_module(&context).0 {
-                reversed_override_graph.insert(key, value);
-            }
-        });
+        slow_fun_monitor_scope(|slow_function_monitor| {
+            handles.par_iter().for_each(|handle| {
+                let context =
+                    ModuleContext::create(handle.clone(), transaction, module_ids).unwrap();
+                slow_function_monitor.monitor_function(
+                    || {
+                        for (key, value) in create_reversed_override_graph_for_module(&context).0 {
+                            reversed_override_graph.insert(key, value);
+                        }
+                    },
+                    format!(
+                        "Building reverse override graph for `{}`",
+                        handle.module().as_str(),
+                    ),
+                    /* max_time_in_seconds */ 4,
+                );
+            });
+        })
     });
 
     step.finish();

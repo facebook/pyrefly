@@ -105,7 +105,8 @@ $ $PYREFLY snippet "x: int = 'hello'" --output-format=json
       "code": -2,
       "name": "bad-assignment",
       "description": "`Literal['hello']` is not assignable to `int`",
-      "concise_description": "`Literal['hello']` is not assignable to `int`"
+      "concise_description": "`Literal['hello']` is not assignable to `int`",
+      "severity": "error"
     }
   ]
 } (no-eol)

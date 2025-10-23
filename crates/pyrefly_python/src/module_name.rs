@@ -104,6 +104,10 @@ impl ModuleName {
         Self::from_str("builtins")
     }
 
+    pub fn extra_builtins() -> Self {
+        Self::from_str("__builtins__")
+    }
+
     pub fn typing() -> Self {
         Self::from_str("typing")
     }
@@ -170,6 +174,10 @@ impl ModuleName {
 
     pub fn django_utils_functional() -> Self {
         Self::from_str("django.utils.functional")
+    }
+
+    pub fn pydantic_types() -> Self {
+        Self::from_str("pydantic.types")
     }
 
     /// The "unknown" module name, which corresponds to `__unknown__`.
@@ -330,6 +338,12 @@ impl ModuleName {
             }
         }
         None
+    }
+
+    /// Pop off the last name component from this [`ModuleName`]. If the `ModuleName`
+    /// would be empty, return `None` instead.
+    pub fn parent(&self) -> Option<Self> {
+        Some(Self::from_str(self.as_str().rsplit_once('.')?.0))
     }
 }
 

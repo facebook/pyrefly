@@ -79,6 +79,7 @@ use lsp_types::Registration;
 use lsp_types::RegistrationParams;
 use lsp_types::RelatedFullDocumentDiagnosticReport;
 use lsp_types::RelativePattern;
+use lsp_types::RenameFilesParams;
 use lsp_types::RenameOptions;
 use lsp_types::RenameParams;
 use lsp_types::SemanticTokens;
@@ -141,6 +142,7 @@ use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::SignatureHelpRequest;
 use lsp_types::request::UnregisterCapability;
+use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
 use lsp_types::request::WorkspaceSymbolRequest;
 use pyrefly_build::handle::Handle;
@@ -170,10 +172,6 @@ use crate::config::config::ConfigFile;
 use crate::error::error::Error;
 use crate::lsp::build_system::queue_source_db_rebuild_and_recheck;
 use crate::lsp::build_system::should_requery_build_system;
-use crate::lsp::features::hover::get_hover;
-use crate::lsp::features::provide_type::ProvideType;
-use crate::lsp::features::provide_type::ProvideTypeResponse;
-use crate::lsp::features::provide_type::provide_type;
 use crate::lsp::lsp::apply_change_events;
 use crate::lsp::lsp::as_notification;
 use crate::lsp::lsp::as_request;
@@ -192,6 +190,11 @@ use crate::lsp::transaction_manager::TransactionManager;
 use crate::lsp::workspace::LspAnalysisConfig;
 use crate::lsp::workspace::Workspace;
 use crate::lsp::workspace::Workspaces;
+use crate::lsp_features::hover::get_hover;
+use crate::lsp_features::provide_type::ProvideType;
+use crate::lsp_features::provide_type::ProvideTypeResponse;
+use crate::lsp_features::provide_type::provide_type;
+use crate::lsp_features::will_rename_files::will_rename_files;
 use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
@@ -229,6 +232,9 @@ pub trait TspInterface {
 
     /// Get access to the state for creating transactions
     fn state(&self) -> &Arc<State>;
+
+    /// Get access to the recheck queue for async task processing
+    fn recheck_queue(&self) -> &HeavyTaskQueue;
 
     /// Process an LSP event and return the next step
     fn process_event<'a>(
@@ -444,7 +450,20 @@ pub fn capabilities(
                 supported: Some(true),
                 change_notifications: Some(OneOf::Left(true)),
             }),
-            file_operations: None,
+            file_operations: Some(lsp_types::WorkspaceFileOperationsServerCapabilities {
+                will_rename: Some(lsp_types::FileOperationRegistrationOptions {
+                    filters: vec![lsp_types::FileOperationFilter {
+                        pattern: lsp_types::FileOperationPattern {
+                            glob: "**/*.{py,pyi}".to_owned(),
+
+                            matches: Some(lsp_types::FileOperationPatternKind::File),
+                            options: None,
+                        },
+                        scheme: Some("file".to_owned()),
+                    }],
+                }),
+                ..Default::default()
+            }),
         }),
         ..Default::default()
     }
@@ -882,6 +901,32 @@ impl Server {
                         ));
                         ide_transaction_manager.save(transaction);
                     }
+                } else if let Some(params) = as_request::<WillRenameFiles>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<WillRenameFiles>(
+                            params, &x.id,
+                        )
+                    {
+                        let transaction =
+                            ide_transaction_manager.non_committable_transaction(&self.state);
+                        let supports_document_changes = self
+                            .initialize_params
+                            .capabilities
+                            .workspace
+                            .as_ref()
+                            .and_then(|w| w.workspace_edit.as_ref())
+                            .and_then(|we| we.document_changes)
+                            .unwrap_or(false);
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(self.will_rename_files(
+                                &transaction,
+                                params,
+                                supports_document_changes,
+                            )),
+                        ));
+                        ide_transaction_manager.save(transaction);
+                    }
                 } else if &x.method == "pyrefly/textDocument/typeErrorDisplayStatus" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
                     self.send_response(new_response(
@@ -928,9 +973,9 @@ impl Server {
         let s = Self {
             connection: ServerConnection(connection),
             lsp_queue,
-            recheck_queue: HeavyTaskQueue::new(),
-            find_reference_queue: HeavyTaskQueue::new(),
-            sourcedb_queue: HeavyTaskQueue::new(),
+            recheck_queue: HeavyTaskQueue::new(false),
+            find_reference_queue: HeavyTaskQueue::new(false),
+            sourcedb_queue: HeavyTaskQueue::new(true),
             invalidated_configs: Arc::new(Mutex::new(SmallSet::new())),
             initialize_params,
             indexing_mode,
@@ -1018,7 +1063,7 @@ impl Server {
     fn provide_type(
         &self,
         transaction: &Transaction<'_>,
-        params: crate::lsp::features::provide_type::ProvideTypeParams,
+        params: crate::lsp_features::provide_type::ProvideTypeParams,
     ) -> Option<ProvideTypeResponse> {
         let uri = &params.text_document.uri;
         let handle = self.make_handle_if_enabled(uri)?;
@@ -1193,7 +1238,7 @@ impl Server {
         let cancellation_handles = self.cancellation_handles.dupe();
         let open_files = self.open_files.dupe();
         self.recheck_queue.queue_task(Box::new(move || {
-            let mut transaction = state.new_committable_transaction(Require::Indexing, None);
+            let mut transaction = state.new_committable_transaction(Require::indexing(), None);
             f(transaction.as_mut());
 
             Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
@@ -1225,7 +1270,7 @@ impl Server {
         let unknown = ModuleName::unknown();
 
         eprintln!("Populating all files in the config ({:?}).", config.source);
-        let mut transaction = state.new_committable_transaction(Require::Indexing, None);
+        let mut transaction = state.new_committable_transaction(Require::indexing(), None);
 
         let project_path_blobs = config.get_filtered_globs(None);
         let paths = project_path_blobs.files().unwrap_or_default();
@@ -1240,7 +1285,7 @@ impl Server {
         }
 
         eprintln!("Prepare to check {} files.", handles.len());
-        transaction.as_mut().run(&handles, Require::Indexing);
+        transaction.as_mut().run(&handles, Require::indexing());
         state.commit_transaction(transaction);
         // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
         // the main event loop of the server. As a result, the server can do a revalidation of
@@ -1259,7 +1304,7 @@ impl Server {
             eprintln!(
                 "Populating up to {workspace_indexing_limit} files in the workspace ({workspace_root:?}).",
             );
-            let mut transaction = state.new_committable_transaction(Require::Indexing, None);
+            let mut transaction = state.new_committable_transaction(Require::indexing(), None);
 
             let globs = Globs::new_with_root(workspace_root.as_path(), vec!["**/*".to_owned()])
                 .unwrap_or_default();
@@ -1275,7 +1320,7 @@ impl Server {
             }
 
             eprintln!("Prepare to check {} files.", handles.len());
-            transaction.as_mut().run(&handles, Require::Indexing);
+            transaction.as_mut().run(&handles, Require::indexing());
             state.commit_transaction(transaction);
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
@@ -1355,18 +1400,39 @@ impl Server {
         Ok(())
     }
 
+    /// Determines whether file watchers should be re-registered based on event types.
+    /// Returns true if config files changed or files were created/removed/unknown.
+    fn should_rewatch(events: &CategorizedEvents) -> bool {
+        let config_changed = events.iter().any(|x| {
+            x.file_name()
+                .and_then(|x| x.to_str())
+                .is_some_and(|x| ConfigFile::CONFIG_FILE_NAMES.contains(&x))
+        });
+
+        // Re-register watchers if files were created/removed (pip install, new files, etc.)
+        // or if unknown events occurred. This ensures we discover new files while avoiding
+        // unnecessary re-registration on simple file modifications.
+        let files_added_or_removed =
+            !events.created.is_empty() || !events.removed.is_empty() || !events.unknown.is_empty();
+
+        config_changed || files_added_or_removed
+    }
+
     fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         if params.changes.is_empty() {
             return;
         }
 
         let events = CategorizedEvents::new_lsp(params.changes);
-
         let should_requery_build_system = should_requery_build_system(&events);
 
+        // Rewatch files if necessary (config changed, files added/removed, etc.)
+        if Self::should_rewatch(&events) {
+            eprintln!("[Pyrefly] Re-registering file watchers");
+            self.setup_file_watcher_if_necessary();
+        }
+
         self.invalidate(move |t| t.invalidate_events(&events));
-        // rewatch files in case we loaded or dropped any configs
-        self.setup_file_watcher_if_necessary();
 
         // If a non-Python, non-config file was changed, then try rebuilding build systems.
         // If no build system file was changed, then we should just not do anything. If
@@ -1403,7 +1469,7 @@ impl Server {
             // Clear out the memory associated with this file.
             // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
             // Having the extra file hanging around doesn't harm anything, but does use extra memory.
-            let mut transaction = state.new_committable_transaction(Require::Indexing, None);
+            let mut transaction = state.new_committable_transaction(Require::indexing(), None);
             transaction.as_mut().set_memory(vec![(uri, None)]);
             let handles =
                 Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
@@ -2089,7 +2155,7 @@ impl Server {
         let cancellation_handles = self.cancellation_handles.dupe();
         let open_files = self.open_files.dupe();
         self.recheck_queue.queue_task(Box::new(move || {
-            let mut transaction = state.new_committable_transaction(Require::Indexing, None);
+            let mut transaction = state.new_committable_transaction(Require::indexing(), None);
             transaction.as_mut().invalidate_config();
 
             Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
@@ -2108,6 +2174,21 @@ impl Server {
             let _ = lsp_queue.send(LspEvent::RecheckFinished);
         }));
     }
+
+    fn will_rename_files(
+        &self,
+        transaction: &Transaction<'_>,
+        params: RenameFilesParams,
+        supports_document_changes: bool,
+    ) -> Option<WorkspaceEdit> {
+        will_rename_files(
+            &self.state,
+            transaction,
+            &self.open_files,
+            params,
+            supports_document_changes,
+        )
+    }
 }
 
 impl TspInterface for Server {
@@ -2117,6 +2198,10 @@ impl TspInterface for Server {
 
     fn state(&self) -> &Arc<State> {
         &self.state
+    }
+
+    fn recheck_queue(&self) -> &HeavyTaskQueue {
+        &self.recheck_queue
     }
 
     fn process_event<'a>(

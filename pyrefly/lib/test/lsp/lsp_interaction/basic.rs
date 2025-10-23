@@ -54,6 +54,19 @@ fn test_initialize_basic() {
                     "workspaceFolders": {
                         "supported": true,
                         "changeNotifications": true
+                    },
+                    "fileOperations": {
+                        "willRename": {
+                            "filters": [
+                                {
+                                    "pattern": {
+                                        "glob": "**/*.{py,pyi}",
+                                        "matches": "file"
+                                    },
+                                    "scheme": "file"
+                                }
+                            ]
+                        }
                     }
                 }
             }, "serverInfo": {

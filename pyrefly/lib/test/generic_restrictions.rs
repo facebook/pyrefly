@@ -75,7 +75,7 @@ def test[T: B](x: T) -> None:
     b: B = x  # OK
     c: C = x  # E: `T` is not assignable to `C`
 
-test(A())  # E: Type `A` is not assignable to upper bound `B` of type variable `T`
+test(A())  # E: `A` is not assignable to upper bound `B` of type variable `T`
 test(B())
 test(C())
  "#,
@@ -92,7 +92,7 @@ class Foo[T: B]:
 
 class Bar(Foo[B]):  # OK
     pass
-class Bar(Foo[A]):  # E: Type `A` is not assignable to upper bound `B` of type variable `T`
+class Bar(Foo[A]):  # E: `A` is not assignable to upper bound `B` of type variable `T`
     pass
  "#,
 );
@@ -111,7 +111,7 @@ def test[T: (B, C)](x: T) -> None:
     c: C = x  # E: `T` is not assignable to `C`
     d: B | C = x  # OK
 
-test(A())  # E: Type `A` is not assignable to upper bound `B | C` of type variable `T`
+test(A())  # E: `A` is not assignable to upper bound `B | C` of type variable `T`
 test(B())
 test(C())
 test(D())
@@ -130,7 +130,7 @@ class Foo[T: (B, C)]:
 
 class Bar(Foo[B]):  # OK
     pass
-class Bar(Foo[A]):  # E: Type `A` is not assignable to upper bound `B | C` of type variable `T`
+class Bar(Foo[A]):  # E: `A` is not assignable to upper bound `B | C` of type variable `T`
     pass
  "#,
 );
@@ -487,7 +487,6 @@ T = TypeVar("T", int)  # E: Expected at least 2 constraints in TypeVar `T`, got 
 );
 
 testcase!(
-    bug = "We always promote when instantiating, but we should not promote if the bound is literal",
     test_typevar_literal_bound,
     r#"
 from typing import Literal, LiteralString, assert_type
@@ -495,9 +494,65 @@ def f[T: Literal["foo"]](x: T) -> T: ...
 def g[T: LiteralString](x: T) -> T: ...
 
 assert_type(f("foo"), Literal["foo"])
-assert_type(f("bar"), str) # E: Type `str` is not assignable to upper bound `Literal['foo']`
+assert_type(f("bar"), str) # E: `str` is not assignable to upper bound `Literal['foo']`
 
 assert_type(g("foo"), Literal["foo"])
 assert_type(g("bar"), Literal["bar"])
+    "#,
+);
+
+testcase!(
+    bug = "This should succeed with no errors",
+    test_add_with_constraints,
+    r#"
+def add[T: (int, str)](x: T, y: T) -> T:
+    return x + y # E: `+` is not supported # E: `+` is not supported # E: `int | Unknown` is not assignable to declared return type `T`
+    "#,
+);
+
+testcase!(
+    bug = "Unexpected error in add3",
+    test_add_with_upper_bound,
+    r#"
+# This is not allowed because it's legal to pass something like `add1(0, "1")` to this function.
+def add1[T: int | str](x: T, y: T):
+    return x + y # E: `+` is not supported # E: `+` is not supported
+
+# This is ok.
+def add2[T: int](x: T, y: T) -> int:
+    return x + y
+
+# This is also ok.
+def add3[T: int | float](x: T, y: T) -> int | float:
+    return x + y # E: `+` is not supported
+    "#,
+);
+
+testcase!(
+    bug = "Spurious '`+` is not supported' error",
+    test_add_with_upper_bound_and_bad_return_type,
+    r#"
+# mypy and pyright both reject both of these, so we do, too.
+def add1[T: int](x: T, y: T) -> T:
+    return x + y # E: Returned type `int` is not assignable to declared return type `T`
+def add2[T: int | float](x: T, y: T) -> T:
+    return x + y # E: `+` is not supported # E: Returned type `float | int` is not assignable to declared return type `T`
+    "#,
+);
+
+testcase!(
+    bug = "This should succeed with no errors. Pyrefly pins the types too early due to https://github.com/facebook/pyrefly/issues/105",
+    test_multiple_args_upper_bound,
+    r#"
+from typing import assert_type
+
+def f[T: int | str](x: T, y: T): ...
+f(0, "1") # E: `Literal['1']` is not assignable to parameter `y` with type `int`
+
+class A[T]:
+    def __init__(self, x: T, y: T): ...
+# Note: pyright says the type is A[int | str]; mypy says A[object].
+# Either is okay, but A[int] is definitely wrong and we shouldn't emit the not assignable error.
+assert_type(A(0, "1"), A[int | str]) # E: assert_type(A[int], A[int | str]) # E: `Literal['1']` is not assignable to parameter `y` with type `int`
     "#,
 );

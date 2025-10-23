@@ -319,6 +319,8 @@ pub struct FuncFlags {
     pub is_deprecated: bool,
     /// A function decorated with `@property`
     pub is_property_getter: bool,
+    /// A function decorated with `functools.cached_property` or equivalent.
+    pub is_cached_property: bool,
     /// A `foo.setter` function, where `foo` is some `@property`-decorated function.
     /// When used to decorate a function, turns the decorated function into a property setter.
     pub is_property_setter_decorator: bool,
@@ -735,6 +737,28 @@ impl FunctionKind {
                 func: Name::new_static("total_ordering"),
             },
             Self::Def(func_id) => (**func_id).clone(),
+        }
+    }
+
+    pub fn function_name(&self) -> Cow<'_, Name> {
+        match self {
+            Self::IsInstance => Cow::Owned(Name::new_static("isinstance")),
+            Self::IsSubclass => Cow::Owned(Name::new_static("issubclass")),
+            Self::ClassMethod => Cow::Owned(Name::new_static("classmethod")),
+            Self::Dataclass => Cow::Owned(Name::new_static("dataclass")),
+            Self::DataclassField => Cow::Owned(Name::new_static("field")),
+            Self::DataclassTransform => Cow::Owned(Name::new_static("dataclass_transform")),
+            Self::Final => Cow::Owned(Name::new_static("final")),
+            Self::Overload => Cow::Owned(Name::new_static("overload")),
+            Self::Override => Cow::Owned(Name::new_static("override")),
+            Self::Cast => Cow::Owned(Name::new_static("cast")),
+            Self::AssertType => Cow::Owned(Name::new_static("assert_type")),
+            Self::RevealType => Cow::Owned(Name::new_static("reveal_type")),
+            Self::RuntimeCheckable => Cow::Owned(Name::new_static("runtime_checkable")),
+            Self::CallbackProtocol(_) => Cow::Owned(dunder::CALL),
+            Self::AbstractMethod => Cow::Owned(Name::new_static("abstractmethod")),
+            Self::TotalOrdering => Cow::Owned(Name::new_static("total_ordering")),
+            Self::Def(func_id) => Cow::Borrowed(&func_id.func),
         }
     }
 }

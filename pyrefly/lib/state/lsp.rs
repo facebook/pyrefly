@@ -70,6 +70,7 @@ use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::graph::index::Idx;
 use crate::state::ide::IntermediateDefinition;
+use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
 use crate::state::ide::key_to_intermediate_definition;
 use crate::state::require::Require;
@@ -1513,6 +1514,20 @@ impl<'a> Transaction<'a> {
                             let title = format!("Insert import: `{}`", insert_text.trim());
                             code_actions.push((title, module_info.dupe(), range, insert_text));
                         }
+
+                        for module_name in self.search_modules_fuzzy(unknown_name) {
+                            if module_name == handle.module() {
+                                continue;
+                            }
+                            if let Ok(module_handle) = self.import_handle(handle, module_name, None)
+                            {
+                                let (position, insert_text) =
+                                    import_regular_import_edit(&ast, module_handle);
+                                let range = TextRange::at(position, TextSize::new(0));
+                                let title = format!("Insert import: `{}`", insert_text.trim());
+                                code_actions.push((title, module_info.dupe(), range, insert_text));
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -1663,6 +1678,7 @@ impl<'a> Transaction<'a> {
                         is_deprecated: _,
                         definition: attribute_definition,
                         docstring_range,
+                        is_reexport: _,
                     } in solver.completions(base_type, Some(expected_name), false)
                     {
                         if let Some((TextRangeWithModule { module, range }, _)) =
@@ -1864,6 +1880,33 @@ impl<'a> Transaction<'a> {
                     ..Default::default()
                 });
             }
+
+            for module_name in self.search_modules_fuzzy(identifier.as_str()) {
+                if module_name == handle.module() {
+                    continue;
+                }
+                let module_name_str = module_name.as_str();
+                if let Ok(module_handle) = self.import_handle(handle, module_name, None) {
+                    let (insert_text, additional_text_edits) = {
+                        let (position, insert_text) =
+                            import_regular_import_edit(&ast, module_handle);
+                        let import_text_edit = TextEdit {
+                            range: module_info
+                                .lined_buffer()
+                                .to_lsp_range(TextRange::at(position, TextSize::new(0))),
+                            new_text: insert_text.clone(),
+                        };
+                        (Some(insert_text), Some(vec![import_text_edit]))
+                    };
+                    completions.push(CompletionItem {
+                        label: module_name_str.to_owned(),
+                        detail: insert_text,
+                        kind: Some(CompletionItemKind::MODULE),
+                        additional_text_edits,
+                        ..Default::default()
+                    });
+                }
+            }
         }
     }
 
@@ -2040,20 +2083,7 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         import_format: ImportFormat,
     ) -> Vec<CompletionItem> {
-        let mut results = self.completion_unsorted_opt(handle, position, import_format);
-        for item in &mut results {
-            let sort_text = if item.additional_text_edits.is_some() {
-                "3"
-            } else if item.label.starts_with("__") {
-                "2"
-            } else if item.label.as_str().starts_with("_") {
-                "1"
-            } else {
-                "0"
-            }
-            .to_owned();
-            item.sort_text = Some(sort_text);
-        }
+        let mut results = self.completion_sorted_opt(handle, position, import_format);
         results.sort_by(|item1, item2| {
             item1
                 .sort_text
@@ -2065,7 +2095,7 @@ impl<'a> Transaction<'a> {
         results
     }
 
-    fn completion_unsorted_opt(
+    fn completion_sorted_opt(
         &self,
         handle: &Handle,
         position: TextSize,
@@ -2151,6 +2181,11 @@ impl<'a> Transaction<'a> {
                                     detail,
                                     kind,
                                     documentation,
+                                    sort_text: if x.is_reexport {
+                                        Some("1".to_owned())
+                                    } else {
+                                        None
+                                    },
                                     tags: if x.is_deprecated {
                                         Some(vec![CompletionItemTag::DEPRECATED])
                                     } else {
@@ -2199,6 +2234,22 @@ impl<'a> Transaction<'a> {
                     }
                 }
             }
+        }
+        for item in &mut result {
+            let sort_text = if item.additional_text_edits.is_some() {
+                "4"
+            } else if item.label.starts_with("__") {
+                "3"
+            } else if item.label.as_str().starts_with("_") {
+                "2"
+            } else if let Some(sort_text) = &item.sort_text {
+                // 1 is reserved for re-exports
+                sort_text.as_str()
+            } else {
+                "0"
+            }
+            .to_owned();
+            item.sort_text = Some(sort_text);
         }
         result
     }
@@ -2381,7 +2432,7 @@ impl<'a> Transaction<'a> {
         return_types: bool,
         containers: bool,
     ) -> Option<Vec<(TextSize, Type, AnnotationKind)>> {
-        let is_interesting_type = |x: &Type| !x.is_error();
+        let is_interesting_type = |x: &Type| !x.is_any();
         let is_interesting_expr = |x: &Expr| !Ast::is_literal(x);
         let bindings = self.get_bindings(handle)?;
         let mut res = Vec::new();
@@ -2480,7 +2531,7 @@ impl<'a> Transaction<'a> {
                             Binding::Function(x, _pred, _class_meta) => {
                                 if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
                                     && let Some(mut ty) = self.get_type(handle, key)
-                                    && !ty.is_error()
+                                    && !ty.is_any()
                                 {
                                     let fun = bindings.get(bindings.get(*x).undecorated_idx);
                                     if fun.def.is_async
@@ -2696,6 +2747,45 @@ impl<'a> Transaction<'a> {
                         children: Some(children),
                     });
                 }
+                Stmt::Assign(stmt_assign) => {
+                    for target in &stmt_assign.targets {
+                        if let Expr::Name(name) = target {
+                            // todo(jvansch): Try to resuse DefinitionMetadata here.
+                            symbols.push(DocumentSymbol {
+                                name: name.id.to_string(),
+                                detail: None, // Todo(jvansch): Could add type info here later
+                                kind: lsp_types::SymbolKind::VARIABLE,
+                                tags: None,
+                                deprecated: None,
+                                range: module_info.lined_buffer().to_lsp_range(stmt_assign.range),
+                                selection_range: module_info
+                                    .lined_buffer()
+                                    .to_lsp_range(name.range),
+                                children: None,
+                            });
+                        }
+                    }
+                }
+                Stmt::AnnAssign(stmt_ann_assign) => {
+                    if let Expr::Name(name) = &*stmt_ann_assign.target {
+                        symbols.push(DocumentSymbol {
+                            name: name.id.to_string(),
+                            detail: Some(
+                                module_info
+                                    .code_at(stmt_ann_assign.annotation.range())
+                                    .to_owned(),
+                            ),
+                            kind: lsp_types::SymbolKind::VARIABLE,
+                            tags: None,
+                            deprecated: None,
+                            range: module_info
+                                .lined_buffer()
+                                .to_lsp_range(stmt_ann_assign.range),
+                            selection_range: module_info.lined_buffer().to_lsp_range(name.range),
+                            children: None,
+                        });
+                    }
+                }
                 _ => {}
             };
             symbols.append(&mut recursed_symbols);
@@ -2745,7 +2835,7 @@ impl<'a> CancellableTransaction<'a> {
             ModulePathDetails::Memory(path_buf) => {
                 let handle_of_filesystem_counterpart = Handle::new(
                     definition.module.name(),
-                    ModulePath::filesystem(path_buf.clone()),
+                    ModulePath::filesystem((**path_buf).clone()),
                     sys_info.dupe(),
                 );
                 // In-memory files can never be found through import resolution (no rdeps),
@@ -2782,7 +2872,7 @@ impl<'a> CancellableTransaction<'a> {
             .filter_map(|handle| match handle.path().details() {
                 ModulePathDetails::Memory(path_buf) => Some(Handle::new(
                     handle.module(),
-                    ModulePath::filesystem(path_buf.clone()),
+                    ModulePath::filesystem((**path_buf).clone()),
                     handle.sys_info().dupe(),
                 )),
                 _ => None,
@@ -2820,7 +2910,7 @@ impl<'a> CancellableTransaction<'a> {
                     let TextRangeWithModule { module, range } = &definition;
                     let module = if let Some(info) = self.as_ref().get_module_info(&Handle::new(
                         module.name(),
-                        ModulePath::filesystem(path_buf.clone()),
+                        ModulePath::filesystem((**path_buf).clone()),
                         handle.sys_info().dupe(),
                     )) {
                         info

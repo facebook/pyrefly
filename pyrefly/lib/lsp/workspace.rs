@@ -88,6 +88,7 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
                     interpreter,
                     mut env,
                 }) = w.python_info.clone()
+                    && config.interpreters.is_empty()
                 {
                     let site_package_path: Option<Vec<PathBuf>> =
                         config.python_environment.site_package_path.take();

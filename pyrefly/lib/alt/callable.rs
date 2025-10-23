@@ -231,7 +231,7 @@ impl<'a> CallArg<'a> {
             Self::Arg(TypeOrExpr::Expr(e)) => CallArgPreEval::Expr(e, false),
             Self::Star(e, range) => {
                 let ty = e.infer(solver, arg_errors);
-                let iterables = solver.iterate(&ty, *range, arg_errors);
+                let iterables = solver.iterate(&ty, *range, arg_errors, None);
                 // If we have a union of iterables, use a fixed length only if every iterable is
                 // fixed and has the same length. Otherwise, use star.
                 let mut fixed_lens = Vec::new();
@@ -256,14 +256,7 @@ impl<'a> CallArg<'a> {
                     let tys = fixed_tys.into_map(|tys| solver.unions(tys));
                     CallArgPreEval::Fixed(tys, 0)
                 } else {
-                    let mut star_tys = Vec::new();
-                    for x in iterables {
-                        match x {
-                            Iterable::OfType(ty) => star_tys.push(ty.clone()),
-                            Iterable::FixedLen(tys) => star_tys.extend(tys),
-                        }
-                    }
-                    let ty = solver.unions(star_tys);
+                    let ty = solver.get_produced_type(iterables);
                     CallArgPreEval::Star(ty, false)
                 }
             }
@@ -413,7 +406,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match x {
             CallArg::Star(x, _) => {
                 let mut ty = x.infer(self, errors);
-                self.expand_type_mut(&mut ty);
+                self.expand_vars_mut(&mut ty);
                 matches!(ty, Type::Args(q2) if &*q2 == q)
             }
             _ => false,
@@ -427,7 +420,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> bool {
         let mut ty = x.value.infer(self, errors);
-        self.expand_type_mut(&mut ty);
+        self.expand_vars_mut(&mut ty);
         matches!(ty, Type::Kwargs(q2) if &*q2 == q)
     }
 
@@ -1026,7 +1019,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Params::ParamSpec(concatenate, p) => {
-                let p = self.solver().expand(p);
+                let p = self.solver().expand_vars(p);
                 match p {
                     Type::ParamSpecValue(params) => self.callable_infer_params(
                         callable_name,
@@ -1114,6 +1107,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
         }
-        self.solver().expand(callable.ret)
+        self.solver().expand_vars(callable.ret)
     }
 }

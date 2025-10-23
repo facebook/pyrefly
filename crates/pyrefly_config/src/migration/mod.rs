@@ -17,6 +17,7 @@ pub(crate) mod python_platform;
 pub(crate) mod python_version;
 pub mod run;
 pub(crate) mod search_path;
+pub(crate) mod site_package_path;
 pub(crate) mod sub_configs;
 pub(crate) mod untyped_def_behavior;
 

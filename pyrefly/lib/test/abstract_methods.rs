@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -85,6 +86,7 @@ drawable = Drawable()  # E: Cannot instantiate `Drawable`
 
 testcase!(
     test_inherited_abstract_method,
+    TestEnv::new().enable_implicit_abstract_class_error(),
     r#"
 from abc import ABC, abstractmethod
 
@@ -93,7 +95,7 @@ class Base(ABC):
     def method(self) -> None:
         pass
 
-class Child(Base):
+class Child(Base):  # E: Class `Child` has unimplemented abstract members: `method`
     # Child doesn't implement method, so it's still abstract
     pass
 
@@ -103,14 +105,13 @@ child = Child()  # E: Cannot instantiate `Child`
 );
 
 testcase!(
-    bug = "We should consider erroring on the class definition too",
     test_final_class_with_abstract_methods,
     r#"
 from typing import final
 from abc import ABC, abstractmethod
 
 @final
-class BadClass(ABC):
+class BadClass(ABC):  # E: Final class `BadClass` cannot have unimplemented abstract members: `method`
     @abstractmethod
     def method(self) -> None:
         pass
@@ -121,6 +122,7 @@ x = BadClass()  # E: Cannot instantiate `BadClass`
 
 testcase!(
     test_partial_implementation,
+    TestEnv::new().enable_implicit_abstract_class_error(),
     r#"
 from abc import ABC, abstractmethod
 
@@ -133,7 +135,7 @@ class Base(ABC):
     def method2(self) -> None:
         pass
 
-class Partial(Base):
+class Partial(Base):  # E: Class `Partial` has unimplemented abstract members: `method2`
     def method1(self) -> None:
         print("implemented")
 
@@ -206,6 +208,7 @@ c = Child()
 
 testcase!(
     test_abstract_property,
+    TestEnv::new().enable_implicit_abstract_class_error(),
     r#"
 from typing import *
 from abc import ABC, abstractmethod
@@ -216,10 +219,44 @@ class Base(ABC):
     @abstractmethod
     def processor(self) -> bool: pass
 
-class Child(Base):
+class Child(Base):  # E: Class `Child` has unimplemented abstract members: `processor`
     def __init__(self) -> None:
         super().__init__()
 
 x = Child()  # E: Cannot instantiate `Child`
 "#,
+);
+
+testcase!(
+    test_abstract_async_iterator,
+    TestEnv::new().enable_implicit_abstract_class_error(),
+    r#"
+from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
+from typing import Any
+
+# error
+class A(ABC):
+    @abstractmethod
+    async def foo(self) -> AsyncIterator[int]:  # E: Abstract methods for async generators should use `def`, not `async def`
+        pass
+
+class B(A):
+    async def foo(self) -> AsyncIterator[int]:
+        yield 1
+
+# ok
+class C(ABC):
+    @abstractmethod
+    def foo(self) -> AsyncIterator[int]:
+        pass
+
+    @abstractmethod
+    async def bar(self) -> Any:
+        pass
+
+class D(C):  # E: Class `D` has unimplemented abstract members: `bar`
+    async def foo(self) -> AsyncIterator[int]:
+        yield 1
+    "#,
 );

@@ -148,7 +148,7 @@ mod tests {
             ),
             (
                 mpfs("base/proj/sub/b.py"),
-                SmallMap::from_iter([(ErrorKind::AsyncError, 3)]),
+                SmallMap::from_iter([(ErrorKind::NotAsync, 3)]),
             ),
             (
                 mpfs("base/proj/dub/z.py"),
@@ -165,7 +165,7 @@ mod tests {
             vec![
                 (ErrorKind::AnnotationMismatch, 10),
                 (ErrorKind::ReadOnly, 6),
-                (ErrorKind::AsyncError, 3),
+                (ErrorKind::NotAsync, 3),
             ],
         )];
         assert_eq!(want, get_top_error_dirs_by_error_kind(&errors, 0));
@@ -177,7 +177,7 @@ mod tests {
             ),
             (
                 pb("base/proj"),
-                vec![(ErrorKind::ReadOnly, 6), (ErrorKind::AsyncError, 3)],
+                vec![(ErrorKind::ReadOnly, 6), (ErrorKind::NotAsync, 3)],
             ),
         ];
         assert_eq!(want, get_top_error_dirs_by_error_kind(&errors, 1));
@@ -189,7 +189,7 @@ mod tests {
             ),
             (
                 pb("base/proj/sub"),
-                vec![(ErrorKind::AsyncError, 3), (ErrorKind::ReadOnly, 2)],
+                vec![(ErrorKind::NotAsync, 3), (ErrorKind::ReadOnly, 2)],
             ),
             (pb("base/proj/dub"), vec![(ErrorKind::ReadOnly, 4)]),
         ];
@@ -201,7 +201,7 @@ mod tests {
                 vec![(ErrorKind::AnnotationMismatch, 10)],
             ),
             (pb("base/proj/dub/z.py"), vec![(ErrorKind::ReadOnly, 4)]),
-            (pb("base/proj/sub/b.py"), vec![(ErrorKind::AsyncError, 3)]),
+            (pb("base/proj/sub/b.py"), vec![(ErrorKind::NotAsync, 3)]),
             (pb("base/proj/sub/a.py"), vec![(ErrorKind::ReadOnly, 2)]),
         ];
         assert_eq!(want, get_top_error_dirs_by_error_kind(&errors, 3));

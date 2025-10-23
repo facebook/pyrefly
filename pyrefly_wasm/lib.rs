@@ -10,6 +10,7 @@
 
 use pyrefly::playground::Playground;
 use pyrefly::playground::Position;
+use pyrefly::playground::Range;
 use starlark_map::small_map::SmallMap;
 use wasm_bindgen::prelude::*;
 
@@ -51,12 +52,26 @@ impl State {
         serde_wasm_bindgen::to_value(&self.0.get_errors()).unwrap_or(JsValue::NULL)
     }
 
-    #[wasm_bindgen(js_name=queryType)]
-    pub fn query_type(&mut self, line: i32, column: i32) -> JsValue {
+    #[wasm_bindgen(js_name=hover)]
+    pub fn hover(&mut self, line: i32, column: i32) -> JsValue {
         self.0
-            .query_type(Position::new(line, column))
+            .hover(Position::new(line, column))
             .map(|result| serde_wasm_bindgen::to_value(&result).unwrap())
             .unwrap_or(JsValue::NULL)
+    }
+
+    #[wasm_bindgen(js_name=semanticTokens)]
+    pub fn semantic_tokens(&mut self, range: JsValue) -> JsValue {
+        let range: Option<Range> = serde_wasm_bindgen::from_value(range).ok();
+        self.0
+            .semantic_tokens(range)
+            .map(|result| serde_wasm_bindgen::to_value(&result).unwrap())
+            .unwrap_or(JsValue::NULL)
+    }
+
+    #[wasm_bindgen(js_name=semanticTokensLegend)]
+    pub fn semantic_tokens_legend(&mut self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.0.semantic_tokens_legend()).unwrap_or(JsValue::NULL)
     }
 
     #[wasm_bindgen(js_name=gotoDefinition)]

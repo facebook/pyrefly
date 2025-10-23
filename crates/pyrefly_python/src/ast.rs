@@ -325,4 +325,14 @@ impl Ast {
             }),
         })
     }
+
+    pub fn contains_await(expr: &Expr) -> bool {
+        let mut found = false;
+        expr.visit(&mut |node: &Expr| {
+            if matches!(node, Expr::Await(_)) {
+                found = true;
+            }
+        });
+        found
+    }
 }

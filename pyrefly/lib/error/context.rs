@@ -58,12 +58,12 @@ impl ErrorContext {
             Self::InplaceBinaryOp(..) => ErrorKind::UnsupportedOperation,
             Self::Iteration(..) => ErrorKind::NotIterable,
             Self::AsyncIteration(..) => ErrorKind::NotIterable,
-            Self::Await(..) => ErrorKind::AsyncError,
-            Self::Index(..) => ErrorKind::IndexError,
+            Self::Await(..) => ErrorKind::NotAsync,
+            Self::Index(..) => ErrorKind::BadIndex,
             Self::SetItem(..) => ErrorKind::UnsupportedOperation,
             Self::DelItem(..) => ErrorKind::UnsupportedOperation,
-            Self::MatchPositional(..) => ErrorKind::MatchError,
-            Self::ImportNotFound(..) => ErrorKind::ImportError,
+            Self::MatchPositional(..) => ErrorKind::BadMatch,
+            Self::ImportNotFound(..) => ErrorKind::MissingImport,
         }
     }
 }
@@ -172,6 +172,8 @@ pub enum TypeCheckKind {
     OverloadInput(Callable, Callable),
     /// Check that the type a TypeVar is specialized with is compatible with its type restriction.
     TypeVarSpecialization(Name),
+    /// An `x in y` check
+    Container,
 }
 
 impl TypeCheckKind {
@@ -198,7 +200,7 @@ impl TypeCheckKind {
             Self::CallKwArgs(..) => ErrorKind::BadArgumentType,
             Self::CallUnpackKwArg(..) => ErrorKind::BadArgumentType,
             Self::FunctionParameterDefault(..) => ErrorKind::BadFunctionDefinition,
-            Self::TypedDictKey(..) => ErrorKind::TypedDictKeyError,
+            Self::TypedDictKey(..) => ErrorKind::BadTypedDictKey,
             Self::TypedDictUnpacking => ErrorKind::BadUnpacking,
             Self::Attribute(..) => ErrorKind::BadAssignment,
             Self::AnnotatedName(..) => ErrorKind::BadAssignment,
@@ -214,6 +216,7 @@ impl TypeCheckKind {
             Self::OverloadReturn => ErrorKind::InconsistentOverload,
             Self::OverloadInput(..) => ErrorKind::InconsistentOverload,
             Self::TypeVarSpecialization(..) => ErrorKind::BadSpecialization,
+            Self::Container => ErrorKind::UnsupportedOperation,
         }
     }
 }

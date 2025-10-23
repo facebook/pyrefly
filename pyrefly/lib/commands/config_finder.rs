@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use dupe::Dupe;
+use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::base::ConfigBase;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::arc_id::ArcId;
@@ -22,7 +23,9 @@ use crate::config::config::ProjectLayout;
 use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::config::finder::debug_log;
-use crate::module::typeshed::BundledTypeshed;
+use crate::module::bundled::BundledStub;
+use crate::module::typeshed::BundledTypeshedStdlib;
+use crate::module::typeshed_third_party::BundledTypeshedThirdParty;
 
 /// Finalizes a config before being returned by a [`ConfigFinder`].
 pub trait ConfigConfigurer: Send + Sync + 'static {
@@ -62,12 +65,6 @@ pub trait ConfigConfigurer: Send + Sync + 'static {
 /// is always returned.
 pub struct DefaultConfigConfigurer {}
 
-impl DefaultConfigConfigurer {
-    pub fn standard_config_finder() -> ConfigFinder {
-        standard_config_finder(Arc::new(Self {}))
-    }
-}
-
 impl ConfigConfigurer for DefaultConfigConfigurer {
     fn configure(
         &self,
@@ -78,6 +75,51 @@ impl ConfigConfigurer for DefaultConfigConfigurer {
         config.configure();
         (ArcId::new(config), Vec::new())
     }
+}
+
+pub fn default_config_finder() -> ConfigFinder {
+    standard_config_finder(Arc::new(DefaultConfigConfigurer {}))
+}
+
+struct DefaultConfigConfigurerWithOverrides {
+    args: ConfigOverrideArgs,
+    ignore_errors: bool,
+}
+
+impl DefaultConfigConfigurerWithOverrides {
+    fn new(args: ConfigOverrideArgs, ignore_errors: bool) -> Self {
+        Self {
+            args,
+            ignore_errors,
+        }
+    }
+}
+
+impl ConfigConfigurer for DefaultConfigConfigurerWithOverrides {
+    fn configure(
+        &self,
+        _: Option<&Path>,
+        config: ConfigFile,
+        mut errors: Vec<ConfigError>,
+    ) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
+        let (c, mut configure_errors) = self.args.override_config(config);
+        if self.ignore_errors {
+            errors.clear();
+        } else {
+            errors.append(&mut configure_errors);
+        }
+        (c, errors)
+    }
+}
+
+pub fn default_config_finder_with_overrides(
+    args: ConfigOverrideArgs,
+    ignore_errors: bool,
+) -> ConfigFinder {
+    standard_config_finder(Arc::new(DefaultConfigConfigurerWithOverrides::new(
+        args,
+        ignore_errors,
+    )))
 }
 
 /// Create a standard `ConfigFinder`, using the provided [`ConfigConfigurer`] to finalize
@@ -127,7 +169,7 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
                 .or_insert_with(|| {
                     let (config, errors) = configure2.configure(
                         path.parent(),
-                        ConfigFile::init_at_root(&path, &ProjectLayout::Flat),
+                        ConfigFile::init_at_root(&path, &ProjectLayout::Flat, true),
                         vec![],
                     );
                     // Since this is a config we generated, these are likely internal errors.
@@ -149,7 +191,10 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
                     }
                     ModulePathDetails::Namespace(x) => x.as_path(),
                     ModulePathDetails::BundledTypeshed(_) => {
-                        return BundledTypeshed::config();
+                        return BundledTypeshedStdlib::config();
+                    }
+                    ModulePathDetails::BundledTypeshedThirdParty(_) => {
+                        return BundledTypeshedThirdParty::config();
                     }
                 };
                 cache_parents
@@ -311,9 +356,12 @@ mod tests {
         assert_eq!(config_file.source, ConfigSource::Synthetic);
         assert_eq!(
             config_file.search_path().cloned().collect::<Vec<_>>(),
+            Vec::<PathBuf>::new()
+        );
+        assert_eq!(
+            config_file.fallback_search_path,
             vec![root.join("no_config")]
         );
-        assert_eq!(config_file.fallback_search_path, Vec::<PathBuf>::new());
 
         // check invalid module path parent
         assert_eq!(
@@ -333,7 +381,7 @@ mod tests {
                 ModuleName::from_str("foo.bar"),
                 ModulePath::bundled_typeshed(PathBuf::from("bundled_typeshed")),
             ),
-            BundledTypeshed::config(),
+            BundledTypeshedStdlib::config(),
         );
 
         // check namespace

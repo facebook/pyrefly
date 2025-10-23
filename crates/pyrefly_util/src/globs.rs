@@ -386,6 +386,10 @@ impl Globs {
     pub fn append(&mut self, patterns: &[Glob]) {
         self.0.extend_from_slice(patterns);
     }
+
+    pub fn globs(&self) -> &[Glob] {
+        &self.0
+    }
 }
 
 impl Display for Globs {

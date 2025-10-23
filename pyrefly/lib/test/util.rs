@@ -104,6 +104,8 @@ pub struct TestEnv {
     infer_with_first_use: bool,
     site_package_path: Vec<PathBuf>,
     implicitly_defined_attribute_error: bool,
+    implicit_any_error: bool,
+    implicit_abstract_class_error: bool,
     default_require_level: Require,
 }
 
@@ -118,6 +120,8 @@ impl TestEnv {
             infer_with_first_use: true,
             site_package_path: Vec::new(),
             implicitly_defined_attribute_error: false,
+            implicit_any_error: false,
+            implicit_abstract_class_error: false,
             default_require_level: Require::Exports,
         }
     }
@@ -148,6 +152,16 @@ impl TestEnv {
 
     pub fn enable_implicitly_defined_attribute_error(mut self) -> Self {
         self.implicitly_defined_attribute_error = true;
+        self
+    }
+
+    pub fn enable_implicit_any_error(mut self) -> Self {
+        self.implicit_any_error = true;
+        self
+    }
+
+    pub fn enable_implicit_abstract_class_error(mut self) -> Self {
+        self.implicit_abstract_class_error = true;
         self
     }
 
@@ -201,7 +215,7 @@ impl TestEnv {
         self.modules
             .iter()
             .filter_map(|(_, path, contents)| match path.details() {
-                ModulePathDetails::Memory(path) => Some((path.clone(), contents.dupe())),
+                ModulePathDetails::Memory(path) => Some(((**path).clone(), contents.dupe())),
                 _ => None,
             })
             .collect()
@@ -220,6 +234,12 @@ impl TestEnv {
         let errors = config.root.errors.as_mut().unwrap();
         if self.implicitly_defined_attribute_error {
             errors.set_error_severity(ErrorKind::ImplicitlyDefinedAttribute, Severity::Error);
+        }
+        if self.implicit_any_error {
+            errors.set_error_severity(ErrorKind::ImplicitAny, Severity::Error);
+        }
+        if self.implicit_abstract_class_error {
+            errors.set_error_severity(ErrorKind::ImplicitAbstractClass, Severity::Error);
         }
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
         for (name, path, _) in self.modules.iter() {
@@ -399,7 +419,7 @@ fn get_batched_lsp_operations_report_helper(
     assert_zero_errors: bool,
     get_report: impl Fn(&State, &Handle, TextSize) -> String,
 ) -> String {
-    let (handles, state) = mk_multi_file_state(files, Require::Indexing, assert_zero_errors);
+    let (handles, state) = mk_multi_file_state(files, Require::indexing(), assert_zero_errors);
     let mut report = String::new();
     for (name, code) in files {
         report.push_str("# ");
@@ -439,7 +459,7 @@ pub fn get_batched_lsp_operations_report_no_cursor(
     files: &[(&'static str, &str)],
     get_report: impl Fn(&State, &Handle) -> String,
 ) -> String {
-    let (handles, state) = mk_multi_file_state(files, Require::Indexing, true);
+    let (handles, state) = mk_multi_file_state(files, Require::indexing(), true);
     let mut report = String::new();
     for (name, _code) in files {
         report.push_str("# ");

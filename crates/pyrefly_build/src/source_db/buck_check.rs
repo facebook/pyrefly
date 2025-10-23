@@ -14,6 +14,7 @@ use anyhow::Context as _;
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::absolutize::Absolutize as _;
@@ -24,6 +25,7 @@ use tracing::debug;
 use vec1::Vec1;
 
 use crate::handle::Handle;
+use crate::source_db::ModulePathCache;
 use crate::source_db::SourceDatabase;
 use crate::source_db::Target;
 
@@ -123,6 +125,7 @@ pub struct BuckCheckSourceDatabase {
     sources: SmallMap<ModuleName, Vec1<PathBuf>>,
     dependencies: SmallMap<ModuleName, Vec1<PathBuf>>,
     sys_info: SysInfo,
+    cached_modules: ModulePathCache,
 }
 
 impl SourceDatabase for BuckCheckSourceDatabase {
@@ -133,7 +136,7 @@ impl SourceDatabase for BuckCheckSourceDatabase {
                 paths.iter().map(|path| {
                     Handle::new(
                         name.dupe(),
-                        ModulePath::filesystem(path.to_path_buf()),
+                        self.cached_modules.get(path),
                         self.sys_info.dupe(),
                     )
                 })
@@ -150,7 +153,7 @@ impl SourceDatabase for BuckCheckSourceDatabase {
         self.sources
             .get(module)
             .or_else(|| self.dependencies.get(module))
-            .map(|p| ModulePath::filesystem(p.first().clone()))
+            .map(|p| self.cached_modules.get(p.first()))
     }
 
     fn handle_from_module_path(&self, module_path: ModulePath) -> Option<Handle> {
@@ -163,7 +166,7 @@ impl SourceDatabase for BuckCheckSourceDatabase {
         Some(Handle::new(name, module_path, self.sys_info.dupe()))
     }
 
-    fn requery_source_db(&self, _: SmallSet<PathBuf>) -> anyhow::Result<bool> {
+    fn requery_source_db(&self, _: SmallSet<ModulePathBuf>) -> anyhow::Result<bool> {
         Ok(false)
     }
 
@@ -206,6 +209,7 @@ impl BuckCheckSourceDatabase {
                 dependency_items.into_iter().chain(typeshed_items),
             ),
             sys_info,
+            cached_modules: ModulePathCache::new(),
         }
     }
 }

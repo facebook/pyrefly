@@ -68,7 +68,7 @@ struct LookupResult {
     pub internal_error: Vec<InternalError>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AttrSubsetError {
     // `got` is not accessible, but `want` is
     NoAccess,
@@ -570,6 +570,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         todo_ctx: &str,
+        allow_getattr_fallback: bool,
     ) -> Option<Type> {
         let mut not_found = false;
         let mut attr_tys = Vec::new();
@@ -579,7 +580,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Some(base) => {
                 let direct_lookup_result = self.lookup_magic_dunder_attr(base.clone(), attr_name);
-                self.lookup_attr_from_base_getattr_fallback(attr_name, direct_lookup_result)
+                if allow_getattr_fallback {
+                    self.lookup_attr_from_base_getattr_fallback(attr_name, direct_lookup_result)
+                } else {
+                    direct_lookup_result
+                }
             }
         };
         for (attr, _) in lookup_result.found {
@@ -951,7 +956,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         got: &Type,
         protocol: &ClassType,
-        name: &Name,
+        attr_name: &Name,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> Result<(), SubsetError> {
         if let Some(got_attrs) = self
@@ -962,7 +967,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .0
                         .mapped(|base| AttributeBase1::ProtocolSubset(Box::new(base))),
                 );
-                self.lookup_attr_from_base(got_base, name)
+                self.lookup_attr_from_base(got_base, attr_name)
             })
             .and_then(|lookup_result| {
                 if lookup_result.not_found.is_empty() && lookup_result.internal_error.is_empty() {
@@ -973,20 +978,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
         {
             if (!got_attrs.is_empty())
-                && let Some(want) = self.get_protocol_attribute(protocol, got.clone(), name)
+                && let Some(want) = self.get_protocol_attribute(protocol, got.clone(), attr_name)
             {
+                let got_type_display = self.for_display(got.clone());
                 for (got_attr, _) in got_attrs.iter() {
                     self.is_attribute_subset(got_attr, &want, &mut |got, want| {
                         is_subset(got, want)
                     })
-                    .map_err(|_| SubsetError::Other)?;
+                    .map_err(|err| {
+                        SubsetError::IncompatibleAttribute(Box::new((
+                            protocol.name().clone(),
+                            got_type_display.clone(),
+                            attr_name.clone(),
+                            err,
+                        )))
+                    })?;
                 }
                 Ok(())
             } else {
-                Err(SubsetError::Other)
+                Err(SubsetError::MissingAttribute(
+                    protocol.name().clone(),
+                    attr_name.clone(),
+                ))
             }
         } else {
-            Err(SubsetError::Other)
+            Err(SubsetError::MissingAttribute(
+                protocol.name().clone(),
+                attr_name.clone(),
+            ))
         }
     }
 
@@ -1798,6 +1817,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             errors,
             None,
             "__bool__",
+            false,
         );
 
         if let Some(ty) = cond_bool_ty
@@ -1831,6 +1851,8 @@ pub struct AttrInfo {
     pub is_deprecated: bool,
     pub definition: Option<AttrDefinition>,
     pub docstring_range: Option<TextRange>,
+    /// is this defined in another module (true) or in this module (false)?
+    pub is_reexport: bool,
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -1858,6 +1880,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     TextRangeWithModule::new(c.module().dupe(), range),
                                 )),
                                 docstring_range: c.field_docstring_range(fld),
+                                is_reexport: false,
                             });
                         }
                     }
@@ -1872,6 +1895,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 TextRangeWithModule::new(c.module().dupe(), range),
                             )),
                             docstring_range: c.field_docstring_range(expected_attribute_name),
+                            is_reexport: false,
                         });
                     }
                 }
@@ -1952,6 +1976,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     }) => *docstring_range,
                                     _ => None,
                                 },
+                                is_reexport: matches!(
+                                    export_location,
+                                    ExportLocation::OtherModule(..)
+                                ),
                             }),
                     );
                 }
@@ -1980,6 +2008,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 }) => *docstring_range,
                                 _ => None,
                             },
+                            is_reexport: matches!(export_location, ExportLocation::OtherModule(..)),
                         });
                     }
                 }

@@ -55,6 +55,7 @@ pub struct UndecoratedFunction {
 /// A value that combines the metadata of a function def and also provides the type of the function
 /// after decorators are applied. Note that the type might not be a function at all, since
 /// decorators can produce any type.
+#[derive(Clone, Debug)]
 pub struct DecoratedFunction {
     pub idx: Idx<KeyDecoratedFunction>,
     pub ty: Arc<Type>,
@@ -67,6 +68,7 @@ pub enum SpecialDecorator<'a> {
     StaticMethod(Name),
     ClassMethod(Name),
     Property(Name),
+    CachedProperty(Name),
     EnumMember,
     Override,
     Final,

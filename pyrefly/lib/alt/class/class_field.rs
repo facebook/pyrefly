@@ -802,6 +802,10 @@ impl<'a> Instance<'a> {
                 ClassType::new(self.class.dupe(), self.targs.clone()),
                 self_type.clone(),
             ),
+            InstanceKind::TypeVar(q) => ClassBase::Quantified(
+                q.clone(),
+                ClassType::new(self.class.dupe(), self.targs.clone()),
+            ),
             _ => ClassBase::ClassType(ClassType::new(self.class.dupe(), self.targs.clone())),
         }
     }
@@ -963,6 +967,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         range: TextRange,
         field_definition: &ClassFieldDefinition,
+        functional_class_def: bool,
         errors: &ErrorCollector,
     ) -> ClassField {
         // TODO(stroxler): Clean this up, as we convert more of the class field logic to using enums.
@@ -1070,7 +1075,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     self.expr_infer(e, errors)
                 };
-                self.expand_type_mut(&mut ty);
+                self.expand_vars_mut(&mut ty);
 
                 (ty, inherited_annot)
             }
@@ -1080,6 +1085,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ),
         };
         let metadata = self.get_metadata_for_class(class);
+
+        if let Some(named_tuple_metadata) = metadata.named_tuple_metadata()
+            && !functional_class_def
+            && named_tuple_metadata.elements.contains(name)
+            && name.as_str().starts_with('_')
+        {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                format!("NamedTuple field name may not start with an underscore: `{name}`"),
+            );
+        }
 
         let magically_initialized = {
             // We consider fields to be always-initialized if it's defined within stub files.
@@ -1190,7 +1208,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::TypedDictKeyError),
+                        ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
                         format!(
                             "Cannot extend closed TypedDict `{}` with extra item `{}`",
                             base.name(),
@@ -1206,7 +1224,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // The field type needs to be assignable to the extra_items type.
                         if !self.is_subset_eq(field_ty, &ty) {
                             self.error(
-                                errors, range, ErrorInfo::Kind(ErrorKind::TypedDictKeyError),
+                                errors, range, ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
                             format!(
                                 "`{}` is not assignable to `extra_items` type `{}` of TypedDict `{}`",
                                 self.for_display(field_ty.clone()), self.for_display(ty), base.name()));
@@ -1219,14 +1237,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 range,
-                                ErrorInfo::Kind(ErrorKind::TypedDictKeyError),
+                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
                                 format!("TypedDict `{}` with non-read-only `extra_items` cannot be extended with required extra item `{}`", base.name(), name),
                             );
                         } else if !self.is_equal(field_ty, &ty) {
                             self.error(
                                 errors,
                                 range,
-                                ErrorInfo::Kind(ErrorKind::TypedDictKeyError),
+                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
                                 format!(
                                     "`{}` is not consistent with `extra_items` type `{}` of TypedDict `{}`",
                                     self.for_display(field_ty.clone()), self.for_display(ty), base.name()),
@@ -1358,7 +1376,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         if let RawClassFieldInitialization::Method(MethodThatSetsAttr {
             method_name,
-            recognized_attribute_defining_method: false,
+            recognized_attribute_defining_method,
         }) = initial_value
         {
             let mut defined_in_parent = false;
@@ -1370,13 +1388,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
             }
             if !defined_in_parent {
-                self.error(
-                errors,
-                range,
-                ErrorInfo::Kind(ErrorKind::ImplicitlyDefinedAttribute,
-                ),
-                format!("Attribute `{}` is implicitly defined by assignment in method `{method_name}`, which is not a constructor", &name),
-            );
+                if metadata.is_protocol() {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::ProtocolImplicitlyDefinedAttribute),
+                        "Instance or class variables within a Protocol class must be explicitly declared within the class body".to_owned(),
+                    );
+                } else if !recognized_attribute_defining_method {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::ImplicitlyDefinedAttribute,),
+                        format!("Attribute `{}` is implicitly defined by assignment in method `{method_name}`, which is not a constructor", &name),
+                    );
+                }
             }
         }
         if let Some(dm) = metadata.dataclass_metadata()
@@ -1635,7 +1661,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let is_class_var = annotation.is_some_and(|ann| ann.is_class_var());
                 match field.initialization() {
                     ClassFieldInitialization::ClassBody(_) => {
-                        self.expand_type_mut(&mut ty); // bind_instance matches on the type, so resolve it if we can
+                        self.expand_vars_mut(&mut ty); // bind_instance matches on the type, so resolve it if we can
                         bind_instance_attribute(instance, ty, is_class_var, read_only_reason)
                     }
                     ClassFieldInitialization::Method
@@ -1754,6 +1780,55 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .is_some_and(|metadata| metadata.fields.contains_key(field_name))
     }
 
+    fn should_check_field_for_override_consistency(&self, field_name: &Name) -> bool {
+        // Object construction (`__new__`, `__init__`, `__init_subclass__`) should not participate in override checks
+        if field_name == &dunder::NEW
+            || field_name == &dunder::INIT
+            || field_name == &dunder::INIT_SUBCLASS
+        {
+            return false;
+        }
+
+        // `__hash__` is often overridden to `None` to signal hashability
+        if field_name == &dunder::HASH {
+            return false;
+        }
+
+        // TODO(grievejia): In principle we should not really skip `__call__`. But the reality is that
+        // there are too many classes on typeshed whose `__call__` are marked as follows:
+        // ```
+        // def __call__(self, *args: Any, **kwds: Any) -> Any: ...
+        // ```
+        // If we follow our pre-existing subtyping rule, this kind of signature would be non-overridable
+        // -- any overrider must be able to take ANY arguments which can't be practical. We need to either
+        // special-case typeshed or special-case callable subtyping to make `__call__` override check more usable.
+        if field_name == &dunder::CALL {
+            return false;
+        }
+
+        // Private attributes should not participate in override checks
+        if field_name.starts_with("__") && !field_name.ends_with("__") {
+            return false;
+        }
+
+        // TODO: This should only be ignored when `cls` is a dataclass
+        if field_name == &dunder::POST_INIT {
+            return false;
+        }
+
+        // TODO: This should only be ignored when `_ignore_` is defined on enums
+        if field_name.as_str() == "_ignore_" {
+            return false;
+        }
+
+        // TODO: skipping slots for now to unblock typeshed upgrade
+        if field_name == &dunder::SLOTS {
+            return false;
+        }
+
+        true
+    }
+
     pub fn check_consistent_override_for_field(
         &self,
         cls: &Class,
@@ -1767,43 +1842,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return;
         }
 
-        // Object construction (`__new__`, `__init__`, `__init_subclass__`) should not participate in override checks
-        if field_name == &dunder::NEW
-            || field_name == &dunder::INIT
-            || field_name == &dunder::INIT_SUBCLASS
-        {
-            return;
-        }
-
-        // `__hash__` is often overridden to `None` to signal hashability
-        if field_name == &dunder::HASH {
-            return;
-        }
-
-        // TODO(grievejia): In principle we should not really skip `__call__`. But the reality is that
-        // there are too many classes on typeshed whose `__call__` are marked as follows:
-        // ```
-        // def __call__(self, *args: Any, **kwds: Any) -> Any: ...
-        // ```
-        // If we follow our pre-existing subtyping rule, this kind of signature would be non-overridable
-        // -- any overrider must be able to take ANY arguments which can't be practical. We need to either
-        // special-case typeshed or special-case callable subtyping to make `__call__` override check more usable.
-        if field_name == &dunder::CALL {
-            return;
-        }
-
-        // Private attributes should not participate in overrload checks
-        if field_name.starts_with("__") && !field_name.ends_with("__") {
-            return;
-        }
-
-        // TODO: This should only be ignored when `cls` is a dataclass
-        if field_name == &dunder::POST_INIT {
-            return;
-        }
-
-        // TODO: This should only be ignored when `_ignore_` is defined on enums
-        if field_name.as_str() == "_ignore_" {
+        if !self.should_check_field_for_override_consistency(field_name) {
             return;
         }
 
@@ -1969,13 +2008,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Maps field from inherited class
         let mro = self.get_mro_for_class(cls);
         let mut inherited_fields: SmallMap<&Name, Vec<(&Name, Type)>> = SmallMap::new();
+        let current_class_fields: SmallSet<_> = cls.fields().collect();
 
         for parent_cls in mro.ancestors_no_object().iter() {
             let class_fields = parent_cls.class_object().fields();
             for field in class_fields {
+                // Skip fields that are not relevant for override consistency checks
+                if !self.should_check_field_for_override_consistency(field) {
+                    continue;
+                }
                 let key = KeyClassField(parent_cls.class_object().index(), field.clone());
                 let field_entry = self.get_from_class(cls, &key);
                 if let Some(field_entry) = field_entry.as_ref() {
+                    // Skip fields that are overridden in the current class,
+                    // they will have been checked by
+                    // `check_consistent_override_for_field` already
+                    if current_class_fields.contains(field) {
+                        continue;
+                    }
                     inherited_fields
                         .entry(field)
                         .or_default()
@@ -2478,15 +2528,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     narrowed_types,
                 );
             }
-            ClassAttribute::Property(_, None, cls) => {
-                let e = NoAccessReason::SettingReadOnlyProperty(cls);
-                self.error(
-                    errors,
-                    range,
-                    ErrorInfo::new(ErrorKind::ReadOnly, context),
-                    e.to_error_msg(attr_name),
-                );
-                *should_narrow = false;
+            ClassAttribute::Property(getter, None, cls) => {
+                let is_cached_property = getter.is_cached_property();
+                if is_cached_property {
+                    let attr_ty = self.call_property_getter(getter, range, errors, context);
+                    self.check_set_read_write_and_infer_narrow(
+                        attr_ty,
+                        attr_name,
+                        got,
+                        range,
+                        errors,
+                        context,
+                        *should_narrow,
+                        narrowed_types,
+                    );
+                    *should_narrow = false;
+                } else {
+                    let e = NoAccessReason::SettingReadOnlyProperty(cls);
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::new(ErrorKind::ReadOnly, context),
+                        e.to_error_msg(attr_name),
+                    );
+                    *should_narrow = false;
+                }
             }
             ClassAttribute::Property(_, Some(setter), _) => {
                 let got = CallArg::arg(got);

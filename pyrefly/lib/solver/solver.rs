@@ -32,6 +32,7 @@ use vec1::Vec1;
 use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
+use crate::alt::attr::AttrSubsetError;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
@@ -100,19 +101,6 @@ impl Display for Variable {
             Variable::Parameter => write!(f, "Parameter"),
             Variable::Unwrap => write!(f, "Unwrap"),
             Variable::Answer(t) => write!(f, "{t}"),
-        }
-    }
-}
-
-impl Variable {
-    /// For some types of variables we should promote literals, for others we should not.
-    /// E.g. `x = 1; while True: x = x` should be `Literal[1]` while
-    /// `[1]` should be `List[int]`.
-    fn promote<Ans: LookupAnswer>(&self, ty: Type, type_order: TypeOrder<Ans>) -> Type {
-        if matches!(self, Variable::Partial | Variable::Quantified(_)) {
-            ty.promote_literals(type_order.stdlib())
-        } else {
-            ty
         }
     }
 }
@@ -239,6 +227,11 @@ impl Variables {
     }
 
     fn get_node(&self, x: Var) -> &RefCell<VariableNode> {
+        assert_ne!(
+            x,
+            Var::ZERO,
+            "Internal error: unexpected Var::ZERO, which is a dummy value."
+        );
         self.0.get(&x).expect(VAR_LEAK)
     }
 }
@@ -319,13 +312,13 @@ impl Solver {
     /// Variables that have not yet been bound will remain as Var.
     ///
     /// In addition, if the type exceeds a large depth, it will be replaced with `Any`.
-    pub fn expand(&self, mut t: Type) -> Type {
-        self.expand_mut(&mut t);
+    pub fn expand_vars(&self, mut t: Type) -> Type {
+        self.expand_vars_mut(&mut t);
         t
     }
 
     /// Like `expand`, but when you have a `&mut`.
-    pub fn expand_mut(&self, t: &mut Type) {
+    pub fn expand_vars_mut(&self, t: &mut Type) {
         self.expand_with_limit(t, TYPE_LIMIT, &VarRecurser::new());
         // After we substitute bound variables, we may be able to simplify some types
         self.simplify_mut(t);
@@ -339,17 +332,24 @@ impl Solver {
             // but don't have any good location information to hand.
             *t = Type::any_implicit();
         } else if let Type::Var(x) = t {
-            let lock = self.variables.lock();
-            if let Some(_guard) = lock.recurse(*x, recurser) {
-                let variable = lock.get(*x);
-                if let Variable::Answer(w) = &*variable {
-                    *t = w.clone();
-                    drop(variable);
-                    drop(lock);
-                    self.expand_with_limit(t, limit - 1, recurser);
-                }
-            } else {
+            if *x == Var::ZERO {
+                // This shouldn't happen, but we currently can see this in the LSP
+                // where we do type operations on a type value which has been passed
+                // to `for_display`.
                 *t = Type::any_implicit();
+            } else {
+                let lock = self.variables.lock();
+                if let Some(_guard) = lock.recurse(*x, recurser) {
+                    let variable = lock.get(*x);
+                    if let Variable::Answer(w) = &*variable {
+                        *t = w.clone();
+                        drop(variable);
+                        drop(lock);
+                        self.expand_with_limit(t, limit - 1, recurser);
+                    }
+                } else {
+                    *t = Type::any_implicit();
+                }
             }
         } else {
             t.recurse_mut(&mut |t| self.expand_with_limit(t, limit - 1, recurser));
@@ -360,11 +360,6 @@ impl Solver {
     /// and returns that answer. Note that if the `Var` is already bound to something that contains a
     /// `Var` (including itself), then we will return the answer.
     pub fn force_var(&self, v: Var) -> Type {
-        assert_ne!(
-            v,
-            Var::ZERO,
-            "Cannot force Var::ZERO, which is a dummy value"
-        );
         let lock = self.variables.lock();
         let mut e = lock.get_mut(v);
         match &mut *e {
@@ -412,7 +407,7 @@ impl Solver {
                 *x = unions(mem::take(xs));
             }
             if let Type::Tuple(tuple) = x {
-                *x = simplify_tuples(mem::take(tuple));
+                *x = Type::Tuple(simplify_tuples(mem::take(tuple)));
             }
             // When a param spec is resolved, collapse any Concatenate and Callable types that use it
             if let Type::Concatenate(ts, box Type::ParamSpecValue(paramlist)) = x {
@@ -667,7 +662,10 @@ impl Solver {
     /// instantiation, but __init__ will.
     pub fn generalize_class_targs(&self, targs: &mut TArgs) {
         // Expanding targs might require the variables lock, so do that first.
-        targs.as_mut().iter_mut().for_each(|t| self.expand_mut(t));
+        targs
+            .as_mut()
+            .iter_mut()
+            .for_each(|t| self.expand_vars_mut(t));
         let lock = self.variables.lock();
         targs.iter_paired_mut().for_each(|(param, t)| {
             if let Type::Var(v) = t
@@ -749,7 +747,7 @@ impl Solver {
     }
 
     pub fn for_display(&self, t: Type) -> Type {
-        let mut t = self.expand(t);
+        let mut t = self.expand_vars(t);
         self.simplify_mut(&mut t);
         t.deterministic_printing()
     }
@@ -762,6 +760,7 @@ impl Solver {
         errors: &ErrorCollector,
         loc: TextRange,
         tcc: &dyn Fn() -> TypeCheckContext,
+        subset_error: SubsetError,
     ) {
         let tcc = tcc();
         let msg = tcc.kind.format_error(
@@ -769,12 +768,16 @@ impl Solver {
             &self.for_display(want.clone()),
             errors.module().name(),
         );
+        let mut msg_lines = vec1![msg];
+        if let Some(subset_error_msg) = subset_error.to_error_msg() {
+            msg_lines.push(subset_error_msg);
+        }
         match tcc.context {
             Some(ctx) => {
-                errors.add(loc, ErrorInfo::Context(&|| ctx.clone()), vec1![msg]);
+                errors.add(loc, ErrorInfo::Context(&|| ctx.clone()), msg_lines);
             }
             None => {
-                errors.add(loc, ErrorInfo::Kind(tcc.kind.as_error_kind()), vec1![msg]);
+                errors.add(loc, ErrorInfo::Kind(tcc.kind.as_error_kind()), msg_lines);
             }
         }
     }
@@ -863,9 +866,14 @@ impl Solver {
                 // is more restrictive (so the `forced` is an over-approximation).
                 if self.is_subset_eq(&t, &forced, type_order).is_err() {
                     // Poor error message, but overall, this is a terrible experience for users.
-                    self.error(&t, &forced, errors, loc, &|| {
-                        TypeCheckContext::of_kind(TypeCheckKind::CycleBreaking)
-                    });
+                    self.error(
+                        &t,
+                        &forced,
+                        errors,
+                        loc,
+                        &|| TypeCheckContext::of_kind(TypeCheckKind::CycleBreaking),
+                        SubsetError::Other,
+                    );
                 }
             }
             _ => {
@@ -890,7 +898,7 @@ impl Solver {
         want: &Type,
         type_order: TypeOrder<Ans>,
     ) -> Result<(), SubsetError> {
-        self.is_subset_eq_impl(got, want, type_order, false)
+        self.is_subset_eq_impl(got, want, type_order)
     }
 
     fn is_subset_eq_impl<Ans: LookupAnswer>(
@@ -898,9 +906,8 @@ impl Solver {
         got: &Type,
         want: &Type,
         type_order: TypeOrder<Ans>,
-        union: bool,
     ) -> Result<(), SubsetError> {
-        let mut subset = self.subset(type_order, union);
+        let mut subset = self.subset(type_order);
         subset.is_subset_eq(got, want)
     }
 
@@ -910,19 +917,14 @@ impl Solver {
         want: &Type,
         type_order: TypeOrder<Ans>,
     ) -> Result<(), SubsetError> {
-        let mut subset = self.subset(type_order, false);
+        let mut subset = self.subset(type_order);
         subset.is_equal(got, want)
     }
 
-    fn subset<'a, Ans: LookupAnswer>(
-        &'a self,
-        type_order: TypeOrder<'a, Ans>,
-        union: bool,
-    ) -> Subset<'a, Ans> {
+    fn subset<'a, Ans: LookupAnswer>(&'a self, type_order: TypeOrder<'a, Ans>) -> Subset<'a, Ans> {
         Subset {
             solver: self,
             type_order,
-            union,
             gas: INITIAL_GAS,
             recursive_assumptions: SmallSet::new(),
         }
@@ -938,6 +940,77 @@ pub struct TypeVarSpecializationError {
     pub error: SubsetError,
 }
 
+#[derive(Debug, Clone)]
+pub enum TypedDictSubsetError {
+    /// TypedDict `got` is missing a field that `want` requires
+    MissingField { got: Name, want: Name, field: Name },
+    /// TypedDict field in `got` is ReadOnly but `want` requires read-write
+    ReadOnlyMismatch { got: Name, want: Name, field: Name },
+    /// TypedDict field in `got` is not required but `want` requires it
+    RequiredMismatch { got: Name, want: Name, field: Name },
+    /// TypedDict field in `got` is required cannot be, since it is `NotRequired` and read-write in `want`
+    NotRequiredReadWriteMismatch { got: Name, want: Name, field: Name },
+    /// TypedDict invariant field type mismatch (read-write fields must have exactly the same type)
+    InvariantFieldMismatch {
+        got: Name,
+        got_field_ty: Type,
+        want: Name,
+        want_field_ty: Type,
+        field: Name,
+    },
+    /// TypedDict covariant field type mismatch (readonly field type in `got` is not a subtype of `want`)
+    CovariantFieldMismatch {
+        got: Name,
+        got_field_ty: Type,
+        want: Name,
+        want_field_ty: Type,
+        field: Name,
+    },
+}
+
+impl TypedDictSubsetError {
+    pub fn to_error_msg(self) -> String {
+        match self {
+            TypedDictSubsetError::MissingField { got, want, field } => {
+                format!("Field `{field}` is present in `{want}` and absent in `{got}`")
+            }
+            TypedDictSubsetError::ReadOnlyMismatch { got, want, field } => {
+                format!("Field `{field}` is read-write in `{want}` but is `ReadOnly` in `{got}`")
+            }
+            TypedDictSubsetError::RequiredMismatch { got, want, field } => {
+                format!("Field `{field}` is required in `{want}` but is `NotRequired` in `{got}`")
+            }
+            TypedDictSubsetError::NotRequiredReadWriteMismatch { got, want, field } => {
+                format!(
+                    "Field `{field}` is `NotRequired` and read-write in `{want}`, so it cannot be required in `{got}`"
+                )
+            }
+            TypedDictSubsetError::InvariantFieldMismatch {
+                got,
+                got_field_ty,
+                want,
+                want_field_ty,
+                field,
+            } => format!(
+                "Field `{field}` in `{got}` has type `{}`, which is not consistent with `{}` in `{want}` (read-write fields must have the same type)",
+                got_field_ty.deterministic_printing(),
+                want_field_ty.deterministic_printing()
+            ),
+            TypedDictSubsetError::CovariantFieldMismatch {
+                got,
+                got_field_ty,
+                want,
+                want_field_ty,
+                field,
+            } => format!(
+                "Field `{field}` in `{got}` has type `{}`, which is not assignable to `{}`, the type of `{want}.{field}` (read-only fields are covariant)",
+                got_field_ty.deterministic_printing(),
+                want_field_ty.deterministic_printing()
+            ),
+        }
+    }
+}
+
 /// If a got <: want check fails, the failure reason
 #[derive(Debug, Clone)]
 pub enum SubsetError {
@@ -946,8 +1019,38 @@ pub enum SubsetError {
     /// Instantiations for quantified vars are incompatible with bounds
     #[allow(dead_code)]
     TypeVarSpecialization(Vec1<TypeVarSpecializationError>),
+    /// `got` is missing an attribute that the Protocol `want` requires
+    /// The first element is the name of the protocol, the second is the name of the attribute
+    MissingAttribute(Name, Name),
+    /// Attribute in `got` is incompatible with the same attribute in Protocol `want`
+    /// The first element is the name of `want, the second element is `got`, and the third element is the name of the attribute
+    IncompatibleAttribute(Box<(Name, Type, Name, AttrSubsetError)>),
+    /// TypedDict subset check failed
+    TypedDict(Box<TypedDictSubsetError>),
     // TODO(rechen): replace this with specific reasons
     Other,
+}
+
+impl SubsetError {
+    pub fn to_error_msg(self) -> Option<String> {
+        match self {
+            SubsetError::PosParamName(got, want) => Some(format!(
+                "Positional parameter name mismatch: got `{got}`, want `{want}`"
+            )),
+            SubsetError::TypeVarSpecialization(_) => {
+                // TODO
+                None
+            }
+            SubsetError::MissingAttribute(protocol, attribute) => Some(format!(
+                "Protocol `{protocol}` requires attribute `{attribute}`"
+            )),
+            SubsetError::IncompatibleAttribute(box (protocol, got, attribute, err)) => {
+                Some(err.to_error_msg(&Name::new(format!("{got}")), &protocol, &attribute))
+            }
+            SubsetError::TypedDict(err) => Some(err.to_error_msg()),
+            SubsetError::Other => None,
+        }
+    }
 }
 
 /// A helper to implement subset ergonomically.
@@ -955,8 +1058,6 @@ pub enum SubsetError {
 pub struct Subset<'a, Ans: LookupAnswer> {
     solver: &'a Solver,
     pub type_order: TypeOrder<'a, Ans>,
-    // True if we are doing a union, false if we are actually checking for subset.
-    union: bool,
     gas: Gas,
     /// Recursive assumptions of pairs of types that is_subset_eq returns true for.
     /// Used for structural typechecking of protocols.
@@ -980,11 +1081,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     }
 
     /// Implementation of Var subset cases, calling onward to solve non-Var cases.
+    ///
+    /// This function does two things: it checks that got <: want, and it solves free variables assuming that
+    /// got <: want.
+    ///
+    /// Before solving, for Quantified and Partial variables we will generally
+    /// promote literals when a variable appears on the left side of an
+    /// inequality, but not when it is on the left. This means that, e.g.:
+    /// - if `f[T](x: T) -> T: ...`, then `f(1)` gets solved to `int`
+    /// - if `f(x: Literal[0]): ...`, then `x = []; f(x[0])` results in `x: list[Literal[0]]`
     fn is_subset_eq_var(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
-        // This function does two things: it checks that got <: want, and it solves free variables assuming that
-        // got <: want. Most callers want both behaviors. The exception is that in a union, we call is_subset_eq
-        // for the sole purpose of solving partial and parameter variables, throwing away the check result.
-        let should_force = |v: &Variable| !self.union || matches!(v, Variable::Partial);
         match (got, want) {
             _ if got == want => Ok(()),
             (Type::Var(v1), Type::Var(v2)) => {
@@ -1017,111 +1123,110 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(variables);
                         self.is_subset_eq(&t1, want)
                     }
-                    (var_type1, var_type2)
-                        if should_force(var_type1) && should_force(var_type2) =>
-                    {
+                    (_, _) => {
                         drop(variable1);
                         drop(variable2);
                         variables.unify(*v1, *v2);
                         Ok(())
                     }
-                    (_, _) => Err(SubsetError::Other),
                 }
             }
             (Type::Var(v1), t2) => {
                 let variables = self.solver.variables.lock();
-                let variable = variables.get(*v1);
-                match &*variable {
+                let v1_ref = variables.get(*v1);
+                match &*v1_ref {
                     Variable::Parameter => {
                         unreachable!("Unexpected Variable::Parameter in constraint");
                     }
                     Variable::Answer(t1) => {
                         let t1 = t1.clone();
-                        drop(variable);
+                        drop(v1_ref);
                         drop(variables);
                         self.is_subset_eq(&t1, t2)
                     }
-                    var_type if should_force(var_type) => {
-                        if let Variable::Quantified(q) = var_type {
-                            let name = q.name.clone();
-                            let bound = q.restriction().as_type(self.type_order.stdlib());
-                            drop(variable);
-                            variables.update(*v1, Variable::Answer(t2.clone()));
-                            drop(variables);
-                            if let Err(e) = self.is_subset_eq(t2, &bound) {
-                                self.solver.instantiation_errors.write().insert(
-                                    *v1,
-                                    TypeVarSpecializationError {
-                                        name,
-                                        got: t2.clone(),
-                                        want: bound,
-                                        error: e,
-                                    },
-                                );
-                            }
-                        } else {
-                            drop(variable);
-                            variables.update(*v1, Variable::Answer(t2.clone()));
+                    Variable::Quantified(q) => {
+                        let name = q.name.clone();
+                        let bound = q.restriction().as_type(self.type_order.stdlib());
+                        drop(v1_ref);
+                        variables.update(*v1, Variable::Answer(t2.clone()));
+                        drop(variables);
+                        if let Err(e) = self.is_subset_eq(t2, &bound) {
+                            self.solver.instantiation_errors.write().insert(
+                                *v1,
+                                TypeVarSpecializationError {
+                                    name,
+                                    got: t2.clone(),
+                                    want: bound,
+                                    error: e,
+                                },
+                            );
                         }
                         Ok(())
                     }
-                    _ => Err(SubsetError::Other),
+                    Variable::Partial | Variable::Unwrap | Variable::Recursive(..) => {
+                        drop(v1_ref);
+                        variables.update(*v1, Variable::Answer(t2.clone()));
+                        Ok(())
+                    }
                 }
             }
             (t1, Type::Var(v2)) => {
                 let variables = self.solver.variables.lock();
-                let variable = variables.get(*v2);
-                match &*variable {
+                let v2_ref = variables.get(*v2);
+                match &*v2_ref {
                     Variable::Parameter => {
                         unreachable!("Unexpected Variable::Parameter in constraint");
                     }
                     Variable::Answer(t2) => {
                         let t2 = t2.clone();
-                        drop(variable);
+                        drop(v2_ref);
                         drop(variables);
                         self.is_subset_eq(t1, &t2)
                     }
-                    var_type if should_force(var_type) => {
-                        // Note that we promote the type when the var is on the RHS, but not when it's on the
-                        // LHS, so that we infer more general types but leave user-specified types alone.
-                        let t1_p = var_type.promote(t1.clone(), self.type_order);
-                        if let Variable::Quantified(q) = var_type {
-                            let name = q.name.clone();
-                            let bound = q.restriction().as_type(self.type_order.stdlib());
-                            drop(variable);
-                            variables.update(*v2, Variable::Answer(t1_p.clone()));
-                            drop(variables);
-                            if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
-                                // If the promoted type fails, try again with the original type, in case the bound itself is literal.
-                                // This could be more optimized, but errors are rare, so this code path should not be hot.
+                    Variable::Quantified(q) => {
+                        let t1_p = t1.clone().promote_literals(self.type_order.stdlib());
+                        let name = q.name.clone();
+                        let bound = q.restriction().as_type(self.type_order.stdlib());
+                        drop(v2_ref);
+                        variables.update(*v2, Variable::Answer(t1_p.clone()));
+                        drop(variables);
+                        if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
+                            // If the promoted type fails, try again with the original type, in case the bound itself is literal.
+                            // This could be more optimized, but errors are rare, so this code path should not be hot.
+                            self.solver
+                                .variables
+                                .lock()
+                                .update(*v2, Variable::Answer(t1.clone()));
+                            if self.is_subset_eq(t1, &bound).is_err() {
+                                // If the original type is also an error, use the promoted type.
                                 self.solver
                                     .variables
                                     .lock()
-                                    .update(*v2, Variable::Answer(t1.clone()));
-                                if self.is_subset_eq(t1, &bound).is_err() {
-                                    // If the original type is also an error, use the promoted type.
-                                    self.solver
-                                        .variables
-                                        .lock()
-                                        .update(*v2, Variable::Answer(t1_p.clone()));
-                                    self.solver.instantiation_errors.write().insert(
-                                        *v2,
-                                        TypeVarSpecializationError {
-                                            name,
-                                            got: t1_p.clone(),
-                                            want: bound,
-                                            error: err_p,
-                                        },
-                                    );
-                                }
+                                    .update(*v2, Variable::Answer(t1_p.clone()));
+                                self.solver.instantiation_errors.write().insert(
+                                    *v2,
+                                    TypeVarSpecializationError {
+                                        name,
+                                        got: t1_p.clone(),
+                                        want: bound,
+                                        error: err_p,
+                                    },
+                                );
                             }
-                        } else {
-                            drop(variable);
-                            variables.update(*v2, Variable::Answer(t1_p));
                         }
                         Ok(())
                     }
-                    _ => Err(SubsetError::Other),
+                    Variable::Partial => {
+                        let t1_p = t1.clone().promote_literals(self.type_order.stdlib());
+                        drop(v2_ref);
+                        variables.update(*v2, Variable::Answer(t1_p));
+                        Ok(())
+                    }
+                    Variable::Unwrap | Variable::Recursive(..) => {
+                        drop(v2_ref);
+                        variables.update(*v2, Variable::Answer(t1.clone()));
+                        Ok(())
+                    }
                 }
             }
             _ => self.is_subset_eq_impl(got, want),

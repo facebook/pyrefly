@@ -10,6 +10,8 @@ use std::fmt;
 use std::fmt::Display;
 
 use dupe::Dupe;
+use itertools::Either;
+use itertools::Itertools;
 use num_traits::ToPrimitive;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
@@ -27,10 +29,12 @@ use ruff_python_ast::Comprehension;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
+use ruff_python_ast::ExprGenerator;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprSlice;
 use ruff_python_ast::ExprStarred;
 use ruff_python_ast::ExprStringLiteral;
+use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::Number;
@@ -38,6 +42,8 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
+use vec1::Vec1;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -410,132 +416,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 Type::Callable(Box::new(Callable { params, ret }))
             }
-            Expr::Tuple(x) => {
-                let (hint_ts, default_hint) = if let Some(hint) = &hint
-                    && let Type::Tuple(tup) = hint.ty()
-                {
-                    match tup {
-                        Tuple::Concrete(elts) => {
-                            let elt_hints = elts.map(|ty| HintRef::new(ty, hint.errors()));
-                            (elt_hints, None)
-                        }
-                        Tuple::Unpacked(box (prefix, _, _)) => {
-                            // TODO: We should also contextually type based on the middle and suffix
-                            let prefix_hints = prefix.map(|ty| HintRef::new(ty, hint.errors()));
-                            (prefix_hints, None)
-                        }
-                        Tuple::Unbounded(elt) => {
-                            (Vec::new(), Some(HintRef::new(elt, hint.errors())))
-                        }
-                    }
-                } else {
-                    (Vec::new(), None)
-                };
-                let mut prefix = Vec::new();
-                let mut unbounded = Vec::new();
-                let mut suffix = Vec::new();
-                let mut hint_ts_iter = hint_ts.into_iter();
-                let mut encountered_invalid_star = false;
-                for elt in x.elts.iter() {
-                    match elt {
-                        Expr::Starred(ExprStarred { value, .. }) => {
-                            let ty = self.expr_infer(value, errors);
-                            match ty {
-                                Type::Tuple(Tuple::Concrete(elts)) => {
-                                    if unbounded.is_empty() {
-                                        if !elts.is_empty() {
-                                            hint_ts_iter.nth(elts.len() - 1);
-                                        }
-                                        prefix.extend(elts);
-                                    } else {
-                                        suffix.extend(elts)
-                                    }
-                                }
-                                Type::Tuple(Tuple::Unpacked(box (pre, middle, suff)))
-                                    if unbounded.is_empty() =>
-                                {
-                                    prefix.extend(pre);
-                                    suffix.extend(suff);
-                                    unbounded.push(middle);
-                                    hint_ts_iter.nth(usize::MAX);
-                                }
-                                _ => {
-                                    if let Some(iterable_ty) = self.unwrap_iterable(&ty) {
-                                        if !unbounded.is_empty() {
-                                            unbounded.push(Type::Tuple(Tuple::unbounded(
-                                                self.unions(suffix),
-                                            )));
-                                            suffix = Vec::new();
-                                        }
-                                        unbounded.push(Type::Tuple(Tuple::unbounded(iterable_ty)));
-                                        hint_ts_iter.nth(usize::MAX);
-                                    } else {
-                                        self.error(
-                                            errors,
-                                            x.range(),
-                                            ErrorInfo::Kind(ErrorKind::NotIterable),
-                                            format!(
-                                                "Expected an iterable, got `{}`",
-                                                self.for_display(ty)
-                                            ),
-                                        );
-                                        encountered_invalid_star = true;
-                                        hint_ts_iter.nth(usize::MAX); // TODO: missing test
-                                    }
-                                }
-                            }
-                        }
-                        _ => {
-                            let ty = self.expr_infer_type_no_trace(
-                                elt,
-                                if unbounded.is_empty() {
-                                    hint_ts_iter.next().or(default_hint)
-                                } else {
-                                    None
-                                },
-                                errors,
-                            );
-                            if unbounded.is_empty() {
-                                prefix.push(ty)
-                            } else {
-                                suffix.push(ty)
-                            }
-                        }
-                    }
-                }
-                if encountered_invalid_star {
-                    // We already produced the type error, and we can't really roll up a suitable outermost type here.
-                    // TODO(stroxler): should we really be producing a `tuple[Any]` here? We do at least know *something* about the type!
-                    Type::any_error()
-                } else {
-                    match unbounded.as_slice() {
-                        [] => Type::tuple(prefix),
-                        [middle] => Type::Tuple(Tuple::unpacked(prefix, middle.clone(), suffix)),
-                        // We can't precisely model unpacking two unbounded iterables, so we'll keep any
-                        // concrete prefix and suffix elements and merge everything in between into an unbounded tuple
-                        _ => {
-                            let middle_types: Vec<Type> = unbounded
-                                .iter()
-                                .map(|t| {
-                                    self.unwrap_iterable(t)
-                                        .unwrap_or(Type::Any(AnyStyle::Implicit))
-                                })
-                                .collect();
-                            Type::Tuple(Tuple::unpacked(
-                                prefix,
-                                Type::Tuple(Tuple::Unbounded(Box::new(self.unions(middle_types)))),
-                                suffix,
-                            ))
-                        }
-                    }
-                }
-            }
+            Expr::Tuple(x) => self.tuple_infer(x, hint, errors),
             Expr::List(x) => {
                 let elt_hint = hint.and_then(|ty| self.decompose_list(ty));
                 if x.is_empty() {
                     let elem_ty = elt_hint.map_or_else(
                         || {
                             if !self.solver().infer_with_first_use {
+                                self.error(
+                                    errors,
+                                    x.range(),
+                                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                                    "This expression is implicitly inferred to be `list[Any]`. Please provide an explicit type annotation.".to_owned(),
+                                );
                                 Type::any_implicit()
                             } else {
                                 self.solver().fresh_contained(self.uniques).to_type()
@@ -556,6 +449,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let elem_ty = elem_hint.map_or_else(
                         || {
                             if !self.solver().infer_with_first_use {
+                                self.error(
+                                    errors,
+                                    x.range(),
+                                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                                    "This expression is implicitly inferred to be `set[Any]`. Please provide an explicit type annotation.".to_owned(),
+                                );
                                 Type::any_implicit()
                             } else {
                                 self.solver().fresh_contained(self.uniques).to_type()
@@ -616,9 +515,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                     )
                     .into_ty();
-                self.stdlib
-                    .generator(yield_ty, Type::None, Type::None)
-                    .to_type()
+                if self.generator_expr_is_async(x) {
+                    self.stdlib.async_generator(yield_ty, Type::None).to_type()
+                } else {
+                    self.stdlib
+                        .generator(yield_ty, Type::None, Type::None)
+                        .to_type()
+                }
             }
             Expr::Await(x) => {
                 let awaiting_ty = self.expr_infer(&x.value, errors);
@@ -627,7 +530,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None => self.error(
                         errors,
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::AsyncError),
+                        ErrorInfo::Kind(ErrorKind::NotAsync),
                         ErrorContext::Await(self.for_display(ty.clone())).format(),
                     ),
                 })
@@ -711,6 +614,187 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn tuple_infer(&self, x: &ExprTuple, hint: Option<HintRef>, errors: &ErrorCollector) -> Type {
+        let owner = Owner::new();
+        let (hint_ts, default_hint) = if let Some(hint) = &hint {
+            let (tuples, nontuples) = self.split_tuple_hint(hint.ty());
+            // Combine hints from multiple tuples.
+            let mut element_hints: Vec<Vec1<&Type>> = Vec::new();
+            let mut default_hint = Vec::new();
+            for tuple in tuples {
+                let (cur_element_hints, cur_default_hint) = self.tuple_to_element_hints(tuple);
+                if let Some(cur_default_hint) = cur_default_hint {
+                    // Use the default hint for any elements that this tuple doesn't provide per-element hints for.
+                    for ts in element_hints.iter_mut().skip(cur_element_hints.len()) {
+                        ts.push(cur_default_hint);
+                    }
+                    default_hint.push(cur_default_hint);
+                }
+                for (i, element_hint) in cur_element_hints.into_iter().enumerate() {
+                    if i < element_hints.len() {
+                        element_hints[i].push(element_hint);
+                    } else {
+                        element_hints.push(vec1![element_hint]);
+                    }
+                }
+            }
+            if !nontuples.is_empty() {
+                // The non-tuple options may contain a type like Sequence[T] that provides an additional default hint.
+                let nontuple_hint = self.unions(nontuples.into_iter().cloned().collect());
+                let nontuple_element_hint =
+                    self.decompose_tuple(HintRef::new(&nontuple_hint, hint.errors()));
+                if let Some(nontuple_element_hint) = nontuple_element_hint {
+                    let nontuple_element_hint = owner.push(nontuple_element_hint.to_type());
+                    for ts in element_hints.iter_mut() {
+                        ts.push(nontuple_element_hint);
+                    }
+                    default_hint.push(nontuple_element_hint);
+                }
+            }
+            (
+                element_hints.into_map(|ts| self.types_to_hint(ts, hint.errors(), &owner)),
+                Vec1::try_from_vec(default_hint)
+                    .ok()
+                    .map(|ts| self.types_to_hint(ts, hint.errors(), &owner)),
+            )
+        } else {
+            (Vec::new(), None)
+        };
+        let mut prefix = Vec::new();
+        let mut unbounded = Vec::new();
+        let mut suffix = Vec::new();
+        let mut hint_ts_iter = hint_ts.into_iter();
+        let mut encountered_invalid_star = false;
+        for elt in x.elts.iter() {
+            match elt {
+                Expr::Starred(ExprStarred { value, .. }) => {
+                    let ty = self.expr_infer(value, errors);
+                    match ty {
+                        Type::Tuple(Tuple::Concrete(elts)) => {
+                            if unbounded.is_empty() {
+                                if !elts.is_empty() {
+                                    hint_ts_iter.nth(elts.len() - 1);
+                                }
+                                prefix.extend(elts);
+                            } else {
+                                suffix.extend(elts)
+                            }
+                        }
+                        Type::Tuple(Tuple::Unpacked(box (pre, middle, suff)))
+                            if unbounded.is_empty() =>
+                        {
+                            prefix.extend(pre);
+                            suffix.extend(suff);
+                            unbounded.push(middle);
+                            hint_ts_iter.nth(usize::MAX);
+                        }
+                        _ => {
+                            if let Some(iterable_ty) = self.unwrap_iterable(&ty) {
+                                if !unbounded.is_empty() {
+                                    unbounded
+                                        .push(Type::Tuple(Tuple::unbounded(self.unions(suffix))));
+                                    suffix = Vec::new();
+                                }
+                                unbounded.push(Type::Tuple(Tuple::unbounded(iterable_ty)));
+                                hint_ts_iter.nth(usize::MAX);
+                            } else {
+                                self.error(
+                                    errors,
+                                    x.range(),
+                                    ErrorInfo::Kind(ErrorKind::NotIterable),
+                                    format!("Expected an iterable, got `{}`", self.for_display(ty)),
+                                );
+                                encountered_invalid_star = true;
+                                hint_ts_iter.nth(usize::MAX); // TODO: missing test
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    let ty = self.expr_infer_type_no_trace(
+                        elt,
+                        if unbounded.is_empty() {
+                            hint_ts_iter.next().or(default_hint)
+                        } else {
+                            None
+                        },
+                        errors,
+                    );
+                    if unbounded.is_empty() {
+                        prefix.push(ty)
+                    } else {
+                        suffix.push(ty)
+                    }
+                }
+            }
+        }
+        if encountered_invalid_star {
+            // We already produced the type error, and we can't really roll up a suitable outermost type here.
+            // TODO(stroxler): should we really be producing a `tuple[Any]` here? We do at least know *something* about the type!
+            Type::any_error()
+        } else {
+            match unbounded.as_slice() {
+                [] => Type::tuple(prefix),
+                [middle] => Type::Tuple(Tuple::unpacked(prefix, middle.clone(), suffix)),
+                // We can't precisely model unpacking two unbounded iterables, so we'll keep any
+                // concrete prefix and suffix elements and merge everything in between into an unbounded tuple
+                _ => {
+                    let middle_types: Vec<Type> = unbounded
+                        .iter()
+                        .map(|t| {
+                            self.unwrap_iterable(t)
+                                .unwrap_or(Type::Any(AnyStyle::Implicit))
+                        })
+                        .collect();
+                    Type::Tuple(Tuple::unpacked(
+                        prefix,
+                        Type::Tuple(Tuple::Unbounded(Box::new(self.unions(middle_types)))),
+                        suffix,
+                    ))
+                }
+            }
+        }
+    }
+
+    fn split_tuple_hint<'b>(&self, hint: &'b Type) -> (Vec<&'b Tuple>, Vec<&'b Type>) {
+        match hint {
+            Type::Tuple(tuple) => (vec![tuple], Vec::new()),
+            Type::Union(ts) => ts.iter().partition_map(|t| match t {
+                Type::Tuple(tuple) => Either::Left(tuple),
+                _ => Either::Right(t),
+            }),
+            _ => (Vec::new(), vec![hint]),
+        }
+    }
+
+    fn tuple_to_element_hints<'b>(&self, tup: &'b Tuple) -> (Vec<&'b Type>, Option<&'b Type>) {
+        match tup {
+            Tuple::Concrete(elts) => (elts.iter().collect(), None),
+            Tuple::Unpacked(box (prefix, _, _)) => {
+                // TODO: We should also contextually type based on the middle and suffix
+                (prefix.iter().collect(), None)
+            }
+            Tuple::Unbounded(elt) => (Vec::new(), Some(elt)),
+        }
+    }
+
+    fn types_to_hint<'b>(
+        &self,
+        ts: Vec1<&'b Type>,
+        errors: Option<&'b ErrorCollector>,
+        owner: &'b Owner<Type>,
+    ) -> HintRef<'b, 'b> {
+        if ts.len() == 1 {
+            let (t, _) = ts.split_off_first();
+            HintRef::new(t, errors)
+        } else {
+            HintRef::new(
+                owner.push(self.unions(ts.into_iter().cloned().collect())),
+                errors,
+            )
+        }
+    }
+
     fn dict_infer(
         &self,
         items: &[DictItem],
@@ -758,12 +842,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         // Note that we don't need to filter out the TypedDict options here; any non-`dict` options
         // are ignored when decomposing the hint.
-        self.dict_items_infer(flattened_items, hint, errors)
+        self.dict_items_infer(range, flattened_items, hint, errors)
     }
 
     /// Infers a `dict` type for dictionary items. Note: does not handle TypedDict!
     fn dict_items_infer(
         &self,
+        range: TextRange,
         items: Vec<&DictItem>,
         hint: Option<HintRef>,
         errors: &ErrorCollector,
@@ -790,6 +875,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 },
                 |ty| ty.to_type(),
             );
+            if hint.is_none() && !self.solver().infer_with_first_use {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                    "This expression is implicitly inferred to be `dict[Any, Any]`. Please provide an explicit type annotation.".to_owned(),
+                );
+            }
             self.stdlib.dict(key_ty, value_ty).to_type()
         } else {
             let mut key_tys = Vec::new();
@@ -882,7 +975,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ty.as_bool().or_else(|| {
             // If the object defines `__bool__`, we can check if it returns a statically known value
             if self
-                .type_of_magic_dunder_attr(ty, &dunder::BOOL, range, errors, None, "as_bool")?
+                .type_of_magic_dunder_attr(ty, &dunder::BOOL, range, errors, None, "as_bool", true)?
                 .is_never()
             {
                 return None;
@@ -915,7 +1008,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // for the next one. Most useful for expressions like `optional_list or []`.
             let hint = hint.or_else(|| Some(HintRef::new(&t_acc, None)));
             let mut t = self.expr_infer_with_hint(value, hint, errors);
-            self.expand_type_mut(&mut t);
+            self.expand_vars_mut(&mut t);
             if should_shortcircuit(&t, value.range()) {
                 t_acc = self.union(t_acc, t);
                 break;
@@ -950,6 +1043,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.check_redundant_condition(&ty, if_clause.range(), errors);
             }
         }
+    }
+
+    /// If a comprehension contains `async for` clauses, or if it contains
+    /// `await` expressions or other asynchronous comprehensions anywhere except
+    /// the iterable expression in the leftmost `for` clause, it is treated as an `AsyncGenerator`
+    fn generator_expr_is_async(&self, generator: &ExprGenerator) -> bool {
+        if Ast::contains_await(&generator.elt) {
+            return true;
+        }
+        for (idx, comp) in generator.generators.iter().enumerate() {
+            if comp.is_async
+                || (idx != 0 && Ast::contains_await(&comp.iter))
+                || Ast::contains_await(&comp.target)
+                || comp.ifs.iter().any(Ast::contains_await)
+            {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn attr_infer_for_type(
@@ -1456,7 +1568,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::TypeAliasError),
+                        ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
                         format!(
                             "TypeAliasType must be assigned to a variable named `{}`",
                             lit.value.to_str()
@@ -1467,7 +1579,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     arg.range(),
-                    ErrorInfo::Kind(ErrorKind::TypeAliasError),
+                    ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
                     "Expected first argument of `TypeAliasType` to be a string literal".to_owned(),
                 );
             }
@@ -1483,7 +1595,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 arg.range(),
-                ErrorInfo::Kind(ErrorKind::TypeAliasError),
+                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
                 "Unexpected positional argument to `TypeAliasType`".to_owned(),
             );
         }
@@ -1495,7 +1607,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 kw.range,
-                                ErrorInfo::Kind(ErrorKind::TypeAliasError),
+                                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
                                 "Multiple values for argument `name`".to_owned(),
                             );
                         } else {
@@ -1508,7 +1620,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 kw.range,
-                                ErrorInfo::Kind(ErrorKind::TypeAliasError),
+                                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
                                 "Multiple values for argument `value`".to_owned(),
                             );
                         } else {
@@ -1522,7 +1634,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 kw.range,
-                                ErrorInfo::Kind(ErrorKind::TypeAliasError),
+                                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
                                 "Value for argument `type_params` must be a tuple literal"
                                     .to_owned(),
                             );
@@ -1532,7 +1644,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             kw.range,
-                            ErrorInfo::Kind(ErrorKind::TypeAliasError),
+                            ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
                             format!("Unexpected keyword argument `{}` to `TypeAliasType`", id.id),
                         );
                     }
@@ -1541,7 +1653,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         kw.range,
-                        ErrorInfo::Kind(ErrorKind::TypeAliasError),
+                        ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
                         "Cannot pass unpacked keyword arguments to `TypeAliasType`".to_owned(),
                     );
                 }
@@ -1551,7 +1663,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 x.range,
-                ErrorInfo::Kind(ErrorKind::TypeAliasError),
+                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
                 "Missing `name` argument".to_owned(),
             );
         }
@@ -1561,7 +1673,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 x.range,
-                ErrorInfo::Kind(ErrorKind::TypeAliasError),
+                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
                 "Missing `value` argument".to_owned(),
             );
             None
@@ -1719,7 +1831,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             slice.range(),
-                            ErrorInfo::Kind(ErrorKind::IndexError),
+                            ErrorInfo::Kind(ErrorKind::BadIndex),
                             format!(
                                 "Enum `{}` does not have a member named `{}`",
                                 cls.name(),
@@ -1738,28 +1850,60 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             slice.range(),
-                            ErrorInfo::Kind(ErrorKind::IndexError),
+                            ErrorInfo::Kind(ErrorKind::BadIndex),
                             format!("Enum `{}` can only be indexed by strings", cls.name()),
                         )
                     }
                 }
-                Type::ClassDef(cls) => Type::type_form(self.specialize(
-                    &cls,
-                    xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors)),
-                    range,
-                    errors,
-                )),
+                Type::ClassDef(cls) => {
+                    let metadata = self.get_metadata_for_class(&cls);
+                    let class_getitem_result = if self.get_class_tparams(&cls).is_empty()
+                        && !metadata.has_base_any()
+                        && !metadata.is_new_type()
+                    {
+                        let class_ty = Type::ClassDef(cls.dupe());
+                        // TODO(stroxler): Add a new API, similar to `type_of_attr_get` but returning a
+                        // LookupResult or an Optional type, that we could use here to avoid the double lookup.
+                        if self.has_attr(&class_ty, &dunder::CLASS_GETITEM) {
+                            let cls_value = self.promote_silently(&cls);
+                            let call_args = [CallArg::ty(&cls_value, range), CallArg::expr(slice)];
+                            Some(self.call_method_or_error(
+                                &class_ty,
+                                &dunder::CLASS_GETITEM,
+                                range,
+                                &call_args,
+                                &[],
+                                errors,
+                                Some(&|| ErrorContext::Index(self.for_display(class_ty.clone()))),
+                            ))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(result) = class_getitem_result {
+                        result
+                    } else {
+                        Type::type_form(self.specialize(
+                            &cls,
+                            xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors)),
+                            range,
+                            errors,
+                        ))
+                    }
+                }
                 Type::Type(box Type::SpecialForm(special)) => {
                     self.apply_special_form(special, slice, range, errors)
                 }
-                Type::Tuple(Tuple::Concrete(ref elts)) if xs.len() == 1 => self.infer_tuple_index(
+                Type::Tuple(Tuple::Concrete(ref elts)) => self.infer_tuple_index(
                     elts.to_owned(),
-                    &xs[0],
+                    slice,
                     range,
                     errors,
                     Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                 ),
-                Type::Tuple(_) if xs.len() == 1 => self.call_method_or_error(
+                Type::Tuple(_) => self.call_method_or_error(
                     &base,
                     &dunder::GETITEM,
                     range,
@@ -1816,7 +1960,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 self.error(
                                     errors,
                                     slice.range(),
-                                    ErrorInfo::Kind(ErrorKind::TypedDictKeyError),
+                                    ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
                                     format!(
                                         "TypedDict `{}` does not have key `{}`",
                                         typed_dict.name(),
@@ -1837,7 +1981,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         _ => self.error(
                             errors,
                             slice.range(),
-                            ErrorInfo::Kind(ErrorKind::TypedDictKeyError),
+                            ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
                             format!(
                                 "Invalid key for TypedDict `{}`, got `{}`",
                                 typed_dict.name(),
@@ -1929,7 +2073,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 range,
-                                ErrorInfo::Kind(ErrorKind::IndexError),
+                                ErrorInfo::Kind(ErrorKind::BadIndex),
                                 format!(
                                     "Index {idx} out of range for tuple with {} elements",
                                     elts.len()
@@ -1979,7 +2123,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorInfo::Kind(ErrorKind::IndexError),
+                            ErrorInfo::Kind(ErrorKind::BadIndex),
                             format!(
                                 "Index `{idx}` out of range for bytes with {} elements",
                                 bytes.len()

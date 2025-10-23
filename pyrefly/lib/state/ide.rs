@@ -77,7 +77,7 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             | Binding::LoopPhi(k, ..) => {
                 current_idx = *k;
             }
-            Binding::Phi(ks) if !ks.is_empty() => current_idx = *ks.iter().next().unwrap(),
+            Binding::Phi(_, ks) if !ks.is_empty() => current_idx = *ks.iter().next().unwrap(),
             Binding::PossibleLegacyTParam(k, _) => {
                 let binding = bindings.get(*k);
                 current_idx = binding.idx();
@@ -198,6 +198,21 @@ pub fn insert_import_edit(
         export_name,
         use_absolute_import,
     )
+}
+
+/// Insert `import <>` import at the top of the file
+pub fn import_regular_import_edit(
+    ast: &ModModule,
+    handle_to_import_from: Handle,
+) -> (TextSize, String) {
+    let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
+        first_stmt.range().start()
+    } else {
+        ast.range.end()
+    };
+    let module_name_to_import = handle_to_import_from.module();
+    let insert_text = format!("import {}\n", module_name_to_import.as_str());
+    (position, insert_text)
 }
 
 pub fn insert_import_edit_with_forced_import_format(

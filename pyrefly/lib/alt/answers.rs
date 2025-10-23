@@ -680,6 +680,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 is_deprecated: _,
                 definition,
                 docstring_range: _,
+                is_reexport: _,
             } in self.completions(base.clone(), Some(attribute_name), false)
             {
                 match definition {

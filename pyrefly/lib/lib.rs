@@ -28,7 +28,7 @@
 #![feature(closure_lifetime_binder)]
 #![feature(if_let_guard)]
 
-mod alt;
+pub mod alt;
 mod binding;
 #[cfg(not(target_arch = "wasm32"))]
 mod commands;
@@ -38,6 +38,7 @@ mod export;
 mod graph;
 #[cfg(not(target_arch = "wasm32"))]
 mod lsp;
+mod lsp_features;
 mod module;
 pub mod playground;
 pub mod query;
@@ -64,8 +65,8 @@ pub mod library {
                 pub use crate::commands::all::Command;
                 pub use crate::commands::check::CheckArgs;
                 pub use crate::commands::check::FullCheckArgs;
-                pub use crate::commands::config_finder::DefaultConfigConfigurer;
-                pub use crate::commands::config_finder::standard_config_finder;
+                pub use crate::commands::config_finder::default_config_finder;
+                pub use crate::commands::config_finder::default_config_finder_with_overrides;
                 pub use crate::commands::util;
             }
         }

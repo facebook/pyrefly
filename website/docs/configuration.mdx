@@ -131,7 +131,7 @@ This does not specify
 import should be resolved from. See [`search-path`](#search-path) instead.
 
 - Type: list of [filesystem glob patterns](#filesystem-globbing)
-- Default: `["**/*"]`
+- Default: `["**/*.py*"]`
 - Flag equivalent: `FILES...` argument
 - Equivalent configs: `include` in Pyright, `files`/`modules`/`packages` in
   mypy
@@ -157,8 +157,11 @@ The glob patterns used to describe which files to avoid
 type checking as way to filter files that match `project-includes`,
 but we don't want to type check.
 
+The default here is *always* included in your `project-excludes`, even if you override
+it to something else.
+
 - Type: list of [filesystem glob patterns](#filesystem-globbing)
-- Default: `["**/node_modules", "**/__pycache__", "**/*venv/**"]`
+- Default: `["**/node_modules", "**/__pycache__", "**/venv/**", "**/.[!/.]*/**"]`
 - Flag equivalent: `--project-excludes`
 - Equivalent configs: `exclude` in Pyright and mypy
 - Notes:
@@ -258,11 +261,13 @@ resolution, after [`search-path`](#search-path) and `typeshed`.
 See more on [how Pyrefly does import resolution](import-resolution.mdx).
 
 - Type: list of directories
-- Default: result from [Environment Autoconfiguration](#environment-autoconfiguration), or
+- Default: `./typings` + the result from [Environment Autoconfiguration](#environment-autoconfiguration), or
   `[]` if the Python interpreter cannot be queried
 - Flag equivalent: `--site-package-path`
 - Equivalent configs: none
 - Notes:
+  - The queried interpreter's site package paths will always be included in addition to any user-specified value,
+  unless environment auto-configuration is turned off.
   - Ideally, this should not be set manually, unless you're using a venv, running one-off tests,
     testing specific behavior, or having trouble with [Environment Autoconfiguration](#environment-autoconfiguration).
     Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
@@ -465,7 +470,7 @@ will always, unconditionally replace the import with `typing.Any`.
 - Flag equivalent: `--ignore-missing-imports`
 - Equivalent configs: `ignore_missing_imports` in mypy
 - Notes:
-  - `errors = {import-error = false}` (TOML inline table for `errors`) has similar behavior in Pyrefly, but ignores
+  - `errors = {missing-import = false}` (TOML inline table for `errors`) has similar behavior in Pyrefly, but ignores
     *all* import errors instead of import errors from specific modules.
   - When a `.pyc` file is encountered and no source/stub files are available, Pyrefly automatically treats module as `typing.Any`.
     This behavior ensures that compiled Python files without available source code do not cause import errors and are handled permissively.
@@ -868,10 +873,10 @@ interpreter installed, some of these values may be overridden.
 ```toml
 ###### configuring what to type check and where to import from
 
-# check all files in "."
-project-includes = ["."]
-# exclude dotfiles
-project-excludes = ["**/.[!/.]*", "**/*venv/**"]
+# check all Python files under the containing directory
+project-includes = ["**/*.py*"]
+# exclude some uninteresting files
+project-excludes = ["**/node_modules", "**/__pycache__", "**/*venv/**", "**/.[!/.]*/**"]
 # perform an upward search for `.gitignore`, `.ignore`, and `.git/info/exclude`, and
 # add those to `project-excludes` automatically
 use-ignore-files = true

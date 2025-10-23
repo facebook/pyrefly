@@ -11,7 +11,7 @@ testcase!(
     test_override_any,
     r#"
 from typing import override, Any
- 
+
 class ParentB(Any):
     pass
 
@@ -19,21 +19,21 @@ class ParentB(Any):
 class ChildB(ParentB):
     @override
     def method1(self) -> None:
-        pass        
+        pass
  "#,
 );
 
 testcase!(
     test_override_basic_method,
     r#"
- 
+
 class A:
     def f(self, x:str, y:str) -> str:
         return x + y
 
 class B(A):
     def f(self, x:int, y:int) -> int: # E: Class member `B.f` overrides parent class `A` in an inconsistent manner
-        return x + y        
+        return x + y
  "#,
 );
 
@@ -214,7 +214,7 @@ class ChildA(ParentA):
     @override
     def property1(self) -> int: # E: Class member `ChildA.property1` is marked as an override, but no parent class has a matching attribute
         return 1
-    
+
  "#,
 );
 
@@ -231,7 +231,7 @@ class ChildA(ParentA):
     @staticmethod
     def static_method1() -> int: # E: Class member `ChildA.static_method1` is marked as an override, but no parent class has a matching attribute
         return 1
-    
+
  "#,
 );
 
@@ -258,7 +258,7 @@ class ChildA(ParentA):
     @wrapper
     @override
     @staticmethod
-    def static_method1() -> bool: 
+    def static_method1() -> bool:
         return True
  "#,
 );
@@ -280,7 +280,7 @@ class ChildA(ParentA):
     @override
     @staticmethod
     def static_method1() -> int:
-        return 1    
+        return 1
  "#,
 );
 
@@ -303,7 +303,7 @@ class ChildA(ParentA):
         ...
 
     @override
-    def method4(self, x: int | str) -> int | str: 
+    def method4(self, x: int | str) -> int | str:
         return 0
  "#,
 );
@@ -531,7 +531,7 @@ class UseBase:
 
 class UseDerived(UseBase):
     __private: Derived
-    def __iter__(self) -> Iterator[list[Derived]]: ...  # E: `UseDerived.__iter__` overrides parent class `UseBase` in an inconsistent manner 
+    def __iter__(self) -> Iterator[list[Derived]]: ...  # E: `UseDerived.__iter__` overrides parent class `UseBase` in an inconsistent manner
     "#,
 );
 
@@ -545,7 +545,7 @@ class C:
     @override
     def __eq__(self, other: object) -> bool:  # OK
         ...
-    
+
     @override
     def __does_not_exist__(self, other: object) -> bool:  # E: no parent class has a matching attribute
         ...
@@ -564,5 +564,20 @@ class UseBase:
 
 class UseDerived(UseBase):
     def __call__(self) -> list[Derived]: ...
+    "#,
+);
+
+testcase!(
+    test_override_with_type_alias_param,
+    r#"
+from typing import TypeAliasType
+TA1 = TypeAliasType("TA1", float | int | None)
+TA2 = TypeAliasType("TA2", float | int)
+class A:
+    def f(self, x: TA1):
+        pass
+class B(A):
+    def f(self, x: TA2):  # E: `B.f` has type `BoundMethod[B, (self: B, x: float | int) -> None]`, which is not assignable to `BoundMethod[B, (self: B, x: float | int | None) -> None]`, the type of `A.f`
+        pass
     "#,
 );

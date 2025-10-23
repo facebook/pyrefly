@@ -432,3 +432,25 @@ def f(x: type[tuple[Any, ...]]):
     return x() # Ok
     "#,
 );
+
+testcase!(
+    test_bad_tuple_index,
+    r#"
+def f(x: tuple[int, int], y: tuple[int, ...]):
+    x[(1, 2)]  # E: No matching overload found for function `tuple.__getitem__`
+    y[(1, 2)]  # E: No matching overload found for function `tuple.__getitem__`
+    "#,
+);
+
+testcase!(
+    test_typevartuple_subclass_index,
+    r#"
+from typing import assert_type, TypeVarTuple
+Ts = TypeVarTuple('Ts')
+class TupleChild(tuple[*Ts]): ...
+def f(x: TupleChild[int, str]):
+    assert_type(x[0], int)
+    assert_type(x[1], str)
+    x[2]  # E: Index 2 out of range for tuple with 2 elements
+    "#,
+);

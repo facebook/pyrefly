@@ -340,11 +340,11 @@ mod tests {
         let tests_errors = tests_config.settings.errors.as_ref().unwrap();
 
         assert_eq!(
-            src_errors.severity(ErrorKind::ImportError),
+            src_errors.severity(ErrorKind::MissingImport),
             Severity::Ignore
         );
         assert_eq!(
-            tests_errors.severity(ErrorKind::ImportError),
+            tests_errors.severity(ErrorKind::MissingImport),
             Severity::Error
         );
     }

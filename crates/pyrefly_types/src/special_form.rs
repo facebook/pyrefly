@@ -16,6 +16,7 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::name::Name;
 
 use crate::annotation::Qualifier;
@@ -54,7 +55,18 @@ pub enum SpecialForm {
 
 impl SpecialForm {
     pub fn new(name: &Name, annotation: &Expr) -> Option<Self> {
-        if !matches!(annotation, Expr::Name(x) if x.id == "_SpecialForm") {
+        if name.as_str() == "Generic" {
+            if let Expr::Subscript(ExprSubscript {
+                value: box Expr::Name(x),
+                slice: box Expr::Name(y),
+                ..
+            }) = annotation
+                && x.id == "type"
+                && y.id == "_Generic"
+            {
+                return Some(SpecialForm::Generic);
+            }
+        } else if !matches!(annotation, Expr::Name(x) if x.id == "_SpecialForm") {
             return None;
         }
         SpecialForm::from_str(name.as_str()).ok()

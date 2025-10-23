@@ -7,6 +7,7 @@
 
 use num_traits::ToPrimitive;
 use pyrefly_python::ast::Ast;
+use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
@@ -921,6 +922,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             NarrowOp::Or(ops) => TypeInfo::join(
                 ops.map(|op| self.narrow(type_info, op, range, errors)),
                 &|tys| self.unions(tys),
+                &|got, want| self.is_subset_eq(got, want),
+                JoinStyle::SimpleMerge,
             ),
         }
     }

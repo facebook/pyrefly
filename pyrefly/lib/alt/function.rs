@@ -26,6 +26,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
@@ -92,7 +93,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let skip_implementation = self.module().path().style() == ModuleStyle::Interface
             || class_metadata.is_some_and(|idx| self.get_idx(*idx).is_protocol())
             || def.metadata().flags.is_abstract_method;
-        if def.metadata().flags.is_overload {
+        let mut ty = if def.metadata().flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
             let successor = self.get_function_successor(&def);
             if successor.is_none() {
@@ -191,7 +192,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 (*def.ty).clone()
             }
+        };
+
+        if def.is_stub()
+            && self.module().path().style() != ModuleStyle::Interface
+            && let Some(cls) = def.defining_cls()
+            && self.get_metadata_for_class(cls).is_protocol()
+        {
+            ty.transform_toplevel_func_metadata(|meta| {
+                meta.flags.is_abstract_method = true;
+            });
         }
+
+        ty
     }
 
     pub fn undecorated_function(
@@ -288,10 +301,51 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         stmt: &StmtFunctionDef,
         errors: &ErrorCollector,
     ) -> Arc<Type> {
-        let ret = self
+        let mut ret = self
             .get(&Key::ReturnType(ShortIdentifier::new(&stmt.name)))
             .arc_clone_ty();
-
+        // `stmt.returns` is always set to None because the binding step calls `mem::take` on it
+        let has_return_annotation_or_infers_return = self
+            .bindings()
+            .function_has_return_annotation_or_infers_return(&stmt.name);
+        if stmt.is_async
+            && def.metadata.flags.is_abstract_method
+            && !ret.is_any()
+            && let Some((_, _, coroutine_ret)) = self.unwrap_coroutine(&ret)
+            && !coroutine_ret.is_any()
+            && self.unwrap_async_iterator(&coroutine_ret).is_some()
+        {
+            self.error(
+                errors,
+                stmt.name.range(),
+                ErrorInfo::Kind(ErrorKind::BadFunctionDefinition),
+                "Abstract methods for async generators should use `def`, not `async def`"
+                    .to_owned(),
+            );
+            ret = coroutine_ret;
+        }
+        if !has_return_annotation_or_infers_return {
+            self.error(
+                errors,
+                stmt.name.range(),
+                ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                format!("`{}` is missing a return annotation", stmt.name),
+            );
+        }
+        for p in stmt.parameters.iter() {
+            let name = p.name().as_str();
+            if p.annotation().is_none() && name != "cls" && name != "self" {
+                self.error(
+                    errors,
+                    p.name().range(),
+                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                    format!(
+                        "`{}` is missing an annotation for parameter `{name}`",
+                        stmt.name
+                    ),
+                );
+            }
+        }
         if matches!(&ret, Type::TypeGuard(_) | Type::TypeIs(_)) {
             self.validate_type_guard_positional_argument_count(
                 &def.params,
@@ -353,6 +407,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(CalleeKind::Class(ClassKind::Property(name))) => {
                 Some(SpecialDecorator::Property(name))
             }
+            Some(CalleeKind::Class(ClassKind::CachedProperty(name))) => {
+                Some(SpecialDecorator::CachedProperty(name))
+            }
             Some(CalleeKind::Class(ClassKind::EnumMember)) => Some(SpecialDecorator::EnumMember),
             Some(CalleeKind::Function(FunctionKind::Override)) => Some(SpecialDecorator::Override),
             Some(CalleeKind::Function(FunctionKind::Final)) => Some(SpecialDecorator::Final),
@@ -396,6 +453,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             SpecialDecorator::Property(_) => {
                 flags.is_property_getter = true;
+                true
+            }
+            SpecialDecorator::CachedProperty(_) => {
+                flags.is_property_getter = true;
+                flags.is_cached_property = true;
                 true
             }
             SpecialDecorator::EnumMember => {
@@ -697,6 +759,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             SpecialDecorator::StaticMethod(name) => name.as_str(),
             SpecialDecorator::ClassMethod(name) => name.as_str(),
             SpecialDecorator::Property(name) => name.as_str(),
+            SpecialDecorator::CachedProperty(name) => name.as_str(),
             SpecialDecorator::EnumMember => "member",
             SpecialDecorator::Override => "override",
             SpecialDecorator::Final => "final",

@@ -50,6 +50,8 @@ const monaco = {
         registerDefinitionProvider: jest.fn(),
         registerHoverProvider: jest.fn(),
         registerInlayHintsProvider: jest.fn(),
+        registerDocumentSemanticTokensProvider: jest.fn(),
+        registerDocumentSemanticTokensLegendProvider: jest.fn(),
     },
 };
 
@@ -93,6 +95,24 @@ function setInlayHintFunctionForMonaco(
     _inlayHintFunction: () => any
 ): void {}
 
+/**
+ * Sets the semantic tokens function for Monaco
+ * @param _model The editor model
+ * @param _semanticTokensFunction The semantic tokens function
+ */
+function setSemanticTokensFunctionForMonaco(
+    _model: MockEditorModel,
+    _semanticTokensFunction: (range: any) => any
+): void {}
+
+/**
+ * Sets the semantic tokens legend function for Monaco
+ * @param _semanticTokensLegendFunction The semantic tokens legend function
+ */
+function setSemanticTokensLegendForMonaco(
+    _semanticTokensLegendFunction: () => any
+): void {}
+
 module.exports = {
     __esModule: true,
     monaco,
@@ -100,4 +120,6 @@ module.exports = {
     setGetDefFunction,
     setHoverFunctionForMonaco,
     setInlayHintFunctionForMonaco,
+    setSemanticTokensFunctionForMonaco,
+    setSemanticTokensLegendForMonaco
 };

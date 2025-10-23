@@ -54,8 +54,8 @@
   "annotations_methods.py": [],
   "annotations_typeexpr.py": [],
   "callables_annotation.py": [
-    "Line 156: Unexpected errors ['`Proto4[Ellipsis]` is not assignable to `Proto3`']",
-    "Line 157: Unexpected errors ['`Proto7` is not assignable to `Proto6`']"
+    "Line 156: Unexpected errors ['`Proto4[Ellipsis]` is not assignable to `Proto3`\\n  `Proto4[Ellipsis].__call__` has type `BoundMethod[Proto4[Ellipsis], (Proto4[Ellipsis], int, ...) -> None]`, which is not assignable to `BoundMethod[Proto4[Ellipsis], (self: Proto4[Ellipsis], a: int, *args: Any, **kwargs: Any) -> None]`, the type of `Proto3.__call__`']",
+    "Line 157: Unexpected errors ['`Proto7` is not assignable to `Proto6`\\n  `Proto7.__call__` has type `BoundMethod[Proto7, (self: Proto7, a: float, /, b: int, *, k: str, m: str) -> None]`, which is not assignable to `BoundMethod[Proto7, (self: Proto7, a: int, /, *args: Any, *, k: str, **kwargs: Any) -> None]`, the type of `Proto6.__call__`']"
   ],
   "callables_kwargs.py": [],
   "callables_protocol.py": [],
@@ -133,7 +133,7 @@
     "Line 98: Expected 1 errors"
   ],
   "generics_basic.py": [
-    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`', '`+` is not supported between `AnyStr` and `AnyStr`\\n  No matching overload found for function `str.__add__`\\n  Possible overloads:\\n  (value: LiteralString, /) -> LiteralString\\n  (value: str, /) -> str [closest match]', 'Returned type `bytes | Unknown` is not assignable to declared return type `AnyStr`']",
+    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`\\n  Protocol `Buffer` requires attribute `__buffer__`', '`+` is not supported between `AnyStr` and `AnyStr`\\n  No matching overload found for function `str.__add__`\\n  Possible overloads:\\n  (value: LiteralString, /) -> LiteralString\\n  (value: str, /) -> str [closest match]', 'Returned type `bytes | Unknown` is not assignable to declared return type `AnyStr`']",
     "Line 67: Unexpected errors ['assert_type(MyStr, str) failed']",
     "Line 68: Unexpected errors ['assert_type(MyStr, str) failed', 'Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`']"
   ],
@@ -250,20 +250,18 @@
     "Line 26: Unexpected errors ['Cannot instantiate `Proto` because it is a protocol']"
   ],
   "protocols_definition.py": [
-    "Line 67: Expected 1 errors",
     "Line 116: Expected 1 errors",
     "Line 117: Expected 1 errors",
-    "Line 79: Unexpected errors ['`Concrete` is not assignable to `Template`']"
+    "Line 79: Unexpected errors ['`Concrete` is not assignable to `Template`\\n  Protocol `Template` requires attribute `temp`']"
   ],
   "protocols_explicit.py": [
     "Line 27: Expected 1 errors",
-    "Line 89: Expected 1 errors",
-    "Line 134: Expected 1 errors"
+    "Line 89: Expected 1 errors"
   ],
   "protocols_generic.py": [],
   "protocols_merging.py": [],
   "protocols_modules.py": [
-    "Line 25: Unexpected errors ['`Module[_protocols_modules1]` is not assignable to `Options1`']"
+    "Line 25: Unexpected errors ['`Module[_protocols_modules1]` is not assignable to `Options1`\\n  `Module[_protocols_modules1].timeout` has type `Literal[100]`, which is not consistent with `int` in `Options1.timeout` (the type of read-write attributes cannot be changed)']"
   ],
   "protocols_recursive.py": [],
   "protocols_runtime_checkable.py": [

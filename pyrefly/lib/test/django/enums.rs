@@ -319,3 +319,16 @@ assert_type(A.X.value, tuple[Literal[1], Literal[2]])
 assert_type(A.X.label, str)
     "#,
 );
+
+django_testcase!(
+    test_override_properties,
+    r#"
+from typing import Any
+from django.db.models import TextChoices
+class A(TextChoices):
+    @property
+    def label(self) -> Any: ...
+    @property
+    def value(self) -> Any: ...
+    "#,
+);

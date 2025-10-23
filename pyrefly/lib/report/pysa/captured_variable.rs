@@ -150,7 +150,11 @@ impl<'a> CapturedVariableVisitor<'a> {
         let binding = self.module_context.bindings.get(idx);
         match binding {
             Binding::Forward(definition_idx) => {
-                self.get_definition_scope_from_idx(*definition_idx, SmallSet::new())
+                self.get_definition_scope_from_idx(
+                    *definition_idx,
+                    /* seen */ SmallSet::new(),
+                    /* depth */ 0,
+                )
             }
             _ => None,
         }
@@ -160,6 +164,7 @@ impl<'a> CapturedVariableVisitor<'a> {
         &self,
         idx: Idx<Key>,
         mut seen: SmallSet<Idx<Key>>,
+        mut depth: u32,
     ) -> Option<ScopeId> {
         if let Some(scope_id) = self.definition_to_scope_map.get(&idx) {
             return Some(*scope_id);
@@ -171,18 +176,28 @@ impl<'a> CapturedVariableVisitor<'a> {
         }
         seen.insert(idx);
 
+        // Avoid a bottleneck with very deep AST nodes.
+        if depth >= 10 {
+            return None;
+        }
+        depth += 1;
+
         let binding = self.module_context.bindings.get(idx);
         match binding {
-            Binding::Forward(idx) => self.get_definition_scope_from_idx(*idx, seen),
-            Binding::Phi(elements) => {
+            Binding::Forward(idx) => self.get_definition_scope_from_idx(*idx, seen, depth),
+            Binding::Phi(_, elements) => {
                 for idx in elements {
-                    if let Some(scope_id) = self.get_definition_scope_from_idx(*idx, seen.clone()) {
+                    if let Some(scope_id) =
+                        self.get_definition_scope_from_idx(*idx, seen.clone(), depth)
+                    {
                         return Some(scope_id);
                     }
                 }
                 None
             }
-            Binding::CompletedPartialType(idx, _) => self.get_definition_scope_from_idx(*idx, seen),
+            Binding::CompletedPartialType(idx, _) => {
+                self.get_definition_scope_from_idx(*idx, seen, depth)
+            }
             _ => None,
         }
     }
@@ -199,7 +214,13 @@ impl<'a> AstScopedVisitor for CapturedVariableVisitor<'a> {
         );
     }
 
-    fn visit_expression(&mut self, expr: &Expr, scopes: &Scopes) {
+    fn visit_expression(
+        &mut self,
+        expr: &Expr,
+        scopes: &Scopes,
+        _parent_expression: Option<&Expr>,
+        _assignment_targets: Option<&Vec<&Expr>>,
+    ) {
         if self.current_exported_function.is_none() {
             return;
         }

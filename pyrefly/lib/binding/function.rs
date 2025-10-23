@@ -685,6 +685,22 @@ fn function_last_expressions<'a>(
                     return None;
                 }
             }
+            Stmt::For(x) => {
+                let mut has_break = false;
+                fn f(stmt: &Stmt, res: &mut bool) {
+                    match stmt {
+                        Stmt::Break(_) => {
+                            *res = true;
+                        }
+                        Stmt::While(_) | Stmt::For(_) => {}
+                        _ => stmt.recurse(&mut |stmt| f(stmt, res)),
+                    }
+                }
+                x.body.visit(&mut |stmt| f(stmt, &mut has_break));
+                if has_break {
+                    return None;
+                }
+            }
             Stmt::If(x) => {
                 let mut last_test = None;
                 for (test, body) in sys_info.pruned_if_branches(x) {
