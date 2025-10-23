@@ -503,7 +503,7 @@ Definition Result:
                               ^
 Definition Result:
 6 |     def foo(self, y: str, x: int) -> None:
-                      ^       
+                      ^
 "#
         .trim(),
         report.trim(),
@@ -921,7 +921,7 @@ class A[T, U]:
 
 class B:
     pass
-    
+
 def f(x: A[B, Path]) -> None:
 #          ^  ^
     pass
@@ -939,7 +939,7 @@ Definition Result:
 10 | def f(x: A[B, Path]) -> None:
                    ^
 Definition Result:
-107 | class Path(PurePath):
+142 | class Path(PurePath):
             ^^^^
 "#
         .trim(),

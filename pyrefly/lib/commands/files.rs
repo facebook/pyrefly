@@ -177,7 +177,8 @@ fn get_globs_and_config_for_files(
     project_excludes: Option<Globs>,
     args: ConfigOverrideArgs,
 ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder)> {
-    let project_excludes = project_excludes.unwrap_or_else(ConfigFile::default_project_excludes);
+    let mut project_excludes = project_excludes.unwrap_or_default();
+    project_excludes.append(ConfigFile::required_project_excludes().globs());
     let files_to_check = absolutize(files_to_check);
     let (config_finder, errors) = match config {
         Some(explicit) => {

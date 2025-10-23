@@ -32,23 +32,20 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use serde::Serialize;
 
-use crate::binding::binding::Binding;
-use crate::binding::binding::BindingClassField;
-use crate::binding::binding::ClassFieldDefinition;
 use crate::report::pysa::ast_visitor::AstScopedVisitor;
 use crate::report::pysa::ast_visitor::Scopes;
 use crate::report::pysa::ast_visitor::visit_module_ast;
 use crate::report::pysa::class::ClassRef;
-use crate::report::pysa::class::get_class_field_declaration;
+use crate::report::pysa::class::get_class_field;
 use crate::report::pysa::class::get_context_from_class;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionBaseDefinition;
+use crate::report::pysa::function::FunctionNode;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::function::WholeProgramFunctionDefinitions;
 use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleId;
 use crate::report::pysa::override_graph::OverrideGraph;
-use crate::report::pysa::override_graph::get_last_definition;
 use crate::report::pysa::types::ScalarTypeProperties;
 use crate::report::pysa::types::has_superclass;
 use crate::state::lsp::FindPreference;
@@ -574,7 +571,7 @@ impl<'a> CallGraphVisitor<'a> {
     ) -> (Option<ClassRef>, bool) {
         let receiver_type = strip_none_from_union(receiver_type);
         match receiver_type {
-            Type::ClassType(class_type) => (
+            Type::ClassType(class_type) | Type::SelfType(class_type) => (
                 Some(ClassRef::from_class(
                     class_type.class_object(),
                     self.module_context.module_ids,
@@ -611,25 +608,14 @@ impl<'a> CallGraphVisitor<'a> {
         field_name: &Name,
     ) -> Option<FunctionRef> {
         let context = get_context_from_class(class, self.module_context);
-        get_class_field_declaration(class, field_name, &context).and_then(|field_binding| {
-            match field_binding {
-                BindingClassField {
-                    definition: ClassFieldDefinition::MethodLike { definition, .. },
-                    ..
-                } => {
-                    let binding = context.bindings.get(*definition);
-                    if let Binding::Function(key_decorated_function, ..) = binding {
-                        Some(FunctionRef::from_decorated_function(
-                            &get_last_definition(*key_decorated_function, &context),
-                            &context,
-                        ))
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            }
-        })
+        let class_field = get_class_field(class, field_name, &context)?;
+        let function = FunctionNode::exported_function_from_class_field(
+            class,
+            field_name,
+            class_field,
+            &context,
+        )?;
+        Some(function.as_function_ref(&context))
     }
 
     // Figure out what target to pick for an indirect call that resolves to implementation_target.
@@ -881,9 +867,9 @@ impl<'a> CallGraphVisitor<'a> {
     fn resolve_name(
         &self,
         name: &ExprName,
+        call_arguments: Option<&ruff_python_ast::Arguments>,
         return_type: Option<ScalarTypeProperties>,
     ) -> Option<CallCallees<FunctionRef>> {
-        let callee_expr_suffix = name.id.as_str();
         let identifier = Ast::expr_name_identifier(name.clone());
         let go_to_definitions = self
             .module_context
@@ -901,20 +887,52 @@ impl<'a> CallGraphVisitor<'a> {
                     self.function_base_definitions,
                     self.module_context,
                 )
-                .map(|function_ref| {
-                    self.call_target_from_function_ref(
-                        function_ref,
-                        return_type,
-                        /* receiver_type */
-                        None, // We don't know receiver type since we are given an `ExprName`
-                        callee_expr_suffix,
-                        /* is_override_target */ false,
-                        /* override_implicit_receiver*/ None,
-                    )
-                })
             })
             .collect::<Vec<_>>();
+
+        let callee_expr_suffix = name.id.as_str();
         if !go_to_definitions.is_empty() {
+            let go_to_definitions = go_to_definitions
+                .into_iter()
+                .map(|function_ref| {
+                    let call_target = || {
+                        self.call_target_from_function_ref(
+                            function_ref.clone(),
+                            return_type,
+                            /* receiver_type */
+                            None, // We don't know receiver type since we are given an `ExprName`
+                            callee_expr_suffix,
+                            /* is_override_target */ false,
+                            /* override_implicit_receiver*/ None,
+                        )
+                    };
+                    if function_ref.module_name == ModuleName::builtins()
+                        && function_ref.function_name == "repr"
+                    {
+                        // Find the actual `__repr__`
+                        call_arguments
+                            .as_ref()
+                            .and_then(|arguments| {
+                                arguments.find_positional(0).and_then(|argument| {
+                                    self.module_context.answers.get_type_trace(argument.range())
+                                })
+                            })
+                            .and_then(|first_argument_type| {
+                                self.call_target_from_method_name(
+                                    &Name::new_static("__repr__"),
+                                    Some(&first_argument_type),
+                                    return_type,
+                                    /* is_bound_method */ true,
+                                    callee_expr_suffix,
+                                    /* override_implicit_receiver*/ None,
+                                )
+                            })
+                            .unwrap_or(call_target())
+                    } else {
+                        call_target()
+                    }
+                })
+                .collect::<Vec<_>>();
             Some(CallCallees {
                 call_targets: go_to_definitions,
                 init_targets: vec![],
@@ -1047,6 +1065,8 @@ impl<'a> CallGraphVisitor<'a> {
                     _ => false,
                 })
         });
+        // Go-to-definition always resolves to the property getters, even when used as a left hand side of an
+        // assignment. Therefore we use heuristics to differentiate setters from getters.
         let (property_setters, property_getters) = if in_assignment_lhs {
             (property_callees, vec![])
         } else {
@@ -1058,56 +1078,68 @@ impl<'a> CallGraphVisitor<'a> {
             .module_context
             .answers
             .get_type_trace(attribute.value.range());
-        let call_target_from_function_ref = |function_ref: FunctionRef| {
-            self.compute_indirect_targets(receiver_type.as_ref(), function_ref)
-                .into_iter()
-                .map(|target| match target {
-                    Target::Function(function_ref) => self.call_target_from_function_ref(
-                        function_ref,
-                        return_type,
-                        receiver_type.as_ref(),
-                        callee_expr_suffix,
-                        /* is_override_target */ false,
-                        /* override_implicit_receiver*/ None,
-                    ),
-                    Target::Override(function_ref) => self.call_target_from_function_ref(
-                        function_ref,
-                        return_type,
-                        receiver_type.as_ref(),
-                        callee_expr_suffix,
-                        /* is_override_target */ true,
-                        /* override_implicit_receiver*/ None,
-                    ),
-                    Target::Object(_) => CallTarget {
-                        target,
-                        implicit_receiver: ImplicitReceiver::False,
-                        receiver_class: None,
-                        implicit_dunder_call: false,
-                        is_class_method: false,
-                        is_static_method: false,
-                        return_type,
-                    },
-                })
-                .collect::<Vec<_>>()
-        };
+        let call_target_from_function_ref =
+            |function_ref: FunctionRef, return_type: Option<ScalarTypeProperties>| {
+                self.compute_indirect_targets(receiver_type.as_ref(), function_ref)
+                    .into_iter()
+                    .map(|target| match target {
+                        Target::Function(function_ref) => self.call_target_from_function_ref(
+                            function_ref,
+                            return_type,
+                            receiver_type.as_ref(),
+                            callee_expr_suffix,
+                            /* is_override_target */ false,
+                            /* override_implicit_receiver*/ None,
+                        ),
+                        Target::Override(function_ref) => self.call_target_from_function_ref(
+                            function_ref,
+                            return_type,
+                            receiver_type.as_ref(),
+                            callee_expr_suffix,
+                            /* is_override_target */ true,
+                            /* override_implicit_receiver*/ None,
+                        ),
+                        Target::Object(_) => CallTarget {
+                            target,
+                            implicit_receiver: ImplicitReceiver::False,
+                            receiver_class: None,
+                            implicit_dunder_call: false,
+                            is_class_method: false,
+                            is_static_method: false,
+                            return_type,
+                        },
+                    })
+                    .collect::<Vec<_>>()
+            };
 
         Some(AttributeAccessCallees {
             if_called: CallCallees {
                 call_targets: non_property_callees
                     .into_iter()
-                    .flat_map(&call_target_from_function_ref)
+                    .flat_map(|function| call_target_from_function_ref(function, return_type))
                     .collect(),
                 init_targets: vec![],
                 new_targets: vec![],
             },
             property_setters: property_setters
                 .into_iter()
-                .flat_map(&call_target_from_function_ref)
+                .flat_map(|function| {
+                    call_target_from_function_ref(function, Some(ScalarTypeProperties::none()))
+                })
                 .collect(),
-            property_getters: property_getters
-                .into_iter()
-                .flat_map(call_target_from_function_ref)
-                .collect(),
+            property_getters: {
+                // We cannot get the return types by treating the property getter expressions as callable types.
+                // Hence we use the types of the whole expressions.
+                let return_type = self
+                    .module_context
+                    .answers
+                    .get_type_trace(attribute.range())
+                    .map(|type_| ScalarTypeProperties::from_type(&type_, self.module_context));
+                property_getters
+                    .into_iter()
+                    .flat_map(|function| call_target_from_function_ref(function, return_type))
+                    .collect()
+            },
         })
     }
 
@@ -1124,7 +1156,7 @@ impl<'a> CallGraphVisitor<'a> {
 
         match &*call.func {
             Expr::Name(name) => {
-                let callees = self.resolve_name(name, return_type);
+                let callees = self.resolve_name(name, Some(&call.arguments), return_type);
                 debug_println!(
                     self.debug,
                     "Resolved call `{:#?}` into `{:#?}`",
@@ -1195,7 +1227,11 @@ impl<'a> CallGraphVisitor<'a> {
                 .resolve_call(call, assignment_targets)
                 .map(ExpressionCallees::Call),
             Expr::Name(name) if !is_nested_callee_or_base => self
-                .resolve_name(name, Some(return_type_when_called()))
+                .resolve_name(
+                    name,
+                    /* call_arguments */ None,
+                    Some(return_type_when_called()),
+                )
                 .map(|call_callees| {
                     ExpressionCallees::Identifier(IdentifierCallees {
                         if_called: call_callees,

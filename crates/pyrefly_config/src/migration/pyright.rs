@@ -54,6 +54,8 @@ pub struct PyrightConfig {
     pub project_excludes: Option<Globs>,
     #[serde(rename = "extraPaths")]
     pub search_path: Option<Vec<PathBuf>>,
+    #[serde(rename = "stubPath")]
+    pub stub_path: Option<PathBuf>,
     #[serde(rename = "pythonPlatform")]
     pub python_platform: Option<String>,
     #[serde(rename = "pythonVersion")]
@@ -73,6 +75,7 @@ use crate::migration::python_interpreter::PythonInterpreter;
 use crate::migration::python_platform::PythonPlatformConfig;
 use crate::migration::python_version::PythonVersionConfig;
 use crate::migration::search_path::SearchPath;
+use crate::migration::site_package_path::SitePackagePath;
 use crate::migration::sub_configs::SubConfigs;
 
 impl PyrightConfig {
@@ -91,6 +94,7 @@ impl PyrightConfig {
             Box::new(PythonVersionConfig),
             Box::new(PythonPlatformConfig),
             Box::new(SearchPath),
+            Box::new(SitePackagePath),
             Box::new(IgnoreMissingImports),
             Box::new(ErrorCodes),
             Box::new(SubConfigs),

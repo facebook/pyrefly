@@ -14,6 +14,7 @@ pub fn default_pyright_config() -> PyrightConfig {
         project_includes: None,
         project_excludes: None,
         search_path: None,
+        stub_path: None,
         python_platform: None,
         python_version: None,
         errors: RuleOverrides {

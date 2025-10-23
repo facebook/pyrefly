@@ -14,16 +14,11 @@ use pyrefly_util::thread_pool::ThreadPool;
 use rayon::prelude::*;
 use ruff_python_ast::name::Name;
 
-use crate::alt::types::decorated_function::DecoratedFunction;
-use crate::binding::binding::Binding;
-use crate::binding::binding::ClassFieldDefinition;
-use crate::binding::binding::KeyDecoratedFunction;
-use crate::graph::index::Idx;
 use crate::report::pysa::class::ClassRef;
-use crate::report::pysa::class::get_class_field_declaration;
 use crate::report::pysa::class::get_context_from_class;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionBaseDefinition;
+use crate::report::pysa::function::FunctionNode;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::function::WholeProgramFunctionDefinitions;
 use crate::report::pysa::function::get_all_functions;
@@ -95,64 +90,30 @@ impl WholeProgramReversedOverrideGraph {
     }
 }
 
-// Requires `context` to be the module context of the decorated function.
-pub fn get_last_definition(
-    key_decorated_function: Idx<KeyDecoratedFunction>,
-    context: &ModuleContext,
-) -> DecoratedFunction {
-    // Follow the successor chain to find the last function
-    let mut last_decorated_function = key_decorated_function;
-    loop {
-        let successor = context.bindings.get(last_decorated_function).successor;
-        if let Some(successor) = successor {
-            last_decorated_function = successor;
-        } else {
-            break;
-        }
-    }
-    DecoratedFunction::from_bindings_answers(
-        last_decorated_function,
-        &context.bindings,
-        &context.answers,
-    )
-}
-
 fn get_super_class_member(
     class: &Class,
-    field: &Name,
+    field_name: &Name,
     context: &ModuleContext,
 ) -> Option<FunctionRef> {
     assert_eq!(class.module(), &context.module_info);
+
     let super_class_member = context
         .transaction
         .ad_hoc_solve(&context.handle, |solver| {
-            solver.get_super_class_member(class, None, field)
+            solver.get_super_class_member(class, None, field_name)
         })
         .flatten()?;
 
     // Important: we need to use the module context of the class.
     let context = get_context_from_class(&super_class_member.defining_class, context);
 
-    // TODO(T225700656): handle class fields.
-    get_class_field_declaration(&super_class_member.defining_class, field, &context)
-        .and_then(|binding_class_field| {
-            if let ClassFieldDefinition::MethodLike { definition, .. } =
-                binding_class_field.definition
-            {
-                let binding = context.bindings.get(definition);
-                if let Binding::Function(key_decorated_function, _pred, _class_meta) = binding {
-                    Some(*key_decorated_function)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .map(|key_decorated_function| {
-            let last_function = get_last_definition(key_decorated_function, &context);
-            FunctionRef::from_decorated_function(&last_function, &context)
-        })
+    let function = FunctionNode::exported_function_from_class_field(
+        &super_class_member.defining_class,
+        field_name,
+        super_class_member.value,
+        &context,
+    )?;
+    Some(function.as_function_ref(&context))
 }
 
 pub fn create_reversed_override_graph_for_module(

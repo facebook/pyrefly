@@ -16,6 +16,7 @@ use zstd::stream::read::Decoder;
 
 const BUNDLED_TYPESHED_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/typeshed.tar.zst"));
 
+#[derive(PartialEq)]
 enum PathFilter {
     /// Filter for stdlib files (typeshed/stdlib/...)
     Stdlib,
@@ -69,7 +70,18 @@ fn extract_pyi_files_from_archive(filter: PathFilter) -> anyhow::Result<SmallMap
             continue;
         }
 
-        let relative_path = relative_path_components.collect::<PathBuf>();
+        // Typeshed stdlib stubs have a different directory structure than third-party stubs.
+        // stdlib example: typeshed/stdlib/builtins.pyi
+        // third-party example: typeshed/stubs/package-name/package-name/other.pyi
+        // An example of this might be the path typeshed/stubs/JACK-Client/jack/other.pyi
+        // In this case we want out path to be jack/other.pyi, so we skip over "stubs" and "JACK-Client".
+        let relative_path = if filter == PathFilter::ThirdPartyStubs {
+            relative_path_components.next();
+            relative_path_components.collect::<PathBuf>()
+        } else {
+            relative_path_components.collect::<PathBuf>()
+        };
+
         if relative_path.extension().is_none_or(|ext| ext != "pyi") {
             // typeshed/stdlib/ contains non-.pyi files like VERSIONS that we don't care about.
             continue;
@@ -118,6 +130,27 @@ mod tests {
         }
     }
 
+    // TODO(jvansch): Unignore this test once we have third party stubs in the repo.
+    #[test]
+    #[ignore = "Third Party Stubs not added to bundled_typeshed yet"]
+    fn test_bundled_typeshed_returns_third_party_files() {
+        let result = bundled_third_party_stubs();
+        assert!(result.is_ok(), "bundled_typeshed should succeed");
+
+        let files = result.unwrap();
+        assert!(!files.is_empty(), "Should contain stdlib .pyi files");
+
+        // Verify all returned paths are .pyi files
+        for (path, _) in files.iter() {
+            assert_eq!(
+                path.extension().and_then(|ext| ext.to_str()),
+                Some("pyi"),
+                "All files should have .pyi extension, found: {:?}",
+                path
+            );
+        }
+    }
+
     #[test]
     fn test_bundled_typeshed_paths_are_relative() {
         let result = bundled_typeshed().unwrap();
@@ -129,6 +162,23 @@ mod tests {
                 first_component.and_then(|c| c.as_os_str().to_str()),
                 Some("stdlib"),
                 "Path should not start with 'stdlib', found: {:?}",
+                path
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "Third Party Stubs not added to bundled_typeshed yet"]
+    fn test_bundled_typeshed_third_party_resolves_path() {
+        let result = bundled_third_party_stubs().unwrap();
+
+        // Verify paths don't start with "stdlib" (it should be stripped)
+        for (path, _) in result.iter() {
+            let first_component = path.components().next();
+            assert_ne!(
+                first_component.and_then(|c| c.as_os_str().to_str()),
+                Some("stubs"),
+                "Path should not start with 'stubs', found: {:?}",
                 path
             );
         }

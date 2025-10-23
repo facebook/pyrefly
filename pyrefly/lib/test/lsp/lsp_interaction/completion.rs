@@ -576,3 +576,66 @@ fn test_relative_module_completion() {
 
     interaction.shutdown();
 }
+
+#[test]
+fn test_stdlib_submodule_completion() {
+    let root = get_test_files_root();
+    let root_path = root.path().to_path_buf();
+
+    let mut interaction =
+        LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
+
+    interaction.set_root(root_path.clone());
+    interaction.initialize(InitializeSettings::default());
+
+    interaction.server.did_open("foo.py");
+    interaction.server.did_change("foo.py", "import email.");
+    interaction.server.completion("foo.py", 0, 13);
+
+    interaction.client.expect_response_with_item(
+        serde_json::json!({
+            "label": "errors",
+            "detail": "email.errors",
+            "kind": 9,
+            "sortText": "0",
+        }),
+        "Expected completion response with submodule suggestion",
+    );
+
+    interaction.shutdown();
+}
+
+#[test]
+fn test_stdlib_class_completion() {
+    let root = get_test_files_root();
+    let root_path = root.path().to_path_buf();
+
+    let mut interaction =
+        LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
+
+    interaction.set_root(root_path.clone());
+    interaction.initialize(InitializeSettings::default());
+
+    interaction.server.did_open("foo.py");
+    interaction.server.did_change("foo.py", "FirstHeader");
+    interaction.server.completion("foo.py", 0, 11);
+
+    interaction.client.expect_response_with_item(
+        serde_json::json!({
+            "label": "FirstHeaderLineIsContinuationDefect",
+            "detail": "from email.errors import FirstHeaderLineIsContinuationDefect\n",
+            "kind": 7,
+            "sortText": "4",
+            "additionalTextEdits": [{
+                "newText": "from email.errors import FirstHeaderLineIsContinuationDefect\n",
+                "range": {
+                    "start": {"character": 0, "line": 0},
+                    "end": {"character": 0, "line": 0},
+                }
+            }],
+        }),
+        "Expected completion response with autoimport suggestion",
+    );
+
+    interaction.shutdown();
+}

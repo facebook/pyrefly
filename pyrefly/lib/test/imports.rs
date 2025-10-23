@@ -1058,3 +1058,21 @@ testcase!(
 x: X = X()
 "#,
 );
+
+fn env_extra_builtins_in_typings() -> TestEnv {
+    TestEnv::one_with_path(
+        "__builtins__",
+        "typings/__builtins__.pyi",
+        r#"
+class X: ...
+"#,
+    )
+}
+
+testcase!(
+    test_extra_builtins_in_typings,
+    env_extra_builtins_in_typings(),
+    r#"
+x: X = X()
+"#,
+);

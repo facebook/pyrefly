@@ -36,6 +36,7 @@ use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::types::class_metadata::EnumMetadata;
 use crate::alt::types::class_metadata::InitDefaults;
+use crate::alt::types::class_metadata::Metaclass;
 use crate::alt::types::class_metadata::NamedTupleMetadata;
 use crate::alt::types::class_metadata::ProtocolMetadata;
 use crate::alt::types::class_metadata::TotalOrderingMetadata;
@@ -151,12 +152,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter_map(|(b, metadata)| metadata.custom_metaclass().map(|m| (b.name(), m)))
             .collect::<Vec<_>>();
-        let metaclass = self.calculate_metaclass(
+        let calculated_metaclass = self.calculate_metaclass(
             cls,
             metaclasses.into_iter().next(),
             &base_metaclasses,
             errors,
         );
+        let metaclass = calculated_metaclass.get();
         if let Some(metaclass) = &metaclass {
             self.check_base_class_metaclasses(cls, metaclass, &base_metaclasses, errors);
             if metaclass.targs().as_slice().iter().any(|targ| {
@@ -234,8 +236,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
 
-        let enum_metadata =
-            self.enum_metadata(cls, metaclass.as_ref(), &bases_with_metadata, errors);
+        let enum_metadata = self.enum_metadata(cls, metaclass, &bases_with_metadata, errors);
 
         let is_final = decorators.iter().any(|(decorator, _)| {
             decorator.ty().callee_kind() == Some(CalleeKind::Function(FunctionKind::Final))
@@ -263,7 +264,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .find_map(|(_, metadata)| metadata.dataclass_transform_metadata().cloned());
         let dataclass_transform_metadata = self.dataclass_transform_metadata(
             &decorators,
-            metaclass.as_ref(),
+            metaclass,
             dataclass_defaults_from_base_class.clone(),
         );
         let dataclass_from_dataclass_transform = self.dataclass_from_dataclass_transform(
@@ -284,7 +285,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             self.validate_frozen_dataclass_inheritance(cls, dm, &bases_with_metadata, errors);
         }
-        let extends_abc = self.extends_abc(&bases_with_metadata);
+        let extends_abc = self.extends_abc(&bases_with_metadata, metaclass);
 
         // Compute final base class list.
         let bases = if is_typed_dict && bases_with_metadata.is_empty() {
@@ -312,7 +313,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         ClassMetadata::new(
             bases,
-            metaclass,
+            calculated_metaclass,
             keywords,
             typed_dict_metadata,
             named_tuple_metadata,
@@ -971,6 +972,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ErrorInfo::Kind(ErrorKind::InvalidArgument),
                                 "Second argument to NewType cannot be a protocol".to_owned(),
                             );
+                            return None;
+                        } else {
+                            return Some((class_object, metadata));
                         }
                     } else if metadata.is_new_type() {
                         self.error(
@@ -1012,11 +1016,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         raw_metaclass: Option<&Expr>,
         base_metaclasses: &[(&Name, &ClassType)],
         errors: &ErrorCollector,
-    ) -> Option<ClassType> {
+    ) -> Metaclass {
         let direct_meta = raw_metaclass.and_then(|x| self.direct_metaclass(cls, x, errors));
 
         if let Some(metaclass) = direct_meta {
-            Some(metaclass)
+            Metaclass::Direct(metaclass)
         } else {
             let mut inherited_meta: Option<ClassType> = None;
             for (_, m) in base_metaclasses {
@@ -1033,6 +1037,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             inherited_meta
+                .map(Metaclass::Inherited)
+                .unwrap_or(Metaclass::None)
         }
     }
 
@@ -1155,7 +1161,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         AbstractClassMembers::new(abstract_members)
     }
 
-    fn extends_abc(&self, bases_with_metadata: &Vec<(Class, Arc<ClassMetadata>)>) -> bool {
+    fn extends_abc(
+        &self,
+        bases_with_metadata: &Vec<(Class, Arc<ClassMetadata>)>,
+        metaclass: Option<&ClassType>,
+    ) -> bool {
         for (base, base_metadata) in bases_with_metadata {
             if base.has_toplevel_qname("abc", "ABC") {
                 return true;
@@ -1170,6 +1180,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if base_metadata.extends_abc() {
                 return true;
             }
+        }
+        if let Some(metaclass) = metaclass
+            && metaclass
+                .class_object()
+                .has_toplevel_qname("abc", "ABCMeta")
+        {
+            return true;
         }
         false
     }

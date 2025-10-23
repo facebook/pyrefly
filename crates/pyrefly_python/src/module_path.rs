@@ -14,6 +14,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use dupe::Dupe;
+use equivalent::Equivalent;
+use serde::Deserialize;
 use serde::Serialize;
 use serde::Serializer;
 use static_interner::Intern;
@@ -44,9 +46,38 @@ impl Serialize for ModulePathBuf {
     }
 }
 
+impl<'de> Deserialize<'de> for ModulePathBuf {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let path: &Path = Deserialize::deserialize(d)?;
+        Ok(ModulePathBuf::from_path(path))
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+struct PathRef<'a>(&'a Path);
+
+impl<'a> Equivalent<PathBuf> for PathRef<'a> {
+    fn equivalent(&self, key: &PathBuf) -> bool {
+        *self.0 == *key
+    }
+}
+
+impl<'a> From<PathRef<'a>> for PathBuf {
+    fn from(value: PathRef<'a>) -> Self {
+        value.0.to_path_buf()
+    }
+}
+
 impl ModulePathBuf {
-    fn new(path: PathBuf) -> Self {
+    pub fn new(path: PathBuf) -> Self {
         Self(MODULE_PATH_INTERNER.intern(path))
+    }
+
+    pub fn from_path(path: &Path) -> Self {
+        Self(MODULE_PATH_INTERNER.intern(PathRef(path)))
     }
 }
 
@@ -82,8 +113,11 @@ pub enum ModulePathDetails {
     /// The module source comes from memory, only for files (not namespace).
     Memory(ModulePathBuf),
     /// The module source comes from typeshed bundled with Pyrefly (which gets stored in-memory).
-    /// The path is relative to the root of the typeshed directory.
+    /// The path is relative to the root of the typeshed/stdlib directory.
     BundledTypeshed(ModulePathBuf),
+    /// The module source comes from typeshed bundled with Pyrefly (which gets stored in-memory).
+    /// Although the module root is the same the third party stubs are stored in a subdirectory called stubs.
+    BundledTypeshedThirdParty(ModulePathBuf),
 }
 
 impl PartialOrd for ModulePath {
@@ -124,6 +158,13 @@ impl Display for ModulePath {
                     relative_path.display()
                 )
             }
+            ModulePathDetails::BundledTypeshedThirdParty(relative_path) => {
+                write!(
+                    f,
+                    "bundled /crates/pyrefly_bundled/third_party/typeshed/stubs/{}",
+                    relative_path.display()
+                )
+            }
         }
     }
 }
@@ -134,7 +175,10 @@ impl Serialize for ModulePath {
             ModulePathDetails::FileSystem(path)
             | ModulePathDetails::Memory(path)
             | ModulePathDetails::Namespace(path) => path.serialize(serializer),
-            ModulePathDetails::BundledTypeshed(_) => self.to_string().serialize(serializer),
+            ModulePathDetails::BundledTypeshed(_)
+            | ModulePathDetails::BundledTypeshedThirdParty(_) => {
+                self.to_string().serialize(serializer)
+            }
         }
     }
 }
@@ -160,6 +204,12 @@ impl ModulePath {
         Self::new(ModulePathDetails::BundledTypeshed(ModulePathBuf::new(
             relative_path,
         )))
+    }
+
+    pub fn bundled_typeshed_third_party(relative_path: PathBuf) -> Self {
+        Self::new(ModulePathDetails::BundledTypeshedThirdParty(
+            ModulePathBuf::new(relative_path),
+        ))
     }
 
     pub fn is_init(&self) -> bool {
@@ -225,9 +275,15 @@ impl ModulePath {
         match &self.0 {
             ModulePathDetails::FileSystem(path)
             | ModulePathDetails::BundledTypeshed(path)
+            | ModulePathDetails::BundledTypeshedThirdParty(path)
             | ModulePathDetails::Memory(path)
             | ModulePathDetails::Namespace(path) => path,
         }
+    }
+
+    /// Convert to a path, that may not exist on disk.
+    pub fn module_path_buf(&self) -> ModulePathBuf {
+        ModulePathBuf::from_path(self.as_path())
     }
 
     /// For nominal types, we consider FileSystem and Memory to be equal. This is important in the
@@ -243,6 +299,9 @@ impl ModulePath {
             }
             ModulePathDetails::BundledTypeshed(path) => {
                 ModulePath::new(ModulePathDetails::BundledTypeshed(*path))
+            }
+            ModulePathDetails::BundledTypeshedThirdParty(path) => {
+                ModulePath::new(ModulePathDetails::BundledTypeshedThirdParty(*path))
             }
         }
     }

@@ -15,11 +15,15 @@ use dupe::Dupe;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::HoverContents;
+use lsp_types::SemanticTokens;
+use lsp_types::SemanticTokensLegend;
+use lsp_types::SemanticTokensResult;
 use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_build::source_db::Target;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
@@ -30,6 +34,7 @@ use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::prelude::VecExt;
 use ruff_text_size::TextSize;
+use serde::Deserialize;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -39,6 +44,7 @@ use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::lsp_features::hover::get_hover;
 use crate::state::require::Require;
+use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 
@@ -83,7 +89,7 @@ impl SourceDatabase for PlaygroundSourceDatabase {
         Some(Handle::new(name.dupe(), path, self.sys_info.dupe()))
     }
 
-    fn requery_source_db(&self, _: SmallSet<PathBuf>) -> anyhow::Result<bool> {
+    fn requery_source_db(&self, _: SmallSet<ModulePathBuf>) -> anyhow::Result<bool> {
         Ok(false)
     }
 
@@ -128,15 +134,15 @@ impl Position {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Range {
-    #[serde(rename(serialize = "startLineNumber"))]
+    #[serde(rename(serialize = "startLineNumber", deserialize = "startLineNumber"))]
     pub start_line: i32,
-    #[serde(rename(serialize = "startColumn"))]
+    #[serde(rename(serialize = "startColumn", deserialize = "startColumn"))]
     pub start_col: i32,
-    #[serde(rename(serialize = "endLineNumber"))]
+    #[serde(rename(serialize = "endLineNumber", deserialize = "endLineNumber"))]
     pub end_line: i32,
-    #[serde(rename(serialize = "endColumn"))]
+    #[serde(rename(serialize = "endColumn", deserialize = "endColumn"))]
     pub end_col: i32,
 }
 
@@ -148,6 +154,19 @@ impl Range {
             end_line: range.end.line.get() as i32,
             end_col: range.end.column.get() as i32,
         }
+    }
+
+    fn to_display_range(&self) -> Option<DisplayRange> {
+        Some(DisplayRange {
+            start: DisplayPos {
+                line: LineNumber::new(u32::try_from(self.start_line).ok()?)?,
+                column: NonZeroU32::new(u32::try_from(self.start_col).ok()?)?,
+            },
+            end: DisplayPos {
+                line: LineNumber::new(u32::try_from(self.end_line).ok()?)?,
+                column: NonZeroU32::new(u32::try_from(self.end_col).ok()?)?,
+            },
+        })
     }
 }
 
@@ -413,6 +432,27 @@ impl Playground {
         Some(MonacoHover {
             contents: vec![hover.contents],
         })
+    }
+
+    pub fn semantic_tokens(&self, range: Option<Range>) -> Option<SemanticTokensResult> {
+        let handle = self.handles.get(&self.active_filename)?;
+        let transaction = self.state.transaction();
+        let range = range.and_then(|r| {
+            let display_range = r.to_display_range()?;
+            transaction
+                .get_module_info(handle)
+                .map(|info| info.lined_buffer().from_display_range(&display_range))
+        });
+        Some(SemanticTokensResult::Tokens(SemanticTokens {
+            result_id: None,
+            data: transaction
+                .semantic_tokens(handle, range)
+                .unwrap_or_default(),
+        }))
+    }
+
+    pub fn semantic_tokens_legend(&self) -> SemanticTokensLegend {
+        SemanticTokensLegends::lsp_semantic_token_legends()
     }
 
     pub fn goto_definition(&mut self, pos: Position) -> Option<Range> {

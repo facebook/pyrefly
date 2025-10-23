@@ -487,7 +487,6 @@ T = TypeVar("T", int)  # E: Expected at least 2 constraints in TypeVar `T`, got 
 );
 
 testcase!(
-    bug = "We always promote when instantiating, but we should not promote if the bound is literal",
     test_typevar_literal_bound,
     r#"
 from typing import Literal, LiteralString, assert_type

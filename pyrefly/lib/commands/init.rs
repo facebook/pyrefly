@@ -188,7 +188,6 @@ impl InitArgs {
         // This prevents us from simply outputting an empty file, and gives the user somewhere to start if they want to customize.
         let cfg = ConfigFile {
             project_includes: ConfigFile::default_project_includes(),
-            project_excludes: ConfigFile::default_project_excludes(),
             ..Default::default()
         };
 

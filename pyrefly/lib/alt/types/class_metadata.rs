@@ -78,7 +78,7 @@ impl Display for ClassMetadata {
 impl ClassMetadata {
     pub fn new(
         bases: Vec<Class>,
-        metaclass: Option<ClassType>,
+        metaclass: Metaclass,
         keywords: Vec<(Name, Type)>,
         typed_dict_metadata: Option<TypedDictMetadata>,
         named_tuple_metadata: Option<NamedTupleMetadata>,
@@ -97,7 +97,7 @@ impl ClassMetadata {
         is_django_model: bool,
     ) -> ClassMetadata {
         ClassMetadata {
-            metaclass: Metaclass(metaclass),
+            metaclass,
             keywords: Keywords(keywords),
             typed_dict_metadata,
             named_tuple_metadata,
@@ -143,7 +143,11 @@ impl ClassMetadata {
 
     /// The class's custom (non-`type`) metaclass, if it has one.
     pub fn custom_metaclass(&self) -> Option<&ClassType> {
-        self.metaclass.0.as_ref()
+        self.metaclass.get()
+    }
+
+    pub fn custom_metaclass_raw(&self) -> &Metaclass {
+        &self.metaclass
     }
 
     /// The class's metaclass.
@@ -179,6 +183,23 @@ impl ClassMetadata {
 
     pub fn extends_abc(&self) -> bool {
         self.extends_abc
+    }
+
+    pub fn is_explicitly_abstract(&self) -> bool {
+        for base in self.base_class_objects() {
+            if base.has_toplevel_qname("abc", "ABC") {
+                return true;
+            }
+        }
+        // Only check the metaclass if it's directly specified on this class
+        if let Metaclass::Direct(metaclass) = self.custom_metaclass_raw()
+            && metaclass
+                .class_object()
+                .has_toplevel_qname("abc", "ABCMeta")
+        {
+            return true;
+        }
+        false
     }
 
     pub fn is_deprecated(&self) -> bool {
@@ -330,14 +351,36 @@ impl Display for ClassSynthesizedFields {
 
 /// A struct representing a class's metaclass. A value of `None` indicates
 /// no explicit metaclass, in which case the default metaclass is `type`.
-#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
-struct Metaclass(Option<ClassType>);
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
+pub enum Metaclass {
+    Direct(ClassType),
+    Inherited(ClassType),
+    None,
+}
 
 impl Display for Metaclass {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match &self.0 {
-            Some(metaclass) => write!(f, "{metaclass}"),
-            None => write!(f, "type"),
+        match &self {
+            Self::Direct(metaclass) => write!(f, "{metaclass}"),
+            Self::Inherited(metaclass) => write!(f, "inherited({metaclass})"),
+            Self::None => write!(f, "type"),
+        }
+    }
+}
+
+impl Default for Metaclass {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl Metaclass {
+    /// Convenience function to get the metaclass as a ClassType, regardless of its origin
+    pub fn get(&self) -> Option<&ClassType> {
+        match self {
+            Self::Direct(metaclass) => Some(metaclass),
+            Self::Inherited(metaclass) => Some(metaclass),
+            Self::None => None,
         }
     }
 }

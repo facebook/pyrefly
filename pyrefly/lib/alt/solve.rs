@@ -97,6 +97,7 @@ use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::style::ErrorStyle;
+use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::solver::solver::SubsetError;
 use crate::types::annotation::Annotation;
@@ -318,20 +319,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Arc<AbstractClassMembers> {
         let metadata = self.get_metadata_for_class(cls);
         let abstract_members = self.calculate_abstract_members(cls);
-        if metadata.is_final() {
-            let unimplemented = abstract_members.unimplemented_abstract_methods();
-            if !unimplemented.is_empty() {
-                let members = unimplemented
-                    .iter()
-                    .map(|member| format!("`{member}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+        let unimplemented = abstract_members.unimplemented_abstract_methods();
+        if !unimplemented.is_empty() {
+            let members = unimplemented
+                .iter()
+                .map(|member| format!("`{member}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if metadata.is_final() {
                 self.error(
                     errors,
                     cls.range(),
                     ErrorInfo::Kind(ErrorKind::BadClassDefinition),
                     format!(
                         "Final class `{}` cannot have unimplemented abstract members: {}",
+                        cls.name(),
+                        members
+                    ),
+                );
+            } else if !metadata.is_protocol()
+                && !metadata.is_new_type()
+                && !metadata.is_explicitly_abstract()
+            {
+                self.error(
+                    errors,
+                    cls.range(),
+                    ErrorInfo::Kind(ErrorKind::ImplicitAbstractClass),
+                    format!(
+                        "Class `{}` has unimplemented abstract members: {}",
                         cls.name(),
                         members
                     ),
@@ -2504,9 +2519,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.expr(e, None, errors)
                 }
             },
-            Binding::StmtExpr(e, is_assert_type) => {
+            Binding::StmtExpr(e, special_export) => {
                 let result = self.expr(e, None, errors);
-                if !is_assert_type
+                if *special_export != Some(SpecialExport::AssertType)
                     && let Type::ClassType(cls) = &result
                     && self.is_coroutine(&result)
                     && !self.extends_any(cls.class_object())

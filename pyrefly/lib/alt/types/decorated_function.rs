@@ -68,6 +68,7 @@ pub enum SpecialDecorator<'a> {
     StaticMethod(Name),
     ClassMethod(Name),
     Property(Name),
+    CachedProperty(Name),
     EnumMember,
     Override,
     Final,

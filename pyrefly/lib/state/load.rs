@@ -22,7 +22,9 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::style::ErrorStyle;
+use crate::module::bundled::BundledStub;
 use crate::module::typeshed::typeshed;
+use crate::module::typeshed_third_party::typeshed_third_party;
 use crate::state::memory::MemoryFilesLookup;
 
 /// The result of loading a module, including its `Module` and `ErrorCollector`.
@@ -49,6 +51,12 @@ impl Load {
                 x.load(path)
                     .ok_or_else(|| anyhow!("bundled typeshed problem"))
             }),
+            ModulePathDetails::BundledTypeshedThirdParty(path) => {
+                typeshed_third_party().and_then(|x| {
+                    x.load(path)
+                        .ok_or_else(|| anyhow!("bundled typeshed third party problem"))
+                })
+            }
         };
         match res {
             Err(err) => (Arc::new(String::new()), Some(err)),

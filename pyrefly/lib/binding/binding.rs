@@ -60,6 +60,7 @@ use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::bindings::Bindings;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::pydantic::PydanticConfigDict;
+use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::types::annotation::Annotation;
@@ -1187,8 +1188,8 @@ pub enum Binding {
     // Unlike the general `Expr` binding above, this separate binding allows us to
     // perform additional checks that are only relevant for expressions in `Stmt::Expr`,
     // such as verifying for unused awaitables.
-    // The boolean is whether the expression is a call to `assert_type()`
-    StmtExpr(Expr, bool),
+    // The boolean is whether the expression is a call to something defined as a `SpecialExport`
+    StmtExpr(Expr, Option<SpecialExport>),
     /// Propagate a type to a new binding. Takes an optional annotation to
     /// check against (which will override the computed type if they disagree).
     MultiTargetAssign(Option<Idx<KeyAnnotation>>, Idx<Key>, TextRange),

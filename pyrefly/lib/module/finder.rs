@@ -18,6 +18,7 @@ use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 
 use crate::config::config::ConfigFile;
+use crate::module::bundled::BundledStub;
 use crate::module::typeshed::typeshed;
 use crate::state::loader::FindError;
 

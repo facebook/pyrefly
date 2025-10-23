@@ -41,6 +41,7 @@ mod lsp;
 mod mro;
 mod named_tuple;
 mod narrow;
+mod natural;
 mod new_type;
 mod operators;
 mod overload;

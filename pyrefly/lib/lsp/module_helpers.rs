@@ -19,8 +19,10 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::absolutize::Absolutize as _;
 use tracing::warn;
 
+use crate::module::bundled::BundledStub;
 use crate::module::module_info::ModuleInfo;
 use crate::module::typeshed::typeshed;
+use crate::module::typeshed_third_party::typeshed_third_party;
 use crate::state::state::State;
 
 /// Convert to a path we can show to the user. The contents may not match the disk, but it has
@@ -33,6 +35,17 @@ pub fn to_real_path(path: &ModulePath) -> Option<PathBuf> {
         ModulePathDetails::BundledTypeshed(path) => {
             let typeshed = typeshed().ok()?;
             let typeshed_path = match typeshed.materialized_path_on_disk() {
+                Ok(typeshed_path) => Some(typeshed_path),
+                Err(err) => {
+                    warn!("Builtins unable to be loaded on disk, {}", err);
+                    None
+                }
+            }?;
+            Some(typeshed_path.join(&**path))
+        }
+        ModulePathDetails::BundledTypeshedThirdParty(path) => {
+            let typeshed_third_party = typeshed_third_party().ok()?;
+            let typeshed_path = match typeshed_third_party.materialized_path_on_disk() {
                 Ok(typeshed_path) => Some(typeshed_path),
                 Err(err) => {
                     warn!("Builtins unable to be loaded on disk, {}", err);

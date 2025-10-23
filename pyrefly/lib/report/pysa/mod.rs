@@ -42,6 +42,7 @@ use rayon::prelude::*;
 use ruff_python_ast::name::Name;
 use serde::Serialize;
 
+use crate::module::bundled::BundledStub;
 use crate::module::typeshed::typeshed;
 use crate::report::pysa::call_graph::CallGraph;
 use crate::report::pysa::call_graph::export_call_graphs;

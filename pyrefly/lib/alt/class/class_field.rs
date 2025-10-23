@@ -1780,6 +1780,55 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .is_some_and(|metadata| metadata.fields.contains_key(field_name))
     }
 
+    fn should_check_field_for_override_consistency(&self, field_name: &Name) -> bool {
+        // Object construction (`__new__`, `__init__`, `__init_subclass__`) should not participate in override checks
+        if field_name == &dunder::NEW
+            || field_name == &dunder::INIT
+            || field_name == &dunder::INIT_SUBCLASS
+        {
+            return false;
+        }
+
+        // `__hash__` is often overridden to `None` to signal hashability
+        if field_name == &dunder::HASH {
+            return false;
+        }
+
+        // TODO(grievejia): In principle we should not really skip `__call__`. But the reality is that
+        // there are too many classes on typeshed whose `__call__` are marked as follows:
+        // ```
+        // def __call__(self, *args: Any, **kwds: Any) -> Any: ...
+        // ```
+        // If we follow our pre-existing subtyping rule, this kind of signature would be non-overridable
+        // -- any overrider must be able to take ANY arguments which can't be practical. We need to either
+        // special-case typeshed or special-case callable subtyping to make `__call__` override check more usable.
+        if field_name == &dunder::CALL {
+            return false;
+        }
+
+        // Private attributes should not participate in override checks
+        if field_name.starts_with("__") && !field_name.ends_with("__") {
+            return false;
+        }
+
+        // TODO: This should only be ignored when `cls` is a dataclass
+        if field_name == &dunder::POST_INIT {
+            return false;
+        }
+
+        // TODO: This should only be ignored when `_ignore_` is defined on enums
+        if field_name.as_str() == "_ignore_" {
+            return false;
+        }
+
+        // TODO: skipping slots for now to unblock typeshed upgrade
+        if field_name == &dunder::SLOTS {
+            return false;
+        }
+
+        true
+    }
+
     pub fn check_consistent_override_for_field(
         &self,
         cls: &Class,
@@ -1793,43 +1842,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return;
         }
 
-        // Object construction (`__new__`, `__init__`, `__init_subclass__`) should not participate in override checks
-        if field_name == &dunder::NEW
-            || field_name == &dunder::INIT
-            || field_name == &dunder::INIT_SUBCLASS
-        {
-            return;
-        }
-
-        // `__hash__` is often overridden to `None` to signal hashability
-        if field_name == &dunder::HASH {
-            return;
-        }
-
-        // TODO(grievejia): In principle we should not really skip `__call__`. But the reality is that
-        // there are too many classes on typeshed whose `__call__` are marked as follows:
-        // ```
-        // def __call__(self, *args: Any, **kwds: Any) -> Any: ...
-        // ```
-        // If we follow our pre-existing subtyping rule, this kind of signature would be non-overridable
-        // -- any overrider must be able to take ANY arguments which can't be practical. We need to either
-        // special-case typeshed or special-case callable subtyping to make `__call__` override check more usable.
-        if field_name == &dunder::CALL {
-            return;
-        }
-
-        // Private attributes should not participate in overrload checks
-        if field_name.starts_with("__") && !field_name.ends_with("__") {
-            return;
-        }
-
-        // TODO: This should only be ignored when `cls` is a dataclass
-        if field_name == &dunder::POST_INIT {
-            return;
-        }
-
-        // TODO: This should only be ignored when `_ignore_` is defined on enums
-        if field_name.as_str() == "_ignore_" {
+        if !self.should_check_field_for_override_consistency(field_name) {
             return;
         }
 
@@ -1995,13 +2008,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Maps field from inherited class
         let mro = self.get_mro_for_class(cls);
         let mut inherited_fields: SmallMap<&Name, Vec<(&Name, Type)>> = SmallMap::new();
+        let current_class_fields: SmallSet<_> = cls.fields().collect();
 
         for parent_cls in mro.ancestors_no_object().iter() {
             let class_fields = parent_cls.class_object().fields();
             for field in class_fields {
+                // Skip fields that are not relevant for override consistency checks
+                if !self.should_check_field_for_override_consistency(field) {
+                    continue;
+                }
                 let key = KeyClassField(parent_cls.class_object().index(), field.clone());
                 let field_entry = self.get_from_class(cls, &key);
                 if let Some(field_entry) = field_entry.as_ref() {
+                    // Skip fields that are overridden in the current class,
+                    // they will have been checked by
+                    // `check_consistent_override_for_field` already
+                    if current_class_fields.contains(field) {
+                        continue;
+                    }
                     inherited_fields
                         .entry(field)
                         .or_default()
@@ -2504,15 +2528,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     narrowed_types,
                 );
             }
-            ClassAttribute::Property(_, None, cls) => {
-                let e = NoAccessReason::SettingReadOnlyProperty(cls);
-                self.error(
-                    errors,
-                    range,
-                    ErrorInfo::new(ErrorKind::ReadOnly, context),
-                    e.to_error_msg(attr_name),
-                );
-                *should_narrow = false;
+            ClassAttribute::Property(getter, None, cls) => {
+                let is_cached_property = getter.is_cached_property();
+                if is_cached_property {
+                    let attr_ty = self.call_property_getter(getter, range, errors, context);
+                    self.check_set_read_write_and_infer_narrow(
+                        attr_ty,
+                        attr_name,
+                        got,
+                        range,
+                        errors,
+                        context,
+                        *should_narrow,
+                        narrowed_types,
+                    );
+                    *should_narrow = false;
+                } else {
+                    let e = NoAccessReason::SettingReadOnlyProperty(cls);
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::new(ErrorKind::ReadOnly, context),
+                        e.to_error_msg(attr_name),
+                    );
+                    *should_narrow = false;
+                }
             }
             ClassAttribute::Property(_, Some(setter), _) => {
                 let got = CallArg::arg(got);

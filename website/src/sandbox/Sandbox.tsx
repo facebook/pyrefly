@@ -26,8 +26,10 @@ import {
     setGetDefFunction,
     setHoverFunctionForMonaco,
     setInlayHintFunctionForMonaco,
+    setSemanticTokensFunctionForMonaco,
+    setSemanticTokensLegendForMonaco,
 } from './configured-monaco';
-import type { editor } from 'monaco-editor';
+import { editor } from 'monaco-editor';
 import type { PyreflyErrorMessage } from './SandboxResults';
 import { DEFAULT_SANDBOX_PROGRAM } from './DefaultSandboxProgram';
 import { DEFAULT_UTILS_PROGRAM } from './DefaultUtilsProgram';
@@ -46,6 +48,8 @@ export interface PyreflyState {
     gotoDefinition: (line: number, column: number) => any;
     hover: (line: number, column: number) => any;
     inlayHint: () => any;
+    semanticTokens: (range: any) => any;
+    semanticTokensLegend: () => any;
 }
 
 // Lazy initialization function that will only be called when needed
@@ -572,6 +576,16 @@ export default function Sandbox({
             model,
             () => pyreService?.inlayHint() || []
         );
+        setSemanticTokensFunctionForMonaco(model, (range) =>
+            pyreService?.semanticTokens(range)
+        );
+        setSemanticTokensLegendForMonaco(
+            () =>
+                pyreService?.semanticTokensLegend() ?? {
+                    tokenTypes: [],
+                    tokenModifiers: [],
+                }
+        );
 
         // typecheck on edit
         try {
@@ -720,7 +734,9 @@ export default function Sandbox({
         codeSample,
         pythonVersion,
         models,
-        activeFileName
+        activeFileName,
+        createNewFile,
+        setActiveFileName
     );
     return (
         <div
@@ -920,7 +936,7 @@ function getPyreflyEditor(
 ): React.ReactElement {
     const { colorMode } = docusaurusTheme.useColorMode();
 
-    const editorTheme = colorMode === 'dark' ? 'vs-dark' : 'vs-light';
+    const editorTheme = colorMode === 'dark' ? 'pyreflyDark' : 'pyreflyLight';
     if (isCodeSnippet) {
         return (
             <Editor
@@ -939,6 +955,7 @@ function getPyreflyEditor(
                     hover: { enabled: true, above: false },
                     scrollBeyondLastLine: false,
                     overviewRulerBorder: false,
+                    'semanticHighlighting.enabled': true,
                 }}
             />
         );
@@ -971,6 +988,7 @@ function getPyreflyEditor(
                     hover: { enabled: true, above: false },
                     scrollBeyondLastLine: false,
                     overviewRulerBorder: false,
+                    'semanticHighlighting.enabled': true,
                 }}
             />
         );
@@ -987,7 +1005,9 @@ function getMonacoButtons(
     codeSample: string,
     pythonVersion: string,
     models: Map<string, editor.ITextModel>,
-    activeFileName: string
+    activeFileName: string,
+    createNewFile: (fileName: string, content: string) => void,
+    setActiveFileName: (fileName: string) => void
 ): ReadonlyArray<React.ReactElement> {
     let buttons: ReadonlyArray<React.ReactElement> = [];
     if (isCodeSnippet) {
@@ -1002,7 +1022,9 @@ function getMonacoButtons(
                       codeSample,
                       isCodeSnippet,
                       models,
-                      activeFileName
+                      activeFileName,
+                      createNewFile,
+                      setActiveFileName
                   )
                 : null,
         ].filter(Boolean);
@@ -1020,7 +1042,9 @@ function getMonacoButtons(
                 codeSample,
                 isCodeSnippet,
                 models,
-                activeFileName
+                activeFileName,
+                createNewFile,
+                setActiveFileName
             ),
             getGitHubIssuesButton(model, pythonVersion),
         ];
@@ -1193,12 +1217,19 @@ function getResetButton(
     codeSample: string,
     isCodeSnippet: boolean,
     models: Map<string, editor.ITextModel>,
-    activeFileName: string
+    activeFileName: string,
+    createNewFile: (fileName: string, content: string) => void,
+    setActiveFileName: (fileName: string) => void
 ): React.ReactElement {
     return (
         <MonacoEditorButton
             id="reset-button"
             onClick={async () => {
+                if (!isCodeSnippet) {
+                    createNewFile('utils.py', DEFAULT_UTILS_PROGRAM);
+                    setActiveFileName('sandbox.py');
+                    forceRecheck();
+                }
                 if (model) {
                     model.setValue(codeSample);
                     forceRecheck();

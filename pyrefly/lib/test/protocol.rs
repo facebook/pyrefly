@@ -308,6 +308,21 @@ a: A = A()  # E: Cannot instantiate `A` because it is a protocol
 );
 
 testcase!(
+    test_protocol_stub_method_instantiation_error,
+    r#"
+from typing import Protocol
+
+class Proto(Protocol):
+    def method(self) -> int: ...
+
+class Concrete(Proto):
+    pass
+
+Concrete()  # E: Cannot instantiate `Concrete`
+"#,
+);
+
+testcase!(
     test_protocol_getattr,
     r#"
 from typing import Protocol

@@ -23,7 +23,9 @@ use crate::config::config::ProjectLayout;
 use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::config::finder::debug_log;
+use crate::module::bundled::BundledStub;
 use crate::module::typeshed::BundledTypeshedStdlib;
+use crate::module::typeshed_third_party::BundledTypeshedThirdParty;
 
 /// Finalizes a config before being returned by a [`ConfigFinder`].
 pub trait ConfigConfigurer: Send + Sync + 'static {
@@ -190,6 +192,9 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
                     ModulePathDetails::Namespace(x) => x.as_path(),
                     ModulePathDetails::BundledTypeshed(_) => {
                         return BundledTypeshedStdlib::config();
+                    }
+                    ModulePathDetails::BundledTypeshedThirdParty(_) => {
+                        return BundledTypeshedThirdParty::config();
                     }
                 };
                 cache_parents

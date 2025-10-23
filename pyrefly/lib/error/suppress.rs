@@ -192,12 +192,10 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) -> usize {
         let mut unused_ignore_count = 0;
         let mut ignore_locations: SmallSet<usize> = SmallSet::new();
         for ignore in ignores {
-            let above_line = ignore
-                .decrement()
-                .expect("Invalid error suppression location")
-                .to_zero_indexed() as usize;
+            if let Some(above_line) = ignore.decrement() {
+                ignore_locations.insert(above_line.to_zero_indexed() as usize);
+            }
             let same_line = ignore.to_zero_indexed() as usize;
-            ignore_locations.insert(above_line);
             ignore_locations.insert(same_line);
         }
         if let Ok(file) = read_and_validate_file(path) {
@@ -492,6 +490,15 @@ def f() -> int:
     return 1
 "##;
         assert_remove_ignores(input, output, false, 2);
+    }
+
+    #[test]
+    fn test_remove_suppression_first_line() {
+        let input = r#"x = 1 + 1  # pyrefly: ignore
+"#;
+        let want = r#"x = 1 + 1
+"#;
+        assert_remove_ignores(input, want, false, 1);
     }
 
     #[test]

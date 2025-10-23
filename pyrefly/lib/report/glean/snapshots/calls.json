@@ -442,6 +442,25 @@
           },
           "spans": [
             {
+              "length": 4,
+              "start": 52
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "True"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "calls.py"
+          },
+          "spans": [
+            {
               "length": 5,
               "start": 77
             },
@@ -500,6 +519,16 @@
               "target": {
                 "id": 0,
                 "key": "dataclasses"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 52
+              },
+              "target": {
+                "id": 0,
+                "key": "True"
               }
             },
             {

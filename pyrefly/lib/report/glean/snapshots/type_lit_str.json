@@ -176,6 +176,37 @@
             }
           },
           "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "type_lit_str.Union"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "typing.Union"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "type_lit_str"
+                }
+              }
+            }
+          },
+          "declaration": {
             "module": {
               "id": 0,
               "key": {
@@ -212,8 +243,8 @@
             "key": "type_lit_str.py"
           },
           "span": {
-            "length": 98,
-            "start": 0
+            "length": 114,
+            "start": 25
           }
         }
       },
@@ -237,7 +268,7 @@
           },
           "span": {
             "length": 21,
-            "start": 13
+            "start": 38
           }
         }
       },
@@ -260,8 +291,36 @@
             "key": "type_lit_str.py"
           },
           "span": {
-            "length": 58,
-            "start": 40
+            "length": 74,
+            "start": 65
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "type_lit_str.Union"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "typing.Union"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "type_lit_str.py"
+          },
+          "span": {
+            "length": 5,
+            "start": 19
           }
         }
       },
@@ -284,7 +343,7 @@
             "key": "type_lit_str.py"
           },
           "span": {
-            "length": 99,
+            "length": 140,
             "start": 0
           }
         }
@@ -309,7 +368,7 @@
           },
           "span": {
             "length": 4,
-            "start": 50
+            "start": 75
           }
         }
       },
@@ -333,7 +392,7 @@
           },
           "span": {
             "length": 1,
-            "start": 56
+            "start": 81
           }
         }
       }
@@ -379,7 +438,7 @@
           },
           "span": {
             "length": 21,
-            "start": 13
+            "start": 38
           }
         }
       },
@@ -419,8 +478,8 @@
             "key": "type_lit_str.py"
           },
           "span": {
-            "length": 98,
-            "start": 0
+            "length": 114,
+            "start": 25
           }
         }
       },
@@ -470,7 +529,18 @@
                         "id": 0,
                         "key": "\"B\""
                       },
-                      "xrefs": []
+                      "xrefs": [
+                        {
+                          "source": {
+                            "length": 1,
+                            "start": 1
+                          },
+                          "target": {
+                            "id": 0,
+                            "key": "type_lit_str.B"
+                          }
+                        }
+                      ]
                     }
                   }
                 ],
@@ -478,9 +548,60 @@
                 "returnsInfo": {
                   "displayType": {
                     "id": 0,
-                    "key": "\"list[B] | A\""
+                    "key": "\"Union[list[B], A, bool]\""
                   },
-                  "xrefs": []
+                  "xrefs": [
+                    {
+                      "source": {
+                        "length": 1,
+                        "start": 12
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "type_lit_str.B"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 1,
+                        "start": 16
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "type_lit_str.B.A"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 4,
+                        "start": 19
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "bool"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 4,
+                        "start": 7
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "list"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 5,
+                        "start": 1
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "typing.Union"
+                      }
+                    }
+                  ]
                 }
               }
             }
@@ -490,8 +611,8 @@
             "key": "type_lit_str.py"
           },
           "span": {
-            "length": 58,
-            "start": 40
+            "length": 74,
+            "start": 65
           }
         }
       },
@@ -519,7 +640,7 @@
             "key": "type_lit_str.py"
           },
           "span": {
-            "length": 99,
+            "length": 140,
             "start": 0
           }
         }
@@ -560,7 +681,7 @@
           },
           "span": {
             "length": 4,
-            "start": 50
+            "start": 75
           }
         }
       },
@@ -596,7 +717,18 @@
                     "id": 0,
                     "key": "\"B\""
                   },
-                  "xrefs": []
+                  "xrefs": [
+                    {
+                      "source": {
+                        "length": 1,
+                        "start": 1
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "type_lit_str.B"
+                      }
+                    }
+                  ]
                 }
               }
             }
@@ -607,7 +739,7 @@
           },
           "span": {
             "length": 1,
-            "start": 56
+            "start": 81
           }
         }
       }
@@ -620,8 +752,8 @@
         "id": 0,
         "key": {
           "digest": {
-            "hash": "a8024da3916e40a70d9c77bb7de509d16b324ec36876c0560f6cc39395463a26",
-            "size": 99
+            "hash": "bf7a3e5a9e1baee5114fe725f2099471b4ac42aa7b9e6c71778192916a0cac4a",
+            "size": 140
           },
           "file": {
             "id": 0,
@@ -647,8 +779,9 @@
             1,
             13,
             13,
-            19,
-            44,
+            21,
+            25,
+            58,
             9
           ]
         }
@@ -683,12 +816,134 @@
           "spans": [
             {
               "length": 1,
-              "start": 96
+              "start": 104
+            },
+            {
+              "length": 1,
+              "start": 85
             }
           ],
           "target": {
             "id": 0,
-            "key": "type_lit_str.B.other.<locals>.x"
+            "key": "type_lit_str.B"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "type_lit_str.py"
+          },
+          "spans": [
+            {
+              "length": 1,
+              "start": 108
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "type_lit_str.B.A"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "type_lit_str.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 111
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "bool"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "type_lit_str.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 99
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "list"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "type_lit_str.py"
+          },
+          "spans": [
+            {
+              "length": 5,
+              "start": 134
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "False"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "type_lit_str.py"
+          },
+          "spans": [
+            {
+              "length": 5,
+              "start": 19
+            },
+            {
+              "length": 5,
+              "start": 93
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "typing.Union"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "type_lit_str.py"
+          },
+          "spans": [
+            {
+              "length": 6,
+              "start": 5
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "typing"
           }
         }
       }
@@ -708,11 +963,91 @@
             {
               "source": {
                 "length": 1,
-                "start": 96
+                "start": 104
               },
               "target": {
                 "id": 0,
-                "key": "type_lit_str.B.other.<locals>.x"
+                "key": "type_lit_str.B"
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 108
+              },
+              "target": {
+                "id": 0,
+                "key": "type_lit_str.B.A"
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 85
+              },
+              "target": {
+                "id": 0,
+                "key": "type_lit_str.B"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 111
+              },
+              "target": {
+                "id": 0,
+                "key": "bool"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 99
+              },
+              "target": {
+                "id": 0,
+                "key": "list"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 134
+              },
+              "target": {
+                "id": 0,
+                "key": "False"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 19
+              },
+              "target": {
+                "id": 0,
+                "key": "typing.Union"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 93
+              },
+              "target": {
+                "id": 0,
+                "key": "typing.Union"
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 5
+              },
+              "target": {
+                "id": 0,
+                "key": "typing"
               }
             }
           ]
@@ -989,6 +1324,56 @@
                       }
                     }
                   }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "type_lit_str.Union"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "Union"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "type_lit_str"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "typing.Union"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "Union"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "typing"
                 }
               }
             }

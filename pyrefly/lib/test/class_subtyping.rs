@@ -300,7 +300,7 @@ class A:
     x: int
 class B:
     x: str
-class C(A, B): # E: Field `x` has inconsistent types inherited from multiple base classes
+class C(A, B):
     x: int # E: Class member `C.x` overrides parent class `B` in an inconsistent manner
 class D:
     x: int
@@ -321,6 +321,19 @@ class Bar:
     def foo(self) -> str: ...
 
 class Both(Foo, Bar): # Expect error here
+    ...
+"#,
+);
+
+testcase!(
+    test_multiple_inheritance_special_methods,
+    r#"
+class Foo:
+    def __init__(self, x: int) -> None: ...
+class Bar:
+    def __init__(self, x: str) -> None: ...
+
+class Both(Foo, Bar): # No error here, because __init__ is special
     ...
 "#,
 );

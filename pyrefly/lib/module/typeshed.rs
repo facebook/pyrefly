@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::path::PathBuf;
@@ -12,34 +13,33 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use anyhow::anyhow;
+use dupe::Dupe;
 use pyrefly_bundled::bundled_typeshed;
+use pyrefly_config::error::ErrorDisplayConfig;
+use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_config::error_kind::Severity;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
-use crate::module::bundled::bundled::Stub;
-use crate::module::bundled::bundled::find_bundled_stub_module_path;
-use crate::module::bundled::bundled::get_config_file;
-use crate::module::bundled::bundled::get_materialized_path_on_disk;
-use crate::module::bundled::bundled::get_modules;
-use crate::module::bundled::bundled::load_stubs_from_path;
-#[cfg(test)]
-use crate::module::bundled::bundled::write_stub_files;
+use crate::module::bundled::BundledStub;
 
 #[derive(Debug, Clone)]
 pub struct BundledTypeshedStdlib {
     pub find: SmallMap<ModuleName, PathBuf>,
     pub load: SmallMap<PathBuf, Arc<String>>,
+    pub temp_dir: &'static str,
 }
 
-impl BundledTypeshedStdlib {
+impl BundledStub for BundledTypeshedStdlib {
     fn new() -> anyhow::Result<Self> {
         let contents = bundled_typeshed()?;
         let mut res = Self {
             find: SmallMap::new(),
             load: SmallMap::new(),
+            temp_dir: "pyrefly_bundled_typeshed",
         };
         for (relative_path, contents) in contents {
             let module_name = ModuleName::from_relative_path(&relative_path)?;
@@ -49,36 +49,46 @@ impl BundledTypeshedStdlib {
         Ok(res)
     }
 
-    pub fn find(&self, module: ModuleName) -> Option<ModulePath> {
-        find_bundled_stub_module_path(self.clone(), module)
+    fn find(&self, module: ModuleName) -> Option<ModulePath> {
+        self.find
+            .get(&module)
+            .map(|path| ModulePath::bundled_typeshed(path.clone()))
     }
 
-    pub fn load(&self, path: &Path) -> Option<Arc<String>> {
-        load_stubs_from_path(Stub::BundledTypeshedStdlib(self.clone()), path)
+    fn load(&self, path: &Path) -> Option<Arc<String>> {
+        self.load.get(path).cloned()
     }
 
-    pub fn modules(&self) -> impl Iterator<Item = ModuleName> {
-        let stub = Stub::BundledTypeshedStdlib(self.clone());
-        get_modules(&stub).collect::<Vec<_>>().into_iter()
+    fn load_map(&self) -> impl Iterator<Item = (&PathBuf, &Arc<String>)> {
+        self.load.iter()
     }
 
-    pub fn config() -> ArcId<ConfigFile> {
-        get_config_file()
+    fn modules(&self) -> impl Iterator<Item = ModuleName> {
+        self.find.keys().copied()
     }
 
-    /// Obtain a materialized path for bundled typeshed, writing it all to disk the first time.
-    /// Note: this path is not the source of truth, it simply exists to display typeshed contents
-    /// for informative purposes.
-    pub fn materialized_path_on_disk(&self) -> anyhow::Result<PathBuf> {
-        get_materialized_path_on_disk(
-            Stub::BundledTypeshedStdlib(self.clone()),
-            "pyrefly_bundled_typeshed",
-        )
+    fn get_path_name(&self) -> &'static str {
+        self.temp_dir
     }
 
-    #[cfg(test)]
-    fn write(&self, temp_dir: &Path) -> anyhow::Result<()> {
-        write_stub_files(Stub::BundledTypeshedStdlib(self.clone()), temp_dir)
+    fn config() -> ArcId<ConfigFile> {
+        static CONFIG: LazyLock<ArcId<ConfigFile>> = LazyLock::new(|| {
+            let mut config_file = ConfigFile::default();
+            config_file.python_environment.site_package_path = Some(Vec::new());
+            config_file.search_path_from_file = match stdlib_search_path() {
+                Some(path) => vec![path],
+                None => Vec::new(),
+            };
+            config_file.root.errors = Some(ErrorDisplayConfig::new(HashMap::from([
+                // The stdlib is full of deliberately incorrect overrides, so ignore them
+                (ErrorKind::BadOverride, Severity::Ignore),
+                (ErrorKind::BadParamNameOverride, Severity::Ignore),
+            ])));
+            config_file.root.disable_type_errors_in_ide = Some(true);
+            config_file.configure();
+            ArcId::new(config_file)
+        });
+        CONFIG.dupe()
     }
 }
 

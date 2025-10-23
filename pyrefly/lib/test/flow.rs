@@ -1728,3 +1728,31 @@ else:
     exit(1)
 "#,
 );
+
+fn env_pytest() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "pytest",
+        "pytest.pyi",
+        r#"
+from typing import NoReturn
+def fail(x: str) -> NoReturn: ...
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_pytest_noreturn,
+    env_pytest(),
+    r#"
+import pytest
+
+def test_oops() -> None:
+    try:
+        val = True
+    except:
+        pytest.fail("execution stops here")
+    assert val, "oops"
+"#,
+);

@@ -27,9 +27,9 @@ fn builtins_import_goes_to_typeshed() {
         .type_definition("imports_builtins_no_config.py", 7, 7);
     interaction.client.expect_definition_response_absolute(
         result_file.to_string_lossy().to_string(),
-        425,
+        426,
         0,
-        425,
+        426,
         4,
     );
     assert!(

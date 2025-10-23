@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::lock::RwLock;
 use serde::Deserialize;
@@ -111,7 +112,7 @@ pub trait SourceDatabase: Send + Sync + fmt::Debug {
     /// Returns `Err` if the shellout to the build system failed
     /// The resulting bool represents whether find caches
     /// related to this sourcedb should be invalidated.
-    fn requery_source_db(&self, files: SmallSet<PathBuf>) -> anyhow::Result<bool>;
+    fn requery_source_db(&self, files: SmallSet<ModulePathBuf>) -> anyhow::Result<bool>;
     /// The source database-related configuration files a watcher should wait for
     /// changes on. Changes to one of these returned watchfiles should force
     /// a sourcedb rebuild.

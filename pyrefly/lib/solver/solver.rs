@@ -105,19 +105,6 @@ impl Display for Variable {
     }
 }
 
-impl Variable {
-    /// For some types of variables we should promote literals, for others we should not.
-    /// E.g. `x = 1; while True: x = x` should be `Literal[1]` while
-    /// `[1]` should be `List[int]`.
-    fn promote<Ans: LookupAnswer>(&self, ty: Type, type_order: TypeOrder<Ans>) -> Type {
-        if matches!(self, Variable::Partial | Variable::Quantified(_)) {
-            ty.promote_literals(type_order.stdlib())
-        } else {
-            ty
-        }
-    }
-}
-
 #[must_use = "Quantified vars must be finalized. Pass to finish_quantified."]
 pub struct QuantifiedHandle(Vec<Var>);
 
@@ -240,6 +227,11 @@ impl Variables {
     }
 
     fn get_node(&self, x: Var) -> &RefCell<VariableNode> {
+        assert_ne!(
+            x,
+            Var::ZERO,
+            "Internal error: unexpected Var::ZERO, which is a dummy value."
+        );
         self.0.get(&x).expect(VAR_LEAK)
     }
 }
@@ -340,17 +332,24 @@ impl Solver {
             // but don't have any good location information to hand.
             *t = Type::any_implicit();
         } else if let Type::Var(x) = t {
-            let lock = self.variables.lock();
-            if let Some(_guard) = lock.recurse(*x, recurser) {
-                let variable = lock.get(*x);
-                if let Variable::Answer(w) = &*variable {
-                    *t = w.clone();
-                    drop(variable);
-                    drop(lock);
-                    self.expand_with_limit(t, limit - 1, recurser);
-                }
-            } else {
+            if *x == Var::ZERO {
+                // This shouldn't happen, but we currently can see this in the LSP
+                // where we do type operations on a type value which has been passed
+                // to `for_display`.
                 *t = Type::any_implicit();
+            } else {
+                let lock = self.variables.lock();
+                if let Some(_guard) = lock.recurse(*x, recurser) {
+                    let variable = lock.get(*x);
+                    if let Variable::Answer(w) = &*variable {
+                        *t = w.clone();
+                        drop(variable);
+                        drop(lock);
+                        self.expand_with_limit(t, limit - 1, recurser);
+                    }
+                } else {
+                    *t = Type::any_implicit();
+                }
             }
         } else {
             t.recurse_mut(&mut |t| self.expand_with_limit(t, limit - 1, recurser));
@@ -361,11 +360,6 @@ impl Solver {
     /// and returns that answer. Note that if the `Var` is already bound to something that contains a
     /// `Var` (including itself), then we will return the answer.
     pub fn force_var(&self, v: Var) -> Type {
-        assert_ne!(
-            v,
-            Var::ZERO,
-            "Cannot force Var::ZERO, which is a dummy value"
-        );
         let lock = self.variables.lock();
         let mut e = lock.get_mut(v);
         match &mut *e {
@@ -1087,8 +1081,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     }
 
     /// Implementation of Var subset cases, calling onward to solve non-Var cases.
+    ///
     /// This function does two things: it checks that got <: want, and it solves free variables assuming that
     /// got <: want.
+    ///
+    /// Before solving, for Quantified and Partial variables we will generally
+    /// promote literals when a variable appears on the left side of an
+    /// inequality, but not when it is on the left. This means that, e.g.:
+    /// - if `f[T](x: T) -> T: ...`, then `f(1)` gets solved to `int`
+    /// - if `f(x: Literal[0]): ...`, then `x = []; f(x[0])` results in `x: list[Literal[0]]`
     fn is_subset_eq_var(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
         match (got, want) {
             _ if got == want => Ok(()),
@@ -1132,94 +1133,98 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             (Type::Var(v1), t2) => {
                 let variables = self.solver.variables.lock();
-                let variable = variables.get(*v1);
-                match &*variable {
+                let v1_ref = variables.get(*v1);
+                match &*v1_ref {
                     Variable::Parameter => {
                         unreachable!("Unexpected Variable::Parameter in constraint");
                     }
                     Variable::Answer(t1) => {
                         let t1 = t1.clone();
-                        drop(variable);
+                        drop(v1_ref);
                         drop(variables);
                         self.is_subset_eq(&t1, t2)
                     }
-                    var_type => {
-                        if let Variable::Quantified(q) = var_type {
-                            let name = q.name.clone();
-                            let bound = q.restriction().as_type(self.type_order.stdlib());
-                            drop(variable);
-                            variables.update(*v1, Variable::Answer(t2.clone()));
-                            drop(variables);
-                            if let Err(e) = self.is_subset_eq(t2, &bound) {
-                                self.solver.instantiation_errors.write().insert(
-                                    *v1,
-                                    TypeVarSpecializationError {
-                                        name,
-                                        got: t2.clone(),
-                                        want: bound,
-                                        error: e,
-                                    },
-                                );
-                            }
-                        } else {
-                            drop(variable);
-                            variables.update(*v1, Variable::Answer(t2.clone()));
+                    Variable::Quantified(q) => {
+                        let name = q.name.clone();
+                        let bound = q.restriction().as_type(self.type_order.stdlib());
+                        drop(v1_ref);
+                        variables.update(*v1, Variable::Answer(t2.clone()));
+                        drop(variables);
+                        if let Err(e) = self.is_subset_eq(t2, &bound) {
+                            self.solver.instantiation_errors.write().insert(
+                                *v1,
+                                TypeVarSpecializationError {
+                                    name,
+                                    got: t2.clone(),
+                                    want: bound,
+                                    error: e,
+                                },
+                            );
                         }
+                        Ok(())
+                    }
+                    Variable::Partial | Variable::Unwrap | Variable::Recursive(..) => {
+                        drop(v1_ref);
+                        variables.update(*v1, Variable::Answer(t2.clone()));
                         Ok(())
                     }
                 }
             }
             (t1, Type::Var(v2)) => {
                 let variables = self.solver.variables.lock();
-                let variable = variables.get(*v2);
-                match &*variable {
+                let v2_ref = variables.get(*v2);
+                match &*v2_ref {
                     Variable::Parameter => {
                         unreachable!("Unexpected Variable::Parameter in constraint");
                     }
                     Variable::Answer(t2) => {
                         let t2 = t2.clone();
-                        drop(variable);
+                        drop(v2_ref);
                         drop(variables);
                         self.is_subset_eq(t1, &t2)
                     }
-                    var_type => {
-                        // Note that we promote the type when the var is on the RHS, but not when it's on the
-                        // LHS, so that we infer more general types but leave user-specified types alone.
-                        let t1_p = var_type.promote(t1.clone(), self.type_order);
-                        if let Variable::Quantified(q) = var_type {
-                            let name = q.name.clone();
-                            let bound = q.restriction().as_type(self.type_order.stdlib());
-                            drop(variable);
-                            variables.update(*v2, Variable::Answer(t1_p.clone()));
-                            drop(variables);
-                            if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
-                                // If the promoted type fails, try again with the original type, in case the bound itself is literal.
-                                // This could be more optimized, but errors are rare, so this code path should not be hot.
+                    Variable::Quantified(q) => {
+                        let t1_p = t1.clone().promote_literals(self.type_order.stdlib());
+                        let name = q.name.clone();
+                        let bound = q.restriction().as_type(self.type_order.stdlib());
+                        drop(v2_ref);
+                        variables.update(*v2, Variable::Answer(t1_p.clone()));
+                        drop(variables);
+                        if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
+                            // If the promoted type fails, try again with the original type, in case the bound itself is literal.
+                            // This could be more optimized, but errors are rare, so this code path should not be hot.
+                            self.solver
+                                .variables
+                                .lock()
+                                .update(*v2, Variable::Answer(t1.clone()));
+                            if self.is_subset_eq(t1, &bound).is_err() {
+                                // If the original type is also an error, use the promoted type.
                                 self.solver
                                     .variables
                                     .lock()
-                                    .update(*v2, Variable::Answer(t1.clone()));
-                                if self.is_subset_eq(t1, &bound).is_err() {
-                                    // If the original type is also an error, use the promoted type.
-                                    self.solver
-                                        .variables
-                                        .lock()
-                                        .update(*v2, Variable::Answer(t1_p.clone()));
-                                    self.solver.instantiation_errors.write().insert(
-                                        *v2,
-                                        TypeVarSpecializationError {
-                                            name,
-                                            got: t1_p.clone(),
-                                            want: bound,
-                                            error: err_p,
-                                        },
-                                    );
-                                }
+                                    .update(*v2, Variable::Answer(t1_p.clone()));
+                                self.solver.instantiation_errors.write().insert(
+                                    *v2,
+                                    TypeVarSpecializationError {
+                                        name,
+                                        got: t1_p.clone(),
+                                        want: bound,
+                                        error: err_p,
+                                    },
+                                );
                             }
-                        } else {
-                            drop(variable);
-                            variables.update(*v2, Variable::Answer(t1_p));
                         }
+                        Ok(())
+                    }
+                    Variable::Partial => {
+                        let t1_p = t1.clone().promote_literals(self.type_order.stdlib());
+                        drop(v2_ref);
+                        variables.update(*v2, Variable::Answer(t1_p));
+                        Ok(())
+                    }
+                    Variable::Unwrap | Variable::Recursive(..) => {
+                        drop(v2_ref);
+                        variables.update(*v2, Variable::Answer(t1.clone()));
                         Ok(())
                     }
                 }

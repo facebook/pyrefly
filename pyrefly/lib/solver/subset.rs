@@ -413,6 +413,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 // Protocols can't be instantiated
                 continue;
             }
+            if name == dunder::SLOTS {
+                // Skip `__slots__` check
+                continue;
+            }
             if matches!(
                 got,
                 Type::Callable(_) | Type::Function(_) | Type::BoundMethod(_)

@@ -12,7 +12,7 @@ use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::test::util::mk_multi_file_state_assert_no_errors;
 
 fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
-    let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::Indexing);
+    let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::indexing());
     let mut report = String::new();
     for (name, code) in files {
         report.push_str("# ");
@@ -635,6 +635,68 @@ line: 3, column: 4, length: 1, text: x
 token-type: variable
 
 line: 3, column: 7, length: 3, text: int
+token-type: class, token-modifiers: [defaultLibrary]"#,
+    );
+}
+
+#[test]
+fn nested_class() {
+    let code = r#"
+from typing import SupportsFloat
+class Test:
+    class nested: pass
+Test.nested"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+    # main.py
+line: 1, column: 5, length: 6, text: typing
+token-type: namespace
+
+line: 1, column: 19, length: 13, text: SupportsFloat
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 2, column: 6, length: 4, text: Test
+token-type: class
+
+line: 3, column: 10, length: 6, text: nested
+token-type: class
+
+line: 4, column: 0, length: 4, text: Test
+token-type: class
+
+line: 4, column: 5, length: 6, text: nested
+token-type: class"#,
+    );
+}
+
+#[test]
+fn module_dot_access() {
+    let code = r#"
+import typing
+from typing import SupportsFloat
+typing.SupportsFloat
+SupportsFloat"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+    # main.py
+line: 1, column: 7, length: 6, text: typing
+token-type: namespace, token-modifiers: [defaultLibrary]
+
+line: 2, column: 5, length: 6, text: typing
+token-type: namespace
+
+line: 2, column: 19, length: 13, text: SupportsFloat
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 3, column: 0, length: 6, text: typing
+token-type: namespace, token-modifiers: [defaultLibrary]
+
+line: 3, column: 7, length: 13, text: SupportsFloat
+token-type: class
+
+line: 4, column: 0, length: 13, text: SupportsFloat
 token-type: class, token-modifiers: [defaultLibrary]"#,
     );
 }

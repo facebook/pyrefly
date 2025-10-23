@@ -980,6 +980,8 @@ Completion Results:
 
 - (Class) MissingHeaderBodySeparatorDefect: from email.errors import MissingHeaderBodySeparatorDefect
 
+- (Function) disjoint_base: from typing_extensions import disjoint_base
+
 - (Function) distributions: from importlib.metadata import distributions
 
 - (Function) fix_missing_locations: from ast import fix_missing_locations
@@ -1286,7 +1288,7 @@ fn kwargs_completion_overload_correct() {
 from typing import Literal, overload
 @overload
 def foo(y: bool, z: bool):
-print(y)
+    print(y)
 @overload
 def foo(x: int, y: str):
     print(x)
@@ -2165,6 +2167,35 @@ Completion Results:
 This has documentation.
 - (Method) undocumented: def undocumented(self: Foo) -> int
 - (Field) x: int
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1257
+// Because the base type for completion is passed to Type::for_display,
+// which converts all unsolved Var to Var::ZERO, we were running into an
+// unexpected Var::ZERO in attribute lookup, leading to a panic.
+#[test]
+fn dot_complete_var_crash_regression() {
+    let code = r#"
+class C[T]:
+    def m(self):
+        pass
+def f[T]() -> C[T]: ...
+f().
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+6 | f().
+        ^
+Completion Results:
+- (Method) m: def m(self: C[Unknown]) -> None
 "#
         .trim(),
         report.trim(),

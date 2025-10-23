@@ -62,6 +62,12 @@ However, subconfigs do not support changing the Python version, platform, or mod
 
 Diagnostic settings are carried over to the equivalent subconfig, using the mapping mentioned [above](#type-check-diagnostic-settings-and-error-kinds).
 
+### Extending Builtins
+
+Pyright automatically imports any builtins defined in `__builtins__.pyi` at the project root or in a custom stubs directory specified by `stubPath` (defaulting to `./typings`).
+
+Pyrefly supports this behavior - the directory for `stubPath` should be added to your Pyrefly config's `site-package-path`.
+
 ## Silencing Errors
 
 Like pyright, pyrefly has ways to silence specific error codes. Full details can be found in the [Error Suppression docs](error-suppressions.mdx).

@@ -157,8 +157,11 @@ The glob patterns used to describe which files to avoid
 type checking as way to filter files that match `project-includes`,
 but we don't want to type check.
 
+The default here is *always* included in your `project-excludes`, even if you override
+it to something else.
+
 - Type: list of [filesystem glob patterns](#filesystem-globbing)
-- Default: `["**/node_modules", "**/__pycache__", "**/*venv/**", "**/.[!/.]*/**"]`
+- Default: `["**/node_modules", "**/__pycache__", "**/venv/**", "**/.[!/.]*/**"]`
 - Flag equivalent: `--project-excludes`
 - Equivalent configs: `exclude` in Pyright and mypy
 - Notes:
@@ -258,11 +261,13 @@ resolution, after [`search-path`](#search-path) and `typeshed`.
 See more on [how Pyrefly does import resolution](import-resolution.mdx).
 
 - Type: list of directories
-- Default: result from [Environment Autoconfiguration](#environment-autoconfiguration), or
+- Default: `./typings` + the result from [Environment Autoconfiguration](#environment-autoconfiguration), or
   `[]` if the Python interpreter cannot be queried
 - Flag equivalent: `--site-package-path`
 - Equivalent configs: none
 - Notes:
+  - The queried interpreter's site package paths will always be included in addition to any user-specified value,
+  unless environment auto-configuration is turned off.
   - Ideally, this should not be set manually, unless you're using a venv, running one-off tests,
     testing specific behavior, or having trouble with [Environment Autoconfiguration](#environment-autoconfiguration).
     Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
