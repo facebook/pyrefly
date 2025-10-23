@@ -2360,7 +2360,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             SuperObj::Instance(obj) => self
                 .get_super_class_member(obj.class_object(), Some(start_lookup_cls), name)
                 .map(|member| {
-                    if let Some(reason) = self.super_protocol_stub_reason(&member) {
+                    if let Some(reason) = self.super_method_needs_impl_reason(&member) {
                         ClassAttribute::no_access(reason)
                     } else {
                         self.as_instance_attribute(&member.value, &Instance::of_self_type(obj))
@@ -2369,7 +2369,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             SuperObj::Class(obj) => self
                 .get_super_class_member(obj.class_object(), Some(start_lookup_cls), name)
                 .map(|member| {
-                    if let Some(reason) = self.super_protocol_stub_reason(&member) {
+                    if let Some(reason) = self.super_method_needs_impl_reason(&member) {
                         ClassAttribute::no_access(reason)
                     } else {
                         self.as_class_attribute(&member.value, &ClassBase::SelfType(obj.clone()))
@@ -2378,13 +2378,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn super_protocol_stub_reason(
+    fn super_method_needs_impl_reason(
         &self,
         member: &WithDefiningClass<Arc<ClassField>>,
     ) -> Option<NoAccessReason> {
+        if member.value.is_abstract() {
+            return Some(NoAccessReason::SuperMethodNeedsImplementation(
+                member.defining_class.dupe(),
+            ));
+        }
         let metadata = self.get_metadata_for_class(&member.defining_class);
         if metadata.is_protocol() && member.value.is_stub_method() {
-            Some(NoAccessReason::SuperProtocolStubMethod(
+            Some(NoAccessReason::SuperMethodNeedsImplementation(
                 member.defining_class.dupe(),
             ))
         } else {

@@ -196,9 +196,7 @@ class Base(ABC):
 
 class Child(Base):
     def method(self) -> str:
-        # Calling abstract method via super() should be allowed (no error)
-        # Even though it would fail at runtime, type checkers don't error here
-        super().method()
+        super().method()  # E: Method `method` inherited from class `Base` has no implementation and cannot be accessed via `super()`
         return "child"
 
 # Child is concrete, so this works

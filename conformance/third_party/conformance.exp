@@ -8749,8 +8749,8 @@
     {
       "code": -2,
       "column": 16,
-      "concise_description": "Method `draw` inherited from protocol `PColor` has no implementation and cannot be accessed via `super()`",
-      "description": "Method `draw` inherited from protocol `PColor` has no implementation and cannot be accessed via `super()`",
+      "concise_description": "Method `draw` inherited from class `PColor` has no implementation and cannot be accessed via `super()`",
+      "description": "Method `draw` inherited from class `PColor` has no implementation and cannot be accessed via `super()`",
       "line": 27,
       "name": "missing-attribute",
       "severity": "error",
