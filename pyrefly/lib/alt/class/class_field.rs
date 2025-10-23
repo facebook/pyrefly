@@ -1051,7 +1051,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let (value_ty, inherited_annotation) = match value {
             ExprOrBinding::Expr(e) => {
+                let is_private_attr = name.starts_with("__") && !name.ends_with("__");
                 let (inherited_ty, inherited_annot) = if direct_annotation.is_some() {
+                    (None, None)
+                } else if is_private_attr {
+                    // Private (double-underscore) attributes are effectively class-scoped and should not
+                    // inherit types or annotations from parent classes.
+                    is_inherited = IsInherited::No;
                     (None, None)
                 } else {
                     let (inherited_ty, annotation) =
@@ -1063,6 +1069,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 let mut ty = if let Some(inherited_ty) = inherited_ty
                     && matches!(initial_value, RawClassFieldInitialization::Method(_))
+                    && !is_private_attr
                 {
                     // Inherit the previous type of the attribute if the only declaration-like
                     // thing the current class does is assign to the attribute in a method.

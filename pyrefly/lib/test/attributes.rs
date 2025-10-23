@@ -1600,6 +1600,34 @@ assert_type(B(42).x, int)
 );
 
 testcase!(
+    test_private_attr_assignment_in_constructor,
+    r#"
+from typing import assert_type
+
+class Config:
+    pass
+
+class DerivedConfig(Config):
+    def foo(self) -> None:
+        print("hello")
+
+
+class B:
+    def __init__(self, config: Config) -> None:
+        self.__config = config
+
+
+class C(B):
+    def __init__(self, config: DerivedConfig) -> None:
+        self.__config = config
+
+    def bar(self) -> None:
+        assert_type(self.__config, DerivedConfig)
+        self.__config.foo()
+    "#,
+);
+
+testcase!(
     test_crtp_example, // CRTP = Curiously recurring template pattern
     r#"
 from typing import Any, assert_type
