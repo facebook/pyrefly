@@ -1154,10 +1154,10 @@ def f(x: str) -> str: ...
 def f(x): return x
 
 # Test with wrong type - should show argument type in error
-f(3.14)  # E: No matching overload found for function `f`\n  Called with arguments: (float)
+f(3.14)  # E: No matching overload found for function `f` called with arguments: (float)
 
 # Test with keyword argument
-f(x=3.14)  # E: No matching overload found for function `f`\n  Called with arguments: (x=float)
+f(x=3.14)  # E: No matching overload found for function `f` called with arguments: (x=float)
 
 # Test with multiple arguments (Pyrefly infers literal types for constants)
 @overload
@@ -1166,7 +1166,7 @@ def g(x: int, y: int) -> int: ...
 def g(x: str, y: str) -> str: ...
 def g(x, y): return x
 
-g(1, "hello")  # E: No matching overload found for function `g`\n  Called with arguments: (Literal[1], Literal['hello'])
-g(x=1, y="hello")  # E: No matching overload found for function `g`\n  Called with arguments: (x=Literal[1], y=Literal['hello'])
+g(1, "hello")  # E: No matching overload found for function `g` called with arguments: (Literal[1], Literal['hello'])
+g(x=1, y="hello")  # E: No matching overload found for function `g` called with arguments: (x=Literal[1], y=Literal['hello'])
     "#,
 );

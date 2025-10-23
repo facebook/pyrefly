@@ -216,31 +216,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let args = call.vec_call_arg(args, self, errors);
         let keywords = call.vec_call_keyword(keywords, self, errors);
 
-        // Build a string showing the argument types for error messages
-        let mut arg_type_strs = Vec::new();
-        for arg in &args {
-            let (ty, prefix) = match arg {
-                CallArg::Arg(value) => (value.infer(self, errors), ""),
-                CallArg::Star(value, _) => (value.infer(self, errors), "*"),
-            };
-            let ty_display = self.solver().for_display(ty);
-            arg_type_strs.push(format!("{}{}", prefix, ty_display));
-        }
-        for kw in &keywords {
-            let ty = kw.value.infer(self, errors);
-            let ty_display = self.solver().for_display(ty);
-            if let Some(arg_name) = kw.arg {
-                arg_type_strs.push(format!("{}={}", arg_name.as_str(), ty_display));
-            } else {
-                arg_type_strs.push(format!("**{}", ty_display));
-            }
-        }
-        let args_display = if arg_type_strs.is_empty() {
-            "()".to_owned()
-        } else {
-            format!("({})", arg_type_strs.join(", "))
-        };
-
         // Evaluate the call following https://typing.python.org/en/latest/spec/overload.html#overload-call-evaluation.
 
         // Step 1: eliminate overloads that accept an incompatible number of arguments.
@@ -286,7 +261,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
 
                 // Step 3: perform argument type expansion.
-                let mut args_expander = ArgsExpander::new(args, keywords);
+                let mut args_expander = ArgsExpander::new(args.clone(), keywords.clone());
                 let owner = Owner::new();
                 'outer: while !matched
                     && let Some(arg_lists) = args_expander.expand(self, errors, &owner)
@@ -363,12 +338,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             (closest_overload.res, closest_overload.func.1.signature)
         } else {
+            // Build a string showing the argument types for error messages
+            let mut arg_type_strs = Vec::new();
+            for arg in &args {
+                let (ty, prefix) = match arg {
+                    CallArg::Arg(value) => (value.infer(self, errors), ""),
+                    CallArg::Star(value, _) => (value.infer(self, errors), "*"),
+                };
+                let ty_display = self.for_display(ty);
+                arg_type_strs.push(format!("{}{}", prefix, ty_display));
+            }
+            for kw in &keywords {
+                let ty = kw.value.infer(self, errors);
+                let ty_display = self.for_display(ty);
+                if let Some(arg_name) = kw.arg {
+                    arg_type_strs.push(format!("{}={}", arg_name.as_str(), ty_display));
+                } else {
+                    arg_type_strs.push(format!("**{}", ty_display));
+                }
+            }
+            let args_display = if arg_type_strs.is_empty() {
+                "()".to_owned()
+            } else {
+                format!("({})", arg_type_strs.join(", "))
+            };
+
             let mut msg = vec1![
                 format!(
-                    "No matching overload found for function `{}`",
-                    metadata.kind.as_func_id().format(self.module().name())
+                    "No matching overload found for function `{}` called with arguments: {}",
+                    metadata.kind.as_func_id().format(self.module().name()),
+                    args_display
                 ),
-                format!("Called with arguments: {}", args_display),
                 "Possible overloads:".to_owned(),
             ];
             for overload in overloads {
