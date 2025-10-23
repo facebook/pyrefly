@@ -1254,8 +1254,8 @@ pub enum Binding {
     /// A phi node, representing the union of several alternative keys.
     Phi(JoinStyle<Idx<Key>>, SmallSet<Idx<Key>>),
     /// A phi node for a name that was defined above a loop. This can involve recursion
-    /// due to reassingment in the loop, so we provide a default binding that is used
-    /// if the resulting Cyclic var is forced.
+    /// due to reassingment in the loop, so we provide a prior idx of the type from above
+    /// the loop, which can be used if the resulting Var is forced.
     LoopPhi(Idx<Key>, SmallSet<Idx<Key>>),
     /// A narrowed type.
     Narrow(Idx<Key>, Box<NarrowOp>, TextRange),

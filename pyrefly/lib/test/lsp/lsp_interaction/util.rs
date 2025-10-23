@@ -19,7 +19,7 @@ pub fn get_test_files_root() -> TempDir {
 
     // We copy all files over to a separate temp directory so we are consistent between Cargo and Buck.
     // In particular, given the current directory, Cargo is likely to find a pyproject.toml, but Buck won't.
-    let t = TempDir::new().unwrap();
+    let t = TempDir::with_prefix("pyrefly_lsp_test").unwrap();
     copy_dir_recursively(&source_files, t.path());
 
     t

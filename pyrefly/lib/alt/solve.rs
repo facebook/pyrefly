@@ -326,7 +326,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .map(|member| format!("`{member}`"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            if metadata.is_final() {
+            if !metadata.is_protocol() && metadata.is_final() {
                 self.error(
                     errors,
                     cls.range(),
@@ -1769,6 +1769,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     fields = fields.combine(new_fields);
                 }
                 if let Some(new_fields) = self.get_django_enum_synthesized_fields(cls) {
+                    fields = fields.combine(new_fields);
+                }
+                if let Some(new_fields) = self.get_django_model_synthesized_fields(cls) {
                     fields = fields.combine(new_fields);
                 }
                 fields

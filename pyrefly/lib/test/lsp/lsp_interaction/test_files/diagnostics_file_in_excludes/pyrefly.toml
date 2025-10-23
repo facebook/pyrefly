@@ -1,0 +1,2 @@
+project-includes = [""]
+project-excludes = ["type_errors_exclude.py"]

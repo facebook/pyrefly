@@ -31,7 +31,8 @@ impl<'a> TransactionManager<'a> {
     ) -> Result<CommittingTransaction<'a>, Transaction<'a>> {
         // If there is no ongoing recheck due to on-disk changes, we should prefer to commit
         // the in-memory changes into the main state.
-        if let Some(transaction) = state.try_new_committable_transaction(Require::Indexing, None) {
+        if let Some(transaction) = state.try_new_committable_transaction(Require::indexing(), None)
+        {
             // If we can commit in-memory changes, then there is no point of holding the
             // non-committable transaction with a possibly outdated view of the `ReadableState`
             // so we can destroy the saved state.

@@ -23,6 +23,7 @@ use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_build::source_db::Target;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
@@ -88,7 +89,7 @@ impl SourceDatabase for PlaygroundSourceDatabase {
         Some(Handle::new(name.dupe(), path, self.sys_info.dupe()))
     }
 
-    fn requery_source_db(&self, _: SmallSet<PathBuf>) -> anyhow::Result<bool> {
+    fn requery_source_db(&self, _: SmallSet<ModulePathBuf>) -> anyhow::Result<bool> {
         Ok(false)
     }
 

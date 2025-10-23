@@ -1270,6 +1270,7 @@ impl<'a> AstScopedVisitor for CallGraphVisitor<'a> {
             /* include_top_level */ true,
             /* include_class_top_level */ true,
             /* include_decorators_in_decorated_definition */ true,
+            /* include_default_arguments_in_function */ true,
         );
     }
 
@@ -1291,6 +1292,10 @@ impl<'a> AstScopedVisitor for CallGraphVisitor<'a> {
 
     fn enter_toplevel_scope(&mut self, ast: &ModModule, _: &Scopes) {
         self.enter_debug_scope(&ast.body);
+    }
+
+    fn visit_type_annotations() -> bool {
+        false
     }
 
     fn visit_expression(

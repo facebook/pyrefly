@@ -12,7 +12,7 @@ use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::test::util::mk_multi_file_state_assert_no_errors;
 
 fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
-    let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::Indexing);
+    let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::indexing());
     let mut report = String::new();
     for (name, code) in files {
         report.push_str("# ");

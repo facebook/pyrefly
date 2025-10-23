@@ -380,7 +380,8 @@ impl<'a> TypeDisplayContext<'a> {
                             signature.fmt_with_type_with_newlines(f, &|t| self.display_internal(t))
                         }
                         BoundMethodType::Overload(_) => {
-                            write!(f, "{}", self.display_internal(&func.clone().as_type()))
+                            // Use display instead of display_internal to show overloads w/ top-level formatting
+                            write!(f, "{}", self.display(&func.clone().as_type()))
                         }
                     }
                 } else if self.hover {
@@ -1329,10 +1330,10 @@ pub mod tests {
                         "T",
                         QuantifiedKind::TypeVar
                     )]),
-                    body: sig2
+                    body: sig2.clone()
                 })
             ],
-            metadata: Box::new(sig1.metadata),
+            metadata: Box::new(sig1.metadata.clone()),
         });
 
         // Test compact display mode (non-hover)
@@ -1347,6 +1348,45 @@ pub mod tests {
         hover_ctx.set_display_mode_to_hover();
         assert_eq!(
             hover_ctx.display(&overload).to_string(),
+            r#"
+@overload
+def overloaded_func(x: Any) -> None
+def overloaded_func[T](
+    x: Any,
+    y: Any
+) -> None"#
+        );
+
+        let bound_method_overload = Type::BoundMethod(Box::new(BoundMethod {
+            obj: Type::any_explicit(),
+            func: BoundMethodType::Overload(Overload {
+                signatures: vec1![
+                    OverloadType::Function(sig1.clone()),
+                    OverloadType::Forall(Forall {
+                        tparams: fake_tparams(vec![fake_tparam(
+                            &uniques,
+                            "T",
+                            QuantifiedKind::TypeVar
+                        )]),
+                        body: sig2
+                    })
+                ],
+                metadata: Box::new(sig1.metadata),
+            }),
+        }));
+
+        // Test compact display mode (non-hover)
+        let ctx = TypeDisplayContext::new(&[&bound_method_overload]);
+        assert_eq!(
+            ctx.display(&bound_method_overload).to_string(),
+            "BoundMethod[Any, Overload[(x: Any) -> None, [T](x: Any, y: Any) -> None]]"
+        );
+
+        // Test hover display mode (with @overload decorators)
+        let mut hover_ctx = TypeDisplayContext::new(&[&bound_method_overload]);
+        hover_ctx.set_display_mode_to_hover();
+        assert_eq!(
+            hover_ctx.display(&bound_method_overload).to_string(),
             r#"
 @overload
 def overloaded_func(x: Any) -> None

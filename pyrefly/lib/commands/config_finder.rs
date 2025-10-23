@@ -201,20 +201,22 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
                     .lock()
                     .entry(path.to_owned())
                     .or_insert_with(|| {
-                        let (config, errors) = configure2.configure(
-                            path.parent(),
-                            ConfigFile {
-                                // We use `fallback_search_path` because otherwise a user with `/sys` on their
-                                // computer (all of them) will override `sys.version` in preference to typeshed.
-                                fallback_search_path: path
-                                    .ancestors()
-                                    .map(|x| x.to_owned())
-                                    .collect::<Vec<_>>(),
-                                root: ConfigBase::default_for_ide_without_config(),
-                                ..Default::default()
-                            },
-                            vec![],
-                        );
+                        let mut config = ConfigFile {
+                            project_includes: ConfigFile::default_project_includes(),
+                            // We use `fallback_search_path` because otherwise a user with `/sys` on their
+                            // computer (all of them) will override `sys.version` in preference to typeshed.
+                            fallback_search_path: path
+                                .ancestors()
+                                .map(|x| x.to_owned())
+                                .collect::<Vec<_>>(),
+                            root: ConfigBase::default_for_ide_without_config(),
+                            ..Default::default()
+                        };
+                        let parent = path.parent();
+                        if let Some(parent) = parent {
+                            config.rewrite_with_path_to_config(parent);
+                        }
+                        let (config, errors) = configure2.configure(parent, config, vec![]);
                         // Since this is a config we generated, these are likely internal errors.
                         debug_log(errors);
                         config

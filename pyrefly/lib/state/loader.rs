@@ -24,7 +24,7 @@ use crate::error::context::ErrorContext;
 use crate::module::finder::find_import;
 use crate::module::finder::find_import_filtered;
 
-#[derive(Debug, Clone, Dupe)]
+#[derive(Debug, Clone, Dupe, PartialEq, Eq)]
 pub enum FindError {
     /// This module could not be found, and we should emit an error
     NotFound(ModuleName, Arc<Vec1<String>>),

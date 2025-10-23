@@ -339,6 +339,12 @@ impl ModuleName {
         }
         None
     }
+
+    /// Pop off the last name component from this [`ModuleName`]. If the `ModuleName`
+    /// would be empty, return `None` instead.
+    pub fn parent(&self) -> Option<Self> {
+        Some(Self::from_str(self.as_str().rsplit_once('.')?.0))
+    }
 }
 
 #[cfg(test)]

@@ -107,7 +107,7 @@ child = Child()  # E: Cannot instantiate `Child`
 testcase!(
     test_final_class_with_abstract_methods,
     r#"
-from typing import final
+from typing import final, Protocol
 from abc import ABC, abstractmethod
 
 @final
@@ -117,6 +117,12 @@ class BadClass(ABC):  # E: Final class `BadClass` cannot have unimplemented abst
         pass
 
 x = BadClass()  # E: Cannot instantiate `BadClass`
+
+@final
+class AbstractProtocol(Protocol):
+    @abstractmethod
+    def method(self) -> None:
+        pass
 "#,
 );
 

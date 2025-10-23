@@ -24,6 +24,7 @@ use crate::alt::class::class_field::WithDefiningClass;
 use crate::alt::class::enums::VALUE_PROP;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::binding::binding::KeyExport;
 use crate::types::simplify::unions;
 
 /// Django stubs use this attribute to specify the Python type that a field should infer to
@@ -33,6 +34,9 @@ const CHOICES: Name = Name::new_static("choices");
 const LABEL: Name = Name::new_static("label");
 const LABELS: Name = Name::new_static("labels");
 const VALUES: Name = Name::new_static("values");
+const ID: Name = Name::new_static("id");
+const PK: Name = Name::new_static("pk");
+const AUTO_FIELD: Name = Name::new_static("AutoField");
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_django_field_type(&self, ty: &Type, class: &Class) -> Option<Type> {
@@ -42,13 +46,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 cls.targs().as_slice().first().cloned()
             }
-            Type::ClassType(cls)
-                if self.get_metadata_for_class(class).is_django_model()
-                    && self.inherits_from_django_field(cls.class_object()) =>
-            {
-                self.get_class_member(cls.class_object(), &DJANGO_PRIVATE_GET_TYPE)
-                    .map(|member| member.value.ty())
+            Type::ClassType(cls) => {
+                self.get_django_field_type_from_class(cls.class_object(), class)
             }
+            Type::ClassDef(cls) => self.get_django_field_type_from_class(cls, class),
             Type::Union(union) => {
                 let transformed: Vec<_> = union
                     .iter()
@@ -65,6 +66,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             _ => None,
+        }
+    }
+
+    fn get_django_field_type_from_class(&self, field: &Class, class: &Class) -> Option<Type> {
+        if self.get_metadata_for_class(class).is_django_model()
+            && self.inherits_from_django_field(field)
+        {
+            self.get_class_member(field, &DJANGO_PRIVATE_GET_TYPE)
+                .map(|member| member.value.ty())
+        } else {
+            None
         }
     }
 
@@ -171,5 +183,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             signature,
             metadata,
         }))
+    }
+
+    pub fn get_django_model_synthesized_fields(
+        &self,
+        cls: &Class,
+    ) -> Option<ClassSynthesizedFields> {
+        let metadata = self.get_metadata_for_class(cls);
+        if !metadata.is_django_model() {
+            return None;
+        }
+
+        let mut fields = SmallMap::new();
+
+        let auto_field_export = KeyExport(AUTO_FIELD);
+        let auto_field_type =
+            self.get_from_export(ModuleName::django_models_fields(), None, &auto_field_export);
+
+        // TODO: Extend the solution to handle custom pk
+        if let Some(id_type) = self.get_django_field_type(&auto_field_type, cls) {
+            fields.insert(ID, ClassSynthesizedField::new(id_type.clone()));
+            fields.insert(PK, ClassSynthesizedField::new(id_type));
+        }
+
+        Some(ClassSynthesizedFields::new(fields))
     }
 }

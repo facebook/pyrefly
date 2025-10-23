@@ -16,6 +16,7 @@ use std::process::Command;
 use anyhow::Context as _;
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::sys_info::SysInfo;
 use serde::Deserialize;
 use starlark_map::small_map::SmallMap;
@@ -35,11 +36,11 @@ pub mod custom;
 pub(crate) enum Include {
     #[allow(unused)]
     Target(Target),
-    Path(PathBuf),
+    Path(ModulePathBuf),
 }
 
 impl Include {
-    pub fn path(path: PathBuf) -> Self {
+    pub fn path(path: ModulePathBuf) -> Self {
         Self::Path(path)
     }
 
@@ -107,15 +108,19 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
     fn construct_command(&self) -> Command;
 }
 
+fn is_path_initfile(path: &Path) -> bool {
+    path.ends_with("__init__.py") || path.ends_with("__init__.pyi")
+}
+
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub(crate) struct PythonLibraryManifest {
     pub deps: SmallSet<Target>,
-    pub srcs: SmallMap<ModuleName, Vec1<PathBuf>>,
+    pub srcs: SmallMap<ModuleName, Vec1<ModulePathBuf>>,
     #[serde(flatten)]
     pub sys_info: SysInfo,
     pub buildfile_path: PathBuf,
     #[serde(default, skip)]
-    pub packages: SmallMap<ModuleName, Vec1<PathBuf>>,
+    pub packages: SmallMap<ModuleName, Vec1<ModulePathBuf>>,
 }
 
 impl PythonLibraryManifest {
@@ -134,13 +139,166 @@ impl PythonLibraryManifest {
     }
 
     fn rewrite_relative_to_root(&mut self, root: &Path) {
-        self.srcs
-            .iter_mut()
-            .for_each(|(_, paths)| paths.iter_mut().for_each(|p| *p = root.join(&p)));
-        self.packages
-            .iter_mut()
-            .for_each(|(_, paths)| paths.iter_mut().for_each(|p| *p = root.join(&p)));
+        self.srcs.iter_mut().for_each(|(_, paths)| {
+            paths
+                .iter_mut()
+                .for_each(|p| *p = ModulePathBuf::new(root.join(&**p)))
+        });
+        self.packages.iter_mut().for_each(|(_, paths)| {
+            paths
+                .iter_mut()
+                .for_each(|p| *p = ModulePathBuf::new(root.join(&**p)))
+        });
         self.buildfile_path = root.join(&self.buildfile_path);
+    }
+
+    /// Returns a map of package module name to init file or implicit package directory and
+    /// path of where to continue upward searching for module names in later steps.
+    ///
+    /// When a real __init__ file is found on disk, we return `Ok()`, containing a tuple
+    /// of all init files pointing to the given module name and path of where to continue
+    /// searching from next.
+    ///
+    /// When no init file is found, we return `Err()`, which is both the directory
+    /// where we synthesize an implicit package, as well as the path of where to continue
+    /// searching from next.
+    fn get_explicit_and_basic_implicit_packages(
+        &self,
+        target_root: &Path,
+        all_dunder_inits: &SmallSet<ModulePathBuf>,
+    ) -> SmallMap<ModuleName, Result<(Vec1<ModulePathBuf>, ModulePathBuf), &Path>> {
+        let mut start_packages: SmallMap<
+            ModuleName,
+            Result<(Vec1<ModulePathBuf>, ModulePathBuf), &Path>,
+        > = SmallMap::new();
+
+        // attempt to push the given init file onto `start_packages` if `all_dunder_inits` knows about
+        // it. Return false if we didn't push, true otherwise.
+        let push_if_init_exists = |module: &ModuleName,
+                                   paths: &Vec1<ModulePathBuf>,
+                                   start_packages: &mut SmallMap<
+            ModuleName,
+            Result<(Vec1<ModulePathBuf>, ModulePathBuf), &Path>,
+        >| {
+            let Some(parent) = paths.first().parent() else {
+                return false;
+            };
+            if !parent.starts_with(target_root) {
+                return false;
+            }
+            let Some(parent_parent) = parent.parent() else {
+                return false;
+            };
+
+            // if one of the paths here is a dunder init, then all paths here will be
+            // a dunder init
+            let path = paths.first();
+            if !all_dunder_inits.contains(path) {
+                return false;
+            }
+            start_packages.insert(
+                module.dupe(),
+                // `parent_parent` is used here, since we want to continue searching
+                // from the package's parent, which is the file's directory's parent.
+                Ok((
+                    paths.mapped_ref(|p| ModulePathBuf::from_path(p)),
+                    ModulePathBuf::from_path(parent_parent),
+                )),
+            );
+            true
+        };
+        for (module, paths) in &self.srcs {
+            if push_if_init_exists(module, paths, &mut start_packages) {
+                continue;
+            }
+
+            let path = paths.first();
+            let Some(parent_path) = path.parent() else {
+                continue;
+            };
+
+            if push_if_init_exists(
+                module,
+                &vec1![
+                    ModulePathBuf::new(path.join("__init__.py")),
+                    ModulePathBuf::new(path.join("__init__.pyi"))
+                ],
+                &mut start_packages,
+            ) {
+                continue;
+            }
+
+            if !parent_path.starts_with(target_root) {
+                continue;
+            }
+            let Some(parent_module) = module.parent() else {
+                continue;
+            };
+
+            start_packages
+                .entry(parent_module)
+                .or_insert(Err(parent_path));
+        }
+
+        start_packages
+    }
+
+    /// Given a map of modules to real or synthesized packages, synthesize missing packages up to
+    /// and including this manifest's build file.
+    fn fill_ancestor_synthesized_packages(
+        &self,
+        start_packages: SmallMap<ModuleName, Result<(Vec1<ModulePathBuf>, ModulePathBuf), &Path>>,
+        target_root: &Path,
+    ) -> SmallMap<ModuleName, Vec1<ModulePathBuf>> {
+        // the result we're going to use, with all the files we've found so far
+        let mut inits: SmallMap<ModuleName, Vec1<ModulePathBuf>> = start_packages
+            .iter()
+            .map(|(name, path)| {
+                let files = match path {
+                    Ok((files, _)) => files.clone(),
+                    Err(file) => vec1![ModulePathBuf::from_path(file)],
+                };
+                (name.dupe(), files)
+            })
+            .collect();
+
+        // fill in implicit packages for parent directories, if there's not an entry already
+        for (mut module, path) in start_packages {
+            let mut path = match &path {
+                Ok((_, next_path)) => &**next_path,
+                Err(next_path) => *next_path,
+            };
+            while let Some(parent_module) = module.parent() {
+                let Some(parent_path) = path.parent() else {
+                    break;
+                };
+
+                if inits.contains_key(&parent_module) || !parent_path.starts_with(target_root) {
+                    break;
+                }
+
+                inits.insert(
+                    parent_module.dupe(),
+                    vec1![ModulePathBuf::from_path(parent_path)],
+                );
+                module = parent_module;
+                path = parent_path;
+            }
+        }
+
+        inits
+    }
+
+    /// Get all explicit and implicit dunder inits, preferring explicit. Produces
+    /// dunder inits all the way up to the directory containing this manifest's build file.
+    fn fill_implicit_packages(&mut self, all_dunder_inits: &SmallSet<ModulePathBuf>) {
+        let Some(target_root) = self.buildfile_path.parent() else {
+            return;
+        };
+        let start_packages =
+            self.get_explicit_and_basic_implicit_packages(target_root, all_dunder_inits);
+
+        self.packages = self.fill_ancestor_synthesized_packages(start_packages, target_root);
     }
 }
 
@@ -158,7 +316,7 @@ pub(crate) struct TargetManifestDatabase {
 }
 
 impl TargetManifestDatabase {
-    pub fn produce_map(self) -> SmallMap<Target, PythonLibraryManifest> {
+    pub fn produce_map(mut self) -> SmallMap<Target, PythonLibraryManifest> {
         let mut result = SmallMap::new();
         let aliases: SmallMap<Target, Target> = self
             .db
@@ -168,12 +326,32 @@ impl TargetManifestDatabase {
                 _ => None,
             })
             .collect();
+
+        let mut explicit_dunder_inits = SmallSet::new();
+        for manifest in self.db.values_mut() {
+            match manifest {
+                TargetManifest::Alias { .. } => continue,
+                TargetManifest::Library(lib) => {
+                    lib.replace_alias_deps(&aliases);
+                    lib.rewrite_relative_to_root(&self.root);
+
+                    for paths in lib.srcs.values() {
+                        if !is_path_initfile(paths.first()) {
+                            continue;
+                        }
+                        for path in paths {
+                            explicit_dunder_inits.insert(path.dupe());
+                        }
+                    }
+                }
+            }
+        }
+
         for (target, manifest) in self.db {
             match manifest {
                 TargetManifest::Alias { .. } => continue,
                 TargetManifest::Library(mut lib) => {
-                    lib.replace_alias_deps(&aliases);
-                    lib.rewrite_relative_to_root(&self.root);
+                    lib.fill_implicit_packages(&explicit_dunder_inits);
                     result.insert(target, lib);
                 }
             }
@@ -215,6 +393,7 @@ mod tests {
                         ],
                         &[],
                         "colorama/BUCK",
+                        &[],
                     ),
                     Target::from_string("//colorama:colorama".to_owned()) => TargetManifest::alias(
                         "//colorama:py"
@@ -233,6 +412,7 @@ mod tests {
                         "//colorama:colorama"
                         ],
                         "click/BUCK",
+                        &[],
                     ),
                     Target::from_string("//click:click".to_owned()) => TargetManifest::alias(
                         "//click:py"
@@ -250,13 +430,20 @@ mod tests {
                             &[
                             "pyre/client/log/log.py",
                             "pyre/client/log/log.pyi",
-                            ]
+                            ],
+                        ),
+                        (
+                            "pyre.client.log.format",
+                            &[
+                            "pyre/client/log/format.py",
+                            ],
                         ),
                         ],
                         &[
                         "//click:click"
                         ],
-                        "pyre/client/log/BUCK"
+                        "pyre/client/log/BUCK",
+                        &[],
                     ),
                     Target::from_string("//pyre/client/log:log2".to_owned()) => TargetManifest::lib(
                         &[
@@ -272,13 +459,60 @@ mod tests {
                             "pyre/client/log/log.py",
                             "pyre/client/log/log.pyi",
                             ]
-                        )
+                        ),
+                        (
+                            "log.format",
+                            &[
+                            "pyre/client/log/format.py",
+                            ]
+                        ),
                         ],
                         &[
                         "//click:click"
                         ],
-                        "pyre/client/log/BUCK"
-                    )
+                        "pyre/client/log/BUCK",
+                        &[],
+                    ),
+                    Target::from_string("//implicit_package/test:main".to_owned()) => TargetManifest::lib(
+                            &[
+                            (
+                                "implicit_package.main",
+                                &[
+                                "implicit_package/test/main.py",
+                                ],
+                            ),
+                            ],
+                            &[
+                            "//implicit_package/test:lib",
+                            ],
+                            "implicit_package/test/BUCK",
+                            &[],
+                    ),
+                    Target::from_string("//implicit_package/test:lib".to_owned()) => TargetManifest::lib(
+                            &[
+                            (
+                                "implicit_package.lib.utils",
+                                &[
+                                "implicit_package/test/lib/utils.py",
+                                ],
+                            ),
+                            (
+                                "implicit_package.package_boundary_violation",
+                                &[
+                                "implicit_package/package_boundary_violation.py",
+                                ]
+                            ),
+                            (
+                                "implicit_package.deeply.nested.package.file",
+                                &[
+                                "implicit_package/test/deeply/nested/package/file.py",
+                                ],
+                            )
+                            ],
+                            &[],
+                            "implicit_package/test/BUCK",
+                            &[]
+                    ),
                 },
                 PathBuf::from("/path/to/this/repository"),
             )
@@ -288,9 +522,14 @@ mod tests {
     fn map_srcs(
         srcs: &[(&str, &[&str])],
         prefix_paths: Option<&str>,
-    ) -> SmallMap<ModuleName, Vec1<PathBuf>> {
+    ) -> SmallMap<ModuleName, Vec1<ModulePathBuf>> {
         let prefix = prefix_paths.map(Path::new);
-        let map_path = |p| prefix.map_or_else(|| PathBuf::from(p), |prefix| prefix.join(p));
+        let map_path = |p| {
+            prefix.map_or_else(
+                || ModulePathBuf::from_path(Path::new(p)),
+                |prefix| ModulePathBuf::new(prefix.join(p)),
+            )
+        };
         srcs.iter()
             .map(|(n, paths)| {
                 (
@@ -307,6 +546,28 @@ mod tests {
             .collect()
     }
 
+    fn map_implicit_packages(
+        inits: &[(&str, &[&str])],
+        prefix_paths: Option<&str>,
+    ) -> SmallMap<ModuleName, Vec1<ModulePathBuf>> {
+        let prefix = prefix_paths.map(Path::new);
+        let map_path = |p| {
+            prefix.map_or_else(
+                || ModulePathBuf::from_path(Path::new(p)),
+                |prefix| ModulePathBuf::new(prefix.join(p)),
+            )
+        };
+        inits
+            .iter()
+            .map(|(n, paths)| {
+                (
+                    ModuleName::from_str(n),
+                    Vec1::try_from_vec(paths.iter().map(map_path).collect()).unwrap(),
+                )
+            })
+            .collect()
+    }
+
     impl TargetManifest {
         fn alias(target: &str) -> Self {
             TargetManifest::Alias {
@@ -314,26 +575,36 @@ mod tests {
             }
         }
 
-        pub fn lib(srcs: &[(&str, &[&str])], deps: &[&str], buildfile: &str) -> Self {
+        pub fn lib(
+            srcs: &[(&str, &[&str])],
+            deps: &[&str],
+            buildfile: &str,
+            implicit_packages: &[(&str, &[&str])],
+        ) -> Self {
             TargetManifest::Library(PythonLibraryManifest {
                 srcs: map_srcs(srcs, None),
                 deps: map_deps(deps),
                 sys_info: SysInfo::new(PythonVersion::new(3, 12, 0), PythonPlatform::linux()),
                 buildfile_path: PathBuf::from(buildfile),
-                packages: SmallMap::new(),
+                packages: map_implicit_packages(implicit_packages, None),
             })
         }
     }
 
     impl PythonLibraryManifest {
-        fn new(srcs: &[(&str, &[&str])], deps: &[&str], buildfile: &str) -> Self {
+        fn new(
+            srcs: &[(&str, &[&str])],
+            deps: &[&str],
+            buildfile: &str,
+            inits: &[(&str, &[&str])],
+        ) -> Self {
             let root = "/path/to/this/repository";
             Self {
                 srcs: map_srcs(srcs, Some(root)),
                 deps: map_deps(deps),
                 sys_info: SysInfo::new(PythonVersion::new(3, 12, 0), PythonPlatform::linux()),
                 buildfile_path: PathBuf::from(root).join(buildfile),
-                packages: SmallMap::new(),
+                packages: map_implicit_packages(inits, Some(root)),
             }
         }
     }
@@ -383,6 +654,9 @@ mod tests {
         "pyre.client.log.log": [
           "pyre/client/log/log.py",
           "pyre/client/log/log.pyi"
+        ],
+        "pyre.client.log.format": [
+          "pyre/client/log/format.py"
         ]
       },
       "deps": [
@@ -400,12 +674,43 @@ mod tests {
         "log.log": [
           "pyre/client/log/log.py",
           "pyre/client/log/log.pyi"
+        ],
+        "log.format": [
+          "pyre/client/log/format.py"
         ]
       },
       "deps": [
         "//click:click"
       ],
       "buildfile_path": "pyre/client/log/BUCK",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//implicit_package/test:main": {
+      "srcs": {
+          "implicit_package.main": [
+              "implicit_package/test/main.py"
+          ]
+      },
+      "deps": ["//implicit_package/test:lib"],
+      "buildfile_path": "implicit_package/test/BUCK",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//implicit_package/test:lib": {
+      "srcs": {
+          "implicit_package.lib.utils": [
+              "implicit_package/test/lib/utils.py"
+          ],
+          "implicit_package.package_boundary_violation": [
+              "implicit_package/package_boundary_violation.py"
+          ],
+          "implicit_package.deeply.nested.package.file": [
+              "implicit_package/test/deeply/nested/package/file.py"
+          ]
+      },
+      "deps": [],
+      "buildfile_path": "implicit_package/test/BUCK",
       "python_version": "3.12",
       "python_platform": "linux"
     }
@@ -432,6 +737,12 @@ mod tests {
                 ],
                 &[],
                 "colorama/BUCK",
+                &[
+                    ("colorama", &[
+                        "colorama/__init__.py",
+                        "colorama/__init__.pyi",
+                    ]),
+                ],
             ),
             Target::from_string("//click:py".to_owned()) => PythonLibraryManifest::new(
                 &[
@@ -447,6 +758,12 @@ mod tests {
                     "//colorama:py"
                 ],
                 "click/BUCK",
+                &[
+                    ("click", &[
+                        "click/__init__.pyi",
+                        "click/__init__.py",
+                    ]),
+                ],
             ),
             Target::from_string("//pyre/client/log:log".to_owned()) => PythonLibraryManifest::new(
                 &[
@@ -463,11 +780,22 @@ mod tests {
                             "pyre/client/log/log.pyi",
                         ]
                     ),
+                    (
+                        "pyre.client.log.format",
+                        &[
+                            "pyre/client/log/format.py",
+                        ],
+                    ),
                 ],
                 &[
                     "//click:py"
                 ],
                 "pyre/client/log/BUCK",
+                &[
+                    ("pyre.client.log", &[
+                     "pyre/client/log/__init__.py",
+                    ]),
+                ],
             ),
             Target::from_string("//pyre/client/log:log2".to_owned()) => PythonLibraryManifest::new(
                 &[
@@ -483,17 +811,273 @@ mod tests {
                             "pyre/client/log/log.py",
                             "pyre/client/log/log.pyi",
                         ]
-                    )
+                    ),
+                    (
+                        "log.format",
+                        &[
+                            "pyre/client/log/format.py",
+                        ],
+                    ),
                 ],
                 &[
                     "//click:py"
                 ],
                 "pyre/client/log/BUCK",
-            )
+                &[
+                    ("log", &[
+                        "pyre/client/log/__init__.py",
+                    ]),
+                ],
+            ),
+            Target::from_string("//implicit_package/test:main".to_owned()) => PythonLibraryManifest::new(
+                &[
+                (
+                    "implicit_package.main", &[
+                        "implicit_package/test/main.py"
+                    ]
+                )
+                ],
+                &[
+                    "//implicit_package/test:lib"
+                ],
+                "implicit_package/test/BUCK",
+                &[
+                ("implicit_package", &[
+                        "implicit_package/test",
+                    ],
+                )
+                ],
+            ),
+            Target::from_string("//implicit_package/test:lib".to_owned()) => PythonLibraryManifest::new(
+                &[
+                (
+                    "implicit_package.lib.utils", &[
+                        "implicit_package/test/lib/utils.py"
+                    ],
+                ),
+                (
+                    "implicit_package.package_boundary_violation", &[
+                        "implicit_package/package_boundary_violation.py",
+                    ],
+                ),
+                (
+                    "implicit_package.deeply.nested.package.file", &[
+                        "implicit_package/test/deeply/nested/package/file.py",
+                    ],
+                )
+                ],
+                &[],
+                "implicit_package/test/BUCK",
+                &[
+                ("implicit_package", &[
+                        "implicit_package/test",
+                    ],
+                ),
+                ("implicit_package.lib", &[
+                        "implicit_package/test/lib",
+                    ],
+                ),
+                ("implicit_package.deeply.nested.package", &[
+                        "implicit_package/test/deeply/nested/package",
+                    ],
+                ),
+                ("implicit_package.deeply.nested", &[
+                        "implicit_package/test/deeply/nested",
+                    ],
+                ),
+                ("implicit_package.deeply", &[
+                        "implicit_package/test/deeply",
+                    ],
+                ),
+                ],
+            ),
         };
         assert_eq!(
             TargetManifestDatabase::get_test_database().produce_map(),
             expected
         );
+    }
+
+    #[test]
+    fn test_package_finding() {
+        let db = TargetManifestDatabase::get_test_database();
+        let all_dunder_inits = [
+            "colorama/__init__.pyi",
+            "colorama/__init__.py",
+            "click/__init__.pyi",
+            "click/__init__.py",
+            "pyre/client/log/__init__.py",
+        ]
+        .iter()
+        .map(|p| ModulePathBuf::from_path(Path::new(p)))
+        .collect::<SmallSet<ModulePathBuf>>();
+
+        let result: (
+            SmallMap<
+                Target,
+                SmallMap<ModuleName, Result<(Vec1<ModulePathBuf>, ModulePathBuf), &Path>>,
+            >,
+            SmallMap<Target, SmallMap<ModuleName, Vec1<ModulePathBuf>>>,
+        ) = db
+            .db
+            .iter()
+            .filter_map(|(t, m)| match m {
+                TargetManifest::Library(lib) => Some((t, lib)),
+                TargetManifest::Alias { .. } => None,
+            })
+            .fold(
+                (SmallMap::new(), SmallMap::new()),
+                |(mut first, mut second), (t, l)| {
+                    let root = l.buildfile_path.parent().unwrap();
+                    let base_packages =
+                        l.get_explicit_and_basic_implicit_packages(root, &all_dunder_inits);
+                    first.insert(t.dupe(), base_packages.clone());
+                    second.insert(
+                        t.dupe(),
+                        l.fill_ancestor_synthesized_packages(base_packages, root),
+                    );
+                    (first, second)
+                },
+            );
+
+        let expected_start_packages: SmallMap<
+            Target,
+            SmallMap<ModuleName, Result<(Vec1<ModulePathBuf>, ModulePathBuf), &Path>>,
+        > = smallmap! {
+            "//colorama:py" => smallmap! {
+                "colorama" => Ok((
+                    vec1![
+                        "colorama/__init__.py",
+                        "colorama/__init__.pyi",
+                    ],
+                    "",
+                )),
+            },
+            "//click:py" => smallmap! {
+                "click" => Ok((
+                    vec1![
+                        "click/__init__.pyi",
+                        "click/__init__.py",
+                    ],
+                    "",
+                )),
+            },
+            "//pyre/client/log:log" => smallmap! {
+                "pyre.client.log" => Ok((
+                    vec1![
+                        "pyre/client/log/__init__.py",
+                    ],
+                    "pyre/client",
+                )),
+            },
+            "//pyre/client/log:log2" => smallmap! {
+                "log" => Ok((
+                    vec1![
+                        "pyre/client/log/__init__.py",
+                    ],
+                    "pyre/client",
+                )),
+            },
+            "//implicit_package/test:main" => smallmap! {
+                "implicit_package" => Err(
+                    "implicit_package/test",
+                ),
+            },
+            "//implicit_package/test:lib" => smallmap! {
+                "implicit_package.lib" => Err(
+                    "implicit_package/test/lib",
+                ),
+                "implicit_package.deeply.nested.package" => Err(
+                    "implicit_package/test/deeply/nested/package",
+                ),
+            },
+        }
+        .into_iter()
+        .map(|(t, m)| {
+            (
+                Target::from_string(t.to_owned()),
+                m.into_iter()
+                    .map(|(name, r)| {
+                        (
+                            ModuleName::from_str(name),
+                            match r {
+                                Ok((paths, next)) => Ok((
+                                    paths.mapped(|p| ModulePathBuf::from_path(Path::new(p))),
+                                    ModulePathBuf::from_path(Path::new(next)),
+                                )),
+                                Err(next) => Err(Path::new(next)),
+                            },
+                        )
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+
+        assert_eq!(result.0, expected_start_packages,);
+
+        let expected_ancestor_synthesized_packages = smallmap! {
+            "//colorama:py" => smallmap! {
+                "colorama" => vec1![
+                        "colorama/__init__.py",
+                        "colorama/__init__.pyi",
+                ],
+            },
+            "//click:py" => smallmap! {
+                "click" => vec1![
+                        "click/__init__.pyi",
+                        "click/__init__.py",
+                ],
+            },
+            "//pyre/client/log:log" => smallmap! {
+                "pyre.client.log" => vec1![
+                        "pyre/client/log/__init__.py",
+                ],
+            },
+            "//pyre/client/log:log2" => smallmap! {
+                "log" => vec1![
+                        "pyre/client/log/__init__.py",
+                ],
+            },
+            "//implicit_package/test:main" => smallmap! {
+                "implicit_package" => vec1![
+                    "implicit_package/test",
+                ],
+            },
+            "//implicit_package/test:lib" => smallmap! {
+                "implicit_package.lib" => vec1![
+                    "implicit_package/test/lib",
+                ],
+                "implicit_package.deeply.nested.package" => vec1![
+                    "implicit_package/test/deeply/nested/package",
+                ],
+                "implicit_package.deeply.nested" => vec1![
+                    "implicit_package/test/deeply/nested",
+                ],
+                "implicit_package.deeply" => vec1![
+                    "implicit_package/test/deeply",
+                ],
+                "implicit_package" => vec1![
+                    "implicit_package/test",
+                ],
+            },
+        }
+        .into_iter()
+        .map(|(t, m)| {
+            (
+                Target::from_string(t.to_owned()),
+                m.into_iter()
+                    .map(|(name, paths)| {
+                        (
+                            ModuleName::from_str(name),
+                            paths.mapped(|p| ModulePathBuf::from_path(Path::new(p))),
+                        )
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+
+        assert_eq!(result.1, expected_ancestor_synthesized_packages,);
     }
 }

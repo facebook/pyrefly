@@ -1267,7 +1267,7 @@ def foo(x=bar()):
     &|_context: &ModuleContext| {
         let call_targets = vec![create_call_target("test.bar", TargetType::Function)];
         vec![(
-            "test.$toplevel".to_owned(),
+            "test.foo".to_owned(),
             vec![(
                 "4:11-4:16".to_owned(),
                 call_callees(

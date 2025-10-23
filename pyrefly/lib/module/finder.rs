@@ -104,12 +104,17 @@ fn find_one_part_in_root(
     style_filter: Option<ModuleStyle>,
 ) -> Option<FindResult> {
     let candidate_dir = root.join(name.as_str());
+    // Do not filter by style filter here since __init__.pyi could potentially have .py files covered under it.
+    // Instead, use `ModuleStyle` as a preference.
+    let candidate_init_suffixes = if style_filter.is_some_and(|s| s == ModuleStyle::Executable) {
+        ["__init__.py", "__init__.pyi"]
+    } else {
+        ["__init__.pyi", "__init__.py"]
+    };
     // First check if `name` corresponds to a regular package.
-    for candidate_init_suffix in ["__init__.pyi", "__init__.py"] {
+    for candidate_init_suffix in candidate_init_suffixes {
         let init_path = candidate_dir.join(candidate_init_suffix);
         if init_path.exists() {
-            // Note: do not filter by style filter here since __init__.pyi could potentially have .py files covered under it
-            // todo(connernilsen): do we filter here?
             return Some(FindResult::RegularPackage(init_path, candidate_dir));
         }
     }
@@ -436,8 +441,28 @@ fn find_module_prefixes<'a>(
     results.iter().map(|(_, name)| *name).collect::<Vec<_>>()
 }
 
-// TODO(connernilsen): refactor/clean this up so that we can have filtering and module priority
-// stuff up at this level too.
+// TODO(connernilsen): change things so that we return all entries that match for a given
+// module name across all path components (search path, site package path, ...).
+// Instead, at specific times (`find_module_components`, `find_module`, `find_import_filtered`),
+// see if we have a result for a highest priority item (something that is a single file module
+// matching our style_filter (if applicable) or regular package, and return that. Otherwise,
+// keep searching, and if we get the end, look through everything we've found and select the
+// best thing.
+/// Attempt to find an import with [`ModuleName`] from the search components specified
+/// in the config (including build system). Origin specifies the file we're importing from,
+/// and should only be empty when importing from typeshed/builtins.
+///
+/// [`ModuleStyle`] specifies whether we prefer a `.py` or `.pyi` file. When provided,
+/// - if the result is an init file, we will treat `style_filter` as a preference, meaning
+///   if we find a match, we'll see if the preferred value exists, but return whatever we
+///   find immediately.
+/// - if our best result is a namespace, we return nothing. Anything else is always
+///   preferable to a namespace.
+/// - otherwise, we return the first value if it matches the `style_filter`. If nothing
+///   matches, we return None, even if there were other results.
+///
+/// If `None` is returned when `style_filter.is_some()`, the import should be retried
+/// with `style_filter.is_none()`, since we hard-filter a lot of values here.
 pub fn find_import_filtered(
     config: &ConfigFile,
     module: ModuleName,
@@ -494,7 +519,12 @@ pub fn find_import_filtered(
         style_filter,
     )? {
         Ok(path)
-    } else if let Some(namespace) = namespaces_found.into_iter().next() {
+    } else if let Some(namespace) = namespaces_found.into_iter().next() &&
+        // only use namespaces if style filter is none, since otherwise we might be
+        // skipping a result that's more preferable, but excluded because of the style
+        // filter
+    style_filter.is_none()
+    {
         Ok(ModulePath::namespace(namespace))
     } else if config.ignore_missing_imports(origin, module) {
         Err(FindError::Ignored)
@@ -805,7 +835,7 @@ mod tests {
                     "search_root0",
                     vec![
                         TestPath::dir("a", vec![TestPath::file("b.py")]),
-                        TestPath::dir("spp_priority", vec![]),
+                        TestPath::dir("spp_priority", vec![TestPath::dir("d", vec![])]),
                     ],
                 ),
                 TestPath::dir(
@@ -816,7 +846,7 @@ mod tests {
                     "site_package_path",
                     vec![TestPath::dir(
                         "spp_priority",
-                        vec![TestPath::file("__init__.py")],
+                        vec![TestPath::file("__init__.py"), TestPath::file("d.py")],
                     )],
                 ),
             ],
@@ -846,7 +876,29 @@ mod tests {
             // We will find `spp_priority` in `site_package_path`, even though it's
             // in a later module find component, because we continue searching for
             // a better option when we find a namespace package
-            ModulePath::filesystem(root.join("site_package_path/spp_priority/__init__.py"))
+            ModulePath::filesystem(root.join("site_package_path/spp_priority/__init__.py")),
+        );
+        // we would either take the `__init__.py` result or nothing when a `ModuleStyle` is
+        // provided than a namespace package
+        assert_eq!(
+            find_import_filtered(&config, ModuleName::from_str("spp_priority.d"), None, None,)
+                .unwrap(),
+            ModulePath::filesystem(root.join("site_package_path/spp_priority/d.py")),
+        );
+        assert_eq!(
+            find_import_filtered(
+                &config,
+                ModuleName::from_str("spp_priority.d"),
+                None,
+                Some(ModuleStyle::Interface)
+            ),
+            // When applying a `ModuleStyle`, we don't find a result and force a find import
+            // without a module style.
+            Err(FindError::import_lookup_path(
+                config.structured_import_lookup_path(None),
+                ModuleName::from_str("spp_priority.d"),
+                &config.source,
+            )),
         );
     }
 
@@ -1605,7 +1657,17 @@ mod tests {
         let root = tempdir.path();
         TestPath::setup_test_directory(
             root,
-            vec![TestPath::file("bar.py"), TestPath::file("bar.pyi")],
+            vec![
+                TestPath::file("bar.py"),
+                TestPath::file("bar.pyi"),
+                TestPath::dir(
+                    "module",
+                    vec![
+                        TestPath::file("__init__.py"),
+                        TestPath::file("__init__.pyi"),
+                    ],
+                ),
+            ],
         );
 
         assert_eq!(
@@ -1618,6 +1680,29 @@ mod tests {
             )
             .unwrap(),
             Some(ModulePath::filesystem(root.join("bar.py")))
+        );
+
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("module"),
+                [root.to_path_buf()].iter(),
+                &mut vec![],
+                true,
+                Some(ModuleStyle::Interface),
+            )
+            .unwrap(),
+            Some(ModulePath::filesystem(root.join("module/__init__.pyi")))
+        );
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("module"),
+                [root.to_path_buf()].iter(),
+                &mut vec![],
+                true,
+                Some(ModuleStyle::Executable),
+            )
+            .unwrap(),
+            Some(ModulePath::filesystem(root.join("module/__init__.py")))
         );
 
         assert_eq!(

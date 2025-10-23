@@ -914,10 +914,12 @@ impl<'a> Transaction<'a> {
         // being checked, and only use Require::Exports as the "default" require level, for files
         // reached _only_ through imports.
         //
-        // However, this only works for "check" and does not effect laziness in the IDE, which uses
-        // the default level Require::Indexing. It also does not effect laziness for glean, pysa, or
-        // other "tracing" check modes. This is by design, since those modes currently require all
-        // modules to have completed Solutions to operate correctly.
+        // However, this only works for "check" and the IDE. The latter uses the default level
+        // Require::Indexing but falls back to Require::Exports as a performance optimization.
+        //
+        // This does not affect laziness for glean, pysa, or other "tracing" check modes. This is
+        // by design, since those modes currently require all modules to have completed Solutions
+        // to operate correctly.
         //
         // TODO: It would be much nicer to identify when a module is a 3rd party dependency directly
         // instead of approximating it using require levels.
@@ -964,6 +966,26 @@ impl<'a> Transaction<'a> {
 
     fn get_module(&self, handle: &Handle) -> ArcId<ModuleDataMut> {
         self.get_module_ex(handle, self.data.default_require).0
+    }
+
+    /// Get a module discovered via an import.
+    fn get_imported_module(&self, handle: &Handle, require: Require) -> ArcId<ModuleDataMut> {
+        let require = match require {
+            Require::Indexing(i) => {
+                // If we're building an index to power IDE features, limit the number of times
+                // we'll follow imports for performance reasons. When we hit our limit, we switch
+                // to requiring only exports, which tells Transaction::demand() to stop eagerly
+                // computing results.
+                if i == 0 {
+                    Require::Exports
+                } else {
+                    Require::Indexing(i - 1)
+                }
+            }
+            Require::Exports => Require::Exports,
+            _ => self.data.default_require,
+        };
+        self.get_module_ex(handle, require).0
     }
 
     /// Return the module, plus true if the module was newly created.
@@ -1571,16 +1593,17 @@ impl<'a> TransactionHandle<'a> {
         module: ModuleName,
         path: Option<&ModulePath>,
     ) -> Result<ArcId<ModuleDataMut>, FindError> {
+        let require = self.module_data.state.read().require;
         if let Some(res) = self.module_data.deps.read().get(&module).map(|x| x.first())
             && path.is_none_or(|path| path == res.path())
         {
-            return Ok(self.transaction.get_module(res));
+            return Ok(self.transaction.get_imported_module(res, require));
         }
 
         let handle = self
             .transaction
             .import_handle(&self.module_data.handle, module, path)?;
-        let res = self.transaction.get_module(&handle);
+        let res = self.transaction.get_imported_module(&handle, require);
         let mut write = self.module_data.deps.write();
         let did_insert = match write.entry(module) {
             Entry::Vacant(e) => {
@@ -1767,6 +1790,9 @@ impl State {
     }
 
     pub fn transaction<'a>(&'a self) -> Transaction<'a> {
+        // IMPORTANT: the LSP depends on default_require here being Require::Exports for good
+        // startup time performance. See the call to Server::validate_in_memory_without_committing
+        // in Server::did_open for details.
         self.new_transaction(Require::Exports, None)
     }
 

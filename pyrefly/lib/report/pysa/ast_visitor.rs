@@ -9,7 +9,6 @@ use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::class::Class;
-use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
@@ -85,6 +84,7 @@ impl Scopes {
         include_top_level: bool,
         include_class_top_level: bool,
         include_decorators_in_decorated_definition: bool,
+        include_default_arguments_in_function: bool,
     ) -> Option<FunctionRef> {
         let mut iterator = self.stack.iter().rev();
         loop {
@@ -133,8 +133,14 @@ impl Scopes {
                 Scope::NonExportedClass { .. } => {
                     return None;
                 }
+                Scope::FunctionParameters => {
+                    if !include_default_arguments_in_function {
+                        // This not a true "semantic" scope.
+                        // We need to skip the parent scope, which is the wrapping function/class scope.
+                        iterator.next().unwrap();
+                    }
+                }
                 Scope::FunctionTypeParams
-                | Scope::FunctionParameters
                 | Scope::FunctionReturnAnnotation
                 | Scope::ClassTypeParams
                 | Scope::ClassArguments => {
@@ -213,17 +219,7 @@ pub trait AstScopedVisitor {
     fn enter_toplevel_scope(&mut self, _ast: &ModModule, _scopes_in_toplevel: &Scopes) {}
     fn exit_toplevel_scope(&mut self, _ast: &ModModule, _scopes_in_toplevel: &Scopes) {}
     fn on_scope_update(&mut self, _scopes: &Scopes) {}
-}
-
-fn visit_expression<V: AstScopedVisitor>(
-    expr: &Expr,
-    visitor: &mut V,
-    scopes: &mut Scopes,
-    parent_expression: Option<&Expr>,
-    assignment_targets: Option<&Vec<&Expr>>,
-) {
-    visitor.visit_expression(expr, scopes, parent_expression, assignment_targets);
-    expr.recurse(&mut |e| visit_expression(e, visitor, scopes, Some(expr), assignment_targets));
+    fn visit_type_annotations() -> bool;
 }
 
 fn visit_statement<V: AstScopedVisitor>(
@@ -232,6 +228,40 @@ fn visit_statement<V: AstScopedVisitor>(
     scopes: &mut Scopes,
     module_context: &ModuleContext,
 ) {
+    // By overriding visit_stmt and visit_expr, the visitor doesn't automatically visit nested statements/expressions.
+    struct CustomSourceOrderVisitor<'a, V> {
+        visitor: &'a mut V,
+        scopes: &'a mut Scopes,
+        module_context: &'a ModuleContext<'a>,
+        parent_expression: Option<&'a Expr>,
+        assignment_targets: Option<&'a Vec<&'a Expr>>,
+    }
+    impl<'v, 'e: 'v, V: AstScopedVisitor>
+        ruff_python_ast::visitor::source_order::SourceOrderVisitor<'e>
+        for CustomSourceOrderVisitor<'v, V>
+    {
+        fn visit_stmt(&mut self, stmt: &'e Stmt) {
+            visit_statement(stmt, self.visitor, self.scopes, self.module_context);
+        }
+        fn visit_expr(&mut self, expr: &'e Expr) {
+            self.visitor.visit_expression(
+                expr,
+                self.scopes,
+                self.parent_expression,
+                self.assignment_targets,
+            );
+            let current_parent_expression = self.parent_expression;
+            self.parent_expression = Some(expr);
+            ruff_python_ast::visitor::source_order::walk_expr(self, expr);
+            self.parent_expression = current_parent_expression;
+        }
+        fn visit_annotation(&mut self, expr: &'e Expr) {
+            if V::visit_type_annotations() {
+                self.visit_expr(expr);
+            }
+        }
+    }
+
     visitor.visit_statement(stmt, scopes);
 
     match stmt {
@@ -277,10 +307,16 @@ fn visit_statement<V: AstScopedVisitor>(
 
             scopes.stack.push(Scope::FunctionDecorators);
             visitor.on_scope_update(scopes);
-            function_def.decorator_list.recurse(&mut |e| {
-                visit_expression(
-                    e, visitor, scopes, /* parent_expression */ None,
-                    /* assignment_targets */ None,
+            function_def.decorator_list.iter().for_each(&mut |e| {
+                ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_decorator(
+                    &mut CustomSourceOrderVisitor {
+                        visitor,
+                        scopes,
+                        module_context,
+                        parent_expression: None,
+                        assignment_targets: None,
+                    },
+                    e,
                 )
             });
             scopes.stack.pop();
@@ -288,32 +324,48 @@ fn visit_statement<V: AstScopedVisitor>(
 
             scopes.stack.push(Scope::FunctionTypeParams);
             visitor.on_scope_update(scopes);
-            function_def.type_params.recurse(&mut |e| {
-                visit_expression(
-                    e, visitor, scopes, /* parent_expression */ None,
-                    /* assignment_targets */ None,
+            if let Some(type_params) = &function_def.type_params {
+                ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_type_params(
+                    &mut CustomSourceOrderVisitor {
+                        visitor,
+                        scopes,
+                        module_context,
+                        parent_expression: None,
+                        assignment_targets: None,
+                    },
+                    type_params,
                 );
-            });
+            }
             scopes.stack.pop();
             visitor.on_scope_update(scopes);
 
             scopes.stack.push(Scope::FunctionParameters);
             visitor.on_scope_update(scopes);
-            function_def.parameters.recurse(&mut |e| {
-                visit_expression(
-                    e, visitor, scopes, /* parent_expression */ None,
-                    /* assignment_targets */ None,
-                );
-            });
+            ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_parameters(
+                &mut CustomSourceOrderVisitor {
+                    visitor,
+                    scopes,
+                    module_context,
+                    parent_expression: None,
+                    assignment_targets: None,
+                },
+                &function_def.parameters,
+            );
             scopes.stack.pop();
             visitor.on_scope_update(scopes);
 
             scopes.stack.push(Scope::FunctionReturnAnnotation);
             visitor.on_scope_update(scopes);
-            function_def.returns.recurse(&mut |e| {
-                visit_expression(
-                    e, visitor, scopes, /* parent_expression */ None,
-                    /* assignment_targets */ None,
+            function_def.returns.iter().for_each(|return_annotation| {
+                ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_annotation(
+                    &mut CustomSourceOrderVisitor {
+                        visitor,
+                        scopes,
+                        module_context,
+                        parent_expression: None,
+                        assignment_targets: None,
+                    },
+                    return_annotation,
                 );
             });
             scopes.stack.pop();
@@ -358,10 +410,16 @@ fn visit_statement<V: AstScopedVisitor>(
 
             scopes.stack.push(Scope::ClassDecorators);
             visitor.on_scope_update(scopes);
-            class_def.decorator_list.recurse(&mut |e| {
-                visit_expression(
-                    e, visitor, scopes, /* parent_expression */ None,
-                    /* assignment_targets */ None,
+            class_def.decorator_list.iter().for_each(&mut |e| {
+                ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_decorator(
+                    &mut CustomSourceOrderVisitor {
+                        visitor,
+                        scopes,
+                        module_context,
+                        parent_expression: None,
+                        assignment_targets: None,
+                    },
+                    e,
                 )
             });
             scopes.stack.pop();
@@ -369,23 +427,35 @@ fn visit_statement<V: AstScopedVisitor>(
 
             scopes.stack.push(Scope::ClassTypeParams);
             visitor.on_scope_update(scopes);
-            class_def.type_params.recurse(&mut |e| {
-                visit_expression(
-                    e, visitor, scopes, /* parent_expression */ None,
-                    /* assignment_targets */ None,
+            if let Some(type_params) = &class_def.type_params {
+                ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_type_params(
+                    &mut CustomSourceOrderVisitor {
+                        visitor,
+                        scopes,
+                        module_context,
+                        parent_expression: None,
+                        assignment_targets: None,
+                    },
+                    type_params,
                 );
-            });
+            }
             scopes.stack.pop();
             visitor.on_scope_update(scopes);
 
             scopes.stack.push(Scope::ClassArguments);
             visitor.on_scope_update(scopes);
-            class_def.arguments.recurse(&mut |e| {
-                visit_expression(
-                    e, visitor, scopes, /* parent_expression */ None,
-                    /* assignment_targets */ None,
+            if let Some(arguments) = &class_def.arguments {
+                ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_arguments(
+                    &mut CustomSourceOrderVisitor {
+                        visitor,
+                        scopes,
+                        module_context,
+                        parent_expression: None,
+                        assignment_targets: None,
+                    },
+                    arguments,
                 );
-            });
+            }
             scopes.stack.pop();
             visitor.on_scope_update(scopes);
 
@@ -399,90 +469,88 @@ fn visit_statement<V: AstScopedVisitor>(
         }
         Stmt::Assign(assign) => {
             let assignment_targets = Some(&assign.targets.iter().collect());
-            visit_expression(
-                &assign.value,
-                visitor,
-                scopes,
-                /* parent_expression */ None,
-                assignment_targets,
-            );
-            assign.targets.iter().for_each(|target| {
-                visit_expression(
-                    target,
+            ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_expr(
+                &mut CustomSourceOrderVisitor {
                     visitor,
                     scopes,
-                    /* parent_expression */ None,
+                    module_context,
+                    parent_expression: None,
                     assignment_targets,
+                },
+                &assign.value,
+            );
+            assign.targets.iter().for_each(|target| {
+                ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_expr(
+                    &mut CustomSourceOrderVisitor {
+                        visitor,
+                        scopes,
+                        module_context,
+                        parent_expression: None,
+                        assignment_targets,
+                    },
+                    target,
                 );
             });
         }
         Stmt::AugAssign(assign) => {
             let assignment_targets_vec = Some(vec![assign.target.as_ref()]);
             let assignment_targets = assignment_targets_vec.as_ref();
-            visit_expression(
+            ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_expr(
+                &mut CustomSourceOrderVisitor {
+                    visitor,
+                    scopes,
+                    module_context,
+                    parent_expression: None,
+                    assignment_targets,
+                },
                 &assign.value,
-                visitor,
-                scopes,
-                /* parent_expression */ None,
-                assignment_targets,
             );
-            visit_expression(
+            ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_expr(
+                &mut CustomSourceOrderVisitor {
+                    visitor,
+                    scopes,
+                    module_context,
+                    parent_expression: None,
+                    assignment_targets,
+                },
                 &assign.target,
-                visitor,
-                scopes,
-                /* parent_expression */ None,
-                assignment_targets,
             );
         }
         Stmt::AnnAssign(assign) => {
             let assignment_targets_vec = Some(vec![assign.target.as_ref()]);
             let assignment_targets = assignment_targets_vec.as_ref();
             if let Some(value) = assign.value.as_ref() {
-                visit_expression(
+                ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_expr(
+                    &mut CustomSourceOrderVisitor {
+                        visitor,
+                        scopes,
+                        module_context,
+                        parent_expression: None,
+                        assignment_targets,
+                    },
                     value,
-                    visitor,
-                    scopes,
-                    /* parent_expression */ None,
-                    assignment_targets,
                 )
             }
-            visit_expression(
+            ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_expr(
+                &mut CustomSourceOrderVisitor {
+                    visitor,
+                    scopes,
+                    module_context,
+                    parent_expression: None,
+                    assignment_targets,
+                },
                 &assign.target,
-                visitor,
-                scopes,
-                /* parent_expression */ None,
-                assignment_targets,
             );
         }
         _ => {
             // Use the ruff python ast visitor to find the first reachable statements and expressions from this statement.
-            // By overriding visit_stmt and visit_expr, the visitor doesn't automatically visit nested statements/expressions.
-            struct X<'a, V> {
-                visitor: &'a mut V,
-                scopes: &'a mut Scopes,
-                module_context: &'a ModuleContext<'a>,
-            }
-            impl<'v, 'e, V: AstScopedVisitor>
-                ruff_python_ast::visitor::source_order::SourceOrderVisitor<'e> for X<'v, V>
-            {
-                fn visit_stmt(&mut self, stmt: &'e Stmt) {
-                    visit_statement(stmt, self.visitor, self.scopes, self.module_context);
-                }
-                fn visit_expr(&mut self, expr: &'e Expr) {
-                    visit_expression(
-                        expr,
-                        self.visitor,
-                        self.scopes,
-                        /* parent_expression */ None,
-                        /* assignment_targets */ None,
-                    );
-                }
-            }
             ruff_python_ast::visitor::source_order::walk_stmt(
-                &mut X {
+                &mut CustomSourceOrderVisitor {
                     visitor,
                     scopes,
                     module_context,
+                    parent_expression: None,
+                    assignment_targets: None,
                 },
                 stmt,
             );

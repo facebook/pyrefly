@@ -200,6 +200,7 @@ use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
+use crate::state::state::CommittingTransaction;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 
@@ -569,7 +570,7 @@ impl Server {
             }
             LspEvent::RecheckFinished => {
                 // We did a commit and want to get back to a stable state.
-                self.validate_in_memory(ide_transaction_manager);
+                self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
             }
             LspEvent::CancelRequest(id) => {
                 eprintln!("We should cancel request {id:?}");
@@ -653,7 +654,7 @@ impl Server {
                     // We probably didn't bother completing a previous check, but we are now answering a query that
                     // really needs a previous check to be correct.
                     // Validating sends out notifications, which isn't required, but this is the safest way.
-                    self.validate_in_memory(ide_transaction_manager);
+                    self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
                 }
 
                 eprintln!("Handling non-canceled request {} ({})", x.method, &x.id);
@@ -880,7 +881,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        self.validate_in_memory(ide_transaction_manager);
+                        self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
                         let transaction =
                             ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
@@ -1049,6 +1050,7 @@ impl Server {
                 .config_finder()
                 .python_file(ModuleName::unknown(), e.path());
             if open_files.contains_key(&path)
+                && config.project_includes.covers(&path)
                 && !config.project_excludes.covers(&path)
                 && self
                     .type_error_display_status(e.path().as_path())
@@ -1101,13 +1103,39 @@ impl Server {
         }
     }
 
+    fn validate_in_memory_and_commit_if_possible<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+    ) {
+        let possibly_committable_transaction =
+            ide_transaction_manager.get_possibly_committable_transaction(&self.state);
+        self.validate_in_memory_for_possibly_committable_transaction(
+            ide_transaction_manager,
+            possibly_committable_transaction,
+        );
+    }
+
+    fn validate_in_memory_without_committing<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+    ) {
+        let noncommittable_transaction =
+            ide_transaction_manager.non_committable_transaction(&self.state);
+        self.validate_in_memory_for_possibly_committable_transaction(
+            ide_transaction_manager,
+            Err(noncommittable_transaction),
+        );
+    }
+
     /// Validate open files and send errors to the LSP. In the case of an ongoing recheck
     /// (i.e., another transaction is already being committed or the state is locked for writing),
     /// we still update diagnostics using a non-committable transaction, which may have slightly stale
     /// data compared to the main state
-    fn validate_in_memory<'a>(&'a self, ide_transaction_manager: &mut TransactionManager<'a>) {
-        let mut possibly_committable_transaction =
-            ide_transaction_manager.get_possibly_committable_transaction(&self.state);
+    fn validate_in_memory_for_possibly_committable_transaction<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        mut possibly_committable_transaction: Result<CommittingTransaction<'a>, Transaction<'a>>,
+    ) {
         let transaction = match &mut possibly_committable_transaction {
             Ok(transaction) => transaction.as_mut(),
             Err(transaction) => transaction,
@@ -1238,7 +1266,7 @@ impl Server {
         let cancellation_handles = self.cancellation_handles.dupe();
         let open_files = self.open_files.dupe();
         self.recheck_queue.queue_task(Box::new(move || {
-            let mut transaction = state.new_committable_transaction(Require::Indexing, None);
+            let mut transaction = state.new_committable_transaction(Require::indexing(), None);
             f(transaction.as_mut());
 
             Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
@@ -1270,7 +1298,7 @@ impl Server {
         let unknown = ModuleName::unknown();
 
         eprintln!("Populating all files in the config ({:?}).", config.source);
-        let mut transaction = state.new_committable_transaction(Require::Indexing, None);
+        let mut transaction = state.new_committable_transaction(Require::indexing(), None);
 
         let project_path_blobs = config.get_filtered_globs(None);
         let paths = project_path_blobs.files().unwrap_or_default();
@@ -1285,7 +1313,7 @@ impl Server {
         }
 
         eprintln!("Prepare to check {} files.", handles.len());
-        transaction.as_mut().run(&handles, Require::Indexing);
+        transaction.as_mut().run(&handles, Require::indexing());
         state.commit_transaction(transaction);
         // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
         // the main event loop of the server. As a result, the server can do a revalidation of
@@ -1304,7 +1332,7 @@ impl Server {
             eprintln!(
                 "Populating up to {workspace_indexing_limit} files in the workspace ({workspace_root:?}).",
             );
-            let mut transaction = state.new_committable_transaction(Require::Indexing, None);
+            let mut transaction = state.new_committable_transaction(Require::indexing(), None);
 
             let globs = Globs::new_with_root(workspace_root.as_path(), vec!["**/*".to_owned()])
                 .unwrap_or_default();
@@ -1320,7 +1348,7 @@ impl Server {
             }
 
             eprintln!("Prepare to check {} files.", handles.len());
-            transaction.as_mut().run(&handles, Require::Indexing);
+            transaction.as_mut().run(&handles, Require::indexing());
             state.commit_transaction(transaction);
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
@@ -1361,7 +1389,14 @@ impl Server {
             .write()
             .insert(uri, Arc::new(params.text_document.text));
         if !subsequent_mutation {
-            self.validate_in_memory(ide_transaction_manager);
+            // In order to improve perceived startup perf, when a file is opened, we run a
+            // non-committing transaction that indexes the file with default require level Exports.
+            // This is very fast but doesn't follow transitive dependencies, so completions are
+            // incomplete. This makes most IDE features available immediately while
+            // populate_{project,workspace}_files below runs a transaction at default require level
+            // Indexing in the background, generating a more complete index which becomes available
+            // a few seconds later.
+            self.validate_in_memory_without_committing(ide_transaction_manager);
         }
         self.populate_project_files_if_necessary(config_to_populate_files);
         self.populate_workspace_files_if_necessary();
@@ -1395,7 +1430,7 @@ impl Server {
         ));
         drop(lock);
         if !subsequent_mutation {
-            self.validate_in_memory(ide_transaction_manager);
+            self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
         }
         Ok(())
     }
@@ -1469,7 +1504,7 @@ impl Server {
             // Clear out the memory associated with this file.
             // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
             // Having the extra file hanging around doesn't harm anything, but does use extra memory.
-            let mut transaction = state.new_committable_transaction(Require::Indexing, None);
+            let mut transaction = state.new_committable_transaction(Require::indexing(), None);
             transaction.as_mut().set_memory(vec![(uri, None)]);
             let handles =
                 Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
@@ -2155,7 +2190,7 @@ impl Server {
         let cancellation_handles = self.cancellation_handles.dupe();
         let open_files = self.open_files.dupe();
         self.recheck_queue.queue_task(Box::new(move || {
-            let mut transaction = state.new_committable_transaction(Require::Indexing, None);
+            let mut transaction = state.new_committable_transaction(Require::indexing(), None);
             transaction.as_mut().invalidate_config();
 
             Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());

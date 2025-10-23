@@ -14,6 +14,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use dupe::Dupe;
+use equivalent::Equivalent;
+use serde::Deserialize;
 use serde::Serialize;
 use serde::Serializer;
 use static_interner::Intern;
@@ -44,9 +46,38 @@ impl Serialize for ModulePathBuf {
     }
 }
 
+impl<'de> Deserialize<'de> for ModulePathBuf {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let path: &Path = Deserialize::deserialize(d)?;
+        Ok(ModulePathBuf::from_path(path))
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+struct PathRef<'a>(&'a Path);
+
+impl<'a> Equivalent<PathBuf> for PathRef<'a> {
+    fn equivalent(&self, key: &PathBuf) -> bool {
+        *self.0 == *key
+    }
+}
+
+impl<'a> From<PathRef<'a>> for PathBuf {
+    fn from(value: PathRef<'a>) -> Self {
+        value.0.to_path_buf()
+    }
+}
+
 impl ModulePathBuf {
-    fn new(path: PathBuf) -> Self {
+    pub fn new(path: PathBuf) -> Self {
         Self(MODULE_PATH_INTERNER.intern(path))
+    }
+
+    pub fn from_path(path: &Path) -> Self {
+        Self(MODULE_PATH_INTERNER.intern(PathRef(path)))
     }
 }
 
@@ -248,6 +279,11 @@ impl ModulePath {
             | ModulePathDetails::Memory(path)
             | ModulePathDetails::Namespace(path) => path,
         }
+    }
+
+    /// Convert to a path, that may not exist on disk.
+    pub fn module_path_buf(&self) -> ModulePathBuf {
+        ModulePathBuf::from_path(self.as_path())
     }
 
     /// For nominal types, we consider FileSystem and Memory to be equal. This is important in the

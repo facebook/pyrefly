@@ -14,6 +14,7 @@ use anyhow::Context as _;
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::absolutize::Absolutize as _;
@@ -165,7 +166,7 @@ impl SourceDatabase for BuckCheckSourceDatabase {
         Some(Handle::new(name, module_path, self.sys_info.dupe()))
     }
 
-    fn requery_source_db(&self, _: SmallSet<PathBuf>) -> anyhow::Result<bool> {
+    fn requery_source_db(&self, _: SmallSet<ModulePathBuf>) -> anyhow::Result<bool> {
         Ok(false)
     }
 

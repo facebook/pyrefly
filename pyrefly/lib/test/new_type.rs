@@ -105,17 +105,25 @@ class R:
 );
 
 testcase!(
-    bug =
-        "concrete tuple base classes become unbounded when converted to their class representation",
     test_new_type_tuple,
     r#"
 from typing import NewType
 Foo = NewType("Foo", tuple[int, int])
-Bar = NewType("Bar", tuple[int, ...])
 
 Foo((1, 2))  # OK
-Foo((1, 2, 3))  # this shouldn't be allowed
+Foo((1, 2, 3))  # E: Argument `tuple[Literal[1], Literal[2], Literal[3]]` is not assignable to parameter `_x` with type `tuple[int, int]` in function `Foo.__new__`
      "#,
+);
+
+testcase!(
+    test_new_type_inherits_tuple,
+    r#"
+from typing import NewType
+class A(tuple[int, int]):
+    pass
+X = NewType("X", A)
+X((0, 0))  # E: Argument `tuple[Literal[0], Literal[0]]` is not assignable to parameter `_x` with type `A` in function `X.__new__`
+    "#,
 );
 
 testcase!(

@@ -110,6 +110,10 @@ impl<'a> AstScopedVisitor for DefinitionToScopeMapVisitor<'a> {
             self.bind_name(Key::Definition(ShortIdentifier::new(&kwargs.name)), scopes);
         }
     }
+
+    fn visit_type_annotations() -> bool {
+        false
+    }
 }
 
 fn build_definition_to_scope_map(context: &ModuleContext) -> HashMap<Idx<Key>, ScopeId> {
@@ -211,6 +215,7 @@ impl<'a> AstScopedVisitor for CapturedVariableVisitor<'a> {
             /* include_top_level */ true,
             /* include_class_top_level */ true,
             /* include_decorators_in_decorated_definition */ false,
+            /* include_default_arguments_in_function */ false,
         );
     }
 
@@ -254,6 +259,10 @@ impl<'a> AstScopedVisitor for CapturedVariableVisitor<'a> {
             }
             _ => (),
         }
+    }
+
+    fn visit_type_annotations() -> bool {
+        false
     }
 }
 

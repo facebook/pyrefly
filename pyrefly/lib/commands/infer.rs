@@ -390,7 +390,7 @@ mod test {
         ]
         project_excludes = []
         "#;
-        let tdir = tempfile::tempdir().unwrap();
+        let tdir = tempfile::TempDir::with_prefix("pyrefly_infer_test").unwrap();
         let file_one_path = tdir.path().join("file_one.py");
         fs_anyhow::write(&file_one_path, file_one).unwrap();
         let file_two_path = tdir.path().join("file_two.py");

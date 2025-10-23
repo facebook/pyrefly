@@ -737,3 +737,91 @@ fn test_diagnostics_in_workspace() {
 
     interaction.shutdown();
 }
+
+#[test]
+fn test_diagnostics_file_not_in_includes() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(Some(
+            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+        )),
+        ..Default::default()
+    });
+
+    interaction
+        .server
+        .did_open("diagnostics_file_not_in_includes/type_errors_exclude.py");
+    interaction
+        .server
+        .did_open("diagnostics_file_not_in_includes/type_errors_include.py");
+
+    interaction
+        .server
+        .diagnostic("diagnostics_file_not_in_includes/type_errors_include.py");
+
+    // prove that it works for a project included
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
+        result: Some(get_diagnostics_result()),
+        error: None,
+    });
+
+    interaction
+        .server
+        .diagnostic("diagnostics_file_not_in_includes/type_errors_exclude.py");
+
+    // prove that it ignores a file not in project includes
+    interaction.client.expect_response(Response {
+        id: RequestId::from(3),
+        result: Some(serde_json::json!({"items": [], "kind": "full"})),
+        error: None,
+    });
+
+    interaction.shutdown();
+}
+
+#[test]
+fn test_diagnostics_file_in_excludes() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(Some(
+            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+        )),
+        ..Default::default()
+    });
+
+    interaction
+        .server
+        .did_open("diagnostics_file_in_excludes/type_errors_exclude.py");
+    interaction
+        .server
+        .did_open("diagnostics_file_in_excludes/type_errors_include.py");
+
+    interaction
+        .server
+        .diagnostic("diagnostics_file_in_excludes/type_errors_include.py");
+
+    // prove that it works for a project included
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
+        result: Some(get_diagnostics_result()),
+        error: None,
+    });
+
+    interaction
+        .server
+        .diagnostic("diagnostics_file_in_excludes/type_errors_exclude.py");
+
+    // prove that it ignores a file not in project includes
+    interaction.client.expect_response(Response {
+        id: RequestId::from(3),
+        result: Some(serde_json::json!({"items": [], "kind": "full"})),
+        error: None,
+    });
+
+    interaction.shutdown();
+}
