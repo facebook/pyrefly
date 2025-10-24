@@ -62,8 +62,9 @@ Just:
 Pyrefly will recognize Pydantic constructs like `BaseModel`, `Field`, and `model_config`, and provide appropriate type checking automatically. You can follow [this link](https://github.com/migeed-z/pyrefly-pydantic-demo) to try it out on some small examples.
 
 ---
-## Examples
+## Supported Features with Examples
 
+The following examples showcase which Pydantic features are currently supported by Pyrefly. Pyrefly does not cover all Pydantic features, but these features should provide good coverage of the most common Pydantic use cases. You can request additional Pydantic features to be supported by opening a GitHub issue.
 
 
 ### Immutable fields with ConfigDict
@@ -124,4 +125,45 @@ class ModelForbid(BaseModel, extra="forbid"):
 
 # This will raise a type error because of unexpected field `y`, which is consistent with runtime behavior.
 ModelForbid(x=1, y=2)
+```
+
+### Handling field constraints
+
+```python
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+   x: int = Field(gt=0, lt=10)
+
+Model(x=5)  # OK
+Model(x="5")  # will not raise a type error because of runtime coercion
+```
+
+### Root Models
+
+```python
+from pydantic import RootModel, StrictInt
+
+class IntRootModel(RootModel[int]):
+   pass
+
+class StrictIntRootModel(RootModel[StrictInt]):
+   pass
+
+m1 = IntRootModel(123)  # OK
+m2 = IntRootModel("123") # OK because of runtime coercion
+m3 = StrictIntRootModel("123")  # will raise a type error because of StrictInt
+```
+
+### Alias validation
+
+```python
+from pydantic import BaseModel, Field
+
+class Model(BaseModel, validate_by_name=True, validate_by_alias=True):
+    x: int = Field(alias='y')
+
+# both `x` and `y` are valid aliases
+Model(x=0)
+Model(y=0)
 ```
