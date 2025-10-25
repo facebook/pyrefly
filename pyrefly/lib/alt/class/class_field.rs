@@ -2158,9 +2158,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let child_metadata = self.get_metadata_for_class(cls);
 
-        for (field_name, infos) in inherited_fields.iter() {
-            if infos.len() > 1 {
-                let types: Vec<Type> = infos.iter().map(|info| info.ty.clone()).collect();
+        for (field_name, inherited_field_infos_by_ancestor) in inherited_fields.iter() {
+            if inherited_field_infos_by_ancestor.len() > 1 {
+                let types: Vec<Type> = inherited_field_infos_by_ancestor
+                    .iter()
+                    .map(|info| info.ty.clone())
+                    .collect();
                 if types.iter().any(|ty| {
                     matches!(
                         ty,
@@ -2180,7 +2183,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ),
                         "Inherited types include:".to_owned()
                     ];
-                    for info in infos.iter() {
+                    for info in inherited_field_infos_by_ancestor.iter() {
                         error_msg.push(format!(
                             "  `{}` from `{}`",
                             self.for_display(info.ty.clone()),
@@ -2200,7 +2203,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .typed_dict_field_info(child_metadata.as_ref(), field_name, &child_field)
                         .is_some()
                     {
-                        for info in infos {
+                        for info in inherited_field_infos_by_ancestor {
                             if self
                                 .typed_dict_field_info(
                                     info.metadata.as_ref(),
