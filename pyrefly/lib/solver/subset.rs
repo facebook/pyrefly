@@ -1003,7 +1003,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 self.is_subset_eq(&got, want)
             }
             (Type::ClassType(got), Type::SelfType(want)) => {
-                let has_superclass = self.type_order
+                let has_superclass = self
+                    .type_order
                     .has_superclass(got.class_object(), want.class_object());
                 // Only apply the finality check when:
                 // 1. The classes are the same
@@ -1018,7 +1019,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     has_superclass && (!is_same_bare_class || is_final),
                     SubsetError::Other,
                 )
-            },
+            }
             (Type::Type(box Type::ClassType(got)), Type::SelfType(want)) => ok_or(
                 self.type_order.has_metaclass(got.class_object(), want),
                 SubsetError::Other,
