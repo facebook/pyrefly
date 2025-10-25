@@ -151,6 +151,7 @@ use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::globs::Globs;
@@ -269,7 +270,7 @@ impl ServerConnection {
 
     fn publish_diagnostics(&self, diags: SmallMap<PathBuf, Vec<Diagnostic>>) {
         for (path, diags) in diags {
-            let path = std::fs::canonicalize(&path).unwrap_or(path);
+            let path = path.absolutize();
             match Url::from_file_path(&path) {
                 Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, None),
                 Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
