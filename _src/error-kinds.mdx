@@ -971,6 +971,12 @@ if "hello" in 1:  # int doesn't support `in`!
   ...
 ```
 
+## untyped-import
+
+Type information for some third-party libraries is shipped in a stubs package separate from the
+library's source code. This error is emitted when we detect that a library is being used without
+the recommended stubs package being installed.
+
 ## unused-coroutine
 
 If the result of an async function call is not awaited or used, we will raise an error.
