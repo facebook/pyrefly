@@ -928,6 +928,15 @@ impl Server {
                         ));
                         ide_transaction_manager.save(transaction);
                     }
+                } else if &x.method == "pyrefly/textDocument/docstringRanges" {
+                    let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
+                    let transaction =
+                        ide_transaction_manager.non_committable_transaction(&self.state);
+                    let ranges = self
+                        .docstring_ranges(&transaction, &text_document)
+                        .unwrap_or_default();
+                    self.send_response(new_response(x.id, Ok(ranges)));
+                    ide_transaction_manager.save(transaction);
                 } else if &x.method == "pyrefly/textDocument/typeErrorDisplayStatus" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
                     self.send_response(new_response(
@@ -2035,6 +2044,22 @@ impl Server {
                 })
             })
             .collect()
+    }
+
+    fn docstring_ranges(
+        &self,
+        transaction: &Transaction<'_>,
+        text_document: &TextDocumentIdentifier,
+    ) -> Option<Vec<Range>> {
+        let handle = self.make_handle_if_enabled(&text_document.uri)?;
+        let module = transaction.get_module_info(&handle)?;
+        let docstring_ranges = transaction.docstring_ranges(&handle)?;
+        Some(
+            docstring_ranges
+                .into_iter()
+                .map(|range| module.lined_buffer().to_lsp_range(range))
+                .collect(),
+        )
     }
 
     fn document_diagnostics(

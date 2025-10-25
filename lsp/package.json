@@ -53,6 +53,16 @@
                 "title": "Restart Pyrefly Client",
                 "category": "pyrefly",
                 "command": "pyrefly.restartClient"
+            },
+            {
+                "title": "Fold All Docstrings",
+                "category": "pyrefly",
+                "command": "pyrefly.foldAllDocstrings"
+            },
+            {
+                "title": "Unfold All Docstrings",
+                "category": "pyrefly",
+                "command": "pyrefly.unfoldAllDocstrings"
             }
         ],
         "configuration": {

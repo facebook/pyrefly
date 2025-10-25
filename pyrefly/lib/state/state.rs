@@ -35,6 +35,7 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::docstring::Docstring;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -56,6 +57,7 @@ use pyrefly_util::uniques::UniqueFactory;
 use pyrefly_util::upgrade_lock::UpgradeLock;
 use pyrefly_util::upgrade_lock::UpgradeLockExclusiveGuard;
 use pyrefly_util::upgrade_lock::UpgradeLockWriteGuard;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
@@ -494,6 +496,15 @@ impl<'a> Transaction<'a> {
 
     pub fn get_module_info(&self, handle: &Handle) -> Option<Module> {
         self.get_load(handle).map(|x| x.module_info.dupe())
+    }
+
+    pub fn docstring_ranges(&self, handle: &Handle) -> Option<Vec<TextRange>> {
+        let ast = self.get_ast(handle)?;
+        let mut ranges = Vec::new();
+        collect_docstring_ranges(&ast.body, &mut ranges);
+        ranges.sort_by_key(|range| range.start());
+        ranges.dedup();
+        Some(ranges)
     }
 
     /// Compute transitive dependency closure for the given handle.
@@ -1579,6 +1590,49 @@ impl<'a> Transaction<'a> {
     pub fn get_module_docstring_range(&self, handle: &Handle) -> Option<TextRange> {
         let module_data = self.get_module(handle);
         self.lookup_export(&module_data).docstring_range()
+    }
+}
+
+fn collect_docstring_ranges(body: &[Stmt], ranges: &mut Vec<TextRange>) {
+    if let Some(range) = Docstring::range_from_stmts(body) {
+        ranges.push(range);
+    }
+
+    for stmt in body {
+        match stmt {
+            Stmt::FunctionDef(func) => collect_docstring_ranges(&func.body, ranges),
+            Stmt::ClassDef(class_def) => collect_docstring_ranges(&class_def.body, ranges),
+            Stmt::If(if_stmt) => {
+                collect_docstring_ranges(&if_stmt.body, ranges);
+                for clause in &if_stmt.elif_else_clauses {
+                    collect_docstring_ranges(&clause.body, ranges);
+                }
+            }
+            Stmt::While(while_stmt) => {
+                collect_docstring_ranges(&while_stmt.body, ranges);
+                collect_docstring_ranges(&while_stmt.orelse, ranges);
+            }
+            Stmt::For(for_stmt) => {
+                collect_docstring_ranges(&for_stmt.body, ranges);
+                collect_docstring_ranges(&for_stmt.orelse, ranges);
+            }
+            Stmt::With(with_stmt) => collect_docstring_ranges(&with_stmt.body, ranges),
+            Stmt::Try(try_stmt) => {
+                collect_docstring_ranges(&try_stmt.body, ranges);
+                collect_docstring_ranges(&try_stmt.orelse, ranges);
+                collect_docstring_ranges(&try_stmt.finalbody, ranges);
+                for handler in &try_stmt.handlers {
+                    let ruff_python_ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    collect_docstring_ranges(&handler.body, ranges);
+                }
+            }
+            Stmt::Match(match_stmt) => {
+                for case in &match_stmt.cases {
+                    collect_docstring_ranges(&case.body, ranges);
+                }
+            }
+            _ => {}
+        }
     }
 }
 

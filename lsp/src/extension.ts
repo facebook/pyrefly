@@ -7,7 +7,7 @@
  * @format
  */
 
-import {ExtensionContext, workspace} from 'vscode';
+import {ExtensionContext, workspace, FoldingRangeKind} from 'vscode';
 import * as vscode from 'vscode';
 import {
   CancellationToken,
@@ -101,6 +101,82 @@ No errors will be shown even if there is a [\`pyrefly.toml\`](https://pyrefly.or
       return;
   }
   statusBarItem.show();
+}
+
+async function getDocstringRanges(
+  document: vscode.TextDocument,
+): Promise<vscode.Range[]> {
+  const identifier = client.code2ProtocolConverter.asTextDocumentIdentifier(
+    document,
+  );
+  const response = (await client.sendRequest(
+    'pyrefly/textDocument/docstringRanges',
+    identifier,
+  )) as Array<{
+    start: {line: number; character: number};
+    end: {line: number; character: number};
+  }> | null;
+
+  if (!response) {
+    return [];
+  }
+
+  return response.map(range => client.protocol2CodeConverter.asRange(range));
+}
+
+async function runDocstringFoldingCommand(
+  commandId: 'editor.fold' | 'editor.unfold',
+): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (
+    editor == null ||
+    editor.document.uri.scheme !== 'file' ||
+    editor.document.languageId !== 'python'
+  ) {
+    return;
+  }
+
+  try {
+    const ranges = await getDocstringRanges(editor.document);
+    if (ranges.length === 0) {
+      return;
+    }
+
+    const seen = new Set<string>();
+    const uniqueRanges = ranges.filter(range => {
+      const key = `${range.start.line}:${range.start.character}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+
+    const selectionLines = uniqueRanges
+      .map(range => {
+        if (range.start.line === range.end.line) {
+          return null;
+        }
+        return range.start.line;
+      })
+      .filter((line): line is number => line != null)
+      .filter((line, index, arr) => arr.indexOf(line) === index)
+      .sort((a, b) => a - b);
+
+    if (selectionLines.length === 0) {
+      return;
+    }
+
+    await vscode.commands.executeCommand(commandId, {
+      selectionLines,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : `Unknown error: ${String(error)}`;
+    outputChannel?.appendLine(
+      `Failed to ${commandId === 'editor.fold' ? 'fold' : 'unfold'} docstrings: ${message}`,
+    );
+  }
 }
 
 /**
@@ -251,6 +327,51 @@ export async function activate(context: ExtensionContext) {
       );
       await client.start();
     }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('pyrefly.foldAllDocstrings', async () => {
+      await runDocstringFoldingCommand('editor.fold');
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('pyrefly.unfoldAllDocstrings', async () => {
+      await runDocstringFoldingCommand('editor.unfold');
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.languages.registerFoldingRangeProvider(
+      {language: 'python', scheme: 'file'},
+      {
+        async provideFoldingRanges(document, _context, token) {
+          try {
+            if (token.isCancellationRequested || !client.isRunning()) {
+              return [];
+            }
+            const ranges = await getDocstringRanges(document);
+            if (token.isCancellationRequested) {
+              return [];
+            }
+            return ranges
+              .filter(range => range.start.line < range.end.line)
+              .map(range => ({
+                start: range.start.line,
+                end: range.end.line,
+                kind: FoldingRangeKind.Comment,
+              }));
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : `Unknown error: ${String(error)}`;
+            outputChannel?.appendLine(
+              `Failed to compute docstring folding ranges: ${message}`,
+            );
+            return [];
+          }
+        },
+      },
+    ),
   );
 
   // When our extension is activated, make sure ms-python knows
