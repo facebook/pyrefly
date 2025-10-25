@@ -564,14 +564,14 @@ impl ClassField {
 
     fn type_is_stub_function(ty: &Type) -> bool {
         match ty {
-            Type::Function(func) => func.metadata.flags.is_stub,
+            Type::Function(func) => func.metadata.flags.lacks_implementation,
             Type::Forall(box Forall {
                 body: Forallable::Function(func),
                 ..
-            }) => func.metadata.flags.is_stub,
+            }) => func.metadata.flags.lacks_implementation,
             Type::Overload(overload) => overload.signatures.iter().all(|sig| match sig {
-                OverloadType::Function(function) => function.metadata.flags.is_stub,
-                OverloadType::Forall(forall) => forall.body.metadata.flags.is_stub,
+                OverloadType::Function(function) => function.metadata.flags.lacks_implementation,
+                OverloadType::Forall(forall) => forall.body.metadata.flags.lacks_implementation,
             }),
             _ => false,
         }

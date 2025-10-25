@@ -260,7 +260,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
 
         if stub_or_impl == FunctionStubOrImpl::Stub {
-            flags.is_stub = true;
+            flags.lacks_implementation = true;
         }
 
         // Look for a @classmethod or @staticmethod decorator and change the "self" type

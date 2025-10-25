@@ -335,7 +335,7 @@ pub struct FuncFlags {
     /// A function decorated with `@abc.abstractmethod`
     pub is_abstract_method: bool,
     /// Function body is treated as a stub (e.g. body is `...` or absent in a stub file)
-    pub is_stub: bool,
+    pub lacks_implementation: bool,
     /// A function decorated with `typing.dataclass_transform(...)`, turning it into a
     /// `dataclasses.dataclass`-like decorator. Stores the keyword values passed to the
     /// `dataclass_transform` call. See

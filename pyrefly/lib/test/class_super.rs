@@ -114,7 +114,7 @@ class C:
 );
 
 testcase!(
-    test_super_protocol_stub_method,
+    test_super_protocol_unimplemented_method,
     r#"
 from typing import Protocol
 
