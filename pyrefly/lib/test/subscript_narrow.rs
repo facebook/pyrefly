@@ -183,10 +183,33 @@ class ErrorContext:
             self.system_context = {"status": "active"}
 
         assert_type(self.system_context, dict[str, Any])
-            
+
         self.system_context["timestamp"] = "2024-01-01"
 
         assert_type(self.system_context, dict[str, Any])
         assert_type(self.system_context["timestamp"], Literal["2024-01-01"])
+"#,
+);
+
+testcase!(
+    bug = "https://github.com/facebook/pyrefly/issues/238",
+    test_dict_get_literal_key_narrow,
+    r#"
+from typing import assert_type
+
+def narrow_with_explicit_none(data: dict[str, int]) -> None:
+    value = data.get("foo")
+    if value is not None:
+        assert_type(value, int)
+        assert_type(data["foo"], int)
+    else:
+        assert_type(value, None)
+
+def narrow_with_truthy_check(data: dict[str, int]) -> None:
+    if data.get("bar"):
+        assert_type(data["bar"], int)
+    else:
+        fallback = data.get("bar")
+        assert_type(fallback, int | None)
 "#,
 );

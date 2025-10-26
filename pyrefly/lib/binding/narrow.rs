@@ -771,15 +771,48 @@ pub fn identifier_and_chain_prefix_for_expr(expr: &Expr) -> Option<(Identifier, 
 }
 
 fn subject_for_expr(expr: &Expr) -> Option<NarrowingSubject> {
-    identifier_and_chain_for_expr(expr)
-        .map(|(identifier, attr)| NarrowingSubject::Facets(identifier.id, attr))
+    if let Some((identifier, attr)) = identifier_and_chain_for_expr(expr) {
+        return Some(NarrowingSubject::Facets(identifier.id, attr));
+    }
+
+    if let Expr::Call(ExprCall {
+        func, arguments, ..
+    }) = expr
+        && arguments.keywords.is_empty()
+        && let Some(first_arg) = arguments.args.first()
+        && let Expr::Attribute(attr) = &**func
+        && attr.attr.id.as_str() == "get"
+    {
+        if let Expr::StringLiteral(ExprStringLiteral { value, .. }) = first_arg {
+            let key = value.to_string();
+            if let Some((identifier, facets)) = identifier_and_chain_for_expr(&attr.value) {
+                let props =
+                    Vec1::from_vec_push(facets.facets().to_vec(), FacetKind::Key(key.clone()));
+                return Some(NarrowingSubject::Facets(
+                    identifier.id,
+                    FacetChain::new(props),
+                ));
+            } else if let Expr::Name(name) = &*attr.value {
+                return Some(NarrowingSubject::Facets(
+                    name.id.clone(),
+                    FacetChain::new(Vec1::new(FacetKind::Key(key))),
+                ));
+            }
+        }
+    }
+
+    None
 }
 
 pub fn expr_to_subjects(expr: &Expr) -> Vec<NarrowingSubject> {
     fn f(expr: &Expr, res: &mut Vec<NarrowingSubject>) {
         match expr {
             Expr::Name(name) => res.push(NarrowingSubject::Name(name.id.clone())),
-            Expr::Attribute(_) | Expr::Subscript(_) => res.extend(subject_for_expr(expr)),
+            Expr::Attribute(_) | Expr::Subscript(_) | Expr::Call(_) => {
+                if let Some(subject) = subject_for_expr(expr) {
+                    res.push(subject);
+                }
+            }
             Expr::Named(ExprNamed { target, value, .. }) => {
                 f(target, res);
                 f(value, res);
