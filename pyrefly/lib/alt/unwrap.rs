@@ -281,58 +281,121 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn hint_from_types<'b>(&self, types: Vec<Type>, hint: &HintRef<'b, '_>) -> Option<Hint<'b>> {
+        if types.is_empty() {
+            return None;
+        }
+        let ty = if types.len() == 1 {
+            types.into_iter().next().expect("types has one element")
+        } else {
+            self.unions(types)
+        };
+        Some(hint.map_ty(|_| ty))
+    }
+
+    fn collect_var_from_hint(
+        &self,
+        hint: &Type,
+        make: impl Fn(Var) -> Type,
+    ) -> Option<Vec<Type>> {
+        let mut tys = Vec::new();
+        let mut matched = false;
+
+        let mut consider = |ty: &Type| {
+            let var = self.fresh_var();
+            let container_ty = make(var);
+            if self.is_subset_eq(&container_ty, ty) {
+                matched = true;
+                if let Some(elem_ty) = self.resolve_var_opt(ty, var) {
+                    tys.push(elem_ty);
+                }
+            }
+        };
+
+        match hint {
+            Type::Union(box Union { members, .. }) => {
+                for member in members {
+                    consider(member);
+                }
+            }
+            ty => consider(ty),
+        }
+
+        if matched { Some(tys) } else { None }
+    }
+
     pub fn decompose_dict<'b>(
         &self,
         hint: HintRef<'b, '_>,
     ) -> (Option<Hint<'b>>, Option<Hint<'b>>) {
-        let key = self.fresh_var();
-        let value = self.fresh_var();
-        let dict_type = self.heap.mk_class_type(
-            self.stdlib
-                .dict(key.to_type(self.heap), value.to_type(self.heap)),
-        );
-        if self.is_subset_eq(&dict_type, hint.ty()) {
-            let key = hint.map_ty_opt(|ty| self.resolve_var_opt(ty, key));
-            let value = hint.map_ty_opt(|ty| self.resolve_var_opt(ty, value));
-            (key, value)
-        } else {
-            (None, None)
+        let mut key_types = Vec::new();
+        let mut value_types = Vec::new();
+        let mut matched = false;
+
+        // Helper to process a single target type and accumulate results.
+        let mut consider = |ty: &Type| {
+            let key = self.fresh_var();
+            let value = self.fresh_var();
+            let dict_type = self.heap.mk_class_type(
+                self.stdlib
+                    .dict(key.to_type(self.heap), value.to_type(self.heap)),
+            );
+            if self.is_subset_eq(&dict_type, ty) {
+                matched = true;
+                if let Some(key_ty) = self.resolve_var_opt(ty, key) {
+                    key_types.push(key_ty);
+                }
+                if let Some(value_ty) = self.resolve_var_opt(ty, value) {
+                    value_types.push(value_ty);
+                }
+            }
+        };
+
+        match hint.ty() {
+            Type::Union(box Union { members, .. }) => {
+                for member in members {
+                    consider(member);
+                }
+            }
+            ty => consider(ty),
         }
+
+        if !matched {
+            return (None, None);
+        }
+
+        let key = self.hint_from_types(key_types, &hint);
+        let value = self.hint_from_types(value_types, &hint);
+        (key, value)
     }
 
     pub fn decompose_set<'b>(&self, hint: HintRef<'b, '_>) -> Option<Hint<'b>> {
-        let elem = self.fresh_var();
-        let set_type = self
+        let make = |var: Var| self
             .heap
-            .mk_class_type(self.stdlib.set(elem.to_type(self.heap)));
-        if self.is_subset_eq(&set_type, hint.ty()) {
-            hint.map_ty_opt(|ty| self.resolve_var_opt(ty, elem))
-        } else {
-            None
+            .mk_class_type(self.stdlib.set(var.to_type(self.heap)));
+        match self.collect_var_from_hint(hint.ty(), &make) {
+            Some(tys) => self.hint_from_types(tys, &hint),
+            None => None,
         }
     }
 
     pub fn decompose_list<'b>(&self, hint: HintRef<'b, '_>) -> Option<Hint<'b>> {
-        let elem = self.fresh_var();
-        let list_type = self
+        let make = |var: Var| self
             .heap
-            .mk_class_type(self.stdlib.list(elem.to_type(self.heap)));
-        if self.is_subset_eq(&list_type, hint.ty()) {
-            hint.map_ty_opt(|ty| self.resolve_var_opt(ty, elem))
-        } else {
-            None
+            .mk_class_type(self.stdlib.list(var.to_type(self.heap)));
+        match self.collect_var_from_hint(hint.ty(), &make) {
+            Some(tys) => self.hint_from_types(tys, &hint),
+            None => None,
         }
     }
 
     pub fn decompose_tuple<'b>(&self, hint: HintRef<'b, '_>) -> Option<Hint<'b>> {
-        let elem = self.fresh_var();
-        let tuple_type = self
+        let make = |var: Var| self
             .heap
-            .mk_class_type(self.stdlib.tuple(elem.to_type(self.heap)));
-        if self.is_subset_eq(&tuple_type, hint.ty()) {
-            hint.map_ty_opt(|ty| self.resolve_var_opt(ty, elem))
-        } else {
-            None
+            .mk_class_type(self.stdlib.tuple(var.to_type(self.heap)));
+        match self.collect_var_from_hint(hint.ty(), &make) {
+            Some(tys) => self.hint_from_types(tys, &hint),
+            None => None,
         }
     }
 

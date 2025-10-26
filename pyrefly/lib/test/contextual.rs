@@ -120,7 +120,6 @@ kwarg(xs=[B()], ys=[B()])
 );
 
 testcase!(
-    bug = "Both assignments should be allowed. When decomposing the contextual hint, we eagerly resolve vars to the 'first' branch of the union. Note: due to the union's sorted representation, the first branch is not necessarily the first in source order.",
     test_contextual_typing_against_unions,
     r#"
 class A: ...
@@ -128,7 +127,7 @@ class B: ...
 class B2(B): ...
 class C: ...
 
-x: list[A] | list[B] = [B2()] # E: `list[B2]` is not assignable to `list[A] | list[B]`
+x: list[A] | list[B] = [B2()]
 y: list[B] | list[C] = [B2()]
 "#,
 );
