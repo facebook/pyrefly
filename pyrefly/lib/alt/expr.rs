@@ -35,6 +35,7 @@ use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprGenerator;
+use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprStarred;
 use ruff_python_ast::ExprStringLiteral;
@@ -450,6 +451,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let elem_tys = self.elts_infer(&x.elts, elt_hint, errors);
                     self.stdlib.list(self.unions(elem_tys)).to_type()
                 }
+                let elt_hint = hint.and_then(|ty| self.decompose_list(ty));
+                self.list_with_hint(x, elt_hint, errors)
             }
             Expr::Dict(x) => self.dict_infer(&x.items, hint, x.range, errors),
             Expr::Set(x) => {
@@ -1748,6 +1751,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             ),
         })
+    }
+
+    fn list_with_hint(
+        &self,
+        x: &ExprList,
+        elt_hint: Option<Hint>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        if x.is_empty() {
+            let elem_ty = elt_hint.map_or_else(
+                || {
+                    if !self.solver().infer_with_first_use {
+                        self.error(
+                            errors,
+                            x.range(),
+                            ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                            "This expression is implicitly inferred to be `list[Any]`. Please provide an explicit type annotation.".to_owned(),
+                        );
+                        Type::any_implicit()
+                    } else {
+                        self.solver().fresh_contained(self.uniques).to_type()
+                    }
+                },
+                |hint| hint.to_type(),
+            );
+            self.stdlib.list(elem_ty).to_type()
+        } else {
+            let elem_tys = self.elts_infer(&x.elts, elt_hint, errors);
+            self.stdlib.list(self.unions(elem_tys)).to_type()
+        }
     }
 
     fn intercept_typing_self_use(&self, x: &Expr) -> Option<TypeInfo> {
