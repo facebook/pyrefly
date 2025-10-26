@@ -782,22 +782,20 @@ fn subject_for_expr(expr: &Expr) -> Option<NarrowingSubject> {
         && let Some(first_arg) = arguments.args.first()
         && let Expr::Attribute(attr) = &**func
         && attr.attr.id.as_str() == "get"
+        && let Expr::StringLiteral(ExprStringLiteral { value, .. }) = first_arg
     {
-        if let Expr::StringLiteral(ExprStringLiteral { value, .. }) = first_arg {
-            let key = value.to_string();
-            if let Some((identifier, facets)) = identifier_and_chain_for_expr(&attr.value) {
-                let props =
-                    Vec1::from_vec_push(facets.facets().to_vec(), FacetKind::Key(key.clone()));
-                return Some(NarrowingSubject::Facets(
-                    identifier.id,
-                    FacetChain::new(props),
-                ));
-            } else if let Expr::Name(name) = &*attr.value {
-                return Some(NarrowingSubject::Facets(
-                    name.id.clone(),
-                    FacetChain::new(Vec1::new(FacetKind::Key(key))),
-                ));
-            }
+        let key = value.to_string();
+        if let Some((identifier, facets)) = identifier_and_chain_for_expr(&attr.value) {
+            let props = Vec1::from_vec_push(facets.facets().to_vec(), FacetKind::Key(key.clone()));
+            return Some(NarrowingSubject::Facets(
+                identifier.id,
+                FacetChain::new(props),
+            ));
+        } else if let Expr::Name(name) = &*attr.value {
+            return Some(NarrowingSubject::Facets(
+                name.id.clone(),
+                FacetChain::new(Vec1::new(FacetKind::Key(key))),
+            ));
         }
     }
 
