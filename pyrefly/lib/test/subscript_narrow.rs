@@ -213,3 +213,22 @@ def narrow_with_truthy_check(data: dict[str, int]) -> None:
         assert_type(fallback, int | None)
 "#,
 );
+
+testcase!(
+    bug = "https://github.com/facebook/pyrefly/issues/238",
+    test_typeddict_get_literal_key_narrow,
+    r#"
+from typing import TypedDict, assert_type
+
+class TD(TypedDict, total=False):
+    foo: int
+
+def use(td: TD) -> None:
+    value = td.get("foo")
+    if value is not None:
+        assert_type(value, int)
+        assert_type(td["foo"], int)
+    else:
+        assert_type(value, None)
+"#,
+);
