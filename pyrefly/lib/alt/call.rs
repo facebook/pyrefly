@@ -73,6 +73,8 @@ pub enum CallTarget {
     BoundMethod(Type, TargetWithTParams<Function>),
     /// A class object.
     Class(ClassType),
+    /// A class object called via type[Self] (returns Self instead of ClassType).
+    SelfClass(ClassType),
     /// A TypedDict.
     TypedDict(TypedDict),
     /// An overloaded function.
@@ -143,9 +145,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassDef(cls) => {
                 self.as_call_target_impl(Type::type_form(self.instantiate(&cls)), quantified)
             }
-            Type::Type(box Type::ClassType(cls)) | Type::Type(box Type::SelfType(cls)) => {
-                Some(CallTarget::Class(cls))
-            }
+            Type::Type(box Type::ClassType(cls)) => Some(CallTarget::Class(cls)),
+            Type::Type(box Type::SelfType(cls)) => Some(CallTarget::SelfClass(cls)),
             Type::Type(box Type::Tuple(tuple)) => {
                 Some(CallTarget::Class(self.erase_tuple_type(tuple)))
             }
@@ -657,6 +658,47 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 };
                 self.construct_class(cls, args, keywords, range, errors, context, hint)
+            }
+            CallTarget::SelfClass(cls) => {
+                if cls.has_qname("typing", "Any") {
+                    return self.error(
+                        errors,
+                        range,
+                        ErrorInfo::new(ErrorKind::BadInstantiation, context),
+                        format!("`{}` can not be instantiated", cls.name()),
+                    );
+                }
+                if self
+                    .get_metadata_for_class(cls.class_object())
+                    .is_protocol()
+                {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::new(ErrorKind::BadInstantiation, context),
+                        format!(
+                            "Cannot instantiate `{}` because it is a protocol",
+                            cls.name()
+                        ),
+                    );
+                }
+                if cls.has_qname("builtins", "bool") {
+                    match self.first_arg_type(args, errors) {
+                        None => (),
+                        Some(ty) => self.check_dunder_bool_is_callable(&ty, range, errors),
+                    }
+                };
+                let result =
+                    self.construct_class(cls.clone(), args, keywords, range, errors, context, hint);
+                // Handle custom __new__
+                match &result {
+                    Type::ClassType(result_cls)
+                        if result_cls.class_object() == cls.class_object() =>
+                    {
+                        Type::SelfType(result_cls.clone())
+                    }
+                    _ => result,
+                }
             }
             CallTarget::TypedDict(td) => {
                 self.construct_typed_dict(td, args, keywords, range, errors, context, hint)
