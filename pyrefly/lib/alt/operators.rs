@@ -31,6 +31,7 @@ use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::graph::index::Idx;
+use crate::types::class::ClassType;
 use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
@@ -210,6 +211,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn binop_call_type(
+        &self,
+        target: &Type,
+        method_name: &Name,
+        arg: &Type,
+        range: TextRange,
+    ) -> Option<Type> {
+        let errors = self.error_collector();
+        let mut arg_ty = arg.clone();
+        let call_args = [CallArg::ty(&arg_ty, range)];
+        let ret = self.call_magic_dunder_method(
+            target,
+            method_name,
+            range,
+            &call_args,
+            &[],
+            &errors,
+            None,
+        );
+        if errors.is_empty() {
+            ret.filter(|ty| !ty.is_error())
+        } else {
+            None
+        }
+    }
+
     pub fn binop_infer(
         &self,
         x: &ExprBinOp,
@@ -224,14 +251,62 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.for_display(rhs.clone()),
                 )
             };
-            // Reflected operator implementation: This deviates from the runtime semantics by calling the reflected dunder if the regular dunder call errors.
-            // At runtime, the reflected dunder is called only if the regular dunder method doesn't exist or if it returns NotImplemented.
-            // This deviation is necessary, given that the typeshed stubs don't record when NotImplemented is returned
-            let calls_to_try = [
-                (&Name::new_static(op.dunder()), lhs, rhs),
-                (&Name::new_static(op.reflected_dunder()), rhs, lhs),
-            ];
-            self.try_binop_calls(&calls_to_try, range, errors, &context)
+            let class_type_of = |ty: &Type| -> Option<ClassType> {
+                match ty {
+                    Type::ClassType(cls) => Some(cls.clone()),
+                    Type::SelfType(cls) => Some(cls.clone()),
+                    Type::Literal(Lit::Enum(lit_enum)) => Some(lit_enum.class.clone()),
+                    _ => None,
+                }
+            };
+            let lhs_cls = class_type_of(lhs);
+            let rhs_cls = class_type_of(rhs);
+            let strict_rhs_subclass = matches!((&rhs_cls, &lhs_cls), (Some(rhs_cls), Some(lhs_cls))
+                if rhs_cls.class_object() != lhs_cls.class_object()
+                    && self.has_superclass(rhs_cls.class_object(), lhs_cls.class_object()));
+
+            let forward_name = Name::new_static(op.dunder());
+            let reflected_name = Name::new_static(op.reflected_dunder());
+            let calls_to_try = if strict_rhs_subclass {
+                [(&reflected_name, rhs, lhs), (&forward_name, lhs, rhs)]
+            } else {
+                [(&forward_name, lhs, rhs), (&reflected_name, rhs, lhs)]
+            };
+            let mut result = self.try_binop_calls(&calls_to_try, range, errors, &context);
+
+            if !strict_rhs_subclass {
+                let forward_ret = self.binop_call_type(lhs, &forward_name, rhs, range);
+                let reflected_ret = self.binop_call_type(rhs, &reflected_name, lhs, range);
+                let extra = match (forward_ret, reflected_ret) {
+                    (Some(f), Some(r)) => {
+                        if self.is_equal(&f, &r) && self.is_equal(&result, &f) {
+                            None
+                        } else {
+                            Some(self.union(f, r))
+                        }
+                    }
+                    (Some(f), None) => {
+                        if self.is_equal(&result, &f) {
+                            None
+                        } else {
+                            Some(f)
+                        }
+                    }
+                    (None, Some(r)) => {
+                        if self.is_equal(&result, &r) {
+                            None
+                        } else {
+                            Some(r)
+                        }
+                    }
+                    (None, None) => None,
+                };
+                if let Some(extra) = extra {
+                    result = self.union(result, extra);
+                }
+            }
+
+            result
         };
         // If the expression is of the form [X] * Y where Y is a number, pass down the contextual
         // type hint when evaluating [X]
@@ -304,12 +379,56 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.for_display(rhs.clone()),
                 )
             };
-            let calls_to_try = [
-                (&Name::new_static(op.in_place_dunder()), lhs, rhs),
-                (&Name::new_static(op.dunder()), lhs, rhs),
-                (&Name::new_static(op.reflected_dunder()), rhs, lhs),
-            ];
-            self.try_binop_calls(&calls_to_try, range, errors, &context)
+            let class_type_of = |ty: &Type| -> Option<ClassType> {
+                match ty {
+                    Type::ClassType(cls) => Some(cls.clone()),
+                    Type::SelfType(cls) => Some(cls.clone()),
+                    Type::Literal(Lit::Enum(lit_enum)) => Some(lit_enum.class.clone()),
+                    _ => None,
+                }
+            };
+            let lhs_cls = class_type_of(lhs);
+            let rhs_cls = class_type_of(rhs);
+            let strict_rhs_subclass = matches!((&rhs_cls, &lhs_cls), (Some(rhs_cls), Some(lhs_cls))
+                if rhs_cls.class_object() != lhs_cls.class_object()
+                    && self.has_superclass(rhs_cls.class_object(), lhs_cls.class_object()));
+
+            let inplace_name = Name::new_static(op.in_place_dunder());
+            let forward_name = Name::new_static(op.dunder());
+            let reflected_name = Name::new_static(op.reflected_dunder());
+
+            let calls_to_try = if strict_rhs_subclass {
+                [
+                    (&inplace_name, lhs, rhs),
+                    (&reflected_name, rhs, lhs),
+                    (&forward_name, lhs, rhs),
+                ]
+            } else {
+                [
+                    (&inplace_name, lhs, rhs),
+                    (&forward_name, lhs, rhs),
+                    (&reflected_name, rhs, lhs),
+                ]
+            };
+            let mut result = self.try_binop_calls(&calls_to_try, range, errors, &context);
+
+            let mut union_parts = Vec::new();
+            if let Some(ret) = self.binop_call_type(lhs, &inplace_name, rhs, range) {
+                union_parts.push(ret);
+            }
+            if let Some(ret) = self.binop_call_type(lhs, &forward_name, rhs, range) {
+                union_parts.push(ret);
+            }
+            if let Some(ret) = self.binop_call_type(rhs, &reflected_name, lhs, range) {
+                union_parts.push(ret);
+            }
+            if !union_parts.is_empty() {
+                let extra = self.unions(union_parts);
+                if !self.is_equal(&result, &extra) {
+                    result = self.union(result, extra);
+                }
+            }
+            result
         };
         let base = self.expr_infer(&x.target, errors);
         let rhs = self.expr_infer(&x.value, errors);
