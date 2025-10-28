@@ -187,6 +187,7 @@ use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::lsp::non_wasm::workspace::DiagnosticMode;
 use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
 use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
@@ -1070,7 +1071,17 @@ impl Server {
                 .state
                 .config_finder()
                 .python_file(ModuleName::unknown(), e.path());
-            if open_files.contains_key(&path)
+
+            // Get diagnostic mode for this file's workspace
+            let diagnostic_mode = self.workspaces.get_diagnostic_mode(&path);
+
+            // Check if we should show this diagnostic based on mode
+            let should_show_based_on_mode = match diagnostic_mode {
+                DiagnosticMode::Workspace => true, // Show all files in workspace mode
+                DiagnosticMode::OpenFilesOnly => open_files.contains_key(&path), // Only open files
+            };
+
+            if should_show_based_on_mode
                 && config.project_includes.covers(&path)
                 && !config.project_excludes.covers(&path)
                 && self
@@ -1167,14 +1178,34 @@ impl Server {
         let publish = |transaction: &Transaction| {
             let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
             let open_files = self.open_files.read();
+
+            // Initialize diagnostic entries for open files
             for x in open_files.keys() {
                 diags.insert(x.as_path().to_owned(), Vec::new());
             }
-            for e in transaction.get_errors(&handles).collect_errors().shown {
+
+            // Check if any workspace is in Workspace diagnostic mode
+            let has_workspace_mode = self.workspaces.roots().iter().any(|root| {
+                matches!(
+                    self.workspaces.get_diagnostic_mode(root),
+                    DiagnosticMode::Workspace
+                )
+            });
+
+            // Collect errors from transaction
+            // In workspace mode, get ALL errors; otherwise only get errors for open files
+            let errors = if has_workspace_mode {
+                transaction.get_all_errors()
+            } else {
+                transaction.get_errors(&handles)
+            };
+
+            for e in errors.collect_errors().shown {
                 if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files) {
                     diags.entry(path.to_owned()).or_default().push(diag);
                 }
             }
+
             self.connection.publish_diagnostics(diags);
         };
 
