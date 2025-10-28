@@ -127,7 +127,7 @@ def f(x: LiteralString):
 testcase!(
     test_index_literal,
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 
 def foo(x):
     assert_type("Magic"[0], Literal['M'])
