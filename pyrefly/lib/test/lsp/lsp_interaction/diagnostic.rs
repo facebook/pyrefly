@@ -5,6 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_server::Message;
+use lsp_server::Notification;
+use lsp_server::RequestId;
+use lsp_server::Response;
+use lsp_types::Url;
+use lsp_types::request::DocumentDiagnosticRequest;
 use pyrefly_config::environment::environment::PythonEnvironment;
 use serde_json::json;
 
@@ -790,4 +796,88 @@ fn test_shows_stdlib_errors_when_explicitly_included_in_project_includes() {
         .unwrap();
 
     interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_version_support_publish_diagnostics() {
+    let test_files_root = get_test_files_root();
+    let root = test_files_root.path().to_path_buf();
+    let mut file = root.clone();
+    file.push("text_document.py");
+    let uri = Url::from_file_path(file).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root);
+    interaction.initialize(InitializeSettings {
+        configuration: Some(None),
+        capabilities: Some(serde_json::json!({
+            "textDocument": {
+                "publishDiagnostics": {
+                    "versionSupport": true,
+                },
+            },
+        })),
+        ..Default::default()
+    });
+
+    interaction.server.did_open("text_document.py");
+    interaction.server.diagnostic("text_document.py");
+
+    interaction
+        .client
+        .expect_message(lsp_server::Message::Notification(
+            lsp_server::Notification {
+                method: "textDocument/publishDiagnostics".to_owned(),
+                params: serde_json::json! {{
+                    "uri": uri,
+                    "diagnostics": [],
+                    "version": 1
+                }},
+            },
+        ));
+
+    interaction.server.did_change("text_document.py", "# test");
+    interaction.server.diagnostic("text_document.py");
+
+    // I don't understand why this version is still 1
+    interaction
+        .client
+        .expect_message(lsp_server::Message::Notification(
+            lsp_server::Notification {
+                method: "textDocument/publishDiagnostics".to_owned(),
+                params: serde_json::json! {{
+                    "uri": uri,
+                    "diagnostics": [],
+                    "version": 2
+                }},
+            },
+        ));
+
+    interaction
+        .server
+        .send_message(Message::Notification(Notification {
+            method: "textDocument/didClose".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": uri.to_string(),
+                    "languageId": "python",
+                    "version": 3
+                },
+            }),
+        }));
+    interaction.server.diagnostic("text_document.py");
+
+    interaction
+        .client
+        .expect_message(lsp_server::Message::Notification(
+            lsp_server::Notification {
+                method: "textDocument/publishDiagnostics".to_owned(),
+                params: serde_json::json! {{
+                    "uri": uri,
+                    "diagnostics": [],
+                    "version": 3
+                }},
+            },
+        ));
+
+    interaction.shutdown();
 }
