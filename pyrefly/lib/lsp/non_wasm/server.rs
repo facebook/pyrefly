@@ -1984,17 +1984,21 @@ impl Server {
         let Some(path) = self.path_for_uri(&url) else {
             return;
         };
-        self.version_info.lock().remove(&path);
+        let version = self
+            .version_info
+            .lock()
+            .remove(&uri)
+            .map(|version| version + 1);
         let open_files = self.open_files.dupe();
         if let Some(LspFile::Notebook(notebook)) = open_files.write().remove(&path).as_deref() {
             for cell in notebook.cell_urls() {
                 self.connection
-                    .publish_diagnostics_for_uri(cell.clone(), Vec::new(), None);
+                    .publish_diagnostics_for_uri(cell.clone(), Vec::new(), version);
                 self.open_notebook_cells.write().remove(cell);
             }
         } else {
             self.connection
-                .publish_diagnostics_for_uri(url.clone(), Vec::new(), None);
+                .publish_diagnostics_for_uri(url, Vec::new(), version);
         }
         self.unsaved_file_tracker.forget_uri_path(&url);
         let state = self.state.dupe();
