@@ -805,36 +805,43 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     ) -> Result<(), SubsetError> {
         let got_fields = self.type_order.typed_dict_fields(got);
         let want_fields = self.type_order.typed_dict_fields(want);
-        let got_extra_item = self
+        let got_extra_items = self
             .type_order
-            .typed_dict_extra_items(got.class_object())
-            .extra_item(self.type_order.stdlib())
-            .ty;
-        let want_extra_item = self
+            .typed_dict_extra_items(got.class_object());
+        let want_extra_items = self
             .type_order
-            .typed_dict_extra_items(want.class_object())
-            .extra_item(self.type_order.stdlib())
-            .ty;
-        // Iterate over fields actually present in `got`. Each field present in `got` must be
-        // allowed by the Partial[`want`] semantics: if `want` marks the field ReadOnly then it
-        // cannot appear in a Partial (enforce by requiring Never), otherwise the type of the
-        // `got` field must be a subset of the corresponding `want` field type (or the `want`
-        // extra_item type if `want` doesn't declare the key).
-        all(got_fields.iter(), |(k, got_v)| {
-            let want_ty = want_fields
-                .get(k)
-                .map_or(&want_extra_item, |want_v| &want_v.ty);
-            if want_fields
-                .get(k)
-                .map_or(false, |want_v| want_v.is_read_only())
-            {
-                // ReadOnly keys in `want` cannot be present in Partial[want].
-                self.is_subset_eq(&got_v.ty, &Type::never())
+            .typed_dict_extra_items(want.class_object());
+        let got_extra_field = self.typed_dict_extra_items_field(got_extra_items);
+        let want_extra_field = self.typed_dict_extra_items_field(want_extra_items);
+        let mut ensure_partial =
+            |got_field: &TypedDictField, want_field: &TypedDictField| -> Result<(), SubsetError> {
+                if want_field.is_read_only() {
+                    if got_field.is_read_only() {
+                        Ok(())
+                    } else {
+                        self.is_subset_eq(&got_field.ty, &Type::never())
+                    }
+                } else if got_field.is_read_only() {
+                    Ok(())
+                } else {
+                    self.is_subset_eq(&got_field.ty, &want_field.ty)
+                }
+            };
+        // Every key known to `want` must remain compatible even if `got` omits it entirely.
+        all(want_fields.iter(), |(k, want_field)| {
+            let got_field = got_fields.get(k).unwrap_or(&got_extra_field);
+            ensure_partial(got_field, want_field)
+        })?;
+        // Fields explicitly present on `got` must be allowed by `want` (either as a declared
+        // key or by the `extra_item` contract).
+        all(got_fields.iter(), |(k, got_field)| {
+            if let Some(want_field) = want_fields.get(k) {
+                ensure_partial(got_field, want_field)
             } else {
-                self.is_subset_eq(&got_v.ty, want_ty)
+                ensure_partial(got_field, &want_extra_field)
             }
         })?;
-        self.is_subset_eq(&got_extra_item, &want_extra_item)
+        ensure_partial(&got_extra_field, &want_extra_field)
     }
 
     /// Implementation of subset equality for Type, other than Var.
