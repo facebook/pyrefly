@@ -1925,9 +1925,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range,
                     Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                 ),
-                Type::LiteralString | Type::Literal(Lit::Str(_)) if xs.len() <= 3 => {
+                Type::LiteralString if xs.len() <= 3 => {
                     // We could have a more precise type here, but this matches Pyright.
                     self.stdlib.str().clone().to_type()
+                }
+                Type::Literal(Lit::Str(ref value)) if xs.len() <= 3 => {
+                    let base_ty = Type::Literal(Lit::Str(value.clone()));
+                    let context = || ErrorContext::Index(self.for_display(base_ty.clone()));
+                    self.subscript_str_literal(
+                        value.as_str(),
+                        &base_ty,
+                        slice,
+                        errors,
+                        range,
+                        Some(&context),
+                    )
                 }
                 Type::ClassType(ref cls) | Type::SelfType(ref cls)
                     if let Some(Tuple::Concrete(elts)) = self.as_tuple(cls) =>
@@ -2097,6 +2109,106 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                 }
             }
+        }
+    }
+
+    fn subscript_str_literal(
+        &self,
+        value: &str,
+        base_type: &Type,
+        index_expr: &Expr,
+        errors: &ErrorCollector,
+        range: TextRange,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) -> Type {
+        let fallback = || {
+            self.call_method_or_error(
+                base_type,
+                &dunder::GETITEM,
+                range,
+                &[CallArg::expr(index_expr)],
+                &[],
+                errors,
+                context,
+            )
+        };
+
+        if matches!(index_expr, Expr::Tuple(_)) {
+            return fallback();
+        }
+
+        let literal_index = |expr: &Expr| -> Option<i64> {
+            match self.expr_infer(expr, errors) {
+                Type::Literal(ref lit) => lit.as_index_i64(),
+                _ => None,
+            }
+        };
+
+        let chars: Vec<char> = value.chars().collect();
+        let len = chars.len() as i64;
+
+        if let Expr::Slice(slice) = index_expr {
+            if let Some(step_expr) = slice.step.as_deref() {
+                if !matches!(step_expr, Expr::NoneLiteral(_)) && literal_index(step_expr) != Some(1)
+                {
+                    return fallback();
+                }
+            }
+
+            let lower_value = match slice.lower.as_deref() {
+                Some(expr) => match literal_index(expr) {
+                    Some(value) => Some(value),
+                    None => return fallback(),
+                },
+                None => None,
+            };
+
+            let upper_value = match slice.upper.as_deref() {
+                Some(expr) => match literal_index(expr) {
+                    Some(value) => Some(value),
+                    None => return fallback(),
+                },
+                None => None,
+            };
+
+            let normalize = |idx: i64| -> i64 {
+                let idx = if idx < 0 { len + idx } else { idx };
+                idx.clamp(0, len)
+            };
+
+            let start = normalize(lower_value.unwrap_or(0));
+            let end = normalize(upper_value.unwrap_or(len));
+
+            if start >= end {
+                return Type::Literal(Lit::Str("".into()));
+            }
+
+            let substring: String = chars[start as usize..end as usize].iter().collect();
+            Type::Literal(Lit::Str(substring.into()))
+        } else {
+            let idx_ty = self.expr_infer(index_expr, errors);
+            if let Type::Literal(lit) = idx_ty {
+                if let Some(idx) = lit.as_index_i64() {
+                    let normalized = if idx < 0 { len + idx } else { idx };
+                    if normalized >= 0 && normalized < len {
+                        let ch = chars[normalized as usize];
+                        let mut buf = String::new();
+                        buf.push(ch);
+                        return Type::Literal(Lit::Str(buf.into()));
+                    } else {
+                        return self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::BadIndex),
+                            format!(
+                                "Index `{idx}` out of range for string with {} elements",
+                                chars.len()
+                            ),
+                        );
+                    }
+                }
+            }
+            fallback()
         }
     }
 
