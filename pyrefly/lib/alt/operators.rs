@@ -46,6 +46,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         opname: &Name,
         call_arg_type: &Type,
     ) -> Type {
+        self.record_overload_trace_from_type(range, method_type.clone());
         let callable = self.as_call_target_or_error(
             method_type,
             CallStyle::Method(opname),

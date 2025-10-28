@@ -175,6 +175,31 @@ Hover Result: `dict[int, ((x: int) -> int)]`
 }
 
 #[test]
+fn operator_overload_hover() {
+    let code = r#"
+class My:
+    def __eq__(self, other: object) -> bool:
+        return True
+
+a = My()
+b = My()
+result = a == b
+#           ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+8 | result = a == b
+                ^
+Hover Result: `(self: My, other: object) -> bool`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn import_test() {
     let code = r#"
 import typing
