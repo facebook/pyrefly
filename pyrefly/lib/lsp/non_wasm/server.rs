@@ -1888,17 +1888,21 @@ impl Server {
 
     fn did_close(&self, url: Url) {
         let uri = url.to_file_path().unwrap();
-        self.version_info.lock().remove(&uri);
+        let version = self
+            .version_info
+            .lock()
+            .remove(&uri)
+            .map(|version| version + 1);
         let open_files = self.open_files.dupe();
         if let Some(LspFile::Notebook(notebook)) = open_files.write().remove(&uri).as_deref() {
             for cell in notebook.cell_urls() {
                 self.connection
-                    .publish_diagnostics_for_uri(cell.clone(), Vec::new(), None);
+                    .publish_diagnostics_for_uri(cell.clone(), Vec::new(), version);
                 self.open_notebook_cells.write().remove(cell);
             }
         } else {
             self.connection
-                .publish_diagnostics_for_uri(url, Vec::new(), None);
+                .publish_diagnostics_for_uri(url, Vec::new(), version);
         }
         let state = self.state.dupe();
         let lsp_queue = self.lsp_queue.dupe();
