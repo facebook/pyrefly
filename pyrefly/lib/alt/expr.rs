@@ -2145,46 +2145,131 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
 
         let chars: Vec<char> = value.chars().collect();
-        let len = chars.len() as i64;
+        let len_usize = chars.len();
+        if len_usize > i64::MAX as usize {
+            return fallback();
+        }
+        let len = len_usize as i64;
 
         if let Expr::Slice(slice) = index_expr {
-            if let Some(step_expr) = slice.step.as_deref() {
-                if !matches!(step_expr, Expr::NoneLiteral(_)) && literal_index(step_expr) != Some(1)
-                {
-                    return fallback();
+            let step = match slice.step.as_deref() {
+                Some(expr) => match literal_index(expr) {
+                    Some(value) if value != 0 => value,
+                    _ => return fallback(),
+                },
+                None => 1,
+            };
+
+            if step == i64::MIN {
+                return fallback();
+            }
+
+            let mut start = match slice.lower.as_deref() {
+                Some(expr) => match literal_index(expr) {
+                    Some(value) => value,
+                    None => return fallback(),
+                },
+                None => {
+                    if step < 0 {
+                        len.saturating_sub(1)
+                    } else {
+                        0
+                    }
+                }
+            };
+
+            let mut stop = match slice.upper.as_deref() {
+                Some(expr) => match literal_index(expr) {
+                    Some(value) => value,
+                    None => return fallback(),
+                },
+                None => {
+                    if step < 0 {
+                        match len.checked_add(1) {
+                            Some(v) => -v,
+                            None => return fallback(),
+                        }
+                    } else {
+                        len
+                    }
+                }
+            };
+
+            if step > 0 {
+                if start < 0 {
+                    start += len;
+                    if start < 0 {
+                        start = 0;
+                    }
+                } else if start > len {
+                    start = len;
+                }
+
+                if stop < 0 {
+                    stop += len;
+                    if stop < 0 {
+                        stop = 0;
+                    }
+                } else if stop > len {
+                    stop = len;
+                }
+            } else {
+                if start < 0 {
+                    start += len;
+                    if start < 0 {
+                        start = -1;
+                    }
+                } else if start >= len {
+                    start = len.saturating_sub(1);
+                }
+
+                if stop < 0 {
+                    stop += len;
+                    if stop < 0 {
+                        stop = -1;
+                    }
+                } else if stop >= len {
+                    stop = len.saturating_sub(1);
                 }
             }
 
-            let lower_value = match slice.lower.as_deref() {
-                Some(expr) => match literal_index(expr) {
-                    Some(value) => Some(value),
-                    None => return fallback(),
-                },
-                None => None,
+            let slice_length = if step < 0 {
+                if stop < start {
+                    (start - stop - 1) / (-step) + 1
+                } else {
+                    0
+                }
+            } else if start < stop {
+                (stop - start - 1) / step + 1
+            } else {
+                0
             };
 
-            let upper_value = match slice.upper.as_deref() {
-                Some(expr) => match literal_index(expr) {
-                    Some(value) => Some(value),
-                    None => return fallback(),
-                },
-                None => None,
-            };
-
-            let normalize = |idx: i64| -> i64 {
-                let idx = if idx < 0 { len + idx } else { idx };
-                idx.clamp(0, len)
-            };
-
-            let start = normalize(lower_value.unwrap_or(0));
-            let end = normalize(upper_value.unwrap_or(len));
-
-            if start >= end {
+            if slice_length <= 0 {
                 return Type::Literal(Lit::Str("".into()));
             }
 
-            let substring: String = chars[start as usize..end as usize].iter().collect();
-            Type::Literal(Lit::Str(substring.into()))
+            if slice_length as usize as i64 != slice_length {
+                return fallback();
+            }
+
+            let mut result = String::new();
+            let mut idx = start;
+            for _ in 0..slice_length as usize {
+                if idx < 0 || idx >= len {
+                    return fallback();
+                }
+                let Some(&ch) = chars.get(idx as usize) else {
+                    return fallback();
+                };
+                result.push(ch);
+                idx = match idx.checked_add(step) {
+                    Some(next) => next,
+                    None => return fallback(),
+                };
+            }
+
+            Type::Literal(Lit::Str(result.into()))
         } else {
             let idx_ty = self.expr_infer(index_expr, errors);
             if let Type::Literal(lit) = idx_ty {

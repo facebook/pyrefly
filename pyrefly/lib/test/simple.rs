@@ -732,12 +732,17 @@ assert_type(s[0], Literal["a"])
 assert_type(s[0:2], Literal["ab"])
 assert_type(s[-1], Literal["e"])
 assert_type(s[2:], Literal["cde"])
+assert_type(s[::-1], Literal["edcba"])
+assert_type(s[3:0:-2], Literal["db"])
 assert_type(ss[0], Literal["こ"])
 assert_type(ss[-1], Literal["は"])
+assert_type(ss[2:], Literal["にちは"])
 assert_type(ss[:1], Literal["こ"])
+assert_type(ss[::-1], Literal["はちにんこ"])
 assert_type(em[0], Literal["\U0001F44D"])
 assert_type(em[-1], Literal["\U0001F3FC"])
 assert_type(em[:1], Literal["\U0001F44D"])
+assert_type(em[::-1], Literal["\U0001F3FC\U0001F44D"])
     "#,
 );
 
