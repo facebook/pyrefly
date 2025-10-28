@@ -1574,12 +1574,15 @@ impl Server {
 
     fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri.to_file_path().unwrap();
-        self.version_info.lock().remove(&uri);
+        let version = self
+            .version_info
+            .lock()
+            .remove(&uri)
+            .map(|version| version + 1);
         let open_files = self.open_files.dupe();
         open_files.write().remove(&uri);
-        // TODO: should we use the last version or None?
         self.connection
-            .publish_diagnostics_for_uri(params.text_document.uri, Vec::new(), None);
+            .publish_diagnostics_for_uri(params.text_document.uri, Vec::new(), version);
         let state = self.state.dupe();
         let lsp_queue = self.lsp_queue.dupe();
         let open_files = self.open_files.dupe();
