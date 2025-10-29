@@ -35,7 +35,10 @@ use crate::types::NeverStyle;
 use crate::types::SuperObj;
 use crate::types::TArgs;
 use crate::types::TParam;
+use crate::types::TParams;
 use crate::types::Type;
+use crate::types::TypeAlias;
+use crate::types::TypeAliasStyle;
 
 /// Information about the qnames we have seen.
 /// Set to None to indicate we have seen different values, or Some if they are all the same.
@@ -87,6 +90,7 @@ pub struct TypeDisplayContext<'a> {
     /// Should we display for IDE Hover? This makes type names more readable but less precise.
     hover: bool,
     always_display_module_name: bool,
+    expand_type_aliases: bool,
 }
 
 impl<'a> TypeDisplayContext<'a> {
@@ -147,6 +151,11 @@ impl<'a> TypeDisplayContext<'a> {
     /// Set the context to display for hover. This makes type names more readable but less precise.
     pub fn set_display_mode_to_hover(&mut self) {
         self.hover = true;
+    }
+
+    /// Configure whether to expand type aliases when rendering.
+    pub fn set_expand_type_aliases(&mut self, expand: bool) {
+        self.expand_type_aliases = expand;
     }
 
     pub fn display(&'a self, t: &'a Type) -> impl Display + 'a {
@@ -489,7 +498,7 @@ impl<'a> TypeDisplayContext<'a> {
                 body: Forallable::TypeAlias(ta),
             }) => {
                 if is_toplevel {
-                    ta.fmt_with_type(f, &|t| self.display_internal(t), Some(tparams))
+                    self.fmt_type_alias(ta, Some(tparams.as_ref()), f)
                 } else {
                     write!(f, "{}", *ta.name)
                 }
@@ -536,7 +545,7 @@ impl<'a> TypeDisplayContext<'a> {
             },
             Type::TypeAlias(ta) => {
                 if is_toplevel {
-                    ta.fmt_with_type(f, &|t| self.display_internal(t), None)
+                    self.fmt_type_alias(ta, None, f)
                 } else {
                     write!(f, "{}", *ta.name)
                 }
@@ -560,6 +569,35 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Materialization => write!(f, "Materialization"),
             Type::None => write!(f, "None"),
         }
+    }
+
+    fn fmt_type_alias(
+        &self,
+        ta: &TypeAlias,
+        tparams: Option<&TParams>,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
+        let should_expand =
+            self.expand_type_aliases || matches!(ta.style, TypeAliasStyle::LegacyImplicit);
+        if should_expand {
+            ta.fmt_with_type(f, &|t| self.display_internal(t), tparams)
+        } else {
+            self.fmt_type_alias_name(ta, tparams, f)
+        }
+    }
+
+    fn fmt_type_alias_name(
+        &self,
+        ta: &TypeAlias,
+        tparams: Option<&TParams>,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
+        if let Some(tparams) = tparams {
+            if !tparams.is_empty() {
+                return write!(f, "{}[{}]", *ta.name, commas_iter(|| tparams.iter()),);
+            }
+        }
+        write!(f, "{}", *ta.name)
     }
 }
 

@@ -788,7 +788,7 @@ type Spam1[T1, T2] = T2 | type[T1]
 Spam2: TypeAlias = Spam1[T1, T2]
 
 x1: Spam1[int, str] = int
-x2: Spam2[int, str] = int # E: `TypeAlias[Spam2, type[T2 | type[T1]]]` is not subscriptable
+x2: Spam2[int, str] = int # E: `Spam2[T1, T2]` is not subscriptable
     "#,
 );
 
