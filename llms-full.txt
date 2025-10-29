@@ -1835,6 +1835,19 @@ def f(base: Base):
 f(Sub())  # oops!
 ```
 
+## bad-raise
+
+In a `raise` statement of the form `raise x from y`, `x` must be an exception, and `y` must be an exception or `None`.
+
+```python
+def bad_raise() -> None:
+  raise Exception()  # ok
+  raise 1  # error
+  raise Exception() from None # ok
+  raise Exception() from Exception() # ok
+  raise Exception() from 1 # error
+```
+
 ## bad-return
 
 Arises when a function does not return a value that is compatible with the function's return type annotation.
