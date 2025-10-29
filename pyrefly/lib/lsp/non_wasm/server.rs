@@ -1157,6 +1157,10 @@ impl Server {
                     diags.entry(path.to_owned()).or_default().push(diag);
                 }
             }
+            for (path, diagnostics) in diags.iter_mut() {
+                let handle = make_open_handle(&self.state, path);
+                Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
+            }
             self.connection.publish_diagnostics(diags);
         };
 
@@ -2040,25 +2044,14 @@ impl Server {
             .collect()
     }
 
-    fn document_diagnostics(
-        &self,
+    fn append_unreachable_diagnostics(
         transaction: &Transaction<'_>,
-        params: DocumentDiagnosticParams,
-    ) -> DocumentDiagnosticReport {
-        let handle = make_open_handle(
-            &self.state,
-            &params.text_document.uri.to_file_path().unwrap(),
-        );
-        let mut items = Vec::new();
-        let open_files = &self.open_files.read();
-        for e in transaction.get_errors(once(&handle)).collect_errors().shown {
-            if let Some((_, diag)) = self.get_diag_if_shown(&e, open_files) {
-                items.push(diag);
-            }
-        }
+        handle: &Handle,
+        items: &mut Vec<Diagnostic>,
+    ) {
         if let (Some(ast), Some(module_info)) = (
-            transaction.get_ast(&handle),
-            transaction.get_module_info(&handle),
+            transaction.get_ast(handle),
+            transaction.get_module_info(handle),
         ) {
             let disabled_ranges = disabled_ranges_for_module(ast.as_ref(), handle.sys_info());
             let mut seen = HashSet::new();
@@ -2080,6 +2073,25 @@ impl Server {
                 });
             }
         }
+    }
+
+    fn document_diagnostics(
+        &self,
+        transaction: &Transaction<'_>,
+        params: DocumentDiagnosticParams,
+    ) -> DocumentDiagnosticReport {
+        let handle = make_open_handle(
+            &self.state,
+            &params.text_document.uri.to_file_path().unwrap(),
+        );
+        let mut items = Vec::new();
+        let open_files = &self.open_files.read();
+        for e in transaction.get_errors(once(&handle)).collect_errors().shown {
+            if let Some((_, diag)) = self.get_diag_if_shown(&e, open_files) {
+                items.push(diag);
+            }
+        }
+        Self::append_unreachable_diagnostics(transaction, &handle, &mut items);
         DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
             full_document_diagnostic_report: FullDocumentDiagnosticReport {
                 items,
