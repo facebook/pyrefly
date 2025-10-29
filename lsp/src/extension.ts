@@ -229,7 +229,8 @@ export async function activate(context: ExtensionContext) {
 
   context.subscriptions.push(
     workspace.onDidChangeConfiguration(async event => {
-      if (event.affectsConfiguration('python.pyrefly')) {
+      if (event.affectsConfiguration('python.pyrefly') ||
+          event.affectsConfiguration('python.analysis')) {
         client.sendNotification(DidChangeConfigurationNotification.type, {
           settings: {},
         });

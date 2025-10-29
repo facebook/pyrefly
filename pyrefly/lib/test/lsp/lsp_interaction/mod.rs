@@ -24,4 +24,5 @@ mod rename;
 mod type_definition;
 mod util;
 mod will_rename_files;
+mod workspace_diagnostic_mode;
 mod workspace_symbol;

@@ -95,6 +95,19 @@
                         "off",
                         "verbose"
                     ]
+                },
+                "python.analysis.diagnosticMode": {
+                    "type": "string",
+                    "description": "Controls which files are analyzed for diagnostics. 'openFilesOnly' (default) shows type errors only in open files. 'workspace' shows type errors in all files within the workspace.",
+                    "default": "openFilesOnly",
+                    "enum": [
+                        "openFilesOnly",
+                        "workspace"
+                    ],
+                    "enumDescriptions": [
+                        "Show diagnostics only for files that are currently open in the editor",
+                        "Show diagnostics for all files in the workspace, similar to Pyright's workspace mode"
+                    ]
                 }
             }
         }
