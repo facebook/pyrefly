@@ -90,6 +90,7 @@ fn test_file_watcher() {
                     "watchers": [
                         {"globPattern": root.path().join("**/*.py").to_str().unwrap(), "kind": 7},
                         {"globPattern": root.path().join("**/*.pyi").to_str().unwrap(), "kind": 7},
+                        {"globPattern": root.path().join("**/*.ipynb").to_str().unwrap(), "kind": 7},
                         {"globPattern": root.path().join("**/pyrefly.toml"), "kind": 7},
                         {"globPattern": root.path().join("**/pyproject.toml"), "kind": 7}
                     ]

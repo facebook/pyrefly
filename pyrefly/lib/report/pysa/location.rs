@@ -26,7 +26,10 @@ impl PysaLocation {
     pub fn as_key(&self) -> String {
         format!(
             "{}:{}-{}:{}",
-            self.0.start.line, self.0.start.column, self.0.end.line, self.0.end.column
+            self.0.start.line_within_file(),
+            self.0.start.column(),
+            self.0.end.line_within_file(),
+            self.0.end.column()
         )
     }
 
@@ -52,11 +55,11 @@ impl PysaLocation {
         }
 
         Some(Self(DisplayRange {
-            start: DisplayPos {
+            start: DisplayPos::Source {
                 line: start_line,
                 column: start_column,
             },
-            end: DisplayPos {
+            end: DisplayPos::Source {
                 line: end_line,
                 column: end_column,
             },

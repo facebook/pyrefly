@@ -120,11 +120,11 @@ pub fn create_location(
     end_column: u32,
 ) -> PysaLocation {
     PysaLocation::new(DisplayRange {
-        start: DisplayPos {
+        start: DisplayPos::Source {
             line: LineNumber::new(start_line).expect("line must be greater than 0"),
             column: NonZeroU32::new(start_column).expect("Column must be greater than 0"),
         },
-        end: DisplayPos {
+        end: DisplayPos::Source {
             line: LineNumber::new(end_line).expect("line must be greater than 0"),
             column: NonZeroU32::new(end_column).expect("Column must be greater than 0"),
         },

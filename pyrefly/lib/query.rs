@@ -339,6 +339,19 @@ impl<'a> CalleesWithLocation<'a> {
             }
         }
     }
+    fn callee_from_text_range<F: FnMut(Callee)>(
+        &self,
+        target_range: TextRange,
+        call_target: Option<&Expr>,
+        mut f: F,
+    ) {
+        if let Some(func_ty) = self.answers.get_type_trace(target_range) {
+            let callees = self.callee_from_type(&func_ty, call_target, target_range, None);
+            for callee in callees {
+                f(callee);
+            }
+        }
+    }
 
     pub fn process(&self, location: Option<PythonASTRange>) -> Vec<(PythonASTRange, Callee)> {
         let mut res = Vec::new();
@@ -372,15 +385,9 @@ impl<'a> CalleesWithLocation<'a> {
                 target_location.end_col,
             );
             let target_range = TextRange::new(start_pos, end_pos);
-
-            // Query the type information directly at the target location
-            if let Some(func_ty) = self.answers.get_type_trace(target_range) {
-                let callees = self.callee_from_type(&func_ty, None, target_range, None);
-
-                for callee in callees {
-                    res.push((target_location.clone(), callee));
-                }
-            }
+            self.callee_from_text_range(target_range, None, |c| {
+                res.push((target_location.clone(), c));
+            });
         } else {
             for stmt in &self.ast.body {
                 match &stmt {
@@ -1138,5 +1145,35 @@ impl Query {
             .unwrap_or(false)
         };
         Ok(result)
+    }
+
+    pub fn resolve_target_from_qualified_name(
+        &self,
+        name: ModuleName,
+        path: PathBuf,
+        qualified_name: &str,
+    ) -> Option<Vec<Callee>> {
+        let mut t = self.state.transaction();
+        let h = self.make_handle(name, ModulePath::memory(path.clone()));
+        let snippet = format!("x = {qualified_name}");
+        // Check and type-check the snippet
+        self.check_snippet(&mut t, &h, path, &snippet).unwrap();
+        let ast = t.get_ast(&h).unwrap();
+        fn find_expr(ast: &ModModule) -> Option<&Expr> {
+            for stmt in &ast.body {
+                if let Stmt::Assign(assign) = stmt {
+                    return Some(&assign.value);
+                }
+            }
+            None
+        }
+        let find_callees = CalleesWithLocation::new(t, h)?;
+        let mut res = Vec::new();
+        if let Some(expr) = find_expr(&ast) {
+            find_callees.callee_from_text_range(expr.range(), Some(expr), |c| {
+                res.push(c);
+            });
+        }
+        Some(res)
     }
 }

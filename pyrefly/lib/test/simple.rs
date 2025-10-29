@@ -422,17 +422,18 @@ assert_type(0 if derp() else 1, Literal[0] | Literal[1])
 testcase!(
     test_raise,
     r#"
-def test_raise() -> None:
+def test_raise(exception_or_none: BaseException | None) -> None:
     raise
-    raise None  # E: does not derive from BaseException
+    raise None  # E: expected `BaseException`
     raise BaseException
     raise BaseException()
-    raise 42  # E: does not derive from BaseException
+    raise 42  # E: expected `BaseException`
     raise BaseException from None
     raise BaseException() from None
     raise BaseException() from BaseException
     raise BaseException() from BaseException()
-    raise BaseException() from 42   # E: does not derive from BaseException
+    raise BaseException() from 42   # E: expected `BaseException` or `None`
+    raise BaseException() from exception_or_none
 "#,
 );
 
@@ -1361,83 +1362,76 @@ testcase!(
     r#"
 class NotBoolable:
     __bool__: int = 3
-
-# bool()
-y = bool(NotBoolable())  # E: has type `int`, which is not callable
-
-# unary not
-z = not NotBoolable()  # E: has type `int`, which is not callable
-
-# if expressions
-x = 0 if NotBoolable() else 1  # E: has type `int`, which is not callable  # E: Expected `__bool__` to be a callable, got `int`
-
-# if statements
-if NotBoolable(): ...  # E: has type `int`, which is not callable
-
-# while statements
-while NotBoolable(): ...  # E: has type `int`, which is not callable
-
-# expression evaluating to NotBoolable
 def f() -> NotBoolable:
   return NotBoolable()
 
-if (f() if True else None): ...  # E: has type `int`, which is not callable
+y = bool(NotBoolable())  # E: has type `int`, which is not callable
+z = not NotBoolable()  # E: has type `int`, which is not callable
+x = 0 if NotBoolable() else 1  # E: has type `int`, which is not callable  # E: Expected `__bool__` to be a callable, got `int`
+if NotBoolable(): ...  # E: has type `int`, which is not callable
+while NotBoolable(): ...  # E: has type `int`, which is not callable
+if f(): ...  # E: has type `int`, which is not callable
 
+# We don't treat `__getattr__` as implying a `__bool__`.
 class C:
     def __getattr__(self, x: str) -> object: ...
-
 def test(o: C):
     if o: # should not fail
         pass
 "#,
 );
 
-// Check that we don't raise false positives (or true positives that we want to avoid failing on)
-// for some corner cases
 testcase!(
     test_valid_dunder_bool,
     r#"
-
 from typing import Any, Literal, Never
 
-# Any is always assumed to be valid
+# We always allow `Any` to be used as a bool
 def f(x):
-  if x: ...
-
+    if x: ...
 def g(x: Any):
-  if x: ...
+    if x: ...
 
-# Never does not raise a type error
+# We always allow `Never` to be used as a bool
 def g() -> Never:
     raise Exception()
-
 if g(): ...
 
-# Union types are not checked due to risk of false positives
-class B:
-  def __bool__(self) -> bool:
-    return True
-
+# We don't treat `__getattr__` as implying a `__bool__`
 class C:
-  def __bool__(self) -> Literal[False]:
-    return False
+    def __getattr__(self, x: str) -> object: ...
+def test(o: C):
+    if o: # should not fail
+        pass
+"#,
+);
 
+testcase!(
+    test_union_dunder_bool,
+    r#"
+from typing import Literal
+
+class B:
+    def __bool__(self) -> bool: return True
+class C:
+    def __bool__(self) -> Literal[False]: return False
 class D:
     __bool__ = 42
+class E:
+    pass
 
-def j(x: B | C):
-    if x: ...
+def f(ok: B | C, bad: B | D):
+    if ok: ...
+    if bad: ...  # E: The `__bool__` attribute of `D` has type `int`, which is not callable
 
-# Invalid
-def k(x: B | D):
-    if x: ...  # E: has type `BoundMethod[B, (self: B) -> bool] | int`, which is not callable
-
-def l(x: int | None):
-    if x: ...
-
-def m(x: D | None):
-    if x: ...  # E: has type `BoundMethod[NoneType, (self: NoneType) -> Literal[False]] | int`, which is not callable
-
+# Regression tests for https://github.com/facebook/pyrefly/issues/1364
+def g(ok: B | None, bad1: D | None, bad2: D | E):
+    if ok: ...
+    if bad1 is None: ...  # This is okay - we are not using a truthiness check
+    if bad1: ...  # E: The `__bool__` attribute of `D` has type `int`, which is not callable
+    if not bad1: ... # E: The `__bool__` attribute of `D` has type `int`, which is not callable
+    if bad2: ...  # E: The `__bool__` attribute of `D` has type `int`, which is not callable
+    if not bad2: ...  # E: The `__bool__` attribute of `D` has type `int`, which is not callable
 "#,
 );
 

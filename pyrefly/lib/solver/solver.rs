@@ -98,7 +98,7 @@ impl Display for Variable {
                     write!(f, "Quantified({k})")
                 }
             }
-            Variable::LoopRecursive(t) => write!(f, "LoopRecursive({t})"),
+            Variable::LoopRecursive(t) => write!(f, "LoopRecursive(prior={t})"),
             Variable::Recursive => write!(f, "Recursive"),
             Variable::Parameter => write!(f, "Parameter"),
             Variable::Unwrap => write!(f, "Unwrap"),
@@ -343,8 +343,8 @@ impl Solver {
                 let lock = self.variables.lock();
                 if let Some(_guard) = lock.recurse(*x, recurser) {
                     let variable = lock.get(*x);
-                    if let Variable::Answer(w) = &*variable {
-                        *t = w.clone();
+                    if let Variable::Answer(ty) = &*variable {
+                        *t = ty.clone();
                         drop(variable);
                         drop(lock);
                         self.expand_with_limit(t, limit - 1, recurser);

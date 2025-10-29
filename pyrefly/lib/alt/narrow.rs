@@ -177,12 +177,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.intersects(&res)
     }
 
-    fn narrow_issubclass(&self, left: &Type, right: &Type, range: TextRange) -> Type {
+    fn narrow_issubclass(
+        &self,
+        left: &Type,
+        right: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
         let mut res = Vec::new();
         for right in self.as_class_info(right.clone()) {
             if matches!(left, Type::ClassDef(_)) && matches!(right, Type::ClassDef(_)) {
                 res.push(self.intersect(left, &right))
-            } else if let Some(left) = self.untype_opt(left.clone(), range)
+            } else if let Some(left) = self.untype_opt(left.clone(), range, errors)
                 && let Some(right) = self.unwrap_class_object_silently(&right)
             {
                 res.push(Type::type_form(self.intersect(&left, &right)))
@@ -193,12 +199,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.unions(res)
     }
 
-    fn narrow_is_not_subclass(&self, left: &Type, right: &Type, range: TextRange) -> Type {
+    fn narrow_is_not_subclass(
+        &self,
+        left: &Type,
+        right: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
         let mut res = Vec::new();
         for right in self.as_class_info(right.clone()) {
             if matches!(left, Type::ClassDef(_)) && matches!(right, Type::ClassDef(_)) {
                 res.push(self.subtract(left, &right))
-            } else if let Some(left) = self.untype_opt(left.clone(), range)
+            } else if let Some(left) = self.untype_opt(left.clone(), range, errors)
                 && let Some(right) = self.unwrap_class_object_silently(&right)
             {
                 res.push(Type::type_form(self.subtract(&left, &right)))
@@ -574,11 +586,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AtomicNarrowOp::TypeNotEq(_) => ty.clone(),
             AtomicNarrowOp::IsSubclass(v) => {
                 let right = self.expr_infer(v, errors);
-                self.narrow_issubclass(ty, &right, v.range())
+                self.narrow_issubclass(ty, &right, v.range(), errors)
             }
             AtomicNarrowOp::IsNotSubclass(v) => {
                 let right = self.expr_infer(v, errors);
-                self.narrow_is_not_subclass(ty, &right, v.range())
+                self.narrow_is_not_subclass(ty, &right, v.range(), errors)
             }
             // `hasattr` and `getattr` are handled in `narrow`
             AtomicNarrowOp::HasAttr(_) => ty.clone(),

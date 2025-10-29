@@ -233,6 +233,7 @@ impl<'a> BindingsBuilder<'a> {
         );
         let field_definitions = self.scopes.finish_class_and_get_field_definitions();
 
+        let mut django_primary_key_field: Option<Name> = None;
         let mut fields = SmallMap::with_capacity(field_definitions.len());
         for (name, (definition, range)) in field_definitions.into_iter_hashed() {
             if let ClassFieldDefinition::AssignedInBody {
@@ -241,6 +242,10 @@ impl<'a> BindingsBuilder<'a> {
             } = &definition
             {
                 self.extract_pydantic_config_dict(e, &name, &mut pydantic_config_dict);
+
+                if self.extract_django_primary_key(e) {
+                    django_primary_key_field = Some(name.clone().into_key());
+                }
             }
             let (is_initialized_on_class, is_annotated) = match &definition {
                 ClassFieldDefinition::DefinedInMethod { annotation, .. } => {
@@ -342,6 +347,7 @@ impl<'a> BindingsBuilder<'a> {
                 decorators: decorators_with_ranges.clone().into_boxed_slice(),
                 is_new_type: false,
                 pydantic_config_dict,
+                django_primary_key_field,
             },
         );
         self.insert_binding_idx(
@@ -484,6 +490,7 @@ impl<'a> BindingsBuilder<'a> {
                 decorators: Box::new([]),
                 is_new_type,
                 pydantic_config_dict: PydanticConfigDict::default(),
+                django_primary_key_field: None,
             },
         );
         self.insert_binding_idx(

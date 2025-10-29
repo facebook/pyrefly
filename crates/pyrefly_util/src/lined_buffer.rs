@@ -15,6 +15,7 @@ use std::str::Lines;
 use std::sync::Arc;
 
 use parse_display::Display;
+use ruff_notebook::Notebook;
 use ruff_source_file::LineColumn;
 use ruff_source_file::LineIndex;
 use ruff_source_file::OneIndexed;
@@ -52,7 +53,7 @@ impl LinedBuffer {
         self.buffer.lines()
     }
 
-    pub fn display_pos(&self, offset: TextSize) -> DisplayPos {
+    pub fn display_pos(&self, offset: TextSize, notebook: Option<&Notebook>) -> DisplayPos {
         assert!(
             offset.to_usize() <= self.buffer.len(),
             "offset out of range, expected {} <= {}",
@@ -60,16 +61,28 @@ impl LinedBuffer {
             self.buffer.len()
         );
         let LineColumn { line, column } = self.lines.line_column(offset, &self.buffer);
-        DisplayPos {
-            line: LineNumber(NonZeroU32::new(line.get() as u32).unwrap()),
-            column: NonZeroU32::new(column.get() as u32).unwrap(),
+        if let Some(notebook) = notebook
+            && let Some((cell, cell_line)) =
+                map_notebook_line(notebook, LineNumber::from_one_indexed(line))
+        {
+            DisplayPos::Notebook {
+                cell: NonZeroU32::new(cell.get() as u32).unwrap(),
+                cell_line,
+                line: LineNumber::from_one_indexed(line),
+                column: NonZeroU32::new(column.get() as u32).unwrap(),
+            }
+        } else {
+            DisplayPos::Source {
+                line: LineNumber::from_one_indexed(line),
+                column: NonZeroU32::new(column.get() as u32).unwrap(),
+            }
         }
     }
 
-    pub fn display_range(&self, range: TextRange) -> DisplayRange {
+    pub fn display_range(&self, range: TextRange, notebook: Option<&Notebook>) -> DisplayRange {
         DisplayRange {
-            start: self.display_pos(range.start()),
-            end: self.display_pos(range.end()),
+            start: self.display_pos(range.start(), notebook),
+            end: self.display_pos(range.end(), notebook),
         }
     }
 
@@ -88,8 +101,8 @@ impl LinedBuffer {
     pub fn from_display_pos(&self, pos: DisplayPos) -> TextSize {
         self.lines.offset(
             SourceLocation {
-                line: pos.line.to_one_indexed(),
-                character_offset: OneIndexed::new(pos.column.get() as usize).unwrap(),
+                line: pos.line_within_file().to_one_indexed(),
+                character_offset: OneIndexed::new(pos.column().get() as usize).unwrap(),
             },
             &self.buffer,
             PositionEncoding::Utf32,
@@ -174,31 +187,47 @@ impl Serialize for DisplayRange {
     {
         use serde::ser::SerializeStruct;
         let mut state = serializer.serialize_struct("DisplayRange", 4)?;
-        state.serialize_field("start_line", &self.start.line.0.get())?;
-        state.serialize_field("start_col", &self.start.column.get())?;
-        state.serialize_field("end_line", &self.end.line.0.get())?;
-        state.serialize_field("end_col", &self.end.column.get())?;
+        if let Some(start_cell) = &self.start.cell() {
+            state.serialize_field("start_cell", &start_cell.get())?;
+        }
+        state.serialize_field("start_line", &self.start.line_within_cell().0.get())?;
+        state.serialize_field("start_col", &self.start.column().get())?;
+        if let Some(end_cell) = &self.end.cell() {
+            state.serialize_field("end_cell", &end_cell.get())?;
+        }
+        state.serialize_field("end_line", &self.end.line_within_cell().0.get())?;
+        state.serialize_field("end_col", &self.end.column().get())?;
         state.end()
     }
 }
 
 impl Display for DisplayRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.start.line == self.end.line {
-            if self.start.column == self.end.column {
-                write!(f, "{}:{}", self.start.line, self.start.column)
+        if self.start.line_within_cell() == self.end.line_within_cell() {
+            if self.start.column() == self.end.column() {
+                write!(
+                    f,
+                    "{}:{}",
+                    self.start.line_within_cell(),
+                    self.start.column()
+                )
             } else {
                 write!(
                     f,
                     "{}:{}-{}",
-                    self.start.line, self.start.column, self.end.column
+                    self.start.line_within_cell(),
+                    self.start.column(),
+                    self.end.column()
                 )
             }
         } else {
             write!(
                 f,
                 "{}:{}-{}:{}",
-                self.start.line, self.start.column, self.end.line, self.end.column
+                self.start.line_within_cell(),
+                self.start.column(),
+                self.end.line_within_cell(),
+                self.end.column()
             )
         }
     }
@@ -227,7 +256,11 @@ impl LineNumber {
         self.0.get() - 1
     }
 
-    fn to_one_indexed(self) -> OneIndexed {
+    pub fn from_one_indexed(x: OneIndexed) -> Self {
+        Self(NonZeroU32::new(x.get().try_into().unwrap()).unwrap())
+    }
+
+    pub fn to_one_indexed(self) -> OneIndexed {
         OneIndexed::new(self.0.get() as usize).unwrap()
     }
 
@@ -244,19 +277,42 @@ impl LineNumber {
     }
 }
 
+/// Given a one-indexed row in the concatenated source,
+/// return the cell number and the row in the cell.
+pub fn map_notebook_line(
+    notebook: &Notebook,
+    line: LineNumber,
+) -> Option<(OneIndexed, LineNumber)> {
+    let index = notebook.index();
+    let one_indexed = line.to_one_indexed();
+    let cell = index.cell(one_indexed)?;
+    let cell_row = index.cell_row(one_indexed).unwrap_or(OneIndexed::MIN);
+    Some((cell, LineNumber::from_one_indexed(cell_row)))
+}
+
 /// The line and column of an offset in a source file.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct DisplayPos {
-    /// The line in the source text.
-    pub line: LineNumber,
-    /// The column (UTF scalar values) relative to the start of the line except any
-    /// potential BOM on the first line.
-    pub column: NonZeroU32,
+pub enum DisplayPos {
+    Source {
+        /// The line in the source text.
+        line: LineNumber,
+        /// The column (UTF scalar values) relative to the start of the line except any
+        /// potential BOM on the first line.
+        column: NonZeroU32,
+    },
+    Notebook {
+        cell: NonZeroU32,
+        // The line within the cell
+        cell_line: LineNumber,
+        // The line within the concatenated source
+        line: LineNumber,
+        column: NonZeroU32,
+    },
 }
 
 impl Default for DisplayPos {
     fn default() -> Self {
-        Self {
+        Self::Source {
             line: LineNumber::default(),
             column: NonZeroU32::MIN,
         }
@@ -265,7 +321,53 @@ impl Default for DisplayPos {
 
 impl Display for DisplayPos {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.line, self.column)
+        match self {
+            Self::Source { line, column } => {
+                write!(f, "{}:{}", line, column)
+            }
+            Self::Notebook {
+                cell,
+                cell_line,
+                column,
+                ..
+            } => {
+                write!(f, "{}:{}:{}", cell, cell_line, column)
+            }
+        }
+    }
+}
+
+impl DisplayPos {
+    // Get the line number within the file, or the line number within the cell
+    // for notebooks
+    pub fn line_within_cell(self) -> LineNumber {
+        match self {
+            Self::Source { line, .. } => line,
+            Self::Notebook { cell_line, .. } => cell_line,
+        }
+    }
+
+    // Get the line number within the file, using the position in the
+    // concatenated source for notebooks
+    pub fn line_within_file(self) -> LineNumber {
+        match self {
+            Self::Source { line, .. } => line,
+            Self::Notebook { line, .. } => line,
+        }
+    }
+
+    pub fn column(self) -> NonZeroU32 {
+        match self {
+            Self::Source { column, .. } => column,
+            Self::Notebook { column, .. } => column,
+        }
+    }
+
+    pub fn cell(self) -> Option<NonZeroU32> {
+        match self {
+            Self::Notebook { cell, .. } => Some(cell),
+            Self::Source { .. } => None,
+        }
     }
 }
 
@@ -285,11 +387,11 @@ mod tests {
         assert_eq!(lined_buffer.line_count(), 4);
 
         let range = |l1, c1, l2, c2| DisplayRange {
-            start: DisplayPos {
+            start: DisplayPos::Source {
                 line: LineNumber::from_zero_indexed(l1),
                 column: NonZeroU32::new(c1 + 1u32).unwrap(),
             },
-            end: DisplayPos {
+            end: DisplayPos::Source {
                 line: LineNumber::from_zero_indexed(l2),
                 column: NonZeroU32::new(c2 + 1u32).unwrap(),
             },

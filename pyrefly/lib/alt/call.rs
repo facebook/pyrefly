@@ -60,6 +60,14 @@ pub enum CallStyle<'a> {
     FreeForm,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConstructorKind {
+    // `MyClass`
+    BareClassName,
+    // `type[MyClass]` or `type[Self]`
+    TypeOfClass,
+}
+
 /// A thing that can be called (see as_call_target and call_infer).
 /// Note that a single "call" may invoke multiple functions under the hood,
 /// e.g., `__new__` followed by `__init__` for Class.
@@ -72,7 +80,7 @@ pub enum CallTarget {
     /// Method of a class. The `Type` is the self/cls argument.
     BoundMethod(Type, TargetWithTParams<Function>),
     /// A class object.
-    Class(ClassType),
+    Class(ClassType, ConstructorKind),
     /// A TypedDict.
     TypedDict(TypedDict),
     /// An overloaded function.
@@ -140,15 +148,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     _ => None,
                 }
             }
-            Type::ClassDef(cls) => {
-                self.as_call_target_impl(Type::type_form(self.instantiate(&cls)), quantified)
-            }
+            Type::ClassDef(cls) => match self.instantiate(&cls) {
+                // `instantiate` can only return `ClassType` or `TypedDict`
+                Type::ClassType(cls) => {
+                    Some(CallTarget::Class(cls, ConstructorKind::BareClassName))
+                }
+                Type::TypedDict(typed_dict) => Some(CallTarget::TypedDict(typed_dict)),
+                _ => unreachable!(),
+            },
             Type::Type(box Type::ClassType(cls)) | Type::Type(box Type::SelfType(cls)) => {
-                Some(CallTarget::Class(cls))
+                Some(CallTarget::Class(cls, ConstructorKind::TypeOfClass))
             }
-            Type::Type(box Type::Tuple(tuple)) => {
-                Some(CallTarget::Class(self.erase_tuple_type(tuple)))
-            }
+            Type::Type(box Type::Tuple(tuple)) => Some(CallTarget::Class(
+                self.erase_tuple_type(tuple),
+                ConstructorKind::TypeOfClass,
+            )),
             Type::Type(box Type::Quantified(quantified)) => {
                 Some(CallTarget::Callable(TargetWithTParams(
                     None,
@@ -609,7 +623,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
         let res = match call_target {
-            CallTarget::Class(cls) => {
+            CallTarget::Class(cls, constructor_kind) => {
                 if cls.has_qname("typing", "Any") {
                     return self.error(
                         errors,
@@ -633,7 +647,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let abstract_members = self.get_abstract_members_for_class(cls.class_object());
                     let unimplemented_abstract_methods =
                         abstract_members.unimplemented_abstract_methods();
-                    if !unimplemented_abstract_methods.is_empty() {
+                    if constructor_kind == ConstructorKind::BareClassName
+                        && !unimplemented_abstract_methods.is_empty()
+                    {
                         self.error(
                             errors,
                             range,

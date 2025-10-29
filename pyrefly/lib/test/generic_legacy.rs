@@ -215,15 +215,31 @@ class F(Protocol[P, P]):  # E: Duplicated type parameter declaration
 );
 
 testcase!(
-    bug = "The TODO here is because we implemented but have temporarily disabled a check for the use of a generic class without type arguments as a type annotation; this check needs to be configurable and we don't have the plumbing yet.",
     test_legacy_generic_syntax_implicit_targs,
+    TestEnv::new().enable_implicit_any_error(),
     r#"
 from typing import Any, Generic, TypeVar, assert_type
 T = TypeVar('T')
 class A(Generic[T]):
     x: T
-def f(a: A):  # TODO: The generic class `A` is missing type arguments.
+def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A`
     assert_type(a.x, Any)
+    "#,
+);
+
+testcase!(
+    test_legacy_generic_syntax_implicit_targs_with_default,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import Any, Generic, TypeVar, assert_type
+T = TypeVar('T')
+U = TypeVar('U', default=int)
+class A(Generic[T, U]):
+    x: T
+    y: U
+def f(a: A):  # E: Cannot determine the type parameter `T` for generic class `A`
+    assert_type(a.x, Any)
+    assert_type(a.y, int)
     "#,
 );
 

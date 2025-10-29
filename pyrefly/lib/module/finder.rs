@@ -357,7 +357,6 @@ fn find_module<'a, I>(
     module: ModuleName,
     include: I,
     namespaces_found: &mut Vec<PathBuf>,
-    ignore_missing_source: bool,
     style_filter: Option<ModuleStyle>,
 ) -> Option<FindingOrError<ModulePath>>
 where
@@ -370,20 +369,12 @@ where
             let stub_first = Name::new(format!("{first}-stubs"));
             let stub_result =
                 find_module_components(&stub_first, rest, include.clone(), style_filter);
-            if ignore_missing_source && let Some(stub_result) = stub_result {
-                if let FindResult::NamespacePackage(namespaces) = stub_result {
-                    namespaces_found.append(&mut namespaces.into_vec());
-                    return None;
-                } else {
-                    return Some(stub_result.module_path());
-                }
-            }
-            //
-            // If we couldn't find it in a `-stubs` module or we want to check for missing stubs, look normally.
+
+            // If we couldn't find it in a `-stubs` module, look normally.
             let normal_result = find_module_components(first, rest, include, style_filter);
 
             match (normal_result, stub_result) {
-                (None, Some(stub_result)) if !ignore_missing_source => Some(
+                (None, Some(stub_result)) => Some(
                     stub_result
                         .module_path()
                         .with_error(FindError::NoSource(module)),
@@ -498,7 +489,6 @@ pub fn find_import_filtered(
         module,
         config.search_path(),
         &mut namespaces_found,
-        true,
         style_filter,
     ) {
         path
@@ -507,7 +497,6 @@ pub fn find_import_filtered(
             module,
             std::iter::once(&custom_typeshed_path.join("stdlib")),
             &mut namespaces_found,
-            true,
             style_filter,
         )
     {
@@ -524,7 +513,6 @@ pub fn find_import_filtered(
             module,
             config.fallback_search_path.iter(),
             &mut namespaces_found,
-            true,
             style_filter,
         )
     {
@@ -533,7 +521,6 @@ pub fn find_import_filtered(
         module,
         config.site_package_path(),
         &mut namespaces_found,
-        config.ignore_missing_source,
         style_filter,
     ) {
         path
@@ -623,7 +610,6 @@ mod tests {
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 None,
             )
             .unwrap(),
@@ -634,7 +620,6 @@ mod tests {
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 None,
             )
             .unwrap(),
@@ -645,7 +630,6 @@ mod tests {
                 ModuleName::from_str("foo.qux"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 None,
             ),
             None,
@@ -672,7 +656,6 @@ mod tests {
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 None,
             )
             .unwrap(),
@@ -683,7 +666,6 @@ mod tests {
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 None,
             )
             .unwrap(),
@@ -711,7 +693,6 @@ mod tests {
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 None,
             )
             .unwrap(),
@@ -739,7 +720,6 @@ mod tests {
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 None,
             )
             .unwrap(),
@@ -780,7 +760,6 @@ mod tests {
                     ModuleName::from_str(name),
                     search_roots.iter(),
                     &mut namespaces,
-                    true,
                     None
                 ),
                 None
@@ -801,7 +780,6 @@ mod tests {
                 ModuleName::from_str("c.d.e"),
                 search_roots.iter(),
                 &mut vec![],
-                true,
                 None
             )
             .unwrap(),
@@ -837,7 +815,6 @@ mod tests {
                 ModuleName::from_str("a.c"),
                 [root.join("search_root0"), root.join("search_root1")].iter(),
                 &mut vec![],
-                true,
                 None,
             ),
             // We won't find `a.c` because when searching for package `a`, we've already
@@ -1047,7 +1024,6 @@ mod tests {
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                false,
                 None,
             )
             .unwrap(),
@@ -1060,7 +1036,6 @@ mod tests {
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                false,
                 None,
             )
             .unwrap(),
@@ -1071,7 +1046,6 @@ mod tests {
                 ModuleName::from_str("foo.qux"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                false,
                 None,
             ),
             None
@@ -1098,7 +1072,6 @@ mod tests {
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                false,
                 None,
             )
             .unwrap(),
@@ -1109,7 +1082,6 @@ mod tests {
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                false,
                 None,
             )
             .unwrap(),
@@ -1120,7 +1092,6 @@ mod tests {
                 ModuleName::from_str("foo.qux"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                false,
                 None,
             ),
             None
@@ -1153,7 +1124,6 @@ mod tests {
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                false,
                 None,
             )
             .unwrap(),
@@ -1164,7 +1134,6 @@ mod tests {
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                false,
                 None,
             )
             .unwrap(),
@@ -1175,7 +1144,6 @@ mod tests {
                 ModuleName::from_str("foo.qux"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                false,
                 None,
             ),
             None
@@ -1203,7 +1171,6 @@ mod tests {
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                false,
                 None,
             )
             .unwrap(),
@@ -1214,7 +1181,6 @@ mod tests {
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                false,
                 None,
             )
             .unwrap(),
@@ -1225,7 +1191,6 @@ mod tests {
                 ModuleName::from_str("foo.qux"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                false,
                 None,
             ),
             None
@@ -1256,39 +1221,24 @@ mod tests {
                 ),
             ],
         );
-        assert!(matches!(
-            find_module(
-                ModuleName::from_str("foo.bar"),
-                [root.to_path_buf()].iter(),
-                &mut vec![],
-                false,
-                None,
-            )
-            .unwrap(),
-            FindingOrError::Finding(Finding {
-                finding: _,
-                error: Some(FindError::NoSource(_)),
-            })
-        ));
         assert_eq!(
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 None,
             )
             .unwrap(),
-            FindingOrError::new_finding(ModulePath::filesystem(
-                root.join("foo-stubs/bar/__init__.py")
-            )),
+            FindingOrError::Finding(Finding {
+                finding: ModulePath::filesystem(root.join("foo-stubs/bar/__init__.py")),
+                error: Some(FindError::NoSource(ModuleName::from_str("foo.bar"))),
+            })
         );
         assert!(matches!(
             find_module(
                 ModuleName::from_str("baz.qux"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                false,
                 None,
             )
             .unwrap(),
@@ -1447,7 +1397,6 @@ mod tests {
                 ModuleName::from_str("namespace"),
                 [root.to_path_buf()].iter(),
                 &mut namespaces,
-                true,
                 None,
             ),
             None
@@ -1458,7 +1407,6 @@ mod tests {
                 ModuleName::from_str("namespace.a"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 None,
             )
             .unwrap(),
@@ -1471,7 +1419,6 @@ mod tests {
                 ModuleName::from_str("namespace.b"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 None,
             )
             .unwrap(),
@@ -1490,7 +1437,6 @@ mod tests {
             ModuleName::from_str("compiled_module"),
             [root.to_path_buf()].iter(),
             &mut vec![],
-            true,
             None,
         );
         assert_eq!(
@@ -1502,7 +1448,6 @@ mod tests {
                 ModuleName::from_str("compiled_module.nested"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 None,
             ),
             None
@@ -1523,7 +1468,6 @@ mod tests {
                 ModuleName::from_str("foo"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 None,
             )
             .unwrap(),
@@ -1550,7 +1494,6 @@ mod tests {
                 ModuleName::from_str("subdir.nested_import"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 None,
             )
             .unwrap(),
@@ -1562,7 +1505,6 @@ mod tests {
             ModuleName::from_str("subdir.another_compiled_module"),
             [root.to_path_buf()].iter(),
             &mut vec![],
-            true,
             None,
         );
         assert_eq!(
@@ -1711,7 +1653,6 @@ mod tests {
                 ModuleName::from_str("bar"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 Some(ModuleStyle::Executable),
             )
             .unwrap(),
@@ -1723,7 +1664,6 @@ mod tests {
                 ModuleName::from_str("module"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 Some(ModuleStyle::Interface),
             )
             .unwrap(),
@@ -1734,7 +1674,6 @@ mod tests {
                 ModuleName::from_str("module"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 Some(ModuleStyle::Executable),
             )
             .unwrap(),
@@ -1746,7 +1685,6 @@ mod tests {
                 ModuleName::from_str("bar"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 Some(ModuleStyle::Interface),
             )
             .unwrap(),
@@ -1768,7 +1706,6 @@ mod tests {
                 ModuleName::from_str("bar"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 Some(ModuleStyle::Executable),
             )
             .unwrap(),
@@ -1779,7 +1716,6 @@ mod tests {
                 ModuleName::from_str("bar"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 Some(ModuleStyle::Interface),
             )
             .unwrap(),
@@ -1804,7 +1740,6 @@ mod tests {
                 ModuleName::from_str("baz.bar"),
                 [root.to_path_buf()].iter(),
                 &mut vec![],
-                true,
                 Some(ModuleStyle::Executable),
             )
             .unwrap(),
@@ -1837,7 +1772,6 @@ mod tests {
                 ModuleName::from_str("standalone"),
                 search_roots.iter(),
                 &mut vec![],
-                true,
                 Some(ModuleStyle::Executable),
             )
             .unwrap(),
@@ -1850,7 +1784,6 @@ mod tests {
                 ModuleName::from_str("standalone"),
                 search_roots.iter(),
                 &mut vec![],
-                true,
                 Some(ModuleStyle::Interface),
             )
             .unwrap(),
@@ -1864,7 +1797,6 @@ mod tests {
                 ModuleName::from_str("standalone2"),
                 search_roots.iter(),
                 &mut vec![],
-                true,
                 Some(ModuleStyle::Interface),
             ),
             None
@@ -1874,7 +1806,6 @@ mod tests {
                 ModuleName::from_str("standalone2"),
                 search_roots.iter(),
                 &mut vec![],
-                true,
                 Some(ModuleStyle::Executable),
             )
             .unwrap(),

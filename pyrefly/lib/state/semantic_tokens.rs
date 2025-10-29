@@ -106,8 +106,8 @@ impl SemanticTokensLegends {
             if length == 0 {
                 continue;
             }
-            let current_line = source_range.start.line.to_zero_indexed();
-            let current_col = source_range.start.column.get() - 1;
+            let current_line = source_range.start.line_within_cell().to_zero_indexed();
+            let current_col = source_range.start.column().get() - 1;
             let (delta_line, delta_start) = {
                 let delta_line = current_line - previous_line;
                 let delta_start = if previous_line == current_line {

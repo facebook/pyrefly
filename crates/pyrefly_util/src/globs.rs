@@ -142,7 +142,7 @@ impl Glob {
     }
 
     fn is_python_extension(ext: Option<&OsStr>) -> bool {
-        ext.is_some_and(|e| e == "py" || e == "pyi" || e == "pyw")
+        ext.is_some_and(|e| e == "py" || e == "pyi" || e == "pyw" || e == "ipynb")
     }
 
     /// Returns true if the given file should be included in results.

@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_python"
-version = "0.38.2"
+version = "0.39.2"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -18,6 +18,7 @@ parse-display = "0.8.2"
 pathdiff = "0.2"
 pyrefly_util = { path = "../pyrefly_util" }
 regex = "1.11.1"
+ruff_notebook = { git = "https://github.com/astral-sh/ruff/", rev = "9bee8376a17401f9736b45fdefffb62edc2f1668" }
 ruff_python_ast = { git = "https://github.com/astral-sh/ruff/", rev = "9bee8376a17401f9736b45fdefffb62edc2f1668" }
 ruff_python_parser = { git = "https://github.com/astral-sh/ruff/", rev = "9bee8376a17401f9736b45fdefffb62edc2f1668" }
 ruff_text_size = { git = "https://github.com/astral-sh/ruff/", rev = "9bee8376a17401f9736b45fdefffb62edc2f1668" }

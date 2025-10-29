@@ -102,7 +102,7 @@ assert_words!(BindingAnnotation, 15);
 assert_words!(BindingClass, 23);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
-assert_words!(BindingClassMetadata, 8);
+assert_words!(BindingClassMetadata, 11);
 assert_bytes!(BindingClassMro, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_words!(BindingClassField, 21);
@@ -2035,6 +2035,9 @@ pub struct BindingClassMetadata {
     /// Is this a new type? True only for synthesized classes created from a `NewType` call.
     pub is_new_type: bool,
     pub pydantic_config_dict: PydanticConfigDict,
+    /// The name of the field that has primary_key=True, if any (for Django models).
+    /// Note that we calculate this field for all classes, but it is ignored unless the class is a django model.
+    pub django_primary_key_field: Option<Name>,
 }
 
 impl DisplayWith<Bindings> for BindingClassMetadata {

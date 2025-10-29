@@ -129,18 +129,22 @@ impl Error {
         // Warning: The SourceRange is char indexed, while the snippet is byte indexed.
         //          Be careful in the conversion.
         let source = self.module.lined_buffer().content_in_line_range(
-            self.display_range.start.line,
+            self.display_range.start.line_within_file(),
             cmp::min(
                 LineNumber::from_zero_indexed(
-                    self.display_range.start.line.to_zero_indexed() + MAX_LINES,
+                    self.display_range
+                        .start
+                        .line_within_file()
+                        .to_zero_indexed()
+                        + MAX_LINES,
                 ),
-                self.display_range.end.line,
+                self.display_range.end.line_within_file(),
             ),
         );
         let line_start = self
             .module
             .lined_buffer()
-            .line_start(self.display_range.start.line);
+            .line_start(self.display_range.start.line_within_file());
 
         let level = match self.severity {
             Severity::Error => Level::Error,
@@ -152,7 +156,7 @@ impl Error {
         let span_end = cmp::min(span_start + self.range.len().to_usize(), source.len());
         Level::None.title("").snippet(
             Snippet::source(source)
-                .line_start(self.display_range.start.line.get() as usize)
+                .line_start(self.display_range.start.line_within_cell().get() as usize)
                 .origin(origin)
                 .annotation(level.span(span_start..span_end)),
         )

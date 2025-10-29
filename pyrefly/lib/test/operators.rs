@@ -470,10 +470,23 @@ class Falsey:
 class Truthy:
     def __bool__(self) -> Literal[True]:
         return True
+class NotBoolable:
+    __bool__: int = 0
+
 assert_type(Falsey() or int(), int)
+# Note that although we evaluate `__bool__` and use the result for the boolean
+# operation control flow, the resulting value is the actual `Truthy` instance
+# and not a bool. This matches the runtime.
 assert_type(Truthy() or int(), Truthy)
 assert_type(int() if Truthy() else str(), int)
 assert_type(int() if Falsey() else str(), str)
+
+# Test the use of a non-boolean-convertable type in boolean operators.
+#
+# The runtime only uses truthiness in short-circuiting here, so it is actually
+# legal to use a non-boolable value as the rightmost entry of a bool op.
+assert_type(NotBoolable() or int(), int | NotBoolable)  # E: Expected `__bool__` to be a callable, got `int`
+assert_type(int() or NotBoolable(), int | NotBoolable)
 "#,
 );
 

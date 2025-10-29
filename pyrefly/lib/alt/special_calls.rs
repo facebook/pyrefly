@@ -56,7 +56,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let self_form = Type::SpecialForm(SpecialForm::SelfType);
             let normalize_type = |ty: Type, expr: &Expr| {
                 let mut ty = self
-                    .canonicalize_all_class_types(self.solver().deep_force(ty), expr.range())
+                    .canonicalize_all_class_types(
+                        self.solver().deep_force(ty),
+                        expr.range(),
+                        errors,
+                    )
                     .promote_typevar_values(self.stdlib)
                     .explicit_any()
                     .noreturn_to_never()
@@ -225,7 +229,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         let ret = if let Some(t) = typ {
-            match self.untype_opt(self.expr_infer(t, errors), range) {
+            match self.untype_opt(self.expr_infer(t, errors), range, errors) {
                 Some(t) => t,
                 None => self.error(
                     errors,

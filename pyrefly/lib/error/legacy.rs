@@ -47,6 +47,9 @@ pub struct LegacyError {
     /// This field is not part of Pyre1 error format. But it's useful for Pyrefly clients
     #[serde(default = "default_severity")]
     severity: String,
+    /// Optional notebook cell number for errors in notebook files
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cell: Option<usize>,
 }
 
 impl LegacyError {
@@ -54,10 +57,11 @@ impl LegacyError {
         let error_range = error.display_range();
         let error_path = error.path().as_path();
         Self {
-            line: error_range.start.line.get() as usize,
-            column: error_range.start.column.get() as usize,
-            stop_line: error_range.end.line.get() as usize,
-            stop_column: error_range.end.column.get() as usize,
+            line: error_range.start.line_within_cell().get() as usize,
+            column: error_range.start.column().get() as usize,
+            stop_line: error_range.end.line_within_cell().get() as usize,
+            stop_column: error_range.end.column().get() as usize,
+            cell: error_range.start.cell().map(|cell| cell.get() as usize),
             path: error_path
                 .strip_prefix(relative_to)
                 .unwrap_or(error_path)

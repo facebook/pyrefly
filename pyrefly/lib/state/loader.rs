@@ -88,7 +88,7 @@ impl FindError {
                 None,
                 vec1![format!(
                     "Found stubs for `{module}`, but no source. This means it's likely not \
-                    installed/unimportable. See `ignore-missing-source` to disable this error."
+                    installed/unimportable."
                 )],
             ),
             Self::NoStubs(source_package, stubs_package) => (

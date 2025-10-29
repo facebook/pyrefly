@@ -414,7 +414,6 @@ assert_type(MyClass(), Any)
 );
 
 testcase!(
-    bug = "We should specialize `type[Self@A]` to `type[A]` in the call to `A.__new__`",
     test_cls_type_in_new_annotated,
     r#"
 from typing import Self

@@ -1756,3 +1756,19 @@ def test_oops() -> None:
     assert val, "oops"
 "#,
 );
+
+// Regression test for a stack overflow we had at one point.
+testcase!(
+    test_flow_merging_with_recursion,
+    r#"
+def test(xs: list[int], ys: list[int], zs: list[int]) -> None:
+    results = []
+    for _ in xs:
+        for _ in ys:
+            for _ in zs:
+                if len(results) >= 0:
+                    break
+            if True and len(results) >= 0:
+                break
+"#,
+);

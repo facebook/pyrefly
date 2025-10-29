@@ -1025,7 +1025,7 @@ impl<'a> BindingsBuilder<'a> {
                         FindingOrError::Finding(finding) => (true, finding.error),
                         FindingOrError::Error(error) => (false, Some(error)),
                     };
-                    let error = error.is_some_and(|e| e.kind().is_some());
+                    let error = error.is_some_and(|e| matches!(e, FindError::NotFound(..)));
                     if error {
                         self.error(
                             x.range,

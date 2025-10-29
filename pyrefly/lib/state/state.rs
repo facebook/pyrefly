@@ -104,6 +104,7 @@ use crate::state::dirty::Dirty;
 use crate::state::epoch::Epoch;
 use crate::state::epoch::Epochs;
 use crate::state::errors::Errors;
+use crate::state::load::CodeOrNotebook;
 use crate::state::load::Load;
 use crate::state::loader::FindingOrError;
 use crate::state::loader::LoaderFindCache;
@@ -711,15 +712,29 @@ impl<'a> Transaction<'a> {
         if exclusive.dirty.load
             && let Some(old_load) = exclusive.steps.load.dupe()
         {
-            let (code, self_error) =
+            let (code_or_notebook, self_error) =
                 Load::load_from_path(module_data.handle.path(), &self.memory_lookup());
-            if self_error.is_some() || &code != old_load.module_info.contents() {
+            if self_error.is_some()
+                || match &code_or_notebook {
+                    CodeOrNotebook::Code(code) => {
+                        old_load.module_info.is_notebook()
+                            || code != old_load.module_info.contents()
+                    }
+                    CodeOrNotebook::Notebook(notebook) => {
+                        if let Some(old_notebook) = old_load.module_info.notebook() {
+                            &**notebook != old_notebook
+                        } else {
+                            false
+                        }
+                    }
+                }
+            {
                 let mut write = exclusive.write();
                 write.steps.load = Some(Arc::new(Load::load_from_data(
                     module_data.handle.module(),
                     module_data.handle.path().dupe(),
                     old_load.errors.style(),
-                    code,
+                    code_or_notebook,
                     self_error,
                 )));
                 rebuild(write, true);

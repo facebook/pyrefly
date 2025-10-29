@@ -9,6 +9,7 @@ use std::fmt::Debug;
 use std::mem;
 
 use dupe::Dupe;
+use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_util::lock::Mutex;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -161,7 +162,18 @@ impl ErrorCollector {
                 if err.is_ignored(error_config.permissive_ignores) {
                     result.suppressed.push(err.clone());
                 } else {
-                    match error_config.display_config.severity(err.error_kind()) {
+                    let kind = err.error_kind();
+                    let raw_severity = error_config.display_config.severity(kind);
+                    let severity = match (kind, raw_severity, error_config.ignore_missing_source) {
+                        // If missing-source is set to Ignore (the default), and
+                        // ignore-missing-source is  to false (the default is true, so false must
+                        // have been explicitly set by the user), enable missing-source. Note that
+                        // this means that if `missing-source` and `--ignore-missing-source` are in
+                        // conflict,  the error is enabled if either setting says it should be.
+                        (ErrorKind::MissingSource, Severity::Ignore, false) => Severity::Error,
+                        _ => raw_severity,
+                    };
+                    match severity {
                         Severity::Error => result.shown.push(err.with_severity(Severity::Error)),
                         Severity::Warn => result.shown.push(err.with_severity(Severity::Warn)),
                         Severity::Info => result.shown.push(err.with_severity(Severity::Info)),
@@ -245,7 +257,8 @@ mod tests {
                 .collect(&ErrorConfig::new(
                     &ErrorDisplayConfig::default(),
                     false,
-                    false
+                    false,
+                    true,
                 ))
                 .shown
                 .map(|x| x.msg()),
@@ -297,7 +310,7 @@ mod tests {
             (ErrorKind::BadAssignment, Severity::Ignore),
             (ErrorKind::NotIterable, Severity::Ignore),
         ]));
-        let config = ErrorConfig::new(&display_config, false, false);
+        let config = ErrorConfig::new(&display_config, false, false, true);
 
         assert_eq!(
             errors.collect(&config).shown.map(|x| x.msg()),
@@ -321,10 +334,10 @@ mod tests {
         );
 
         let display_config = ErrorDisplayConfig::default();
-        let config0 = ErrorConfig::new(&display_config, false, false);
+        let config0 = ErrorConfig::new(&display_config, false, false, true);
         assert_eq!(errors.collect(&config0).shown.map(|x| x.msg()), vec!["a"]);
 
-        let config1 = ErrorConfig::new(&display_config, true, false);
+        let config1 = ErrorConfig::new(&display_config, true, false, true);
         assert!(errors.collect(&config1).shown.map(|x| x.msg()).is_empty());
     }
 
@@ -353,7 +366,8 @@ mod tests {
                 .collect(&ErrorConfig::new(
                     &ErrorDisplayConfig::default(),
                     false,
-                    false
+                    false,
+                    true,
                 ))
                 .shown
                 .map(|x| x.msg()),

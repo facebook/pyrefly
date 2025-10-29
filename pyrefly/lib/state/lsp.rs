@@ -488,6 +488,24 @@ impl<'a> Transaction<'a> {
         ans.get_chosen_overload_trace(range)
     }
 
+    fn type_from_expression_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        let module = self.get_ast(handle)?;
+        let covering_nodes = Ast::locate_node(&module, position);
+        for node in covering_nodes {
+            if node.as_expr_ref().is_none() {
+                continue;
+            }
+            let range = node.range();
+            if let Some(callable) = self.get_chosen_overload_trace(handle, range) {
+                return Some(callable);
+            }
+            if let Some(ty) = self.get_type_trace(handle, range) {
+                return Some(ty);
+            }
+        }
+        None
+    }
+
     fn identifier_at(&self, handle: &Handle, position: TextSize) -> Option<IdentifierWithContext> {
         let mod_module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&mod_module, position);
@@ -810,7 +828,7 @@ impl<'a> Transaction<'a> {
                     self.get_type_trace(handle, range)
                 }
             }
-            None => None,
+            None => self.type_from_expression_at(handle, position),
         }
     }
 

@@ -137,6 +137,58 @@ impl ProjectLayout {
     }
 }
 
+/// A struct for getting, storing, and evaluating fallback search paths. A fallback
+/// search path is a search path consisting of ancestor paths from a start path
+/// (usually some Python file) up to and including an end directory, which is usually
+/// the filesystem root (`/`), but can also be the config.
+#[derive(Default, Clone, PartialEq, Eq)]
+pub enum FallbackSearchPath {
+    /// A previously found fallback search path, which will never change. For all inputs,
+    /// this will never change. We use this in configs where we have no idea what the
+    /// project root is, and just try to import anything. This should be a path consisting
+    /// of the starting path to the filesystem root.
+    Static(Arc<Vec<PathBuf>>),
+    /// There is no fallback search path. These aren't the droids you're looking for.
+    #[default]
+    Empty,
+}
+
+impl fmt::Debug for FallbackSearchPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Static(paths) => write!(f, "{paths:?}"),
+            Self::Empty => write!(f, "None"),
+        }
+    }
+}
+
+impl fmt::Display for FallbackSearchPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <Self as fmt::Debug>::fmt(self, f)
+    }
+}
+
+impl FallbackSearchPath {
+    /// Attempt to get a fallback search path for the given directory, if any.
+    /// When we have a Static variant, we return the stored path without doing anything.
+    /// When we have a Dynamic variant, it only has meaning in the context of
+    /// the provided path, so we can only (possibly) return a non-empty vec if the provided path
+    /// is `Some`.
+    pub fn for_directory(&self, directory: Option<&Path>) -> Arc<Vec<PathBuf>> {
+        match (self, directory) {
+            (Self::Static(paths), _) => paths.dupe(),
+            (Self::Empty, _) => Arc::new(vec![]),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Static(paths) => paths.is_empty(),
+            Self::Empty => true,
+        }
+    }
+}
+
 pub enum ImportLookupPathPart<'a> {
     SearchPathFromArgs(&'a [PathBuf]),
     SearchPathFromFile(&'a [PathBuf]),
@@ -160,9 +212,9 @@ impl Display for ImportLookupPathPart<'_> {
                 write!(f, "Import root (inferred from project layout): {root:?}")
             }
             Self::ImportRoot(None) => write!(f, "Import root (inferred from project layout): None"),
-            Self::FallbackSearchPath(paths) => write!(
+            Self::FallbackSearchPath(fallback) => write!(
                 f,
-                "Fallback search path (guessed from project_includes): {paths:?}"
+                "Fallback search path (guessed from project_includes): {fallback:?}"
             ),
             Self::SitePackagePath(paths) => {
                 write!(f, "Site package path from user: {paths:?}")
@@ -186,10 +238,10 @@ impl ImportLookupPathPart<'_> {
         match self {
             Self::SearchPathFromArgs(paths)
             | Self::SearchPathFromFile(paths)
-            | Self::FallbackSearchPath(paths)
             | Self::SitePackagePath(paths)
             | Self::InterpreterSitePackagePath(paths) => paths.is_empty(),
             Self::ImportRoot(root) => root.is_none(),
+            Self::FallbackSearchPath(inner) => inner.is_empty(),
             Self::BuildSystem(_) => false,
         }
     }
@@ -326,6 +378,11 @@ pub struct ConfigFile {
                      alias = "ignore_missing_source",
                  )]
     pub ignore_missing_source: bool,
+
+    /// Should we let Pyrefly try to index the project's files? Disabling this
+    /// may speed up LSP operations on large projects.
+    #[serde(default, skip_serializing_if = "crate::util::skip_default_false")]
+    pub skip_lsp_config_indexing: bool,
 }
 
 impl Default for ConfigFile {
@@ -354,6 +411,7 @@ impl Default for ConfigFile {
             use_ignore_files: true,
             ignore_missing_source: true,
             typeshed_path: None,
+            skip_lsp_config_indexing: false,
         }
     }
 }
@@ -618,6 +676,7 @@ impl ConfigFile {
             self.errors(path),
             self.ignore_errors_in_generated_code(path),
             self.permissive_ignores(path),
+            self.ignore_missing_source,
         )
     }
 
@@ -1082,6 +1141,7 @@ mod tests {
                 }],
                 ignore_missing_source: true,
                 typeshed_path: None,
+                skip_lsp_config_indexing: false,
             }
         );
     }
@@ -1305,6 +1365,7 @@ mod tests {
             }],
             ignore_missing_source: false,
             typeshed_path: None,
+            skip_lsp_config_indexing: false,
         };
 
         let current_dir = std::env::current_dir().unwrap();
@@ -1350,7 +1411,7 @@ mod tests {
             disable_search_path_heuristics: false,
             use_ignore_files: true,
             import_root: None,
-            fallback_search_path: Vec::new(),
+            fallback_search_path: Default::default(),
             python_environment,
             root: Default::default(),
             build_system: Default::default(),
@@ -1361,6 +1422,7 @@ mod tests {
             }],
             ignore_missing_source: false,
             typeshed_path: None,
+            skip_lsp_config_indexing: false,
         };
         assert_eq!(config, expected_config);
     }

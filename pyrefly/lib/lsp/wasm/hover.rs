@@ -42,7 +42,8 @@ fn get_suppressed_errors_for_line(
         .filter(|error| {
             let range = error.display_range();
             // Error overlaps if it starts before or on the line and ends on or after it
-            range.start.line <= suppression_line && range.end.line >= suppression_line
+            range.start.line_within_file() <= suppression_line
+                && range.end.line_within_file() >= suppression_line
         })
         .collect()
 }
@@ -101,11 +102,20 @@ impl HoverValue {
             .filter_map(|qname| {
                 if let Ok(mut url) = Url::from_file_path(qname.module_path().as_path()) {
                     let start_pos = qname.module().display_range(qname.range()).start;
-                    url.set_fragment(Some(&format!(
-                        "L{},{}",
-                        start_pos.line.get(),
-                        start_pos.column
-                    )));
+                    if let Some(cell) = start_pos.cell() {
+                        url.set_fragment(Some(&format!(
+                            "{},L{},{}",
+                            cell.get(),
+                            start_pos.line_within_cell().get(),
+                            start_pos.column()
+                        )));
+                    } else {
+                        url.set_fragment(Some(&format!(
+                            "L{},{}",
+                            start_pos.line_within_file().get(),
+                            start_pos.column()
+                        )));
+                    }
                     Some(format!("[{}]({})", qname.id(), url))
                 } else {
                     None
@@ -169,19 +179,29 @@ pub fn get_hover(
 ) -> Option<Hover> {
     // Handle hovering over an ignore comment
     if let Some(module) = transaction.get_module_info(handle) {
-        let display_pos = module.lined_buffer().display_pos(position);
-        let line_text = module
+        let display_pos = module
             .lined_buffer()
-            .content_in_line_range(display_pos.line, display_pos.line);
+            .display_pos(position, module.notebook());
+        let line_text = module.lined_buffer().content_in_line_range(
+            display_pos.line_within_file(),
+            display_pos.line_within_file(),
+        );
 
         // Find comment start in the current line
         if let Some(comment_offset) = find_comment_start_in_line(line_text) {
             // Check if cursor is at or after the comment
-            if display_pos.column.get() >= comment_offset as u32 {
+            if display_pos.column().get() >= comment_offset as u32 {
                 // Check if this line has suppressions
-                if module.ignore().get(&display_pos.line).is_some() {
-                    let suppressed_errors =
-                        get_suppressed_errors_for_line(transaction, handle, display_pos.line);
+                if module
+                    .ignore()
+                    .get(&display_pos.line_within_file())
+                    .is_some()
+                {
+                    let suppressed_errors = get_suppressed_errors_for_line(
+                        transaction,
+                        handle,
+                        display_pos.line_within_file(),
+                    );
                     return Some(format_suppressed_errors_hover(suppressed_errors));
                 }
             }

@@ -72,6 +72,10 @@ pub enum FunctionId {
     ClassTopLevel { class_id: ClassId },
     /// Function-like class field that is not a `def` statement.
     ClassField { class_id: ClassId, name: Name },
+    /// Decorated target, which represents an artificial function containing all
+    /// decorators of a function, inlined as an expression.
+    /// For e.g, `@foo` on `def bar()` -> `return foo(bar)`
+    FunctionDecoratedTarget { location: PysaLocation },
 }
 
 impl FunctionId {
@@ -82,6 +86,9 @@ impl FunctionId {
             FunctionId::ClassTopLevel { class_id } => format!("CTL:{}", class_id.to_int()),
             FunctionId::ClassField { class_id, name } => {
                 format!("CF:{}:{}", class_id.to_int(), name)
+            }
+            FunctionId::FunctionDecoratedTarget { location } => {
+                format!("FDT:{}", location.as_key())
             }
         }
     }

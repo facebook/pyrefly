@@ -197,14 +197,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let mut fields = SmallMap::new();
 
-        let auto_field_export = KeyExport(AUTO_FIELD);
-        let auto_field_type =
-            self.get_from_export(ModuleName::django_models_fields(), None, &auto_field_export);
+        let custom_pk_field = metadata
+            .django_model_metadata()
+            .and_then(|dm| dm.custom_primary_key_field.as_ref());
 
-        // TODO: Extend the solution to handle custom pk
-        if let Some(id_type) = self.get_django_field_type(&auto_field_type, cls) {
-            fields.insert(ID, ClassSynthesizedField::new(id_type.clone()));
-            fields.insert(PK, ClassSynthesizedField::new(id_type));
+        if let Some(pk_field_name) = custom_pk_field {
+            let instance_type = self.as_class_type_unchecked(cls).to_type();
+            let pk_attr_type = self.attr_infer_for_type(
+                &instance_type,
+                pk_field_name,
+                TextRange::default(),
+                &self.error_swallower(),
+                None,
+            );
+            fields.insert(PK, ClassSynthesizedField::new(pk_attr_type));
+            // When there's a custom pk, don't synthesize an `id` field
+        } else {
+            // No custom pk, use default AutoField for both id and pk
+            let auto_field_export = KeyExport(AUTO_FIELD);
+            let auto_field_type =
+                self.get_from_export(ModuleName::django_models_fields(), None, &auto_field_export);
+
+            if let Some(id_type) = self.get_django_field_type(&auto_field_type, cls) {
+                fields.insert(ID, ClassSynthesizedField::new(id_type.clone()));
+                fields.insert(PK, ClassSynthesizedField::new(id_type));
+            }
         }
 
         Some(ClassSynthesizedFields::new(fields))

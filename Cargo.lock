@@ -157,9 +157,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.98"
+version = "1.0.100"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e16d2d3311acee920a9eb8d33b8cbc1787ce4a264e85f964c2404b969bdcd487"
+checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
 name = "append-only-vec"
@@ -361,7 +361,7 @@ dependencies = [
  "iana-time-zone",
  "num-traits",
  "serde",
- "windows-link",
+ "windows-link 0.1.1",
 ]
 
 [[package]]
@@ -1045,9 +1045,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26145e563e54f2cadc477553f1ec5ee650b00862f0a58bcd12cbdc5f0ea2d2f4"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi",
  "wasi 0.14.2+wasi-0.2.4",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1581,9 +1583,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.27"
+version = "0.4.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
+checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
 
 [[package]]
 name = "lsp-server"
@@ -1750,7 +1752,7 @@ checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
 dependencies = [
  "num-integer",
  "num-traits",
- "rand",
+ "rand 0.8.5",
 ]
 
 [[package]]
@@ -1952,7 +1954,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1181c94580fa345f50f19d738aaa39c0ed30a600d95cb2d3e23f94266f14fbf"
 dependencies = [
  "phf_shared",
- "rand",
+ "rand 0.8.5",
 ]
 
 [[package]]
@@ -2079,7 +2081,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly"
-version = "0.38.2"
+version = "0.39.2"
 dependencies = [
  "anstream",
  "anyhow",
@@ -2109,6 +2111,7 @@ dependencies = [
  "rayon",
  "regex",
  "ruff_annotate_snippets",
+ "ruff_notebook",
  "ruff_python_ast",
  "ruff_python_parser",
  "ruff_source_file",
@@ -2130,7 +2133,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_build"
-version = "0.38.2"
+version = "0.39.2"
 dependencies = [
  "anyhow",
  "dupe",
@@ -2148,7 +2151,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_bundled"
-version = "0.38.2"
+version = "0.39.2"
 dependencies = [
  "anyhow",
  "starlark_map",
@@ -2158,7 +2161,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_config"
-version = "0.38.2"
+version = "0.39.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2193,7 +2196,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_derive"
-version = "0.38.2"
+version = "0.39.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2202,7 +2205,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_python"
-version = "0.38.2"
+version = "0.39.2"
 dependencies = [
  "anyhow",
  "dupe",
@@ -2213,6 +2216,7 @@ dependencies = [
  "pathdiff",
  "pyrefly_util",
  "regex",
+ "ruff_notebook",
  "ruff_python_ast",
  "ruff_python_parser",
  "ruff_text_size",
@@ -2226,7 +2230,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_types"
-version = "0.38.2"
+version = "0.39.2"
 dependencies = [
  "compact_str 0.8.0",
  "dupe",
@@ -2246,7 +2250,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_util"
-version = "0.38.2"
+version = "0.39.2"
 dependencies = [
  "anstream",
  "anyhow",
@@ -2269,6 +2273,7 @@ dependencies = [
  "path-absolutize",
  "pyrefly_derive",
  "rayon",
+ "ruff_notebook",
  "ruff_python_ast",
  "ruff_source_file",
  "ruff_text_size",
@@ -2290,11 +2295,13 @@ version = "0.0.0"
 dependencies = [
  "dupe",
  "getrandom 0.2.16",
+ "getrandom 0.3.3",
  "pyrefly",
  "serde",
  "serde-wasm-bindgen",
  "starlark_map",
  "tar",
+ "uuid",
  "wasm-bindgen",
  "zstd",
 ]
@@ -2306,7 +2313,7 @@ source = "git+https://github.com/jakoschiko/quickcheck?rev=6ecdf5bb4b0132ce66670
 dependencies = [
  "env_logger",
  "log",
- "rand",
+ "rand 0.8.5",
 ]
 
 [[package]]
@@ -2353,8 +2360,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
 dependencies = [
  "libc",
- "rand_chacha",
- "rand_core",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9fbfd9d094a40bf3ae768db9361049ace4c0e04a4fd6b359518bd7b73a73dd97"
+dependencies = [
+ "rand_chacha 0.9.0",
+ "rand_core 0.9.3",
 ]
 
 [[package]]
@@ -2364,7 +2381,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
 dependencies = [
  "ppv-lite86",
- "rand_core",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.9.3",
 ]
 
 [[package]]
@@ -2374,6 +2401,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom 0.2.16",
+]
+
+[[package]]
+name = "rand_core"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
+dependencies = [
+ "getrandom 0.3.3",
 ]
 
 [[package]]
@@ -2488,6 +2524,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruff_diagnostics"
+version = "0.0.0"
+source = "git+https://github.com/astral-sh/ruff/?rev=9bee8376a17401f9736b45fdefffb62edc2f1668#9bee8376a17401f9736b45fdefffb62edc2f1668"
+dependencies = [
+ "is-macro",
+ "ruff_text_size",
+]
+
+[[package]]
+name = "ruff_notebook"
+version = "0.0.0"
+source = "git+https://github.com/astral-sh/ruff/?rev=9bee8376a17401f9736b45fdefffb62edc2f1668#9bee8376a17401f9736b45fdefffb62edc2f1668"
+dependencies = [
+ "anyhow",
+ "itertools 0.14.0",
+ "rand 0.9.1",
+ "ruff_diagnostics",
+ "ruff_source_file",
+ "ruff_text_size",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "thiserror 2.0.12",
+ "uuid",
+]
+
+[[package]]
 name = "ruff_python_ast"
 version = "0.0.0"
 source = "git+https://github.com/astral-sh/ruff/?rev=9bee8376a17401f9736b45fdefffb62edc2f1668#9bee8376a17401f9736b45fdefffb62edc2f1668"
@@ -2546,6 +2609,7 @@ source = "git+https://github.com/astral-sh/ruff/?rev=9bee8376a17401f9736b45fdeff
 dependencies = [
  "memchr",
  "ruff_text_size",
+ "serde",
 ]
 
 [[package]]
@@ -2970,7 +3034,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix 1.0.8",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3309,7 +3373,7 @@ dependencies = [
 
 [[package]]
 name = "tsp_types"
-version = "0.38.2"
+version = "0.39.2"
 dependencies = [
  "lsp-server",
  "lsp-types",
@@ -3381,7 +3445,7 @@ dependencies = [
  "getopts",
  "log",
  "phf_codegen",
- "rand",
+ "rand 0.8.5",
 ]
 
 [[package]]
@@ -3413,6 +3477,40 @@ name = "utf8parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
+
+[[package]]
+name = "uuid"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cf4199d1e5d15ddd86a694e4d0dffa9c323ce759fea589f00fef9d81cc1931d"
+dependencies = [
+ "getrandom 0.3.3",
+ "js-sys",
+ "rand 0.9.1",
+ "uuid-macro-internal",
+ "uuid-rng-internal",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "uuid-macro-internal"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26b682e8c381995ea03130e381928e0e005b7c9eb483c6c8682f50e07b33c2b7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
+name = "uuid-rng-internal"
+version = "1.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23426b4394875bbc29a3074f94e1b52cd0eed2c8410c21a6edbfb033daef0aa1"
+dependencies = [
+ "getrandom 0.3.3",
+]
 
 [[package]]
 name = "valuable"
@@ -3596,6 +3694,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76840935b766e1b0a05c0066835fb9ec80071d4c09a16f6bd5f7e655e3c14c38"
 
 [[package]]
+name = "windows-link"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
 name = "windows-sys"
 version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3638,6 +3742,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2f500e4d28234f72040990ec9d39e3a6b950f9f22d3dba18416c35882612bcb"
 dependencies = [
  "windows-targets 0.53.2",
+]
+
+[[package]]
+name = "windows-sys"
+version = "0.61.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
+dependencies = [
+ "windows-link 0.2.1",
 ]
 
 [[package]]
