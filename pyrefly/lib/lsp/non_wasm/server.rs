@@ -54,6 +54,10 @@ use lsp_types::DocumentSymbol;
 use lsp_types::DocumentSymbolParams;
 use lsp_types::DocumentSymbolResponse;
 use lsp_types::FileSystemWatcher;
+use lsp_types::FoldingRange;
+use lsp_types::FoldingRangeKind;
+use lsp_types::FoldingRangeParams;
+use lsp_types::FoldingRangeProviderCapability;
 use lsp_types::FullDocumentDiagnosticReport;
 use lsp_types::GlobPattern;
 use lsp_types::GotoDefinitionParams;
@@ -127,6 +131,7 @@ use lsp_types::request::Completion;
 use lsp_types::request::DocumentDiagnosticRequest;
 use lsp_types::request::DocumentHighlightRequest;
 use lsp_types::request::DocumentSymbolRequest;
+use lsp_types::request::FoldingRangeRequest;
 use lsp_types::request::GotoDefinition;
 use lsp_types::request::GotoTypeDefinition;
 use lsp_types::request::GotoTypeDefinitionParams;
@@ -429,6 +434,7 @@ pub fn capabilities(
         inlay_hint_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
+        folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
         semantic_tokens_provider: if augments_syntax_tokens {
             // We currently only return partial tokens (e.g. no tokens for keywords right now).
             // If the client doesn't support `augments_syntax_tokens` to fallback baseline
@@ -926,6 +932,20 @@ impl Server {
                                 supports_document_changes,
                             )),
                         ));
+                        ide_transaction_manager.save(transaction);
+                    }
+                } else if let Some(params) = as_request::<FoldingRangeRequest>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<FoldingRangeRequest>(
+                            params, &x.id,
+                        )
+                    {
+                        let transaction =
+                            ide_transaction_manager.non_committable_transaction(&self.state);
+                        let result = self
+                            .folding_ranges(&transaction, params)
+                            .unwrap_or_default();
+                        self.send_response(new_response(x.id, Ok(result)));
                         ide_transaction_manager.save(transaction);
                     }
                 } else if &x.method == "pyrefly/textDocument/docstringRanges" {
@@ -2058,6 +2078,45 @@ impl Server {
             docstring_ranges
                 .into_iter()
                 .map(|range| module.lined_buffer().to_lsp_range(range))
+                .collect(),
+        )
+    }
+
+    fn folding_ranges(
+        &self,
+        transaction: &Transaction<'_>,
+        params: FoldingRangeParams,
+    ) -> Option<Vec<FoldingRange>> {
+        let handle = self.make_handle_if_enabled(&params.text_document.uri)?;
+        let module = transaction.get_module_info(&handle)?;
+        let docstring_ranges = transaction.docstring_ranges(&handle)?;
+        Some(
+            docstring_ranges
+                .into_iter()
+                .filter_map(|range| {
+                    let lsp_range = module.lined_buffer().to_lsp_range(range);
+                    if lsp_range.start.line >= lsp_range.end.line {
+                        return None;
+                    }
+                    let (end_line, end_character) = if lsp_range.end.character == 0
+                        && lsp_range.end.line > lsp_range.start.line
+                    {
+                        (lsp_range.end.line - 1, None)
+                    } else {
+                        (lsp_range.end.line, Some(lsp_range.end.character))
+                    };
+                    if end_line <= lsp_range.start.line {
+                        return None;
+                    }
+                    Some(FoldingRange {
+                        start_line: lsp_range.start.line,
+                        start_character: Some(lsp_range.start.character),
+                        end_line,
+                        end_character,
+                        kind: Some(FoldingRangeKind::Comment),
+                        collapsed_text: None,
+                    })
+                })
                 .collect(),
         )
     }

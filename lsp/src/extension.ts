@@ -7,7 +7,7 @@
  * @format
  */
 
-import {ExtensionContext, workspace, FoldingRangeKind} from 'vscode';
+import {ExtensionContext, workspace} from 'vscode';
 import * as vscode from 'vscode';
 import {
   CancellationToken,
@@ -339,39 +339,6 @@ export async function activate(context: ExtensionContext) {
     vscode.commands.registerCommand('pyrefly.unfoldAllDocstrings', async () => {
       await runDocstringFoldingCommand('editor.unfold');
     }),
-  );
-
-  context.subscriptions.push(
-    vscode.languages.registerFoldingRangeProvider(
-      {language: 'python', scheme: 'file'},
-      {
-        async provideFoldingRanges(document, _context, token) {
-          try {
-            if (token.isCancellationRequested || !client.isRunning()) {
-              return [];
-            }
-            const ranges = await getDocstringRanges(document);
-            if (token.isCancellationRequested) {
-              return [];
-            }
-            return ranges
-              .filter(range => range.start.line < range.end.line)
-              .map(range => ({
-                start: range.start.line,
-                end: range.end.line,
-                kind: FoldingRangeKind.Comment,
-              }));
-          } catch (error) {
-            const message =
-              error instanceof Error ? error.message : `Unknown error: ${String(error)}`;
-            outputChannel?.appendLine(
-              `Failed to compute docstring folding ranges: ${message}`,
-            );
-            return [];
-          }
-        },
-      },
-    ),
   );
 
   // When our extension is activated, make sure ms-python knows
