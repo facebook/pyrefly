@@ -1179,26 +1179,9 @@ impl Server {
             let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
             let open_files = self.open_files.read();
 
-            // Initialize diagnostic entries for open files
-            for x in open_files.keys() {
-                diags.insert(x.as_path().to_owned(), Vec::new());
-            }
-
-            // Check if any workspace is in Workspace diagnostic mode
-            let has_workspace_mode = self.workspaces.roots().iter().any(|root| {
-                matches!(
-                    self.workspaces.get_diagnostic_mode(root),
-                    DiagnosticMode::Workspace
-                )
-            });
-
-            // Collect errors from transaction
-            // In workspace mode, get ALL errors; otherwise only get errors for open files
-            let errors = if has_workspace_mode {
-                transaction.get_all_errors()
-            } else {
-                transaction.get_errors(&handles)
-            };
+            // Collect errors from transaction for open files
+            // The filtering by diagnostic mode is handled in get_diag_if_shown
+            let errors = transaction.get_errors(&handles);
 
             for e in errors.collect_errors().shown {
                 if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files) {

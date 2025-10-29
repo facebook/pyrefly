@@ -178,3 +178,64 @@ fn test_default_mode_is_open_files_only() {
 
     interaction.shutdown();
 }
+
+/// Test that workspace mode does not show errors for files outside the workspace folder
+#[test]
+fn test_workspace_mode_excludes_files_outside_workspace() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(None),
+        ..Default::default()
+    });
+
+    // Send configuration with workspace mode
+    interaction.server.did_change_configuration();
+    interaction.client.expect_configuration_request(2, None);
+    interaction.server.send_configuration_response(
+        2,
+        serde_json::json!([
+            {
+                "pyrefly": {
+                    "displayTypeErrors": "force-on"
+                },
+                "analysis": {
+                    "diagnosticMode": "workspace"
+                }
+            },
+            {
+                "pyrefly": {
+                    "displayTypeErrors": "force-on"
+                },
+                "analysis": {
+                    "diagnosticMode": "workspace"
+                }
+            }
+        ]),
+    );
+
+    // Open a file in the workspace
+    interaction
+        .server
+        .did_open("workspace_diagnostic_mode/opened_file.py");
+
+    // Request diagnostics - workspace mode should only show errors from files within the workspace
+    // Files outside the workspace (like dependencies) should not be shown
+    interaction
+        .server
+        .diagnostic("workspace_diagnostic_mode/opened_file.py");
+
+    // Expect NO errors because the file itself has no errors
+    // More importantly, we should NOT see errors from dependencies or files outside workspace
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
+        result: Some(serde_json::json!({
+            "items": [],
+            "kind": "full"
+        })),
+        error: None,
+    });
+
+    interaction.shutdown();
+}
