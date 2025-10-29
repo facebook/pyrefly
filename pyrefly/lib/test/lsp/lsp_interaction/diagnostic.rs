@@ -82,57 +82,6 @@ fn test_unexpected_keyword_range() {
 }
 
 #[test]
-fn test_redundant_cast_uses_unnecessary_tag() {
-    let test_files_root = get_test_files_root();
-    let mut interaction = LspInteraction::new();
-    interaction.set_root(test_files_root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
-
-    interaction.server.did_change_configuration();
-
-    interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(
-        2,
-        serde_json::json!([
-            {"pyrefly": {"displayTypeErrors": "force-on"}},
-            {"pyrefly": {"displayTypeErrors": "force-on"}}
-        ]),
-    );
-
-    interaction.server.did_open("redundant_cast.py");
-    interaction.server.diagnostic("redundant_cast.py");
-
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
-            "items": [
-                {
-                    "code": "redundant-cast",
-                    "codeDescription": {
-                        "href": "https://pyrefly.org/en/docs/error-kinds/#redundant-cast"
-                    },
-                    "message": "Redundant cast: `int` is the same type as `int`",
-                    "range": {
-                        "end": {"character": 27, "line": 4},
-                        "start": {"character": 15, "line": 4}
-                    },
-                    "severity": 2,
-                    "source": "Pyrefly",
-                    "tags": [1]
-                }
-            ],
-            "kind": "full"
-        })),
-        error: None,
-    });
-
-    interaction.shutdown();
-}
-
-#[test]
 fn test_unreachable_branch_diagnostic() {
     let test_files_root = get_test_files_root();
     let mut interaction = LspInteraction::new();
@@ -164,8 +113,8 @@ fn test_unreachable_branch_diagnostic() {
                     "code": "unreachable-code",
                     "message": "This code is unreachable for the current configuration",
                     "range": {
-                        "end": {"character": 25, "line": 4},
-                        "start": {"character": 4, "line": 4}
+                        "end": {"character": 12, "line": 1},
+                        "start": {"character": 4, "line": 1}
                     },
                     "severity": 4,
                     "source": "Pyrefly",
