@@ -20,12 +20,13 @@ use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 fn test_completion_basic() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
     interaction.server.did_open("foo.py");
 
-    let foo_path = root.path().join("foo.py");
+    let root_path = root.path().join("basic");
+    let foo_path = root_path.join("foo.py");
     interaction
         .server
         .send_message(Message::Notification(Notification {
@@ -79,12 +80,13 @@ fn test_completion_basic() {
 fn test_completion_sorted_in_sorttext_order() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
     interaction.server.did_open("foo.py");
 
-    let foo_path = root.path().join("foo.py");
+    let root_path = root.path().join("basic");
+    let foo_path = root_path.join("foo.py");
     interaction
         .server
         .send_message(Message::Notification(Notification {
@@ -153,12 +155,14 @@ fn test_completion_sorted_in_sorttext_order() {
 fn test_completion_keywords() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
     interaction.server.did_open("foo.py");
 
-    let foo_path = root.path().join("foo.py");
+    let root_path = root.path().join("basic");
+    let foo_path = root_path.join("foo.py");
+
     interaction
         .server
         .send_message(Message::Notification(Notification {
@@ -283,10 +287,10 @@ fn test_completion_with_autoimport() {
 fn test_completion_with_autoimport_without_config() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    let root_path = root.path();
-    let scope_uri = Url::from_file_path(root_path).unwrap();
+    let root_path = root.path().join("basic");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
 
-    interaction.set_root(root_path.to_path_buf());
+    interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings {
         workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
         ..Default::default()
@@ -580,7 +584,7 @@ fn test_relative_module_completion() {
 #[test]
 fn test_stdlib_submodule_completion() {
     let root = get_test_files_root();
-    let root_path = root.path().to_path_buf();
+    let root_path = root.path().join("basic");
 
     let mut interaction =
         LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
@@ -608,7 +612,7 @@ fn test_stdlib_submodule_completion() {
 #[test]
 fn test_stdlib_class_completion() {
     let root = get_test_files_root();
-    let root_path = root.path().to_path_buf();
+    let root_path = root.path().join("basic");
 
     let mut interaction =
         LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
@@ -644,7 +648,7 @@ fn test_stdlib_class_completion() {
 fn test_completion_incomplete_below_autoimport_threshold() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
     interaction.server.did_open("foo.py");
@@ -680,7 +684,7 @@ fn test_completion_incomplete_below_autoimport_threshold() {
 fn test_completion_complete_above_autoimport_threshold() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
     interaction.server.did_open("foo.py");
@@ -715,7 +719,7 @@ fn test_completion_complete_above_autoimport_threshold() {
 fn test_completion_complete_with_local_completions() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
     interaction.server.did_open("foo.py");

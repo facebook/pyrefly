@@ -170,6 +170,11 @@ impl TestEnv {
         self
     }
 
+    pub fn with_version(mut self, version: PythonVersion) -> Self {
+        self.version = version;
+        self
+    }
+
     pub fn add_with_path(&mut self, name: &str, path: &str, code: &str) {
         assert!(
             path.ends_with(".py") || path.ends_with(".pyi") || path.ends_with(".rs"),

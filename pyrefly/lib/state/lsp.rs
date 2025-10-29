@@ -76,6 +76,7 @@ use crate::state::ide::key_to_intermediate_definition;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokenBuilder;
 use crate::state::semantic_tokens::SemanticTokensLegends;
+use crate::state::semantic_tokens::disabled_ranges_for_module;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
@@ -2712,7 +2713,8 @@ impl<'a> Transaction<'a> {
         let bindings = self.get_bindings(handle)?;
         let ast = self.get_ast(handle)?;
         let legends = SemanticTokensLegends::new();
-        let mut builder = SemanticTokenBuilder::new(limit_range);
+        let disabled_ranges = disabled_ranges_for_module(ast.as_ref(), handle.sys_info());
+        let mut builder = SemanticTokenBuilder::new(limit_range, disabled_ranges);
         for NamedBinding {
             definition_handle,
             definition_export,

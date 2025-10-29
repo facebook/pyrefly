@@ -15,6 +15,7 @@ use pyrefly_types::class::Class;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::Type;
+use ruff_python_ast::Expr;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
@@ -40,22 +41,33 @@ const PK: Name = Name::new_static("pk");
 const AUTO_FIELD: Name = Name::new_static("AutoField");
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    pub fn get_django_field_type(&self, ty: &Type, class: &Class) -> Option<Type> {
+    pub fn get_django_field_type(
+        &self,
+        ty: &Type,
+        class: &Class,
+        field_name: Option<&Name>,
+        initial_value_expr: Option<&Expr>,
+    ) -> Option<Type> {
         match ty {
             Type::ClassType(cls)
                 if cls.has_qname(ModuleName::django_utils_functional().as_str(), "_Getter") =>
             {
                 cls.targs().as_slice().first().cloned()
             }
-            Type::ClassType(cls) => {
-                self.get_django_field_type_from_class(cls.class_object(), class)
+            Type::ClassType(cls) => self.get_django_field_type_from_class(
+                cls.class_object(),
+                class,
+                field_name,
+                initial_value_expr,
+            ),
+            Type::ClassDef(cls) => {
+                self.get_django_field_type_from_class(cls, class, field_name, initial_value_expr)
             }
-            Type::ClassDef(cls) => self.get_django_field_type_from_class(cls, class),
             Type::Union(union) => {
                 let transformed: Vec<_> = union
                     .iter()
                     .map(|variant| {
-                        self.get_django_field_type(variant, class)
+                        self.get_django_field_type(variant, class, field_name, initial_value_expr)
                             .unwrap_or_else(|| variant.clone())
                     })
                     .collect();
@@ -70,7 +82,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn get_django_field_type_from_class(&self, field: &Class, class: &Class) -> Option<Type> {
+    fn get_django_field_type_from_class(
+        &self,
+        field: &Class,
+        class: &Class,
+        _field_name: Option<&Name>,
+        _initial_value_expr: Option<&Expr>,
+    ) -> Option<Type> {
         if self.get_metadata_for_class(class).is_django_model()
             && self.inherits_from_django_field(field)
         {
@@ -82,7 +100,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Check if a class inherits from Django's Field class
-    fn inherits_from_django_field(&self, cls: &crate::types::class::Class) -> bool {
+    fn inherits_from_django_field(&self, cls: &Class) -> bool {
         self.get_mro_for_class(cls)
             .ancestors(self.stdlib)
             .any(|ancestor| {
@@ -218,7 +236,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let auto_field_type =
                 self.get_from_export(ModuleName::django_models_fields(), None, &auto_field_export);
 
-            if let Some(id_type) = self.get_django_field_type(&auto_field_type, cls) {
+            if let Some(id_type) = self.get_django_field_type(&auto_field_type, cls, None, None) {
                 fields.insert(ID, ClassSynthesizedField::new(id_type.clone()));
                 fields.insert(PK, ClassSynthesizedField::new(id_type));
             }

@@ -150,10 +150,12 @@ pub struct Suppression {
     kind: Vec<String>,
 }
 
-/// Record the position of `# type: ignore[valid-type]` statements.
+/// Record the position of lines affected by `# type: ignore[valid-type]` suppressions.
 /// For now we don't record the content of the ignore, but we could.
 #[derive(Debug, Clone, Default)]
 pub struct Ignore {
+    // The line number here represents the line that the suppression applies to,
+    // not the line of the suppression comment.
     ignores: SmallMap<LineNumber, Vec<Suppression>>,
     /// Do we have a generic or Pyrefly-specific ignore-all directive?
     ignore_all_strict: bool,
@@ -215,7 +217,7 @@ impl Ignore {
 
     fn parse_ignores(code: &str) -> SmallMap<LineNumber, Vec<Suppression>> {
         let mut ignores: SmallMap<LineNumber, Vec<Suppression>> = SmallMap::new();
-        // If we see a comment on a non-code line, move it to the next non-comment line.
+        // If we see a comment on a non-code line, apply it to the next non-comment line.
         let mut pending = Vec::new();
         let mut line = LineNumber::default();
         for (idx, line_str) in code.lines().enumerate() {
@@ -304,6 +306,34 @@ impl Ignore {
             }
         }
 
+        false
+    }
+
+    /// Similar to `is_ignored``, but it only returns true if the error is ignored
+    /// by a suppression that targets a specific line.
+    pub fn is_ignored_by_suppression_line(
+        &self,
+        suppression_line: LineNumber,
+        start_line: LineNumber,
+        end_line: LineNumber,
+        kind: &str,
+        permissive_ignores: bool,
+    ) -> bool {
+        // If the error does not overlap the range, skip the more expensive check
+        if start_line > suppression_line || end_line < suppression_line {
+            return false;
+        }
+        let Some(suppressions) = self.ignores.get(&suppression_line) else {
+            return false;
+        };
+        if suppressions.iter().any(|supp| match supp.tool {
+            // We only check the subkind if they do `# pyrefly: ignore`
+            Tool::Pyrefly => supp.kind.is_empty() || supp.kind.iter().any(|x| x == kind),
+            Tool::Any => true,
+            _ => permissive_ignores,
+        }) {
+            return true;
+        }
         false
     }
 

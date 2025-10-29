@@ -1535,6 +1535,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::TypedDict(td) | Type::PartialTypedDict(td) => {
                 acc.push(AttributeBase1::TypedDict(td.clone()))
             }
+            Type::Type(box (Type::TypedDict(_) | Type::PartialTypedDict(_))) => {
+                acc.push(AttributeBase1::ClassObject(ClassBase::ClassDef(
+                    self.stdlib.typed_dict_fallback().clone(),
+                )))
+            }
             Type::Tuple(tuple) => {
                 acc.push(AttributeBase1::ClassInstance(self.erase_tuple_type(tuple)))
             }

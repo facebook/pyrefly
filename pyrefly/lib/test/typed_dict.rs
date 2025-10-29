@@ -1783,3 +1783,17 @@ fieldsets: tuple[tuple[str, MyDict], ...] | None = (
 )
     "#,
 );
+
+testcase!(
+    test_type_of_typeddict_dunder_bool,
+    r#"
+from typing import TypedDict
+class D1(TypedDict):
+    a: int
+    b: str
+def func(d: type[D1] | None) -> int:
+    if d:
+        return 1
+    return 2
+    "#,
+);

@@ -127,13 +127,24 @@ assert_type(f(D), D)
 );
 
 testcase!(
-    bug = "This test is a placeholder, we've commented out the check for missing type arguments because until we have configurable errors it causes too many problems.",
-    test_untype_with_missing_targs,
+    test_untype_with_missing_targs_annotation,
+    TestEnv::new().enable_implicit_any_error(),
     r#"
 class C[T]: pass
 
-x: C        # TODO: The generic class `C` is missing type arguments.
-y: C | int  # TODO: The generic class `C` is missing type arguments.
+x: C        # E: Cannot determine the type parameter `T` for generic class `C`
+y: C | int  # E: Cannot determine the type parameter `T` for generic class `C`
+z: list[C]  # E: Cannot determine the type parameter `T` for generic class `C`
+    "#,
+);
+
+testcase!(
+    test_untype_with_missing_targs_base_class,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+class C[T]: pass
+class D(C): pass  # E: Cannot determine the type parameter `T` for generic class `C`
+x: D
     "#,
 );
 

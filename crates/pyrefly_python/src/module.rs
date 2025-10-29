@@ -12,6 +12,7 @@ use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lined_buffer::DisplayPos;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LinedBuffer;
+use ruff_notebook::Notebook;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
@@ -32,6 +33,7 @@ struct ModuleInner {
     ignore: Ignore,
     is_generated: bool,
     contents: LinedBuffer,
+    notebook: Option<Box<Notebook>>,
 }
 
 impl Module {
@@ -46,6 +48,22 @@ impl Module {
             ignore,
             is_generated,
             contents,
+            notebook: None,
+        }))
+    }
+
+    pub fn new_notebook(name: ModuleName, path: ModulePath, notebook: Notebook) -> Self {
+        let contents: Arc<String> = Arc::from(notebook.source_code().to_owned());
+        let ignore = Ignore::new(&contents);
+        let is_generated = contents.contains(GENERATED_TOKEN);
+        let contents = LinedBuffer::new(contents);
+        Self(ArcId::new(ModuleInner {
+            name,
+            path,
+            ignore,
+            is_generated,
+            contents,
+            notebook: Some(Box::new(notebook)),
         }))
     }
 
@@ -72,11 +90,11 @@ impl Module {
     }
 
     pub fn display_range(&self, range: TextRange) -> DisplayRange {
-        self.0.contents.display_range(range)
+        self.0.contents.display_range(range, self.notebook())
     }
 
     pub fn display_pos(&self, offset: TextSize) -> DisplayPos {
-        self.0.contents.display_pos(offset)
+        self.0.contents.display_pos(offset, self.notebook())
     }
 
     pub fn code_at(&self, range: TextRange) -> &str {
@@ -85,6 +103,10 @@ impl Module {
 
     pub fn path(&self) -> &ModulePath {
         &self.0.path
+    }
+
+    pub fn is_notebook(&self) -> bool {
+        self.0.notebook.is_some()
     }
 
     pub fn is_generated(&self) -> bool {
@@ -106,8 +128,8 @@ impl Module {
         permissive_ignores: bool,
     ) -> bool {
         self.0.ignore.is_ignored(
-            source_range.start.line,
-            source_range.end.line,
+            source_range.start.line_within_file(),
+            source_range.end.line_within_file(),
             error_kind,
             permissive_ignores,
         )
@@ -115,6 +137,10 @@ impl Module {
 
     pub fn ignore(&self) -> &Ignore {
         &self.0.ignore
+    }
+
+    pub fn notebook(&self) -> Option<&Notebook> {
+        self.0.notebook.as_deref()
     }
 }
 

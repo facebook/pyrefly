@@ -122,10 +122,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn as_call_target(&self, ty: Type) -> Option<CallTarget> {
-        self.as_call_target_impl(ty, None)
+        self.as_call_target_impl(ty, None, /* dunder_call */ false)
     }
 
-    fn as_call_target_impl(&self, ty: Type, quantified: Option<Quantified>) -> Option<CallTarget> {
+    fn as_call_target_impl(
+        &self,
+        ty: Type,
+        quantified: Option<Quantified>,
+        dunder_call: bool,
+    ) -> Option<CallTarget> {
         match ty {
             Type::Callable(c) => Some(CallTarget::Callable(TargetWithTParams(None, *c))),
             Type::Function(func) => Some(CallTarget::Function(TargetWithTParams(None, *func))),
@@ -140,7 +145,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::BoundMethod(bm) => {
                 let BoundMethod { obj, func } = *bm;
-                match self.as_call_target_impl(func.as_type(), quantified) {
+                match self.as_call_target_impl(func.as_type(), quantified, dunder_call) {
                     Some(CallTarget::Function(func)) => Some(CallTarget::BoundMethod(obj, func)),
                     Some(CallTarget::FunctionOverload(overloads, meta)) => {
                         Some(CallTarget::BoundMethodOverload(obj, overloads, meta))
@@ -175,7 +180,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Type(inner) if let Type::Any(style) = *inner => Some(CallTarget::Any(style)),
             Type::Forall(forall) => {
-                let mut target = self.as_call_target_impl(forall.body.as_type(), quantified);
+                let mut target =
+                    self.as_call_target_impl(forall.body.as_type(), quantified, dunder_call);
                 match &mut target {
                     Some(
                         CallTarget::Callable(TargetWithTParams(x, _))
@@ -188,12 +194,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 target
             }
             Type::Var(v) if let Some(_guard) = self.recurse(v) => {
-                self.as_call_target_impl(self.solver().force_var(v), quantified)
+                self.as_call_target_impl(self.solver().force_var(v), quantified, dunder_call)
             }
             Type::Union(xs) => {
                 let targets = xs
                     .into_iter()
-                    .map(|x| self.as_call_target_impl(x, quantified.clone()))
+                    .map(|x| self.as_call_target_impl(x, quantified.clone(), dunder_call))
                     .collect::<Option<Vec<_>>>()?;
                 if targets.len() == 1 {
                     Some(targets.into_iter().next().unwrap())
@@ -202,20 +208,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Type::Any(style) => Some(CallTarget::Any(style)),
-            Type::TypeAlias(ta) => self.as_call_target_impl(ta.as_value(self.stdlib), quantified),
+            Type::TypeAlias(ta) => {
+                self.as_call_target_impl(ta.as_value(self.stdlib), quantified, dunder_call)
+            }
             Type::ClassType(cls) => {
                 if let Some(quantified) = quantified {
                     self.quantified_instance_as_dunder_call(quantified.clone(), &cls)
-                        .and_then(|ty| self.as_call_target_impl(ty, Some(quantified)))
+                        .and_then(|ty| self.as_call_target_impl(ty, Some(quantified), dunder_call))
+                } else if dunder_call {
+                    // Avoid infinite recursion
+                    None
                 } else {
-                    self.instance_as_dunder_call(&cls)
-                        .and_then(|ty| self.as_call_target_impl(ty, quantified))
+                    self.instance_as_dunder_call(&cls).and_then(|ty| {
+                        self.as_call_target_impl(ty, quantified, /* dunder_call */ true)
+                    })
                 }
             }
             Type::SelfType(cls) => {
                 // Ignoring `quantified` is okay here because Self is not a valid typevar bound.
                 self.self_as_dunder_call(&cls)
-                    .and_then(|ty| self.as_call_target_impl(ty, None))
+                    .and_then(|ty| self.as_call_target_impl(ty, None, dunder_call))
             }
             Type::Type(box Type::TypedDict(typed_dict)) => Some(CallTarget::TypedDict(typed_dict)),
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
@@ -230,6 +242,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     q.clone()
                                         .with_restriction(Restriction::Bound(member.clone())),
                                 ),
+                                dunder_call,
                             ) {
                                 targets.push(target);
                             } else {
@@ -238,7 +251,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                         Some(CallTarget::Union(targets))
                     }
-                    _ => self.as_call_target_impl(bound.clone(), Some(*q)),
+                    _ => self.as_call_target_impl(bound.clone(), Some(*q), dunder_call),
                 },
                 Restriction::Constraints(constraints) => {
                     let mut targets = Vec::new();
@@ -248,6 +261,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Some(q.clone().with_restriction(Restriction::Constraints(vec![
                                 constraint.clone(),
                             ]))),
+                            dunder_call,
                         ) {
                             targets.push(target);
                         } else {
@@ -257,7 +271,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(CallTarget::Union(targets))
                 }
             },
-            Type::KwCall(call) => self.as_call_target_impl(call.return_ty, quantified),
+            Type::KwCall(call) => self.as_call_target_impl(call.return_ty, quantified, dunder_call),
             _ => None,
         }
     }

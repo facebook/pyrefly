@@ -1132,7 +1132,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// are gradual if needed (e.g. `list` is treated as `list[Any]` when used as an annotation).
     ///
     /// This function canonicalizes to `Type::ClassType` or `Type::TypedDict`
-    pub fn canonicalize_all_class_types(&self, ty: Type, range: TextRange) -> Type {
+    pub fn canonicalize_all_class_types(
+        &self,
+        ty: Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
         ty.transform(&mut |ty| match ty {
             Type::SpecialForm(SpecialForm::Tuple) => {
                 *ty = Type::Tuple(Tuple::unbounded(Type::Any(AnyStyle::Implicit)));
@@ -1151,7 +1156,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else if cls.has_toplevel_qname("typing", "Any") {
                     *ty = Type::type_form(Type::any_explicit())
                 } else {
-                    *ty = Type::type_form(self.promote(cls, range));
+                    *ty = Type::type_form(self.promote(cls, range, errors));
                 }
             }
             _ => {}

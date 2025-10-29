@@ -95,6 +95,7 @@ impl ModuleStyle {
         if path.extension() == Some("pyi".as_ref()) {
             ModuleStyle::Interface
         } else {
+            // Both .py and .ipynb are executable
             ModuleStyle::Executable
         }
     }

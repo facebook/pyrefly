@@ -163,3 +163,51 @@ fn test_error_documentation_links() {
 
     interaction.shutdown();
 }
+
+#[test]
+fn test_unreachable_branch_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(None),
+        ..Default::default()
+    });
+
+    interaction.server.did_change_configuration();
+
+    interaction.client.expect_configuration_request(2, None);
+    interaction.server.send_configuration_response(
+        2,
+        serde_json::json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}},
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]),
+    );
+
+    interaction.server.did_open("unreachable_branch.py");
+    interaction.server.diagnostic("unreachable_branch.py");
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
+        result: Some(serde_json::json!({
+            "items": [
+                {
+                    "code": "unreachable-code",
+                    "message": "This code is unreachable for the current configuration",
+                    "range": {
+                        "end": {"character": 12, "line": 6},
+                        "start": {"character": 4, "line": 6}
+                    },
+                    "severity": 4,
+                    "source": "Pyrefly",
+                    "tags": [1]
+                }
+            ],
+            "kind": "full"
+        })),
+        error: None,
+    });
+
+    interaction.shutdown();
+}

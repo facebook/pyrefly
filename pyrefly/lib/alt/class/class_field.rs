@@ -1337,6 +1337,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             direct_annotation.as_ref(),
             &ty,
             &initialization,
+            initial_value,
             descriptor.is_some(),
             range,
             errors,
@@ -1430,6 +1431,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         direct_annotation: Option<&Annotation>,
         ty: &Type,
         initialization: &ClassFieldInitialization,
+        initial_value: &RawClassFieldInitialization,
         is_descriptor: bool,
         range: TextRange,
         errors: &ErrorCollector,
@@ -1445,7 +1447,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             errors,
         )
         .or_else(|| self.get_pydantic_root_model_class_field_type(class, name))
-        .or_else(|| self.get_django_field_type(ty, class))
+        .or_else(|| {
+            let initial_value_expr = match initial_value {
+                RawClassFieldInitialization::ClassBody(e) => e.as_ref(),
+                _ => None,
+            };
+            self.get_django_field_type(ty, class, Some(name), initial_value_expr)
+        })
     }
 
     fn determine_read_only_reason(
@@ -2050,6 +2058,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range,
                     errors,
                 )
+            {
+                continue;
+            }
+            // Special case: if parent field is an unannotated `x = None`, allow child to override
+            // with any type (effectively treating it as Optional[T])
+            if !want_class_field.has_explicit_annotation()
+                && matches!(want_class_field.ty(), Type::None)
             {
                 continue;
             }

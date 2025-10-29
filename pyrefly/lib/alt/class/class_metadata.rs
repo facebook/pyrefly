@@ -477,7 +477,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         extra_items = Some(ExtraItems::Default);
                     }
                     ("extra_items", value_ty) => {
-                        let ty = self.untype_opt(value_ty.clone(), cls.range()).unwrap_or_else(|| {
+                        let ty = self.untype_opt(value_ty.clone(), cls.range(), errors).unwrap_or_else(|| {
                             self.error(
                                 errors,
                                 cls.range(),
@@ -887,7 +887,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Ignore all type errors here since they'll be reported in `class_bases_of` anyway
                 let errors = ErrorCollector::new(self.module().dupe(), ErrorStyle::Never);
                 let ty = self.base_class_expr_infer_for_metadata(x, &errors);
-                match self.untype_opt(ty.clone(), x.range()) {
+                match self.untype_opt(ty.clone(), x.range(), &errors) {
                     None => BaseClassParseResult::InvalidType(ty, x.range()),
                     Some(ty) => parse_base_class_type(ty),
                 }

@@ -260,7 +260,7 @@ fn test_will_rename_files_changes_everything_when_indexed() {
 fn test_will_rename_files_without_config() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::None);
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
     let foo = "foo.py";
@@ -276,7 +276,7 @@ fn test_will_rename_files_without_config() {
         id: RequestId::from(2),
         result: Some(serde_json::json!({
             "changes": {
-                Url::from_file_path(root.path().join("foo.py")).unwrap().to_string(): [
+                Url::from_file_path(root.path().join("basic/foo.py")).unwrap().to_string(): [
                     {
                         "newText": "baz",
                         "range": {
@@ -304,10 +304,10 @@ fn test_will_rename_files_without_config() {
 fn test_will_rename_files_without_config_with_workspace_folder() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
-    let root_path = root.path();
-    let scope_uri = Url::from_file_path(root_path).unwrap();
+    let root_path = root.path().join("basic");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
 
-    interaction.set_root(root_path.to_path_buf());
+    interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings {
         workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
         ..Default::default()
@@ -319,12 +319,12 @@ fn test_will_rename_files_without_config_with_workspace_folder() {
     // Send will_rename_files request to rename bar.py to baz.py
     interaction.server.will_rename_files(bar, "baz.py");
 
-    // Expect a response with edits to update imports in foo.py using "changes" format
+    // Expect a response with edits to update imports in foo.py and foo_relative.py using "changes" format
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
         result: Some(serde_json::json!({
             "changes": {
-                Url::from_file_path(root.path().join("foo.py")).unwrap().to_string(): [
+                Url::from_file_path(root_path.join("foo.py")).unwrap().to_string(): [
                     {
                         "newText": "baz",
                         "range": {
@@ -340,7 +340,7 @@ fn test_will_rename_files_without_config_with_workspace_folder() {
                         }
                     }
                 ],
-                Url::from_file_path(root.path().join("foo_relative.py")).unwrap().to_string(): [
+                Url::from_file_path(root_path.join("foo_relative.py")).unwrap().to_string(): [
                     {
                         "newText": "baz",
                         "range": {

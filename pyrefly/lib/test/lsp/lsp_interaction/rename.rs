@@ -19,12 +19,12 @@ use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 fn test_prepare_rename() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
     interaction.server.did_open("foo.py");
 
-    let path = root.path().join("foo.py");
+    let path = root.path().join("basic/foo.py");
     interaction.server.send_message(Message::Request(Request {
         id: RequestId::from(2),
         method: "textDocument/prepareRename".to_owned(),

@@ -33,8 +33,8 @@ pub mod short_identifier;
 pub mod symbol_kind;
 pub mod sys_info;
 
-/// Suffixes of python files that we can be processed.
-pub const PYTHON_EXTENSIONS: &[&str] = &["py", "pyi"];
+/// Suffixes of python files that can be processed.
+pub const PYTHON_EXTENSIONS: &[&str] = &["py", "pyi", "ipynb"];
 
 /// Suffixes of compiled python modules
 pub const COMPILED_FILE_SUFFIXES: &[&str] = &["pyc", "pyx", "pyd"];

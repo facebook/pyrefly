@@ -1099,7 +1099,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !self.has_valid_annotation_syntax(expr, errors) {
             return Type::any_error();
         }
-        let untyped = self.untype_opt(ty.clone(), range);
+        let untyped = self.untype_opt(ty.clone(), range, errors);
         let mut ty = if let Some(untyped) = untyped {
             let validated =
                 self.validate_type_form(untyped, range, TypeFormContext::TypeAlias, errors);
@@ -3516,7 +3516,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// For example, in `def f(x: int): ...`, we evaluate `int` as a value, getting its type as
     /// `type[int]`, then call `untype(type[int])` to get the `int` annotation.
     pub fn untype(&self, ty: Type, range: TextRange, errors: &ErrorCollector) -> Type {
-        if let Some(t) = self.untype_opt(ty.clone(), range) {
+        if let Some(t) = self.untype_opt(ty.clone(), range, errors) {
             t
         } else {
             self.error(
@@ -3531,21 +3531,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn untype_opt(&self, mut ty: Type, range: TextRange) -> Option<Type> {
+    pub fn untype_opt(
+        &self,
+        mut ty: Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
         if let Type::Forall(forall) = ty {
             ty = self.promote_forall(*forall, range);
         };
-        match self.canonicalize_all_class_types(ty, range) {
+        match self.canonicalize_all_class_types(ty, range, errors) {
             Type::Union(xs) if !xs.is_empty() => {
                 let mut ts = Vec::new();
                 for x in xs {
-                    let t = self.untype_opt(x, range)?;
+                    let t = self.untype_opt(x, range, errors)?;
                     ts.push(t);
                 }
                 Some(self.unions(ts))
             }
             Type::Var(v) if let Some(_guard) = self.recurse(v) => {
-                self.untype_opt(self.solver().force_var(v), range)
+                self.untype_opt(self.solver().force_var(v), range, errors)
             }
             ty @ (Type::TypeVar(_)
             | Type::ParamSpec(_)
@@ -3556,13 +3561,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::None => Some(Type::None), // Both a value and a type
             Type::Ellipsis => Some(Type::Ellipsis), // A bit weird because of tuples, so just promote it
             Type::Any(style) => Some(style.propagate()),
-            Type::TypeAlias(ta) => self.untype_opt(ta.as_type(), range),
+            Type::TypeAlias(ta) => self.untype_opt(ta.as_type(), range, errors),
             t @ Type::Unpack(
                 box Type::Tuple(_) | box Type::TypeVarTuple(_) | box Type::Quantified(_),
             ) => Some(t),
-            Type::Unpack(box Type::Var(v)) if let Some(_guard) = self.recurse(v) => {
-                self.untype_opt(Type::Unpack(Box::new(self.solver().force_var(v))), range)
-            }
+            Type::Unpack(box Type::Var(v)) if let Some(_guard) = self.recurse(v) => self
+                .untype_opt(
+                    Type::Unpack(Box::new(self.solver().force_var(v))),
+                    range,
+                    errors,
+                ),
             Type::QuantifiedValue(q) => Some(q.to_type()),
             Type::ArgsValue(q) => Some(Type::Args(q)),
             Type::KwargsValue(q) => Some(Type::Kwargs(q)),

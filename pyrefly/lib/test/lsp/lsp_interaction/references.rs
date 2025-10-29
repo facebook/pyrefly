@@ -148,7 +148,7 @@ fn test_references_workspace_smaller_than_config() {
 #[test]
 fn test_references_cross_file_no_config() {
     let root = get_test_files_root();
-    let root_path = root.path().to_path_buf();
+    let root_path = root.path().join("basic");
     let scope_uri = Url::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
     interaction.set_root(root_path.clone());
@@ -191,7 +191,8 @@ fn test_references_cross_file_no_config() {
             {
                 "range":{"end":{"character":7,"line":9},"start":{"character":4,"line":9}},
                 "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
-            },            {
+            },
+            {
                 "range": {"start":{"line":6,"character":6},"end":{"character":9,"line":6}},
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
             },

@@ -189,6 +189,7 @@ impl<Function: FunctionTrait> CallTarget<Function> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum UnresolvedReason {
     LambdaArgument,
+    Mixed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -202,6 +203,21 @@ impl Unresolved {
         match self {
             Unresolved::False => true,
             Unresolved::True(_) => false,
+        }
+    }
+
+    fn join(self, other: Self) -> Self {
+        match (&self, &other) {
+            (Unresolved::True(left), Unresolved::True(right)) => {
+                if left == right {
+                    self.clone()
+                } else {
+                    Unresolved::True(UnresolvedReason::Mixed)
+                }
+            }
+            (Unresolved::True(..), Unresolved::False) => self.clone(),
+            (Unresolved::False, Unresolved::True(..)) => other.clone(),
+            (Unresolved::False, Unresolved::False) => Unresolved::False,
         }
     }
 }
@@ -301,6 +317,15 @@ impl<Function: FunctionTrait> CallCallees<Function> {
         higher_order_parameters: HashMap<u32, HigherOrderParameter<Function>>,
     ) {
         self.higher_order_parameters = higher_order_parameters;
+    }
+
+    fn join_in_place(&mut self, other: Self) {
+        self.call_targets.extend(other.call_targets);
+        self.init_targets.extend(other.init_targets);
+        self.new_targets.extend(other.new_targets);
+        self.higher_order_parameters
+            .extend(other.higher_order_parameters);
+        self.unresolved = self.unresolved.clone().join(other.unresolved);
     }
 }
 
@@ -915,7 +940,7 @@ impl<'a> CallGraphVisitor<'a> {
         callee_expr_suffix: Option<&str>,
         override_implicit_receiver: Option<ImplicitReceiver>,
     ) -> Option<CallTarget<FunctionRef>> {
-        match defining_class {
+        let call_target = match defining_class {
             Some(Type::ClassType(class_type)) => {
                 self.create_callee_from_class_field(class_type.class_object(), method)
                     .map(|function_ref| {
@@ -937,8 +962,27 @@ impl<'a> CallGraphVisitor<'a> {
                         )
                     })
             }
+            Some(Type::Union(types)) => types.iter().find_map(|type_| {
+                self.call_target_from_method_name(
+                    method,
+                    Some(type_),
+                    return_type,
+                    is_bound_method,
+                    callee_expr_suffix,
+                    override_implicit_receiver,
+                )
+            }),
             _ => None,
+        };
+        if call_target.is_none() {
+            debug_println!(
+                self.debug,
+                "Cannot find call target for method `{:#?}` in class `{:#?}`",
+                method,
+                defining_class,
+            );
         }
+        call_target
     }
 
     fn call_target_from_new_method(
@@ -988,11 +1032,11 @@ impl<'a> CallGraphVisitor<'a> {
             )
         };
 
-        let init_targets = init_method.map_or(
+        let mut init_targets = init_method.as_ref().map_or(
             object_init_method().into_iter().collect::<Vec<_>>(),
             |init_method| match init_method {
                 Type::BoundMethod(bound_method) => {
-                    extract_function_from_bound_method(&bound_method)
+                    extract_function_from_bound_method(bound_method)
                         .into_iter()
                         .filter_map(|function| {
                             self.call_target_from_method_name(
@@ -1009,28 +1053,42 @@ impl<'a> CallGraphVisitor<'a> {
                 _ => vec![],
             },
         );
+        if init_method.is_some()
+            && init_targets.is_empty()
+            && let Some(object_init_method) = object_init_method()
+        {
+            // TODO(T243217129): Remove this to treat the callees as obscure when unresolved
+            init_targets.push(object_init_method);
+        }
 
-        let new_targets = new_method.map_or(
+        let mut new_targets = new_method.as_ref().map_or(
             object_new_method().into_iter().collect::<Vec<_>>(),
             |new_method| match new_method {
                 Type::Function(function) => self
-                    .call_target_from_new_method(&function, return_type, callee_expr_suffix)
+                    .call_target_from_new_method(function, return_type, callee_expr_suffix)
                     .into_iter()
                     .collect::<Vec<_>>(),
                 Type::Overload(overload) => overload
                     .signatures
-                    .into_iter()
+                    .iter()
                     .filter_map(|overload_type| {
                         let function = match overload_type {
                             OverloadType::Function(function) => function,
-                            OverloadType::Forall(forall) => forall.body,
+                            OverloadType::Forall(forall) => &forall.body,
                         };
-                        self.call_target_from_new_method(&function, return_type, callee_expr_suffix)
+                        self.call_target_from_new_method(function, return_type, callee_expr_suffix)
                     })
                     .collect::<Vec<_>>(),
                 _ => vec![],
             },
         );
+        if new_method.is_some()
+            && new_targets.is_empty()
+            && let Some(object_new_method) = object_new_method()
+        {
+            // TODO(T243217129): Remove this to treat the callees as obscure when unresolved
+            new_targets.push(object_new_method);
+        }
 
         CallCallees {
             call_targets: vec![],
@@ -1038,6 +1096,106 @@ impl<'a> CallGraphVisitor<'a> {
             new_targets,
             higher_order_parameters: HashMap::new(),
             unresolved: Unresolved::False,
+        }
+    }
+
+    fn resolve_pyrefly_target(
+        &self,
+        pyrefly_target: Option<&crate::alt::call::CallTarget>,
+        callee_expr: AnyNodeRef,
+        callee_type: Option<&Type>,
+        return_type: Option<ScalarTypeProperties>,
+        callee_expr_suffix: Option<&str>,
+    ) -> Option<CallCallees<FunctionRef>> {
+        match pyrefly_target {
+            Some(crate::alt::call::CallTarget::BoundMethod(type_, target)) => {
+                // Calling a method on a class instance.
+                let call_targets = self
+                    .call_target_from_method_name(
+                        &method_name_from_function(&target.1),
+                        Some(type_),
+                        return_type,
+                        /* is_bound_method */ true,
+                        callee_expr_suffix,
+                        /* override_implicit_receiver*/ None,
+                    )
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                Some(CallCallees {
+                    call_targets,
+                    init_targets: vec![],
+                    new_targets: vec![],
+                    higher_order_parameters: HashMap::new(),
+                    unresolved: Unresolved::False,
+                })
+            }
+            Some(crate::alt::call::CallTarget::Function(function)) => {
+                // Sometimes this means calling a function (e.g., static method) on a class instance. Sometimes
+                // this could be simply calling a module top-level function, which can be handled when the stack
+                // of D85441657 enables uniquely identifying a definition from a type.
+                let call_targets = self
+                    .call_target_from_method_name(
+                        &method_name_from_function(&function.1),
+                        callee_type,
+                        return_type,
+                        /* is_bound_method */ false,
+                        callee_expr_suffix,
+                        /* override_implicit_receiver*/ None,
+                    )
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                Some(CallCallees {
+                    call_targets,
+                    init_targets: vec![],
+                    new_targets: vec![],
+                    higher_order_parameters: HashMap::new(),
+                    unresolved: Unresolved::False,
+                })
+            }
+            Some(crate::alt::call::CallTarget::Class(class_type, _)) => {
+                // Constructing a class instance.
+                self.module_context
+                    .transaction
+                    .ad_hoc_solve(&self.module_context.handle, |solver| {
+                        let new_method = solver.get_dunder_new(class_type);
+                        let overrides_new = new_method.is_some();
+                        let init_method = solver
+                            .get_dunder_init(class_type, /* get_object_init */ !overrides_new);
+                        (init_method, new_method)
+                    })
+                    .map(|(init_method, new_method)| {
+                        self.resolve_constructor_callees(
+                            init_method,
+                            new_method,
+                            return_type,
+                            callee_expr_suffix,
+                        )
+                    })
+            }
+            Some(crate::alt::call::CallTarget::Union(targets)) => targets
+                .iter()
+                .flat_map(|target| {
+                    self.resolve_pyrefly_target(
+                        Some(target),
+                        callee_expr,
+                        callee_type,
+                        return_type,
+                        callee_expr_suffix,
+                    )
+                })
+                .reduce(|mut so_far, call_target| {
+                    so_far.join_in_place(call_target);
+                    so_far
+                }),
+            _ => {
+                debug_println!(
+                    self.debug,
+                    "Unrecognized pyrefly target `{:#?}` for `{:#?}`",
+                    pyrefly_target,
+                    callee_expr,
+                );
+                None
+            }
         }
     }
 
@@ -1130,81 +1288,13 @@ impl<'a> CallGraphVisitor<'a> {
                         .and_then(|type_| solver.as_call_target(type_.clone()))
                 })
                 .flatten();
-            match pyrefly_target {
-                Some(crate::alt::call::CallTarget::BoundMethod(type_, target)) => {
-                    // Calling a method on a class instance.
-                    let call_targets = self
-                        .call_target_from_method_name(
-                            &method_name_from_function(&target.1),
-                            Some(&type_),
-                            return_type,
-                            /* is_bound_method */ true,
-                            callee_expr_suffix,
-                            /* override_implicit_receiver*/ None,
-                        )
-                        .into_iter()
-                        .collect::<Vec<_>>();
-                    Some(CallCallees {
-                        call_targets,
-                        init_targets: vec![],
-                        new_targets: vec![],
-                        higher_order_parameters: HashMap::new(),
-                        unresolved: Unresolved::False,
-                    })
-                }
-                Some(crate::alt::call::CallTarget::Function(function)) => {
-                    // Calling a function (e.g., static method) on a class instance.
-                    let call_targets = self
-                        .call_target_from_method_name(
-                            &method_name_from_function(&function.1),
-                            callee_type.as_ref(),
-                            return_type,
-                            /* is_bound_method */ false,
-                            callee_expr_suffix,
-                            /* override_implicit_receiver*/ None,
-                        )
-                        .into_iter()
-                        .collect::<Vec<_>>();
-                    Some(CallCallees {
-                        call_targets,
-                        init_targets: vec![],
-                        new_targets: vec![],
-                        higher_order_parameters: HashMap::new(),
-                        unresolved: Unresolved::False,
-                    })
-                }
-                Some(crate::alt::call::CallTarget::Class(class_type, _)) => {
-                    // Constructing a class instance.
-                    self.module_context
-                        .transaction
-                        .ad_hoc_solve(&self.module_context.handle, |solver| {
-                            let new_method = solver.get_dunder_new(&class_type);
-                            let overrides_new = new_method.is_some();
-                            let init_method = solver.get_dunder_init(
-                                &class_type,
-                                /* get_object_init */ !overrides_new,
-                            );
-                            (init_method, new_method)
-                        })
-                        .map(|(init_method, new_method)| {
-                            self.resolve_constructor_callees(
-                                init_method,
-                                new_method,
-                                return_type,
-                                callee_expr_suffix,
-                            )
-                        })
-                }
-                _ => {
-                    debug_println!(
-                        self.debug,
-                        "Unrecognized pyrefly target `{:#?}` for `{:#?}`",
-                        pyrefly_target,
-                        name,
-                    );
-                    None
-                }
-            }
+            self.resolve_pyrefly_target(
+                pyrefly_target.as_ref(),
+                AnyNodeRef::from(name),
+                callee_type.as_ref(),
+                return_type,
+                callee_expr_suffix,
+            )
         }
     }
 
@@ -1478,6 +1568,7 @@ impl<'a> CallGraphVisitor<'a> {
         parent_expression: Option<&Expr>,
         assignment_targets: Option<&Vec<&Expr>>,
     ) -> Option<ExpressionCallees<FunctionRef>> {
+        debug_println!(self.debug, "Resolving callees for expression `{:#?}`", expr);
         let is_nested_callee_or_base =
             parent_expression.is_some_and(|parent_expression| match parent_expression {
                 // For example, avoid visiting `x.__call__` in `x.__call__(1)`

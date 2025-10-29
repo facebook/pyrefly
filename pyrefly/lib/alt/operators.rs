@@ -253,8 +253,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Optimisation: If we have `Union[a, b] | Union[c, d]`, instead of unioning
         // (a | c) | (a | d) | (b | c) | (b | d), we can just do one union.
         if x.op == Operator::BitOr
-            && let Some(l) = self.untype_opt(lhs.clone(), x.left.range())
-            && let Some(r) = self.untype_opt(rhs.clone(), x.right.range())
+            && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
+            && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
         {
             return Type::type_form(self.union(l, r));
         }
@@ -270,8 +270,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else if let Type::Any(style) = &lhs {
                     style.propagate()
                 } else if x.op == Operator::BitOr
-                    && let Some(l) = self.untype_opt(lhs.clone(), x.left.range())
-                    && let Some(r) = self.untype_opt(rhs.clone(), x.right.range())
+                    && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
+                    && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
                 {
                     Type::type_form(self.union(l, r))
                 } else if x.op == Operator::Add

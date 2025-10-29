@@ -49,6 +49,23 @@ use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
 use crate::types::types::Type;
 
+trait UnwrapOrDefaultAndLog<T: Default> {
+    fn unwrap_or_default_and_log(self) -> T;
+}
+
+impl<T: Default> UnwrapOrDefaultAndLog<T> for Option<T> {
+    #[track_caller]
+    fn unwrap_or_default_and_log(self) -> T {
+        match self {
+            Some(x) => x,
+            None => {
+                tracing::warn!("unexpected None");
+                Default::default()
+            }
+        }
+    }
+}
+
 const TYPE_SEPARATORS: [char; 12] = [',', '|', '[', ']', '{', '}', '(', ')', '=', ':', '\'', '"'];
 
 fn hash(x: &[u8]) -> String {
@@ -990,32 +1007,53 @@ impl GleanState<'_> {
             .collect()
     }
 
-    fn import_from_facts(
-        &mut self,
-        import_from: &StmtImportFrom,
-        top_level_declaration: &python::Declaration,
-    ) -> Vec<DeclarationInfo> {
+    fn get_from_module(&mut self, import_from: &StmtImportFrom) -> Option<String> {
         let from_module_name = import_from.module.as_ref().map(|x| x.id());
 
-        let from_module = if import_from.level > 0 {
-            self.module_name
+        let (from_module, dots_range) = if import_from.level > 0 {
+            let module = self
+                .module_name
                 .new_maybe_relative(
                     self.module.path().is_init(),
                     import_from.level,
                     from_module_name,
                 )
-                .map(|x| x.to_string())
+                .map(|x| x.to_string());
+
+            let range = self
+                .module
+                .code_at(import_from.range())
+                .match_indices(['.'])
+                .next()
+                .map(|(s, _)| {
+                    let offset = TextSize::try_from(s).unwrap();
+                    let len = TextSize::from(import_from.level);
+                    TextRange::at(import_from.range().start() + offset, len)
+                });
+            (module, range)
         } else {
-            from_module_name.map(|x| x.to_string())
+            (from_module_name.map(|x| x.to_string()), None)
         };
 
-        let from_module_fact = python::Name::new(from_module.clone().unwrap_or_default());
-        if let Some(module) = &import_from.module {
-            self.add_xref(python::XRefViaName {
-                target: from_module_fact.clone(),
-                source: to_span(module.range()),
-            });
-        }
+        let from_module_range = import_from.module.as_ref().map(|id| id.range());
+        let range = from_module_range
+            .and_then(|x| dots_range.map(|y| x.cover(y)))
+            .or(from_module_range)
+            .or(dots_range);
+
+        self.add_xref(python::XRefViaName {
+            target: python::Name::new(from_module.clone().unwrap_or_default_and_log()),
+            source: to_span(range.unwrap_or_default_and_log()),
+        });
+        from_module
+    }
+
+    fn import_from_facts(
+        &mut self,
+        import_from: &StmtImportFrom,
+        top_level_declaration: &python::Declaration,
+    ) -> Vec<DeclarationInfo> {
+        let from_module = self.get_from_module(import_from);
 
         let mut decl_infos = vec![];
         for import in &import_from.names {
@@ -1024,7 +1062,7 @@ impl GleanState<'_> {
 
             if *from_name.id.as_str() == *star_import {
                 let import_star = python::ImportStarStatement::new(
-                    from_module_fact.clone(),
+                    python::Name::new(from_module.clone().unwrap_or_default()),
                     self.facts.module.clone(),
                 );
                 self.facts

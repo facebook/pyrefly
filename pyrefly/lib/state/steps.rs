@@ -135,12 +135,12 @@ impl Step {
         } else {
             ErrorStyle::Never
         };
-        let (code, self_error) = Load::load_from_path(ctx.path, ctx.memory);
+        let (code_or_notebook, self_error) = Load::load_from_path(ctx.path, ctx.memory);
         Arc::new(Load::load_from_data(
             ctx.module,
             ctx.path.dupe(),
             error_style,
-            code,
+            code_or_notebook,
             self_error,
         ))
     }

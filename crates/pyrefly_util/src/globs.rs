@@ -142,7 +142,7 @@ impl Glob {
     }
 
     fn is_python_extension(ext: Option<&OsStr>) -> bool {
-        ext.is_some_and(|e| e == "py" || e == "pyi" || e == "pyw")
+        ext.is_some_and(|e| e == "py" || e == "pyi" || e == "pyw" || e == "ipynb")
     }
 
     /// Returns true if the given file should be included in results.
@@ -517,13 +517,6 @@ impl Globs {
         self.filtered_files(&GlobFilter::empty(), None)
     }
 
-    /// Same as `files`, but with an upper limit on the number of files returned.
-    /// This is useful for indexing of workspaces, where we don't want to index too many files
-    /// when the user decides to open VSCode at the root of the filesystem.
-    pub fn files_with_limit(&self, limit: usize) -> anyhow::Result<Vec<PathBuf>> {
-        self.filtered_files(&GlobFilter::empty(), Some(limit))
-    }
-
     pub fn covers(&self, path: &Path) -> bool {
         self.matches(path)
     }
@@ -683,6 +676,15 @@ impl Includes for FilteredGlobs {
 
     fn errors(&mut self) -> Vec<anyhow::Error> {
         self.filter.errors()
+    }
+}
+
+impl FilteredGlobs {
+    /// Same as `files`, but with an upper limit on the number of files returned.
+    /// This is useful for indexing of workspaces, where we don't want to index too many files
+    /// when the user decides to open VSCode at the root of the filesystem.
+    pub fn files_with_limit(&self, limit: usize) -> anyhow::Result<Vec<PathBuf>> {
+        self.includes.filtered_files(&self.filter, Some(limit))
     }
 }
 

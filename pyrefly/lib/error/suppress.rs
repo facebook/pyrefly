@@ -29,7 +29,11 @@ use crate::state::errors::Errors;
 fn dedup_errors(errors: &[Error]) -> SmallMap<usize, String> {
     let mut deduped_errors: SmallMap<usize, Vec<String>> = SmallMap::new();
     for error in errors {
-        let line = error.display_range().start.line.to_zero_indexed() as usize;
+        let line = error
+            .display_range()
+            .start
+            .line_within_file()
+            .to_zero_indexed() as usize;
         let error_name = error.error_kind().to_name().to_owned();
         deduped_errors.entry(line).or_default().push(error_name);
     }
@@ -46,6 +50,9 @@ fn dedup_errors(errors: &[Error]) -> SmallMap<usize, String> {
 
 // TODO: In future have this return an ast as well as the string for comparison
 fn read_and_validate_file(path: &Path) -> anyhow::Result<String> {
+    if path.extension().and_then(|e| e.to_str()) == Some("ipynb") {
+        return Err(anyhow!("Cannot suppress errors in notebook file"));
+    }
     let file = fs_anyhow::read_to_string(path);
     match file {
         Ok(file) => {
@@ -176,7 +183,7 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) -> usize {
             suppressed_errors
                 .entry(path)
                 .or_default()
-                .insert(e.display_range().start.line);
+                .insert(e.display_range().start.line_within_file());
         }
     }
 
@@ -421,8 +428,8 @@ def foo() -> None:
             r#"
 {GENERATED_TOKEN}
 
-def bar() -> None: 
-pass 
+def bar() -> None:
+pass
     "#,
         );
         assert_suppress_errors(&file_contents, &file_contents);
