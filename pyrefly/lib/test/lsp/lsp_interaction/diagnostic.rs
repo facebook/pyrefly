@@ -82,7 +82,7 @@ fn test_unexpected_keyword_range() {
 }
 
 #[test]
-fn test_error_documentation_links() {
+fn test_redundant_cast_uses_unnecessary_tag() {
     let test_files_root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
@@ -94,66 +94,82 @@ fn test_error_documentation_links() {
     interaction.server.did_change_configuration();
 
     interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
+    interaction.server.send_configuration_response(
+        2,
+        serde_json::json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}},
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]),
+    );
 
-    interaction.server.did_open("error_docs_test.py");
-    interaction.server.diagnostic("error_docs_test.py");
+    interaction.server.did_open("redundant_cast.py");
+    interaction.server.diagnostic("redundant_cast.py");
 
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
         result: Some(serde_json::json!({
             "items": [
                 {
-                    "code": "bad-assignment",
+                    "code": "redundant-cast",
                     "codeDescription": {
-                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#redundant-cast"
                     },
-                    "message": "`Literal['']` is not assignable to `int`",
+                    "message": "Redundant cast: `int` is the same type as `int`",
                     "range": {
-                        "end": {"character": 11, "line": 9},
-                        "start": {"character": 9, "line": 9}
+                        "end": {"character": 27, "line": 4},
+                        "start": {"character": 15, "line": 4}
                     },
-                    "severity": 1,
-                    "source": "Pyrefly"
-                },
+                    "severity": 2,
+                    "source": "Pyrefly",
+                    "tags": [1]
+                }
+            ],
+            "kind": "full"
+        })),
+        error: None,
+    });
+
+    interaction.shutdown();
+}
+
+#[test]
+fn test_unreachable_branch_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(None),
+        ..Default::default()
+    });
+
+    interaction.server.did_change_configuration();
+
+    interaction.client.expect_configuration_request(2, None);
+    interaction.server.send_configuration_response(
+        2,
+        serde_json::json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}},
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]),
+    );
+
+    interaction.server.did_open("unreachable_branch.py");
+    interaction.server.diagnostic("unreachable_branch.py");
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
+        result: Some(serde_json::json!({
+            "items": [
                 {
-                    "code": "bad-context-manager",
-                    "codeDescription": {
-                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-context-manager"
-                    },
-                    "message": "Cannot use `A` as a context manager\n  Object of class `A` has no attribute `__enter__`",
+                    "code": "unreachable-code",
+                    "message": "This code is unreachable for the current configuration",
                     "range": {
-                        "end": {"character": 8, "line": 17},
-                        "start": {"character": 5, "line": 17}
+                        "end": {"character": 25, "line": 4},
+                        "start": {"character": 4, "line": 4}
                     },
-                    "severity": 1,
-                    "source": "Pyrefly"
-                },
-                {
-                    "code": "bad-context-manager",
-                    "codeDescription": {
-                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-context-manager"
-                    },
-                    "message": "Cannot use `A` as a context manager\n  Object of class `A` has no attribute `__exit__`",
-                    "range": {
-                        "end": {"character": 8, "line": 17},
-                        "start": {"character": 5, "line": 17}
-                    },
-                    "severity": 1,
-                    "source": "Pyrefly"
-                },
-                {
-                    "code": "missing-attribute",
-                    "codeDescription": {
-                        "href": "https://pyrefly.org/en/docs/error-kinds/#missing-attribute"
-                    },
-                    "message": "Object of class `object` has no attribute `nonexistent_method`",
-                    "range": {
-                        "end": {"character": 22, "line": 22},
-                        "start": {"character": 0, "line": 22}
-                    },
-                    "severity": 1,
-                    "source": "Pyrefly"
+                    "severity": 4,
+                    "source": "Pyrefly",
+                    "tags": [1]
                 }
             ],
             "kind": "full"

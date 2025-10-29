@@ -186,16 +186,9 @@ impl SemanticTokenBuilder {
         &mut self,
         range: TextRange,
         token_type: SemanticTokenType,
-        mut token_modifiers: Vec<SemanticTokenModifier>,
+        token_modifiers: Vec<SemanticTokenModifier>,
     ) {
         if self.limit_range.is_none_or(|x| x.contains_range(range)) {
-            if self.is_disabled(range)
-                && token_modifiers
-                    .iter()
-                    .all(|modifier| *modifier != SemanticTokenModifier::DEPRECATED)
-            {
-                token_modifiers.push(SemanticTokenModifier::DEPRECATED);
-            }
             self.tokens.push(SemanticTokenWithFullRange {
                 range,
                 token_type,

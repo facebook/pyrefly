@@ -201,10 +201,10 @@ line: 3, column: 7, length: 12, text: version_info
 token-type: property
 
 line: 4, column: 10, length: 6, text: Legacy
-token-type: class, token-modifiers: [deprecated]
+token-type: class
 
 line: 5, column: 8, length: 5, text: value
-token-type: variable, token-modifiers: [deprecated]
+token-type: variable
 
 line: 7, column: 10, length: 6, text: Modern
 token-type: class

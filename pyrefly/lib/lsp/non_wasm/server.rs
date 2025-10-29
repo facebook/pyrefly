@@ -37,6 +37,8 @@ use lsp_types::CompletionResponse;
 use lsp_types::ConfigurationItem;
 use lsp_types::ConfigurationParams;
 use lsp_types::Diagnostic;
+use lsp_types::DiagnosticSeverity;
+use lsp_types::DiagnosticTag;
 use lsp_types::DidChangeConfigurationParams;
 use lsp_types::DidChangeTextDocumentParams;
 use lsp_types::DidChangeWatchedFilesClientCapabilities;
@@ -200,6 +202,7 @@ use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
+use crate::state::semantic_tokens::disabled_ranges_for_module;
 use crate::state::state::CommittingTransaction;
 use crate::state::state::State;
 use crate::state::state::Transaction;
@@ -2051,6 +2054,30 @@ impl Server {
         for e in transaction.get_errors(once(&handle)).collect_errors().shown {
             if let Some((_, diag)) = self.get_diag_if_shown(&e, open_files) {
                 items.push(diag);
+            }
+        }
+        if let (Some(ast), Some(module_info)) = (
+            transaction.get_ast(&handle),
+            transaction.get_module_info(&handle),
+        ) {
+            let disabled_ranges = disabled_ranges_for_module(ast.as_ref(), handle.sys_info());
+            let mut seen = HashSet::new();
+            for range in disabled_ranges {
+                if range.is_empty() || !seen.insert(range) {
+                    continue;
+                }
+                let lsp_range = module_info.lined_buffer().to_lsp_range(range);
+                items.push(Diagnostic {
+                    range: lsp_range,
+                    severity: Some(DiagnosticSeverity::HINT),
+                    source: Some("Pyrefly".to_owned()),
+                    message: "This code is unreachable for the current configuration".to_owned(),
+                    code: Some(NumberOrString::String("unreachable-code".to_owned())),
+                    code_description: None,
+                    related_information: None,
+                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    data: None,
+                });
             }
         }
         DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
