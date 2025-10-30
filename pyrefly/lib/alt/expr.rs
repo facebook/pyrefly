@@ -1011,7 +1011,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for (i, value) in values.iter().enumerate() {
             // If there isn't a hint for the overall expression, use the preceding branches as a "soft" hint
             // for the next one. Most useful for expressions like `optional_list or []`.
-            let hint = hint.or_else(|| Some(HintRef::new(&t_acc, None)));
+            let hint = hint.or_else(|| {
+                if t_acc.is_never() {
+                    None
+                } else {
+                    Some(HintRef::new(&t_acc, None))
+                }
+            });
             let mut t = self.expr_infer_with_hint(value, hint, errors);
             self.expand_vars_mut(&mut t);
             if i < last_index && should_shortcircuit(&t, value.range()) {
