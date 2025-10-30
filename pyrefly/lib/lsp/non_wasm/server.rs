@@ -1098,15 +1098,20 @@ impl Server {
             // Get diagnostic mode for this file's workspace
             let diagnostic_mode = self.workspaces.get_diagnostic_mode(&path);
 
-            // Check if we should show this diagnostic based on mode
-            let should_show_based_on_mode = match diagnostic_mode {
-                DiagnosticMode::Workspace => true, // Show all files in workspace mode
-                DiagnosticMode::OpenFilesOnly => open_files.contains_key(&path), // Only open files
+            // File must be in project (not excluded) to show diagnostics
+            let is_in_project =
+                config.project_includes.covers(&path) && !config.project_excludes.covers(&path);
+
+            // Then check based on diagnostic mode
+            let is_open = open_files.contains_key(&path);
+            let should_show = match diagnostic_mode {
+                // Workspace mode: show if in project (open or closed files)
+                DiagnosticMode::Workspace => is_in_project,
+                // OpenFilesOnly mode: show if open AND in project
+                DiagnosticMode::OpenFilesOnly => is_open && is_in_project,
             };
 
-            if should_show_based_on_mode
-                && config.project_includes.covers(&path)
-                && !config.project_excludes.covers(&path)
+            if should_show
                 && self
                     .type_error_display_status(e.path().as_path())
                     .is_enabled()
@@ -1198,14 +1203,26 @@ impl Server {
         let handles =
             Self::validate_in_memory_for_transaction(&self.state, &self.open_files, transaction);
 
+        // Check if any workspace is in workspace diagnostic mode
+        let has_workspace_mode = self.workspaces.roots().iter().any(|root| {
+            matches!(
+                self.workspaces.get_diagnostic_mode(root),
+                DiagnosticMode::Workspace
+            )
+        });
+
         let publish = |transaction: &Transaction| {
             let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
             let open_files = self.open_files.read();
 
-            // Collect errors from transaction
-            // In workspace mode, handles includes all project files
-            // The filtering by diagnostic mode is handled in get_diag_if_shown
-            let errors = transaction.get_errors(&handles);
+            // In workspace mode, use get_all_errors() to get errors from all project files.
+            // In open-files-only mode, use get_errors(&handles) to only get errors from open files.
+            // The filtering by diagnostic mode and project includes/excludes is handled in get_diag_if_shown.
+            let errors = if has_workspace_mode {
+                transaction.get_all_errors()
+            } else {
+                transaction.get_errors(&handles)
+            };
 
             for e in errors.collect_errors().shown {
                 if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files) {
@@ -1214,7 +1231,13 @@ impl Server {
             }
 
             for (path, diagnostics) in diags.iter_mut() {
-                let handle = make_open_handle(&self.state, path);
+                // Use appropriate handle type: memory handle for open files, filesystem for others
+                let is_open = open_files.contains_key(path);
+                let handle = if is_open {
+                    make_open_handle(&self.state, path)
+                } else {
+                    handle_from_module_path(&self.state, ModulePath::filesystem(path.clone()))
+                };
                 Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
             }
             self.connection.publish_diagnostics(diags);
