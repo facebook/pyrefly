@@ -262,9 +262,7 @@ fn test_import_completion_skips_hidden_directories() {
                 && let Some(items_array) = items.as_array()
             {
                 let contains_hidden = items_array.iter().any(|item| {
-                    item.get("label")
-                        .and_then(|label| label.as_str())
-                        == Some(".hiddenpkg")
+                    item.get("label").and_then(|label| label.as_str()) == Some(".hiddenpkg")
                 });
                 return !items_array.is_empty() && !contains_hidden;
             }
