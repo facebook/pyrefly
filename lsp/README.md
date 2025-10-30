@@ -32,5 +32,12 @@ settings:
   will provide both type errors and other language features like go-to
   definition, intellisense, hover, etc. Enable this option to keep type errors
   from Pyrefly unchanged but use VSCode's Python extension for everything else.
+ - `python.pyrefly.analysis.disabledLanguageServices` [boolean: false]: an
+   analysis-level option that disables language-service features produced by
+   Pyrefly's analysis (for example: go-to definition, hover, and other
+   navigation/intelligence features) while leaving Pyrefly diagnostics
+   (type errors) intact. Use this when you want Pyrefly's type checking but
+   prefer the editor's language features or another provider for those
+   services.
 - `pyrefly.lspPath` [string: '']: if your platform is not supported, you can
   build pyrefly from source and specify the binary here.
