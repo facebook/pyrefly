@@ -206,6 +206,7 @@ impl DisabledLanguageServices {
     /// Uses the METHOD constants from lsp_types::request::* types
     pub fn is_disabled(&self, method: &str) -> bool {
         match method {
+            "textDocument/provideType" => false, // Always enabled
             "textDocument/definition" => self.definition,
             "textDocument/typeDefinition" => self.type_definition,
             "textDocument/codeAction" => self.code_action,
