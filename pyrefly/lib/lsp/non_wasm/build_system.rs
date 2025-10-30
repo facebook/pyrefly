@@ -5,12 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
 
 use dupe::Dupe as _;
-use pyrefly_build::handle::Handle;
 use pyrefly_config::config::ConfigFile;
 use pyrefly_python::COMPILED_FILE_SUFFIXES;
 use pyrefly_python::PYTHON_EXTENSIONS;
@@ -18,9 +19,11 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::lock::Mutex;
+use pyrefly_util::lock::RwLock;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
@@ -51,22 +54,28 @@ pub fn should_requery_build_system(events: &CategorizedEvents) -> bool {
 /// Attempts to requery any open sourced_dbs for open files, and if there are changes,
 /// invalidate find and perform a recheck.
 pub fn queue_source_db_rebuild_and_recheck(
-    state: &State,
+    state: Arc<State>,
     invalidated_configs: Arc<Mutex<SmallSet<ArcId<ConfigFile>>>>,
     sourcedb_queue: HeavyTaskQueue,
     lsp_queue: LspQueue,
-    handles: &[Handle],
+    open_files: Arc<RwLock<HashMap<PathBuf, Arc<String>>>>,
 ) {
-    let mut configs_to_paths: SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>> = SmallMap::new();
-    let config_finder = state.config_finder();
-    for handle in handles {
-        let config = config_finder.python_file(handle.module(), handle.path());
-        configs_to_paths
-            .entry(config)
-            .or_default()
-            .insert(handle.path().dupe());
-    }
     sourcedb_queue.queue_task(Box::new(move || {
+        let mut configs_to_paths: SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>> =
+            SmallMap::new();
+        let config_finder = state.config_finder();
+        let handles = open_files
+            .read()
+            .keys()
+            .map(|x| make_open_handle(&state, x))
+            .collect::<Vec<_>>();
+        for handle in handles {
+            let config = config_finder.python_file(handle.module(), handle.path());
+            configs_to_paths
+                .entry(config)
+                .or_default()
+                .insert(handle.path().dupe());
+        }
         let new_invalidated_configs: SmallSet<ArcId<ConfigFile>> = configs_to_paths
             .into_iter()
             .filter(|(c, files)| match c.requery_source_db(files) {

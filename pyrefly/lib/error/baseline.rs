@@ -43,7 +43,7 @@ impl BaselineKey {
                 .to_string_lossy()
                 .into_owned(),
             name: error.error_kind().to_name().to_owned(),
-            column: error.display_range().start.column.get() as usize,
+            column: error.display_range().start.column().get() as usize,
         }
     }
 }

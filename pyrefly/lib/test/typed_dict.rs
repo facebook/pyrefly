@@ -174,6 +174,31 @@ def test(a: A) -> None:
 );
 
 testcase!(
+    test_typed_dict_inheritance_field_qualifiers,
+    r#"
+from typing import NotRequired, ReadOnly, Required, TypedDict
+
+class ParentRequired(TypedDict):
+    x: int
+
+class ChildOptional(ParentRequired):
+    x: NotRequired[int]  # E: TypedDict field `x` in `ChildOptional` must remain required because parent TypedDict `ParentRequired` defines it as required
+
+class ParentOptional(TypedDict, total=False):
+    x: int
+
+class ChildRequired(ParentOptional):
+    x: Required[int]  # E: TypedDict field `x` in `ChildRequired` cannot be made required; parent TypedDict `ParentOptional` defines it as non-required
+
+class ParentMutable(TypedDict):
+    x: int
+
+class ChildReadOnly(ParentMutable):
+    x: ReadOnly[int]  # E: TypedDict field `x` in `ChildReadOnly` cannot be marked read-only; parent TypedDict `ParentMutable` defines it as mutable
+"#,
+);
+
+testcase!(
     test_typed_dict_contextual,
     r#"
 from typing import TypedDict
@@ -1756,5 +1781,19 @@ class MyDict(TypedDict):
 fieldsets: tuple[tuple[str, MyDict], ...] | None = (
     ("A", {"x": 1, "y": "2"}),
 )
+    "#,
+);
+
+testcase!(
+    test_type_of_typeddict_dunder_bool,
+    r#"
+from typing import TypedDict
+class D1(TypedDict):
+    a: int
+    b: str
+def func(d: type[D1] | None) -> int:
+    if d:
+        return 1
+    return 2
     "#,
 );

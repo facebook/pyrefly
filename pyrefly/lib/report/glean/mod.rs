@@ -170,6 +170,15 @@ class B:
         return False
 "#;
 
+    let exports_all = r#"from typing import Union as U
+x = 1
+y = 2
+
+__all__ = ["x", "U"]
+
+__all__ += ["y"]
+"#;
+
     let files = [
         ("simple", simple_code),
         ("classes", classes_code),
@@ -178,6 +187,7 @@ class B:
         ("return_types", return_types),
         ("calls", calls),
         ("type_lit_str", type_lit_str),
+        ("exports_all", exports_all),
     ];
     let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Everything);
     let transaction = state.transaction();

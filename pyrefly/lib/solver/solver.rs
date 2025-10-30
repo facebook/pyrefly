@@ -98,7 +98,7 @@ impl Display for Variable {
                     write!(f, "Quantified({k})")
                 }
             }
-            Variable::LoopRecursive(t) => write!(f, "LoopRecursive({t})"),
+            Variable::LoopRecursive(t) => write!(f, "LoopRecursive(prior={t})"),
             Variable::Recursive => write!(f, "Recursive"),
             Variable::Parameter => write!(f, "Parameter"),
             Variable::Unwrap => write!(f, "Unwrap"),
@@ -343,8 +343,8 @@ impl Solver {
                 let lock = self.variables.lock();
                 if let Some(_guard) = lock.recurse(*x, recurser) {
                     let variable = lock.get(*x);
-                    if let Variable::Answer(w) = &*variable {
-                        *t = w.clone();
+                    if let Variable::Answer(ty) = &*variable {
+                        *t = ty.clone();
                         drop(variable);
                         drop(lock);
                         self.expand_with_limit(t, limit - 1, recurser);
@@ -834,11 +834,11 @@ impl Solver {
     /// Record a variable that is used recursively.
     pub fn record_recursive<Ans: LookupAnswer>(
         &self,
-        v: Var,
-        t: Type,
+        var: Var,
+        ty: Type,
         type_order: TypeOrder<Ans>,
         errors: &ErrorCollector,
-        loc: TextRange,
+        range: TextRange,
     ) {
         fn expand(t: Type, variables: &Variables, recurser: &VarRecurser, res: &mut Vec<Type>) {
             match t {
@@ -863,7 +863,7 @@ impl Solver {
         }
 
         let lock = self.variables.lock();
-        let variable = lock.get(v);
+        let variable = lock.get(var);
         match &*variable {
             Variable::Answer(forced) => {
                 let forced = forced.clone();
@@ -872,13 +872,13 @@ impl Solver {
                 // We got forced into choosing a type to satisfy a subset constraint, so check we are OK with that.
                 // Since we have already used `forced`, and will continue to do so, important that what we expect
                 // is more restrictive (so the `forced` is an over-approximation).
-                if self.is_subset_eq(&t, &forced, type_order).is_err() {
+                if self.is_subset_eq(&ty, &forced, type_order).is_err() {
                     // Poor error message, but overall, this is a terrible experience for users.
                     self.error(
-                        &t,
+                        &ty,
                         &forced,
                         errors,
-                        loc,
+                        range,
                         &|| TypeCheckContext::of_kind(TypeCheckKind::CycleBreaking),
                         SubsetError::Other,
                     );
@@ -890,10 +890,10 @@ impl Solver {
                 // possibilities, so just ignore it.
                 let mut res = Vec::new();
                 // First expand all union/var into a list of the possible unions
-                expand(t, &lock, &VarRecurser::new(), &mut res);
+                expand(ty, &lock, &VarRecurser::new(), &mut res);
                 // Then remove any reference to self, before unioning it back together
-                res.retain(|x| x != &Type::Var(v));
-                lock.update(v, Variable::Answer(unions(res)));
+                res.retain(|x| x != &Type::Var(var));
+                lock.update(var, Variable::Answer(unions(res)));
             }
         }
     }

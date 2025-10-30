@@ -11,9 +11,11 @@ use lsp_types::SemanticToken;
 use lsp_types::SemanticTokenModifier;
 use lsp_types::SemanticTokenType;
 use lsp_types::SemanticTokensLegend;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::symbol_kind::SymbolKind;
+use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::types::Type;
 use pyrefly_util::visit::Visit as _;
 use ruff_python_ast::Arguments;
@@ -106,8 +108,8 @@ impl SemanticTokensLegends {
             if length == 0 {
                 continue;
             }
-            let current_line = source_range.start.line.to_zero_indexed();
-            let current_col = source_range.start.column.get() - 1;
+            let current_line = source_range.start.line_within_cell().to_zero_indexed();
+            let current_col = source_range.start.column().get() - 1;
             let (delta_line, delta_start) = {
                 let delta_line = current_line - previous_line;
                 let delta_start = if previous_line == current_line {
@@ -163,13 +165,20 @@ pub struct SemanticTokenWithFullRange {
 pub struct SemanticTokenBuilder {
     tokens: Vec<SemanticTokenWithFullRange>,
     limit_range: Option<TextRange>,
+    disabled_ranges: Vec<TextRange>,
 }
 
 impl SemanticTokenBuilder {
-    pub fn new(limit_range: Option<TextRange>) -> Self {
+    pub fn new(limit_range: Option<TextRange>, mut disabled_ranges: Vec<TextRange>) -> Self {
+        disabled_ranges.sort_by(|a, b| {
+            a.start()
+                .cmp(&b.start())
+                .then_with(|| a.end().cmp(&b.end()))
+        });
         Self {
             tokens: Vec::new(),
             limit_range,
+            disabled_ranges,
         }
     }
 
@@ -186,6 +195,12 @@ impl SemanticTokenBuilder {
                 token_modifiers,
             })
         }
+    }
+
+    fn is_disabled(&self, range: TextRange) -> bool {
+        self.disabled_ranges
+            .iter()
+            .any(|disabled| disabled.contains_range(range))
     }
 
     pub fn process_key(
@@ -247,6 +262,40 @@ impl SemanticTokenBuilder {
 
     fn process_stmt(&mut self, x: &Stmt) {
         match x {
+            Stmt::ClassDef(class_def) => {
+                if self.is_disabled(class_def.range) {
+                    self.push_if_in_range(
+                        class_def.name.range,
+                        SemanticTokenType::CLASS,
+                        Vec::new(),
+                    );
+                }
+                x.recurse(&mut |x| self.process_stmt(x));
+            }
+            Stmt::FunctionDef(function_def) => {
+                if self.is_disabled(function_def.range) {
+                    self.push_if_in_range(
+                        function_def.name.range,
+                        SemanticTokenType::FUNCTION,
+                        Vec::new(),
+                    );
+                }
+                x.recurse(&mut |x| self.process_stmt(x));
+            }
+            Stmt::Assign(assign) => {
+                if self.is_disabled(assign.range()) {
+                    for target in &assign.targets {
+                        if let Expr::Name(name) = target {
+                            self.push_if_in_range(
+                                name.range,
+                                SemanticTokenType::VARIABLE,
+                                Vec::new(),
+                            );
+                        }
+                    }
+                }
+                x.recurse(&mut |x| self.process_stmt(x));
+            }
             Stmt::Try(stmt_try) => {
                 for ExceptHandler::ExceptHandler(handler) in stmt_try.handlers.iter() {
                     if let Some(name) = &handler.name {
@@ -301,4 +350,85 @@ impl SemanticTokenBuilder {
         tokens.sort_by(|a, b| a.range.start().cmp(&b.range.start()));
         tokens
     }
+}
+
+fn collect_disabled_ranges_from_block(
+    stmts: &[Stmt],
+    sys_info: &SysInfo,
+    reachable: bool,
+    ranges: &mut Vec<TextRange>,
+) {
+    for stmt in stmts {
+        collect_disabled_ranges_from_stmt(stmt, sys_info, reachable, ranges);
+    }
+}
+
+fn collect_disabled_ranges_from_stmt(
+    stmt: &Stmt,
+    sys_info: &SysInfo,
+    reachable: bool,
+    ranges: &mut Vec<TextRange>,
+) {
+    if !reachable {
+        ranges.push(stmt.range());
+        return;
+    }
+
+    match stmt {
+        Stmt::If(if_stmt) => {
+            let mut prior_true_branch = false;
+            for (test, body) in Ast::if_branches(if_stmt) {
+                let eval = test.and_then(|expr| sys_info.evaluate_bool(expr));
+                let branch_reachable = if prior_true_branch {
+                    false
+                } else {
+                    !matches!(eval, Some(false))
+                };
+                collect_disabled_ranges_from_block(body, sys_info, branch_reachable, ranges);
+                if !prior_true_branch && matches!(eval, Some(true)) {
+                    prior_true_branch = true;
+                }
+            }
+        }
+        Stmt::FunctionDef(func) => {
+            collect_disabled_ranges_from_block(&func.body, sys_info, reachable, ranges);
+        }
+        Stmt::ClassDef(class_def) => {
+            collect_disabled_ranges_from_block(&class_def.body, sys_info, reachable, ranges);
+        }
+        Stmt::With(with_stmt) => {
+            collect_disabled_ranges_from_block(&with_stmt.body, sys_info, reachable, ranges);
+        }
+        Stmt::For(for_stmt) => {
+            collect_disabled_ranges_from_block(&for_stmt.body, sys_info, reachable, ranges);
+            collect_disabled_ranges_from_block(&for_stmt.orelse, sys_info, reachable, ranges);
+        }
+        Stmt::While(while_stmt) => {
+            let condition = sys_info.evaluate_bool(&while_stmt.test);
+            let body_reachable = reachable && condition != Some(false);
+            collect_disabled_ranges_from_block(&while_stmt.body, sys_info, body_reachable, ranges);
+            collect_disabled_ranges_from_block(&while_stmt.orelse, sys_info, reachable, ranges);
+        }
+        Stmt::Try(try_stmt) => {
+            collect_disabled_ranges_from_block(&try_stmt.body, sys_info, reachable, ranges);
+            for handler in &try_stmt.handlers {
+                let ExceptHandler::ExceptHandler(handler) = handler;
+                collect_disabled_ranges_from_block(&handler.body, sys_info, reachable, ranges);
+            }
+            collect_disabled_ranges_from_block(&try_stmt.orelse, sys_info, reachable, ranges);
+            collect_disabled_ranges_from_block(&try_stmt.finalbody, sys_info, reachable, ranges);
+        }
+        Stmt::Match(match_stmt) => {
+            for case in &match_stmt.cases {
+                collect_disabled_ranges_from_block(&case.body, sys_info, reachable, ranges);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn disabled_ranges_for_module(ast: &ModModule, sys_info: &SysInfo) -> Vec<TextRange> {
+    let mut ranges = Vec::new();
+    collect_disabled_ranges_from_block(&ast.body, sys_info, true, &mut ranges);
+    ranges
 }

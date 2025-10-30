@@ -1535,6 +1535,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::TypedDict(td) | Type::PartialTypedDict(td) => {
                 acc.push(AttributeBase1::TypedDict(td.clone()))
             }
+            Type::Type(box (Type::TypedDict(_) | Type::PartialTypedDict(_))) => {
+                acc.push(AttributeBase1::ClassObject(ClassBase::ClassDef(
+                    self.stdlib.typed_dict_fallback().clone(),
+                )))
+            }
             Type::Tuple(tuple) => {
                 acc.push(AttributeBase1::ClassInstance(self.erase_tuple_type(tuple)))
             }
@@ -1807,39 +1812,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.unions(results)
     }
 
-    // When coercing an instance of condition_type to bool, check that either it does not override
-    // __bool__, or that condition_type.__bool__ is callable.
+    // When determining the boolean value of some term used in a boolean context
+    // to bool, check that either it does not override __bool__, or the
+    // condition_type.__bool__ is callable.
+    //
+    // This allows users to mark a class as not allowing truthiness checks by
+    // explicitly setting `__bool__` to any non-callable type.
     pub fn check_dunder_bool_is_callable(
         &self,
-        condition_type: &Type,
+        type_of_term_used_as_bool: &Type,
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        let cond_bool_ty = self.type_of_magic_dunder_attr(
-            condition_type,
-            &dunder::BOOL,
-            range,
-            errors,
-            None,
-            "__bool__",
-            false,
-        );
-
-        if let Some(ty) = cond_bool_ty
-            && !ty.is_never()
-            && self.as_call_target(ty.clone()).is_none()
-        {
-            self.error(
-                errors,
+        // TODO(stroxler): Ideally, we would collect up the error messages and produce a single
+        // error here. But non-callable `__bool__` failures are likely to be rare in most
+        // codebases so this is not urgent unless we get complaints.
+        let f = |union_member_ty: &Type| {
+            let dunder_bool_ty = self.type_of_magic_dunder_attr(
+                union_member_ty,
+                &dunder::BOOL,
                 range,
-                ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                format!(
-                    "The `__bool__` attribute of `{}` has type `{}`, which is not callable",
-                    self.for_display(condition_type.clone()),
-                    self.for_display(ty.clone()),
-                ),
+                errors,
+                None,
+                "__bool__",
+                false,
             );
-        }
+
+            if let Some(dunder_bool_ty) = dunder_bool_ty
+                && !dunder_bool_ty.is_never()
+                && self.as_call_target(dunder_bool_ty.clone()).is_none()
+            {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    format!(
+                        "The `__bool__` attribute of `{}` has type `{}`, which is not callable",
+                        self.for_display(union_member_ty.clone()),
+                        self.for_display(dunder_bool_ty.clone()),
+                    ),
+                );
+            }
+        };
+        self.map_over_union(type_of_term_used_as_bool, f)
     }
 }
 

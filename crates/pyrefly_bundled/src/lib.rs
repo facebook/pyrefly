@@ -130,15 +130,13 @@ mod tests {
         }
     }
 
-    // TODO(jvansch): Unignore this test once we have third party stubs in the repo.
     #[test]
-    #[ignore = "Third Party Stubs not added to bundled_typeshed yet"]
     fn test_bundled_typeshed_returns_third_party_files() {
         let result = bundled_third_party_stubs();
         assert!(result.is_ok(), "bundled_typeshed should succeed");
 
         let files = result.unwrap();
-        assert!(!files.is_empty(), "Should contain stdlib .pyi files");
+        assert!(!files.is_empty(), "Should contain .pyi files");
 
         // Verify all returned paths are .pyi files
         for (path, _) in files.iter() {
@@ -168,11 +166,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Third Party Stubs not added to bundled_typeshed yet"]
     fn test_bundled_typeshed_third_party_resolves_path() {
         let result = bundled_third_party_stubs().unwrap();
 
-        // Verify paths don't start with "stdlib" (it should be stripped)
+        // Verify paths don't start with "stubs" (it should be stripped)
         for (path, _) in result.iter() {
             let first_component = path.components().next();
             assert_ne!(

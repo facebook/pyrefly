@@ -234,6 +234,24 @@ x = Child()  # E: Cannot instantiate `Child`
 );
 
 testcase!(
+    test_no_error_for_type_of_class,
+    r#"
+from abc import ABC, abstractmethod
+
+class A(ABC):
+    @abstractmethod
+    def m(self) -> None: ...
+
+    @classmethod
+    def classm(cls) -> None:
+        cls() # should not error
+
+def test(cls: type[A]):
+    cls() # should not error
+"#,
+);
+
+testcase!(
     test_abstract_async_iterator,
     TestEnv::new().enable_implicit_abstract_class_error(),
     r#"

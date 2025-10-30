@@ -76,84 +76,152 @@ pub struct Scopes {
     stack: Vec<Scope>,
 }
 
+pub enum ExportFunctionDecorators {
+    #[allow(dead_code)]
+    InDecoratedFunction,
+    InParentScope,
+    InDecoratedTarget,
+    #[allow(dead_code)]
+    Ignore,
+}
+
+pub enum ExportClassDecorators {
+    #[allow(dead_code)]
+    InDecoratedClassTopLevel,
+    InParentScope,
+    #[allow(dead_code)]
+    Ignore,
+}
+
+pub enum ExportDefaultArguments {
+    InFunction,
+    InParentScope,
+    #[allow(dead_code)]
+    Ignore,
+}
+
+pub struct ScopeExportedFunctionFlags {
+    pub include_top_level: bool,
+    pub include_class_top_level: bool,
+    pub include_function_decorators: ExportFunctionDecorators,
+    pub include_class_decorators: ExportClassDecorators,
+    pub include_default_arguments: ExportDefaultArguments,
+}
+
 impl Scopes {
     pub fn current_exported_function(
         &self,
         module_id: ModuleId,
         module_name: ModuleName,
-        include_top_level: bool,
-        include_class_top_level: bool,
-        include_decorators_in_decorated_definition: bool,
-        include_default_arguments_in_function: bool,
+        flags: ScopeExportedFunctionFlags,
     ) -> Option<FunctionRef> {
-        let mut iterator = self.stack.iter().rev();
-        loop {
-            match iterator.next().unwrap() {
-                Scope::TopLevel => {
-                    if include_top_level {
-                        return Some(FunctionRef {
-                            module_id,
-                            module_name,
-                            function_id: FunctionId::ModuleTopLevel,
-                            function_name: Name::from("$toplevel"),
-                        });
-                    } else {
-                        return None;
-                    }
-                }
-                Scope::ExportedFunction {
-                    function_id,
-                    function_name,
-                    ..
-                } => {
-                    return Some(FunctionRef {
+        Self::current_exported_function_impl(self.stack.iter().rev(), module_id, module_name, flags)
+    }
+
+    fn current_exported_function_impl<'a>(
+        mut iterator: impl Iterator<Item = &'a Scope>,
+        module_id: ModuleId,
+        module_name: ModuleName,
+        flags: ScopeExportedFunctionFlags,
+    ) -> Option<FunctionRef> {
+        match iterator.next().unwrap() {
+            Scope::TopLevel => {
+                if flags.include_top_level {
+                    Some(FunctionRef {
                         module_id,
                         module_name,
-                        function_id: function_id.clone(),
-                        function_name: function_name.clone(),
-                    });
-                }
-                Scope::NonExportedFunction { .. } => {
-                    return None;
-                }
-                Scope::ExportedClass { class_id, .. } => {
-                    if include_class_top_level {
-                        return Some(FunctionRef {
-                            module_id,
-                            module_name,
-                            function_id: FunctionId::ClassTopLevel {
-                                class_id: *class_id,
-                            },
-                            function_name: Name::from("$class_toplevel"),
-                        });
-                    } else {
-                        return None;
-                    }
-                }
-                Scope::NonExportedClass { .. } => {
-                    return None;
-                }
-                Scope::FunctionParameters => {
-                    if !include_default_arguments_in_function {
-                        // This not a true "semantic" scope.
-                        // We need to skip the parent scope, which is the wrapping function/class scope.
-                        iterator.next().unwrap();
-                    }
-                }
-                Scope::FunctionTypeParams
-                | Scope::FunctionReturnAnnotation
-                | Scope::ClassTypeParams
-                | Scope::ClassArguments => {
-                    // These are not true "semantic" scopes.
-                    // We need to skip the parent scope, which is the wrapping function/class scope.
-                    iterator.next().unwrap();
-                }
-                Scope::FunctionDecorators | Scope::ClassDecorators => {
-                    if !include_decorators_in_decorated_definition {
-                        iterator.next().unwrap();
-                    }
+                        function_id: FunctionId::ModuleTopLevel,
+                        function_name: Name::from("$toplevel"),
+                    })
+                } else {
+                    None
                 }
             }
+            Scope::ExportedFunction {
+                function_id,
+                function_name,
+                ..
+            } => Some(FunctionRef {
+                module_id,
+                module_name,
+                function_id: function_id.clone(),
+                function_name: function_name.clone(),
+            }),
+            Scope::NonExportedFunction { .. } => None,
+            Scope::ExportedClass { class_id, .. } => {
+                if flags.include_class_top_level {
+                    Some(FunctionRef {
+                        module_id,
+                        module_name,
+                        function_id: FunctionId::ClassTopLevel {
+                            class_id: *class_id,
+                        },
+                        function_name: Name::from("$class_toplevel"),
+                    })
+                } else {
+                    None
+                }
+            }
+            Scope::NonExportedClass { .. } => None,
+            Scope::FunctionParameters => match flags.include_default_arguments {
+                ExportDefaultArguments::InFunction => {
+                    Self::current_exported_function_impl(iterator, module_id, module_name, flags)
+                }
+                ExportDefaultArguments::InParentScope => {
+                    iterator.next().unwrap();
+                    Self::current_exported_function_impl(iterator, module_id, module_name, flags)
+                }
+                ExportDefaultArguments::Ignore => None,
+            },
+            Scope::FunctionTypeParams
+            | Scope::FunctionReturnAnnotation
+            | Scope::ClassTypeParams
+            | Scope::ClassArguments => {
+                // These are not true "semantic" scopes.
+                // We need to skip the parent scope, which is the wrapping function/class scope.
+                iterator.next().unwrap();
+                Self::current_exported_function_impl(iterator, module_id, module_name, flags)
+            }
+            Scope::ClassDecorators => match flags.include_class_decorators {
+                ExportClassDecorators::InDecoratedClassTopLevel => {
+                    Self::current_exported_function_impl(iterator, module_id, module_name, flags)
+                }
+                ExportClassDecorators::InParentScope => {
+                    iterator.next().unwrap();
+                    Self::current_exported_function_impl(iterator, module_id, module_name, flags)
+                }
+                ExportClassDecorators::Ignore => None,
+            },
+            Scope::FunctionDecorators => match flags.include_function_decorators {
+                ExportFunctionDecorators::InDecoratedFunction => {
+                    Self::current_exported_function_impl(iterator, module_id, module_name, flags)
+                }
+                ExportFunctionDecorators::InParentScope => {
+                    iterator.next().unwrap();
+                    Self::current_exported_function_impl(iterator, module_id, module_name, flags)
+                }
+                ExportFunctionDecorators::InDecoratedTarget => {
+                    match Self::current_exported_function_impl(
+                        iterator,
+                        module_id,
+                        module_name,
+                        flags,
+                    ) {
+                        Some(FunctionRef {
+                            function_id: FunctionId::Function { location },
+                            function_name,
+                            ..
+                        }) => Some(FunctionRef {
+                            module_id,
+                            module_name,
+                            function_id: FunctionId::FunctionDecoratedTarget { location },
+                            function_name,
+                        }),
+                        _ => None,
+                    }
+                }
+                ExportFunctionDecorators::Ignore => None,
+            },
         }
     }
 }
@@ -192,33 +260,58 @@ impl ScopeId {
 }
 
 pub trait AstScopedVisitor {
-    fn visit_statement(&mut self, _stmt: &Stmt, _scopes: &Scopes) {}
+    fn visit_statement(&mut self, stmt: &Stmt, scopes: &Scopes) {
+        let _ = stmt;
+        let _ = scopes;
+    }
     fn visit_expression(
         &mut self,
-        _expr: &Expr,
-        _scopes: &Scopes,
-        _parent_expression: Option<&Expr>,
+        expr: &Expr,
+        scopes: &Scopes,
+        parent_expression: Option<&Expr>,
         // If the current expression is in an assignment, this is the left side of the assignment
-        _assignment_targets: Option<&Vec<&Expr>>,
+        assignment_targets: Option<&Vec<&Expr>>,
     ) {
+        let _ = expr;
+        let _ = scopes;
+        let _ = parent_expression;
+        let _ = assignment_targets;
     }
     fn enter_function_scope(
         &mut self,
-        _function_def: &StmtFunctionDef,
-        _scopes_in_function: &Scopes,
+        function_def: &StmtFunctionDef,
+        scopes_in_function: &Scopes,
     ) {
+        let _ = function_def;
+        let _ = scopes_in_function;
     }
     fn exit_function_scope(
         &mut self,
-        _function_def: &StmtFunctionDef,
-        _scopes_outside_function: &Scopes,
+        function_def: &StmtFunctionDef,
+        scopes_outside_function: &Scopes,
     ) {
+        let _ = function_def;
+        let _ = scopes_outside_function;
     }
-    fn enter_class_scope(&mut self, _class_def: &StmtClassDef, _scopes_in_class: &Scopes) {}
-    fn exit_class_scope(&mut self, _function_def: &StmtClassDef, _scopes_outside_class: &Scopes) {}
-    fn enter_toplevel_scope(&mut self, _ast: &ModModule, _scopes_in_toplevel: &Scopes) {}
-    fn exit_toplevel_scope(&mut self, _ast: &ModModule, _scopes_in_toplevel: &Scopes) {}
-    fn on_scope_update(&mut self, _scopes: &Scopes) {}
+    fn enter_class_scope(&mut self, class_def: &StmtClassDef, scopes_in_class: &Scopes) {
+        let _ = class_def;
+        let _ = scopes_in_class;
+    }
+    fn exit_class_scope(&mut self, function_def: &StmtClassDef, scopes_outside_class: &Scopes) {
+        let _ = function_def;
+        let _ = scopes_outside_class;
+    }
+    fn enter_toplevel_scope(&mut self, ast: &ModModule, scopes_in_toplevel: &Scopes) {
+        let _ = ast;
+        let _ = scopes_in_toplevel;
+    }
+    fn exit_toplevel_scope(&mut self, ast: &ModModule, scopes_in_toplevel: &Scopes) {
+        let _ = ast;
+        let _ = scopes_in_toplevel;
+    }
+    fn on_scope_update(&mut self, scopes: &Scopes) {
+        let _ = scopes;
+    }
     fn visit_type_annotations() -> bool;
 }
 
@@ -257,7 +350,7 @@ fn visit_statement<V: AstScopedVisitor>(
         }
         fn visit_annotation(&mut self, expr: &'e Expr) {
             if V::visit_type_annotations() {
-                self.visit_expr(expr);
+                ruff_python_ast::visitor::source_order::walk_annotation(self, expr);
             }
         }
     }
@@ -305,26 +398,28 @@ fn visit_statement<V: AstScopedVisitor>(
             visitor.enter_function_scope(function_def, scopes);
             visitor.on_scope_update(scopes);
 
-            scopes.stack.push(Scope::FunctionDecorators);
-            visitor.on_scope_update(scopes);
-            function_def.decorator_list.iter().for_each(&mut |e| {
-                ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_decorator(
-                    &mut CustomSourceOrderVisitor {
-                        visitor,
-                        scopes,
-                        module_context,
-                        parent_expression: None,
-                        assignment_targets: None,
-                    },
-                    e,
-                )
-            });
-            scopes.stack.pop();
-            visitor.on_scope_update(scopes);
+            if !function_def.decorator_list.is_empty() {
+                scopes.stack.push(Scope::FunctionDecorators);
+                visitor.on_scope_update(scopes);
+                function_def.decorator_list.iter().for_each(&mut |e| {
+                    ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_decorator(
+                        &mut CustomSourceOrderVisitor {
+                            visitor,
+                            scopes,
+                            module_context,
+                            parent_expression: None,
+                            assignment_targets: None,
+                        },
+                        e,
+                    )
+                });
+                scopes.stack.pop();
+                visitor.on_scope_update(scopes);
+            }
 
-            scopes.stack.push(Scope::FunctionTypeParams);
-            visitor.on_scope_update(scopes);
             if let Some(type_params) = &function_def.type_params {
+                scopes.stack.push(Scope::FunctionTypeParams);
+                visitor.on_scope_update(scopes);
                 ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_type_params(
                     &mut CustomSourceOrderVisitor {
                         visitor,
@@ -335,9 +430,9 @@ fn visit_statement<V: AstScopedVisitor>(
                     },
                     type_params,
                 );
+                scopes.stack.pop();
+                visitor.on_scope_update(scopes);
             }
-            scopes.stack.pop();
-            visitor.on_scope_update(scopes);
 
             scopes.stack.push(Scope::FunctionParameters);
             visitor.on_scope_update(scopes);
@@ -354,22 +449,24 @@ fn visit_statement<V: AstScopedVisitor>(
             scopes.stack.pop();
             visitor.on_scope_update(scopes);
 
-            scopes.stack.push(Scope::FunctionReturnAnnotation);
-            visitor.on_scope_update(scopes);
-            function_def.returns.iter().for_each(|return_annotation| {
-                ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_annotation(
-                    &mut CustomSourceOrderVisitor {
-                        visitor,
-                        scopes,
-                        module_context,
-                        parent_expression: None,
-                        assignment_targets: None,
-                    },
-                    return_annotation,
-                );
-            });
-            scopes.stack.pop();
-            visitor.on_scope_update(scopes);
+            if function_def.returns.is_some() {
+                scopes.stack.push(Scope::FunctionReturnAnnotation);
+                visitor.on_scope_update(scopes);
+                function_def.returns.iter().for_each(|return_annotation| {
+                    ruff_python_ast::visitor::source_order::SourceOrderVisitor::visit_annotation(
+                        &mut CustomSourceOrderVisitor {
+                            visitor,
+                            scopes,
+                            module_context,
+                            parent_expression: None,
+                            assignment_targets: None,
+                        },
+                        return_annotation,
+                    );
+                });
+                scopes.stack.pop();
+                visitor.on_scope_update(scopes);
+            }
 
             for stmt in &function_def.body {
                 visit_statement(stmt, visitor, scopes, module_context);

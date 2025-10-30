@@ -1432,3 +1432,25 @@ Definition Result: None
         report.trim(),
     );
 }
+
+#[test]
+fn unreachable_branch() {
+    let code = r#"
+x = 5
+if False:
+    print(x)
+    #     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+4 |     print(x)
+              ^
+Definition Result: None
+
+"#
+        .trim(),
+        report.trim(),
+    );
+}

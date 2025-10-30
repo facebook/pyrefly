@@ -713,6 +713,7 @@ impl FunctionKind {
             ("typing", None, "final") => Self::Final,
             ("typing", None, "runtime_checkable") => Self::RuntimeCheckable,
             ("typing", None, "dataclass_transform") => Self::DataclassTransform,
+            ("typing_extensions", None, "dataclass_transform") => Self::DataclassTransform,
             ("typing_extensions", None, "runtime_checkable") => Self::RuntimeCheckable,
             ("abc", None, "abstractmethod") => Self::AbstractMethod,
             ("functools", None, "total_ordering") => Self::TotalOrdering,

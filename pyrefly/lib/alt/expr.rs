@@ -971,6 +971,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }))
     }
 
+    /// Determine the boolean behavior of a type:
+    /// - `Some(true)` or `Some(false)` when it is known to be statically truthy
+    ///   or falsey (as determined by some baked in rules for literals
+    ///   and looking at the `__bool__` method, if it is present).
+    /// - `None` if it's truthiness is not statically known.
     pub fn as_bool(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) -> Option<bool> {
         ty.as_bool().or_else(|| {
             // If the object defines `__bool__`, we can check if it returns a statically known value
@@ -1009,7 +1014,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let hint = hint.or_else(|| Some(HintRef::new(&t_acc, None)));
             let mut t = self.expr_infer_with_hint(value, hint, errors);
             self.expand_vars_mut(&mut t);
-            if should_shortcircuit(&t, value.range()) {
+            if i < last_index && should_shortcircuit(&t, value.range()) {
                 t_acc = self.union(t_acc, t);
                 break;
             }
@@ -1127,7 +1132,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// are gradual if needed (e.g. `list` is treated as `list[Any]` when used as an annotation).
     ///
     /// This function canonicalizes to `Type::ClassType` or `Type::TypedDict`
-    pub fn canonicalize_all_class_types(&self, ty: Type, range: TextRange) -> Type {
+    pub fn canonicalize_all_class_types(
+        &self,
+        ty: Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
         ty.transform(&mut |ty| match ty {
             Type::SpecialForm(SpecialForm::Tuple) => {
                 *ty = Type::Tuple(Tuple::unbounded(Type::Any(AnyStyle::Implicit)));
@@ -1146,7 +1156,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else if cls.has_toplevel_qname("typing", "Any") {
                     *ty = Type::type_form(Type::any_explicit())
                 } else {
-                    *ty = Type::type_form(self.promote(cls, range));
+                    *ty = Type::type_form(self.promote(cls, range, errors));
                 }
             }
             _ => {}

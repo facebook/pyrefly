@@ -59,9 +59,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> bool {
         // Names starting but not ending with __ are private
         // Names starting and ending with _ are reserved by the enum
-        if name.starts_with("__") && !name.ends_with("__")
-            || name.starts_with("_") && name.ends_with("_")
-        {
+        if Self::is_mangled_attr(name) || name.starts_with("_") && name.ends_with("_") {
             return false;
         }
         // Enum members must be initialized on the class

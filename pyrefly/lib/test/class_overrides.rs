@@ -581,3 +581,49 @@ class B(A):
         pass
     "#,
 );
+
+testcase!(
+    test_unannotated_none_attribute_override,
+    r#"
+from typing import reveal_type
+
+class Foo:
+    x = None
+
+class Bar(Foo):
+    x = 1
+
+reveal_type(Bar.x)  # E: revealed type: int
+reveal_type(Foo.x)  # E: revealed type: None
+def test(x: type[Foo]):
+    reveal_type(x.x)  # E: revealed type: None
+    "#,
+);
+
+testcase!(
+    test_unannotated_none_attribute_override_multiple,
+    r#"
+class Parent:
+    x = None
+    y = None
+
+class Child1(Parent):
+    x = 42
+
+class Child2(Parent):
+    y = "hello"
+    "#,
+);
+
+testcase!(
+    test_unannotated_none_attribute_with_annotation_ok,
+    r#"
+from typing import Optional
+
+class Foo:
+    x: Optional[int] = None
+
+class Bar(Foo):
+    x = 1  # OK - explicit Optional annotation allows override
+    "#,
+);

@@ -76,6 +76,7 @@ use crate::state::ide::key_to_intermediate_definition;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokenBuilder;
 use crate::state::semantic_tokens::SemanticTokensLegends;
+use crate::state::semantic_tokens::disabled_ranges_for_module;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
@@ -488,6 +489,24 @@ impl<'a> Transaction<'a> {
         ans.get_chosen_overload_trace(range)
     }
 
+    fn type_from_expression_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        let module = self.get_ast(handle)?;
+        let covering_nodes = Ast::locate_node(&module, position);
+        for node in covering_nodes {
+            if node.as_expr_ref().is_none() {
+                continue;
+            }
+            let range = node.range();
+            if let Some(callable) = self.get_chosen_overload_trace(handle, range) {
+                return Some(callable);
+            }
+            if let Some(ty) = self.get_type_trace(handle, range) {
+                return Some(ty);
+            }
+        }
+        None
+    }
+
     fn identifier_at(&self, handle: &Handle, position: TextSize) -> Option<IdentifierWithContext> {
         let mod_module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&mod_module, position);
@@ -810,7 +829,7 @@ impl<'a> Transaction<'a> {
                     self.get_type_trace(handle, range)
                 }
             }
-            None => None,
+            None => self.type_from_expression_at(handle, position),
         }
     }
 
@@ -2694,7 +2713,8 @@ impl<'a> Transaction<'a> {
         let bindings = self.get_bindings(handle)?;
         let ast = self.get_ast(handle)?;
         let legends = SemanticTokensLegends::new();
-        let mut builder = SemanticTokenBuilder::new(limit_range);
+        let disabled_ranges = disabled_ranges_for_module(ast.as_ref(), handle.sys_info());
+        let mut builder = SemanticTokenBuilder::new(limit_range, disabled_ranges);
         for NamedBinding {
             definition_handle,
             definition_export,

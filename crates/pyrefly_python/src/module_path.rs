@@ -95,6 +95,7 @@ impl ModuleStyle {
         if path.extension() == Some("pyi".as_ref()) {
             ModuleStyle::Interface
         } else {
+            // Both .py and .ipynb are executable
             ModuleStyle::Executable
         }
     }
@@ -223,6 +224,10 @@ impl ModulePath {
 
     pub fn is_interface(&self) -> bool {
         self.style() == ModuleStyle::Interface
+    }
+
+    pub fn is_notebook(&self) -> bool {
+        self.as_path().extension() == Some("ipynb".as_ref())
     }
 
     /// Attempt to match the given [`ModuleName`]'s components to this `ModulePath`,

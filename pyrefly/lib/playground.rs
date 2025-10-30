@@ -120,14 +120,14 @@ impl Position {
 
     fn from_display_pos(position: DisplayPos) -> Self {
         Self {
-            line: position.line.get() as i32,
-            column: position.column.get() as i32,
+            line: position.line_within_file().get() as i32,
+            column: position.column().get() as i32,
         }
     }
 
     // This should always succeed, but we are being conservative
     fn to_display_pos(&self) -> Option<DisplayPos> {
-        Some(DisplayPos {
+        Some(DisplayPos::Source {
             line: LineNumber::new(u32::try_from(self.line).ok()?)?,
             column: NonZeroU32::new(u32::try_from(self.column).ok()?)?,
         })
@@ -149,20 +149,20 @@ pub struct Range {
 impl Range {
     fn new(range: DisplayRange) -> Self {
         Self {
-            start_line: range.start.line.get() as i32,
-            start_col: range.start.column.get() as i32,
-            end_line: range.end.line.get() as i32,
-            end_col: range.end.column.get() as i32,
+            start_line: range.start.line_within_file().get() as i32,
+            start_col: range.start.column().get() as i32,
+            end_line: range.end.line_within_file().get() as i32,
+            end_col: range.end.column().get() as i32,
         }
     }
 
     fn to_display_range(&self) -> Option<DisplayRange> {
         Some(DisplayRange {
-            start: DisplayPos {
+            start: DisplayPos::Source {
                 line: LineNumber::new(u32::try_from(self.start_line).ok()?)?,
                 column: NonZeroU32::new(u32::try_from(self.start_col).ok()?)?,
             },
-            end: DisplayPos {
+            end: DisplayPos::Source {
                 line: LineNumber::new(u32::try_from(self.end_line).ok()?)?,
                 column: NonZeroU32::new(u32::try_from(self.end_col).ok()?)?,
             },
@@ -393,10 +393,10 @@ impl Playground {
                 .into_map(|e| {
                     let range = e.display_range();
                     Diagnostic {
-                        start_line: range.start.line.get() as i32,
-                        start_col: range.start.column.get() as i32,
-                        end_line: range.end.line.get() as i32,
-                        end_col: range.end.column.get() as i32,
+                        start_line: range.start.line_within_file().get() as i32,
+                        start_col: range.start.column().get() as i32,
+                        end_line: range.end.line_within_file().get() as i32,
+                        end_col: range.end.column().get() as i32,
                         message_header: e.msg_header().to_owned(),
                         message_details: e.msg_details().unwrap_or("").to_owned(),
                         kind: e.error_kind().to_name().to_owned(),

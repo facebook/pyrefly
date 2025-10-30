@@ -35,6 +35,7 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::docstring::Docstring;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -56,7 +57,10 @@ use pyrefly_util::uniques::UniqueFactory;
 use pyrefly_util::upgrade_lock::UpgradeLock;
 use pyrefly_util::upgrade_lock::UpgradeLockExclusiveGuard;
 use pyrefly_util::upgrade_lock::UpgradeLockWriteGuard;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::visitor::Visitor;
+use ruff_python_ast::visitor::walk_body;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
@@ -102,6 +106,7 @@ use crate::state::dirty::Dirty;
 use crate::state::epoch::Epoch;
 use crate::state::epoch::Epochs;
 use crate::state::errors::Errors;
+use crate::state::load::CodeOrNotebook;
 use crate::state::load::Load;
 use crate::state::loader::FindingOrError;
 use crate::state::loader::LoaderFindCache;
@@ -496,6 +501,14 @@ impl<'a> Transaction<'a> {
         self.get_load(handle).map(|x| x.module_info.dupe())
     }
 
+    pub fn docstring_ranges(&self, handle: &Handle) -> Option<Vec<TextRange>> {
+        let ast = self.get_ast(handle)?;
+        let mut ranges = collect_docstring_ranges(&ast.body);
+        ranges.sort_by_key(|range| range.start());
+        ranges.dedup();
+        Some(ranges)
+    }
+
     /// Compute transitive dependency closure for the given handle.
     /// Note that for IDE services, if the given handle is an in-memory one, then you are probably
     /// not getting what you want, because the set of rdeps of in-memory file for IDE service will
@@ -700,15 +713,29 @@ impl<'a> Transaction<'a> {
         if exclusive.dirty.load
             && let Some(old_load) = exclusive.steps.load.dupe()
         {
-            let (code, self_error) =
+            let (code_or_notebook, self_error) =
                 Load::load_from_path(module_data.handle.path(), &self.memory_lookup());
-            if self_error.is_some() || &code != old_load.module_info.contents() {
+            if self_error.is_some()
+                || match &code_or_notebook {
+                    CodeOrNotebook::Code(code) => {
+                        old_load.module_info.is_notebook()
+                            || code != old_load.module_info.contents()
+                    }
+                    CodeOrNotebook::Notebook(notebook) => {
+                        if let Some(old_notebook) = old_load.module_info.notebook() {
+                            &**notebook != old_notebook
+                        } else {
+                            false
+                        }
+                    }
+                }
+            {
                 let mut write = exclusive.write();
                 write.steps.load = Some(Arc::new(Load::load_from_data(
                     module_data.handle.module(),
                     module_data.handle.path().dupe(),
                     old_load.errors.style(),
-                    code,
+                    code_or_notebook,
                     self_error,
                 )));
                 rebuild(write, true);
@@ -1580,6 +1607,33 @@ impl<'a> Transaction<'a> {
         let module_data = self.get_module(handle);
         self.lookup_export(&module_data).docstring_range()
     }
+}
+
+fn collect_docstring_ranges(body: &[Stmt]) -> Vec<TextRange> {
+    struct DocstringCollector {
+        ranges: Vec<TextRange>,
+    }
+
+    impl Visitor<'_> for DocstringCollector {
+        fn visit_body(&mut self, body: &[Stmt]) {
+            if let Some(range) = Docstring::range_from_stmts(body) {
+                self.ranges.push(range);
+            }
+            walk_body(self, body);
+        }
+    }
+
+    let mut collector = DocstringCollector { ranges: Vec::new() };
+
+    if let Some(range) = Docstring::range_from_stmts(body) {
+        collector.ranges.push(range);
+    }
+
+    for stmt in body {
+        Visitor::visit_stmt(&mut collector, stmt);
+    }
+
+    collector.ranges
 }
 
 pub struct TransactionHandle<'a> {

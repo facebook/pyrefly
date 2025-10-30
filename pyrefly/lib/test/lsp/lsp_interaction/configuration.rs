@@ -283,9 +283,10 @@ fn test_workspace_pythonpath_ignored_when_set_in_config_file() {
 #[test]
 fn test_disable_language_services() {
     let test_files_root = get_test_files_root();
-    let scope_uri = Url::from_file_path(test_files_root.path()).unwrap();
+    let root_path = test_files_root.path().join("basic");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings {
         workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
         configuration: Some(None),
@@ -297,7 +298,7 @@ fn test_disable_language_services() {
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
         result: Some(serde_json::json!({
-            "uri": Url::from_file_path(test_files_root.path().join("bar.py")).unwrap().to_string(),
+            "uri": Url::from_file_path(root_path.join("bar.py")).unwrap().to_string(),
             "range": {
                 "start": {
                     "line": 6,
@@ -332,8 +333,9 @@ fn test_disable_language_services() {
 #[test]
 fn test_disable_language_services_default_workspace() {
     let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("basic");
     let mut interaction = LspInteraction::new();
-    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings {
         configuration: Some(None),
         ..Default::default()
@@ -344,7 +346,7 @@ fn test_disable_language_services_default_workspace() {
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
         result: Some(serde_json::json!({
-            "uri": Url::from_file_path(test_files_root.path().join("bar.py")).unwrap().to_string(),
+            "uri": Url::from_file_path(root_path.join("bar.py")).unwrap().to_string(),
             "range": {
                 "start": {
                     "line": 6,
@@ -417,9 +419,10 @@ fn get_diagnostics_result() -> serde_json::Value {
 #[test]
 fn test_disable_type_errors_language_services_still_work() {
     let test_files_root = get_test_files_root();
-    let scope_uri = Url::from_file_path(test_files_root.path()).unwrap();
+    let root_path = test_files_root.path().join("basic");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings {
         workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
         configuration: Some(Some(serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-off"}}, {"pyrefly": {"displayTypeErrors": "force-off"}}]))),
@@ -436,7 +439,7 @@ fn test_disable_type_errors_language_services_still_work() {
             "contents": {
                 "kind":"markdown",
                 "value":"```python\n(class) Bar: type[Bar]\n```\n\nGo to [Bar](".to_owned()
-                    + Url::from_file_path(test_files_root.path().join("bar.py")).unwrap().as_str()
+                    + Url::from_file_path(root_path.join("bar.py")).unwrap().as_str()
                     + "#L7,7)"
             }
         })),

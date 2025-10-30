@@ -1239,3 +1239,25 @@ class Dog(Animal):
 hdog = Dog(name="hdog")
     "#,
 );
+
+testcase!(
+    test_fields_function,
+    r#"
+from typing import assert_type, Any
+from dataclasses import dataclass, fields, Field
+
+@dataclass
+class Person:
+    name: str
+    age: int
+
+# Test fields() on the class type
+f1 = fields(Person)
+assert_type(f1, tuple[Field[Any], ...])
+
+# Test fields() on an instance
+p = Person("Alice", 30)
+f2 = fields(p)
+assert_type(f2, tuple[Field[Any], ...])
+    "#,
+);

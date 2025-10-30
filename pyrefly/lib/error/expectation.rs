@@ -45,7 +45,7 @@ impl Expectation {
             for (line_no, msg) in &self.error {
                 if !errors.iter().any(|e| {
                     e.msg().replace("\n", "\\n").contains(msg)
-                        && e.display_range().start.line.get() as usize == *line_no
+                        && e.display_range().start.line_within_file().get() as usize == *line_no
                 }) {
                     return Err(anyhow::anyhow!(
                         "Expectations failed for {}: can't find error (line {line_no}): {msg}",

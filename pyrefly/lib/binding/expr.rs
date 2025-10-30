@@ -723,7 +723,7 @@ impl<'a> BindingsBuilder<'a> {
             }
             Expr::Await(x) => {
                 self.ensure_expr(&mut x.value, usage);
-                if !self.scopes.is_in_async_def() {
+                if !self.scopes.is_in_async_def() && !self.module_info.path().is_notebook() {
                     self.error(
                         x.range(),
                         ErrorInfo::Kind(ErrorKind::InvalidSyntax),
