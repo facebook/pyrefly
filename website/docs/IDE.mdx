@@ -28,6 +28,13 @@ By default, Pyrefly should work in the IDE with no configuration necessary. But 
 The following configuration options are IDE-specific and exposed as VSCode settings:
 - Disable language services
   - `python.pyrefly.disableLanguageServices` [boolean: false]: By default, Pyrefly will provide both type errors and other language features like go-to definition, intellisense, hover, etc. Set `disableLanguageServices` to `true` to keep type errors from Pyrefly unchanged but use VSCode's Python extension for everything else.
+  - `python.pyrefly.analysis.disabledLanguageServices` [boolean: false]: An
+    analysis-level option that disables language-service features produced by
+    Pyrefly's analysis (for example: go-to definition, hover, and other
+    navigation/intelligence features) while leaving Pyrefly diagnostics
+    (type errors) intact. Use this when you want Pyrefly's type checking but
+    prefer the editor's language features or another provider for those
+    services.
 - Disable type errors
   - `python.pyrefly.displayTypeErrors` [string: 'default']: If `'default'`, Pyrefly will only provide type check squiggles in the IDE if your file is covered by a [Pyrefly configuration](../configuration). If `'force-off'`, Pyrefly will never provide type check squiggles in the IDE. If `'force-on'`, Pyrefly will always provide type check squiggles in the IDE.
 - Specify a custom Pyrefly Binary (lspPath)
