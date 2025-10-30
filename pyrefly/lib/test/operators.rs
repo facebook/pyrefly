@@ -139,6 +139,17 @@ assert_type(x, Literal["a"])
 );
 
 testcase!(
+    test_html_escape_or_str_regression,
+    r#"
+import html
+from typing import assert_type
+
+x = html.escape("") or "a"
+assert_type(x, str)
+    "#,
+);
+
+testcase!(
     test_boolean_and_simple,
     r#"
 from typing import assert_type, Literal
