@@ -915,8 +915,20 @@ impl Server {
                             x.method, x.id,
                         );
                         self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
-                        let transaction =
+                        let mut transaction =
                             ide_transaction_manager.non_committable_transaction(&self.state);
+
+                        // If requesting diagnostics for a file in workspace mode, analyze it
+                        let file_path = params.text_document.uri.to_file_path().unwrap();
+                        let diagnostic_mode = self.workspaces.get_diagnostic_mode(&file_path);
+                        let is_file_open = self.open_files.read().contains_key(&file_path);
+                        if matches!(diagnostic_mode, DiagnosticMode::Workspace) && !is_file_open {
+                            // Use filesystem path for unopened files
+                            let module_path = ModulePath::filesystem(file_path.clone());
+                            let handle = handle_from_module_path(&self.state, module_path);
+                            transaction.run(&[handle], Require::Errors);
+                        }
+
                         self.send_response(new_response(
                             x.id,
                             Ok(self.document_diagnostics(&transaction, params)),
@@ -1190,7 +1202,8 @@ impl Server {
             let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
             let open_files = self.open_files.read();
 
-            // Collect errors from transaction for open files
+            // Collect errors from transaction
+            // In workspace mode, handles includes all project files
             // The filtering by diagnostic mode is handled in get_diag_if_shown
             let errors = transaction.get_errors(&handles);
 
@@ -2140,10 +2153,30 @@ impl Server {
         transaction: &Transaction<'_>,
         params: DocumentDiagnosticParams,
     ) -> DocumentDiagnosticReport {
-        let handle = make_open_handle(
-            &self.state,
-            &params.text_document.uri.to_file_path().unwrap(),
-        );
+        let file_path = params.text_document.uri.to_file_path().unwrap();
+
+        // Check if we should show diagnostics for this file based on diagnostic mode
+        let diagnostic_mode = self.workspaces.get_diagnostic_mode(&file_path);
+        let is_file_open = self.open_files.read().contains_key(&file_path);
+
+        // Use the appropriate handle based on whether the file is open
+        // For unopened files in workspace mode, use filesystem handle
+        let handle = if is_file_open {
+            make_open_handle(&self.state, &file_path)
+        } else if matches!(diagnostic_mode, DiagnosticMode::Workspace) {
+            let module_path = ModulePath::filesystem(file_path.clone());
+            handle_from_module_path(&self.state, module_path)
+        } else {
+            // File is neither open nor in workspace mode, return empty diagnostics
+            return DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
+                full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                    items: Vec::new(),
+                    result_id: None,
+                },
+                related_documents: None,
+            });
+        };
+
         let mut items = Vec::new();
         let open_files = &self.open_files.read();
         for e in transaction.get_errors(once(&handle)).collect_errors().shown {
@@ -2152,6 +2185,7 @@ impl Server {
             }
         }
         Self::append_unreachable_diagnostics(transaction, &handle, &mut items);
+
         DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
             full_document_diagnostic_report: FullDocumentDiagnosticReport {
                 items,

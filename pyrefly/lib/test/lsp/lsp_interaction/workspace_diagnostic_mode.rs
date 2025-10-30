@@ -12,10 +12,10 @@ use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
-/// Test that workspace mode uses get_all_errors (shows all analyzed files)
+/// Test that workspace mode shows errors from unopened files within the workspace
 /// This verifies the filtering logic respects workspace diagnostic mode
 #[test]
-fn test_workspace_mode_uses_get_all_errors() {
+fn test_workspace_mode_shows_unopened_file_errors() {
     let test_files_root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
@@ -49,22 +49,46 @@ fn test_workspace_mode_uses_get_all_errors() {
         ]),
     );
 
-    // Open a file - in workspace mode, this should work normally
-    // The real test is that the code path uses get_all_errors() instead of get_errors(&handles)
+    // Open a file without errors
     interaction
         .server
         .did_open("workspace_diagnostic_mode/opened_file.py");
 
-    // Request diagnostics - should work in workspace mode
+    // Request diagnostics for an UNOPENED file that HAS errors
+    // In workspace mode, we SHOULD see errors from unopened files in the workspace
     interaction
         .server
-        .diagnostic("workspace_diagnostic_mode/opened_file.py");
+        .diagnostic("workspace_diagnostic_mode/file_with_error.py");
 
-    // File has no errors
+    // Expect errors from the unopened file because we're in workspace mode
+    // The file has type errors: add_numbers("hello", "world") where add_numbers expects ints
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
         result: Some(serde_json::json!({
-            "items": [],
+            "items": [
+                {
+                    "code": "bad-argument-type",
+                    "codeDescription": {"href": "https://pyrefly.org/en/docs/error-kinds/#bad-argument-type"},
+                    "message": "Argument `Literal['hello']` is not assignable to parameter `x` with type `int` in function `add_numbers`",
+                    "range": {
+                        "start": {"line": 6, "character": 21},
+                        "end": {"line": 6, "character": 28}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                },
+                {
+                    "code": "bad-argument-type",
+                    "codeDescription": {"href": "https://pyrefly.org/en/docs/error-kinds/#bad-argument-type"},
+                    "message": "Argument `Literal['world']` is not assignable to parameter `y` with type `int` in function `add_numbers`",
+                    "range": {
+                        "start": {"line": 6, "character": 30},
+                        "end": {"line": 6, "character": 37}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
             "kind": "full"
         })),
         error: None,
