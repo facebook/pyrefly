@@ -292,11 +292,17 @@ impl ServerConnection {
         ));
     }
 
-    fn publish_diagnostics(&self, diags: SmallMap<PathBuf, Vec<Diagnostic>>) {
+    fn publish_diagnostics(
+        &self,
+        diags: SmallMap<PathBuf, Vec<Diagnostic>>,
+        version_info: &HashMap<PathBuf, i32>,
+    ) {
         for (path, diags) in diags {
             let path = std::fs::canonicalize(&path).unwrap_or(path);
             match Url::from_file_path(&path) {
-                Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, None),
+                Ok(uri) => {
+                    self.publish_diagnostics_for_uri(uri, diags, version_info.get(&path).copied())
+                }
                 Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
             }
         }
@@ -1218,7 +1224,8 @@ impl Server {
                 let handle = make_open_handle(&self.state, path);
                 Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
             }
-            self.connection.publish_diagnostics(diags);
+            self.connection
+                .publish_diagnostics(diags, &*self.version_info.lock());
         };
 
         match possibly_committable_transaction {
@@ -1567,11 +1574,15 @@ impl Server {
 
     fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri.to_file_path().unwrap();
-        self.version_info.lock().remove(&uri);
+        let version = self
+            .version_info
+            .lock()
+            .remove(&uri)
+            .map(|version| version + 1);
         let open_files = self.open_files.dupe();
         open_files.write().remove(&uri);
         self.connection
-            .publish_diagnostics_for_uri(params.text_document.uri, Vec::new(), None);
+            .publish_diagnostics_for_uri(params.text_document.uri, Vec::new(), version);
         let state = self.state.dupe();
         let lsp_queue = self.lsp_queue.dupe();
         let open_files = self.open_files.dupe();
