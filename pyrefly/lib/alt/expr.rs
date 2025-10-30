@@ -65,6 +65,7 @@ use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
+use crate::types::class::ClassType;
 use crate::types::facet::FacetKind;
 use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
@@ -1772,6 +1773,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn collect_class_type_candidates(&self, ty: &Type, out: &mut Vec<ClassType>) -> bool {
+        match ty {
+            Type::ClassType(cls) | Type::SelfType(cls) => {
+                out.push(cls.clone());
+                true
+            }
+            Type::ClassDef(cls) => {
+                out.push(self.as_class_type_unchecked(cls));
+                true
+            }
+            Type::Union(variants) => variants
+                .iter()
+                .all(|variant| self.collect_class_type_candidates(variant, out)),
+            Type::Type(box inner) => self.collect_class_type_candidates(inner, out),
+            _ => false,
+        }
+    }
+
     pub fn subscript_infer_for_type(
         &self,
         base: &Type,
@@ -1901,6 +1920,61 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             range,
                             errors,
                         ))
+                    }
+                }
+                Type::Type(box Type::Quantified(quantified)) if quantified.is_type_var() => {
+                    let quantified = *quantified;
+                    let base_display_ty =
+                        Type::Type(Box::new(Type::Quantified(Box::new(quantified.clone()))));
+                    let mut enum_classes: Vec<ClassType> = Vec::new();
+                    let mut usable = match quantified.restriction() {
+                        Restriction::Unrestricted => false,
+                        Restriction::Bound(bound) => {
+                            self.collect_class_type_candidates(bound, &mut enum_classes)
+                        }
+                        Restriction::Constraints(constraints) => {
+                            !constraints.is_empty()
+                                && constraints.iter().all(|constraint| {
+                                    self.collect_class_type_candidates(
+                                        constraint,
+                                        &mut enum_classes,
+                                    )
+                                })
+                        }
+                    };
+                    if usable {
+                        let enum_base = self.stdlib.enum_class().class_object();
+                        usable = enum_classes
+                            .iter()
+                            .all(|cls| self.has_superclass(cls.class_object(), enum_base));
+                    }
+                    if usable && !enum_classes.is_empty() {
+                        if self.is_subset_eq(
+                            &self.expr(slice, None, errors),
+                            &self.stdlib.str().clone().to_type(),
+                        ) {
+                            quantified.to_type()
+                        } else {
+                            self.error(
+                                errors,
+                                slice.range(),
+                                ErrorInfo::Kind(ErrorKind::BadIndex),
+                                format!(
+                                    "Enum type `{}` can only be indexed by strings",
+                                    self.for_display(base_display_ty)
+                                ),
+                            )
+                        }
+                    } else {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
+                            format!(
+                                "`{}` is not subscriptable",
+                                self.for_display(base_display_ty)
+                            ),
+                        )
                     }
                 }
                 Type::Type(box Type::SpecialForm(special)) => {
