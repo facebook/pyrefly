@@ -145,6 +145,7 @@ use lsp_types::request::Rename;
 use lsp_types::request::Request as _;
 use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
+use lsp_types::request::SemanticTokensRefresh;
 use lsp_types::request::SignatureHelpRequest;
 use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WillRenameFiles;
@@ -1220,6 +1221,17 @@ impl Server {
                 Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
             }
             self.connection.publish_diagnostics(diags);
+            if self
+                .initialize_params
+                .capabilities
+                .workspace
+                .as_ref()
+                .and_then(|w| w.semantic_tokens.as_ref())
+                .and_then(|st| st.refresh_support)
+                .unwrap_or(false)
+            {
+                self.send_request::<SemanticTokensRefresh>(());
+            }
         };
 
         match possibly_committable_transaction {
