@@ -656,7 +656,11 @@ impl Server {
             LspEvent::LspRequest(x) => {
                 // These are messages where VS Code will use results from previous document versions,
                 // we really don't want to implicitly cancel those.
-                const ONLY_ONCE: &[&str] = &[Completion::METHOD, SignatureHelpRequest::METHOD];
+                const ONLY_ONCE: &[&str] = &[
+                    Completion::METHOD,
+                    SignatureHelpRequest::METHOD,
+                    InlayHintRequest::METHOD,
+                ];
 
                 let in_cancelled_requests = canceled_requests.remove(&x.id);
                 if in_cancelled_requests
