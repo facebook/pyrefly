@@ -20,12 +20,13 @@ use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 fn test_completion_basic() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
     interaction.server.did_open("foo.py");
 
-    let foo_path = root.path().join("foo.py");
+    let root_path = root.path().join("basic");
+    let foo_path = root_path.join("foo.py");
     interaction
         .server
         .send_message(Message::Notification(Notification {
@@ -79,12 +80,13 @@ fn test_completion_basic() {
 fn test_completion_sorted_in_sorttext_order() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
     interaction.server.did_open("foo.py");
 
-    let foo_path = root.path().join("foo.py");
+    let root_path = root.path().join("basic");
+    let foo_path = root_path.join("foo.py");
     interaction
         .server
         .send_message(Message::Notification(Notification {
@@ -153,12 +155,14 @@ fn test_completion_sorted_in_sorttext_order() {
 fn test_completion_keywords() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
     interaction.server.did_open("foo.py");
 
-    let foo_path = root.path().join("foo.py");
+    let root_path = root.path().join("basic");
+    let foo_path = root_path.join("foo.py");
+
     interaction
         .server
         .send_message(Message::Notification(Notification {
@@ -283,10 +287,10 @@ fn test_completion_with_autoimport() {
 fn test_completion_with_autoimport_without_config() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    let root_path = root.path();
-    let scope_uri = Url::from_file_path(root_path).unwrap();
+    let root_path = root.path().join("basic");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
 
-    interaction.set_root(root_path.to_path_buf());
+    interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings {
         workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
         ..Default::default()
@@ -580,7 +584,7 @@ fn test_relative_module_completion() {
 #[test]
 fn test_stdlib_submodule_completion() {
     let root = get_test_files_root();
-    let root_path = root.path().to_path_buf();
+    let root_path = root.path().join("basic");
 
     let mut interaction =
         LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
@@ -608,7 +612,7 @@ fn test_stdlib_submodule_completion() {
 #[test]
 fn test_stdlib_class_completion() {
     let root = get_test_files_root();
-    let root_path = root.path().to_path_buf();
+    let root_path = root.path().join("basic");
 
     let mut interaction =
         LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
@@ -635,6 +639,114 @@ fn test_stdlib_class_completion() {
             }],
         }),
         "Expected completion response with autoimport suggestion",
+    );
+
+    interaction.shutdown();
+}
+
+#[test]
+fn test_completion_incomplete_below_autoimport_threshold() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("basic"));
+    interaction.initialize(InitializeSettings::default());
+
+    interaction.server.did_open("foo.py");
+
+    // Type only 2 characters (below MIN_CHARACTERS_TYPED_AUTOIMPORT = 3)
+    interaction.server.did_change("foo.py", "xy");
+
+    interaction.server.completion("foo.py", 0, 2);
+
+    interaction.client.expect_response_with(
+        |response| {
+            if response.id != RequestId::from(2) {
+                return false;
+            }
+            if let Some(result) = &response.result
+                && let Some(is_incomplete) = result.get("isIncomplete")
+                && let Some(is_incomplete_bool) = is_incomplete.as_bool()
+            {
+                // Since we typed only 2 characters and there are no local completions,
+                // autoimport suggestions are skipped due to MIN_CHARACTERS_TYPED_AUTOIMPORT,
+                // so is_incomplete should be true
+                return is_incomplete_bool;
+            }
+            false
+        },
+        "Expected isIncomplete to be true when typing below autoimport threshold without local completions",
+    );
+
+    interaction.shutdown();
+}
+
+#[test]
+fn test_completion_complete_above_autoimport_threshold() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("basic"));
+    interaction.initialize(InitializeSettings::default());
+
+    interaction.server.did_open("foo.py");
+
+    // Type 3 characters (meets MIN_CHARACTERS_TYPED_AUTOIMPORT = 3)
+    interaction.server.did_change("foo.py", "xyz");
+
+    interaction.server.completion("foo.py", 0, 3);
+
+    interaction.client.expect_response_with(
+        |response| {
+            if response.id != RequestId::from(2) {
+                return false;
+            }
+            if let Some(result) = &response.result
+                && let Some(is_incomplete) = result.get("isIncomplete")
+                && let Some(is_incomplete_bool) = is_incomplete.as_bool()
+            {
+                // Since we typed 3 characters (meets threshold), autoimport suggestions
+                // are included, so is_incomplete should be false
+                return !is_incomplete_bool;
+            }
+            false
+        },
+        "Expected isIncomplete to be false when typing meets or exceeds autoimport threshold",
+    );
+
+    interaction.shutdown();
+}
+
+#[test]
+fn test_completion_complete_with_local_completions() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("basic"));
+    interaction.initialize(InitializeSettings::default());
+
+    interaction.server.did_open("foo.py");
+
+    // Type 2 characters (below threshold) but match local completion "Ba" -> "Bar"
+    interaction.server.did_change("foo.py", "Ba");
+
+    interaction.server.completion("foo.py", 0, 2);
+
+    interaction.client.expect_response_with(
+        |response| {
+            if response.id != RequestId::from(2) {
+                return false;
+            }
+            if let Some(result) = &response.result
+                && let Some(is_incomplete) = result.get("isIncomplete")
+                && let Some(is_incomplete_bool) = is_incomplete.as_bool()
+            {
+                // Even though we have local completions (like "Bar"), since we typed only 2 characters
+                // (below MIN_CHARACTERS_TYPED_AUTOIMPORT), is_incomplete should be true to ensure
+                // the client keeps asking for completions as the user types more characters.
+                // This prevents the Zed bug where local completions prevent autoimport checks.
+                return is_incomplete_bool;
+            }
+            false
+        },
+        "Expected isIncomplete to be true even with local completions when below autoimport threshold",
     );
 
     interaction.shutdown();

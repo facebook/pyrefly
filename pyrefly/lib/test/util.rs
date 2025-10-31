@@ -170,6 +170,11 @@ impl TestEnv {
         self
     }
 
+    pub fn with_version(mut self, version: PythonVersion) -> Self {
+        self.version = version;
+        self
+    }
+
     pub fn add_with_path(&mut self, name: &str, path: &str, code: &str) {
         assert!(
             path.ends_with(".py") || path.ends_with(".pyi") || path.ends_with(".rs"),
@@ -289,7 +294,7 @@ impl TestEnv {
             let name = ModuleName::from_str(module);
             Handle::new(
                 name,
-                find_import(&config_file, name, None).unwrap(),
+                find_import(&config_file, name, None).finding().unwrap(),
                 config.dupe(),
             )
         })
@@ -419,7 +424,7 @@ fn get_batched_lsp_operations_report_helper(
     assert_zero_errors: bool,
     get_report: impl Fn(&State, &Handle, TextSize) -> String,
 ) -> String {
-    let (handles, state) = mk_multi_file_state(files, Require::Indexing, assert_zero_errors);
+    let (handles, state) = mk_multi_file_state(files, Require::indexing(), assert_zero_errors);
     let mut report = String::new();
     for (name, code) in files {
         report.push_str("# ");
@@ -459,7 +464,7 @@ pub fn get_batched_lsp_operations_report_no_cursor(
     files: &[(&'static str, &str)],
     get_report: impl Fn(&State, &Handle) -> String,
 ) -> String {
-    let (handles, state) = mk_multi_file_state(files, Require::Indexing, true);
+    let (handles, state) = mk_multi_file_state(files, Require::indexing(), true);
     let mut report = String::new();
     for (name, _code) in files {
         report.push_str("# ");

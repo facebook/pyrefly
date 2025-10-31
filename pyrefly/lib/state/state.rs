@@ -34,7 +34,9 @@ use enum_iterator::Sequence;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
+use lsp_types::FoldingRangeKind;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::docstring::Docstring;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -56,7 +58,12 @@ use pyrefly_util::uniques::UniqueFactory;
 use pyrefly_util::upgrade_lock::UpgradeLock;
 use pyrefly_util::upgrade_lock::UpgradeLockExclusiveGuard;
 use pyrefly_util::upgrade_lock::UpgradeLockWriteGuard;
+use ruff_python_ast::Expr;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::visitor::Visitor;
+use ruff_python_ast::visitor::walk_body;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
@@ -94,6 +101,7 @@ use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
+use crate::module::bundled::BundledStub;
 use crate::module::finder::find_import_prefixes;
 use crate::module::typeshed::BundledTypeshedStdlib;
 use crate::solver::solver::VarRecurser;
@@ -101,8 +109,9 @@ use crate::state::dirty::Dirty;
 use crate::state::epoch::Epoch;
 use crate::state::epoch::Epochs;
 use crate::state::errors::Errors;
+use crate::state::load::CodeOrNotebook;
 use crate::state::load::Load;
-use crate::state::loader::FindError;
+use crate::state::loader::FindingOrError;
 use crate::state::loader::LoaderFindCache;
 use crate::state::memory::MemoryFiles;
 use crate::state::memory::MemoryFilesLookup;
@@ -495,6 +504,34 @@ impl<'a> Transaction<'a> {
         self.get_load(handle).map(|x| x.module_info.dupe())
     }
 
+    pub fn folding_ranges(
+        &self,
+        handle: &Handle,
+    ) -> Option<Vec<(TextRange, Option<FoldingRangeKind>)>> {
+        let ast = self.get_ast(handle)?;
+        let module_info = self.get_module_info(handle)?;
+        let mut ranges = collect_folding_ranges(&ast.body, &module_info);
+        ranges.sort_by_key(|(range, _)| range.start());
+        ranges.dedup();
+        Some(ranges)
+    }
+
+    pub fn docstring_ranges(&self, handle: &Handle) -> Option<Vec<TextRange>> {
+        let ranges = self.folding_ranges(handle)?;
+        Some(
+            ranges
+                .into_iter()
+                .filter_map(|(range, kind)| {
+                    if kind == Some(FoldingRangeKind::Comment) {
+                        Some(range)
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        )
+    }
+
     /// Compute transitive dependency closure for the given handle.
     /// Note that for IDE services, if the given handle is an in-memory one, then you are probably
     /// not getting what you want, because the set of rdeps of in-memory file for IDE service will
@@ -599,14 +636,14 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         module: ModuleName,
         path: Option<&ModulePath>,
-    ) -> Result<Handle, FindError> {
+    ) -> FindingOrError<Handle> {
         let path = match path {
-            Some(path) => path.dupe(),
+            Some(path) => FindingOrError::new_finding(path.dupe()),
             None => self
                 .get_cached_loader(&self.get_module(handle).config.read())
-                .find_import(module, Some(handle.path()))?,
+                .find_import(module, Some(handle.path())),
         };
-        Ok(Handle::new(module, path, handle.sys_info().dupe()))
+        path.map(|path| Handle::new(module, path, handle.sys_info().dupe()))
     }
 
     /// Create a handle for import `module` within the handle `handle`, preferring `.py` over `.pyi`
@@ -615,14 +652,14 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         module: ModuleName,
         path: Option<&ModulePath>,
-    ) -> Result<Handle, FindError> {
+    ) -> FindingOrError<Handle> {
         let path = match path {
-            Some(path) => path.dupe(),
+            Some(path) => FindingOrError::new_finding(path.dupe()),
             None => self
                 .get_cached_loader(&self.get_module(handle).config.read())
-                .find_import_prefer_executable(module, Some(handle.path()))?,
+                .find_import_prefer_executable(module, Some(handle.path())),
         };
-        Ok(Handle::new(module, path, handle.sys_info().dupe()))
+        path.map(|path| Handle::new(module, path, handle.sys_info().dupe()))
     }
 
     /// Create a handle for import `module` within the handle `handle`
@@ -699,15 +736,29 @@ impl<'a> Transaction<'a> {
         if exclusive.dirty.load
             && let Some(old_load) = exclusive.steps.load.dupe()
         {
-            let (code, self_error) =
+            let (code_or_notebook, self_error) =
                 Load::load_from_path(module_data.handle.path(), &self.memory_lookup());
-            if self_error.is_some() || &code != old_load.module_info.contents() {
+            if self_error.is_some()
+                || match &code_or_notebook {
+                    CodeOrNotebook::Code(code) => {
+                        old_load.module_info.is_notebook()
+                            || code != old_load.module_info.contents()
+                    }
+                    CodeOrNotebook::Notebook(notebook) => {
+                        if let Some(old_notebook) = old_load.module_info.notebook() {
+                            &**notebook != old_notebook
+                        } else {
+                            false
+                        }
+                    }
+                }
+            {
                 let mut write = exclusive.write();
                 write.steps.load = Some(Arc::new(Load::load_from_data(
                     module_data.handle.module(),
                     module_data.handle.path().dupe(),
                     old_load.errors.style(),
-                    code,
+                    code_or_notebook,
                     self_error,
                 )));
                 rebuild(write, true);
@@ -736,7 +787,7 @@ impl<'a> Transaction<'a> {
                 match loader
                     .find_import(dependency_handle.module(), Some(module_data.handle.path()))
                 {
-                    Ok(path) if &path == dependency_handle.path() => {}
+                    FindingOrError::Finding(path) if &path.finding == dependency_handle.path() => {}
                     _ => {
                         is_dirty = true;
                         break;
@@ -913,10 +964,12 @@ impl<'a> Transaction<'a> {
         // being checked, and only use Require::Exports as the "default" require level, for files
         // reached _only_ through imports.
         //
-        // However, this only works for "check" and does not effect laziness in the IDE, which uses
-        // the default level Require::Indexing. It also does not effect laziness for glean, pysa, or
-        // other "tracing" check modes. This is by design, since those modes currently require all
-        // modules to have completed Solutions to operate correctly.
+        // However, this only works for "check" and the IDE. The latter uses the default level
+        // Require::Indexing but falls back to Require::Exports as a performance optimization.
+        //
+        // This does not affect laziness for glean, pysa, or other "tracing" check modes. This is
+        // by design, since those modes currently require all modules to have completed Solutions
+        // to operate correctly.
         //
         // TODO: It would be much nicer to identify when a module is a 3rd party dependency directly
         // instead of approximating it using require levels.
@@ -963,6 +1016,26 @@ impl<'a> Transaction<'a> {
 
     fn get_module(&self, handle: &Handle) -> ArcId<ModuleDataMut> {
         self.get_module_ex(handle, self.data.default_require).0
+    }
+
+    /// Get a module discovered via an import.
+    fn get_imported_module(&self, handle: &Handle, require: Require) -> ArcId<ModuleDataMut> {
+        let require = match require {
+            Require::Indexing(i) => {
+                // If we're building an index to power IDE features, limit the number of times
+                // we'll follow imports for performance reasons. When we hit our limit, we switch
+                // to requiring only exports, which tells Transaction::demand() to stop eagerly
+                // computing results.
+                if i == 0 {
+                    Require::Exports
+                } else {
+                    Require::Indexing(i - 1)
+                }
+            }
+            Require::Exports => Require::Exports,
+            _ => self.data.default_require,
+        };
+        self.get_module_ex(handle, require).0
     }
 
     /// Return the module, plus true if the module was newly created.
@@ -1148,7 +1221,7 @@ impl<'a> Transaction<'a> {
                 .stdlib
                 .insert_hashed(k.to_owned(), Arc::new(Stdlib::for_bootstrapping()));
             let v = Arc::new(Stdlib::new(k.version(), &|module, name| {
-                let path = loader.find_import(module, None).ok()?;
+                let path = loader.find_import(module, None).finding()?;
                 self.lookup_stdlib(&Handle::new(module, path, (*k).dupe()), name, &thread_state)
             }));
             self.data.stdlib.insert_hashed(k, v);
@@ -1559,6 +1632,140 @@ impl<'a> Transaction<'a> {
     }
 }
 
+fn collect_folding_ranges(
+    body: &[Stmt],
+    module: &Module,
+) -> Vec<(TextRange, Option<FoldingRangeKind>)> {
+    use ruff_python_ast::ExceptHandler;
+    use ruff_text_size::Ranged;
+
+    fn range_without_decorators(
+        range: TextRange,
+        decorators: &[ruff_python_ast::Decorator],
+    ) -> TextRange {
+        let decorators_range = decorators
+            .first()
+            .map(|first| first.range().cover(decorators.last().unwrap().range()));
+
+        decorators_range.map_or(range, |x| {
+            range.add_start(x.len() + ruff_text_size::TextSize::from(1))
+        })
+    }
+
+    struct FoldingRangeCollector<'a> {
+        ranges: Vec<(TextRange, Option<FoldingRangeKind>)>,
+        module: &'a Module,
+    }
+
+    impl Visitor<'_> for FoldingRangeCollector<'_> {
+        fn visit_body(&mut self, body: &[Stmt]) {
+            if let Some(range) = Docstring::range_from_stmts(body) {
+                self.ranges.push((range, Some(FoldingRangeKind::Comment)));
+            }
+            walk_body(self, body);
+        }
+
+        fn visit_stmt(&mut self, stmt: &Stmt) {
+            match stmt {
+                Stmt::FunctionDef(func) => {
+                    if !func.body.is_empty() {
+                        let range = range_without_decorators(func.range, &func.decorator_list);
+                        self.ranges.push((range, None));
+                    }
+                }
+                Stmt::ClassDef(class) => {
+                    if !class.body.is_empty() {
+                        let range = range_without_decorators(class.range, &class.decorator_list);
+                        self.ranges.push((range, None));
+                    }
+                }
+                Stmt::If(if_stmt) => {
+                    if !if_stmt.body.is_empty() {
+                        self.ranges.push((if_stmt.range, None));
+                    }
+                    for elif_else in &if_stmt.elif_else_clauses {
+                        if !elif_else.body.is_empty() {
+                            self.ranges.push((elif_else.range, None));
+                        }
+                    }
+                }
+                Stmt::For(for_stmt) => {
+                    if !for_stmt.body.is_empty() {
+                        self.ranges.push((for_stmt.range, None));
+                    }
+                }
+                Stmt::While(while_stmt) => {
+                    if !while_stmt.body.is_empty() {
+                        self.ranges.push((while_stmt.range, None));
+                    }
+                }
+                Stmt::With(with_stmt) => {
+                    if !with_stmt.body.is_empty() {
+                        self.ranges.push((with_stmt.range, None));
+                    }
+                }
+                Stmt::Match(match_stmt) => {
+                    self.ranges.push((match_stmt.range, None));
+                    for case in &match_stmt.cases {
+                        if !case.body.is_empty() {
+                            self.ranges.push((case.range, None));
+                        }
+                    }
+                }
+                Stmt::Try(try_stmt) => {
+                    if !try_stmt.body.is_empty() {
+                        self.ranges.push((try_stmt.range, None));
+                    }
+                    for handler in &try_stmt.handlers {
+                        let ExceptHandler::ExceptHandler(handler_inner) = handler;
+                        if !handler_inner.body.is_empty() {
+                            self.ranges.push((handler_inner.range(), None));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            ruff_python_ast::visitor::walk_stmt(self, stmt);
+        }
+
+        fn visit_expr(&mut self, expr: &Expr) {
+            let range = match expr {
+                Expr::Call(call) => Some(call.arguments.range),
+                Expr::Dict(dict) => Some(dict.range),
+                Expr::List(list) => Some(list.range),
+                Expr::Set(set) => Some(set.range),
+                Expr::Tuple(tuple) => Some(tuple.range),
+                _ => None,
+            };
+
+            if let Some(range) = range {
+                let lsp_range = self.module.lined_buffer().to_lsp_range(range);
+                if lsp_range.start.line != lsp_range.end.line {
+                    self.ranges.push((range, None));
+                }
+            }
+            ruff_python_ast::visitor::walk_expr(self, expr);
+        }
+    }
+
+    let mut collector = FoldingRangeCollector {
+        ranges: Vec::new(),
+        module,
+    };
+
+    if let Some(range) = Docstring::range_from_stmts(body) {
+        collector
+            .ranges
+            .push((range, Some(FoldingRangeKind::Comment)));
+    }
+
+    for stmt in body {
+        Visitor::visit_stmt(&mut collector, stmt);
+    }
+
+    collector.ranges
+}
+
 pub struct TransactionHandle<'a> {
     transaction: &'a Transaction<'a>,
     module_data: ArcId<ModuleDataMut>,
@@ -1569,58 +1776,63 @@ impl<'a> TransactionHandle<'a> {
         &self,
         module: ModuleName,
         path: Option<&ModulePath>,
-    ) -> Result<ArcId<ModuleDataMut>, FindError> {
+    ) -> FindingOrError<ArcId<ModuleDataMut>> {
+        let require = self.module_data.state.read().require;
         if let Some(res) = self.module_data.deps.read().get(&module).map(|x| x.first())
             && path.is_none_or(|path| path == res.path())
         {
-            return Ok(self.transaction.get_module(res));
+            return FindingOrError::new_finding(self.transaction.get_imported_module(res, require));
         }
 
         let handle = self
             .transaction
-            .import_handle(&self.module_data.handle, module, path)?;
-        let res = self.transaction.get_module(&handle);
-        let mut write = self.module_data.deps.write();
-        let did_insert = match write.entry(module) {
-            Entry::Vacant(e) => {
-                e.insert(SmallSet1::new(handle));
-                true
+            .import_handle(&self.module_data.handle, module, path);
+        handle.map(|handle| {
+            let res = self.transaction.get_imported_module(&handle, require);
+            let mut write = self.module_data.deps.write();
+            let did_insert = match write.entry(module) {
+                Entry::Vacant(e) => {
+                    e.insert(SmallSet1::new(handle));
+                    true
+                }
+                Entry::Occupied(mut e) => e.get_mut().insert(handle),
+            };
+            if did_insert {
+                let inserted = res.rdeps.lock().insert(self.module_data.handle.dupe());
+                assert!(inserted);
             }
-            Entry::Occupied(mut e) => e.get_mut().insert(handle),
-        };
-        if did_insert {
-            let inserted = res.rdeps.lock().insert(self.module_data.handle.dupe());
-            assert!(inserted);
-        }
-        // Make sure we hold the deps write lock until after we insert into rdeps.
-        drop(write);
-        Ok(res)
+            // Make sure we hold the deps write lock until after we insert into rdeps.
+            drop(write);
+            res
+        })
     }
 }
 
 impl<'a> LookupExport for TransactionHandle<'a> {
-    fn get(&self, module: ModuleName) -> Result<Exports, FindError> {
-        let module_data = self.get_module(module, None)?;
-        let exports = self.transaction.lookup_export(&module_data);
+    fn get(&self, module: ModuleName) -> FindingOrError<Exports> {
+        let module_data = self.get_module(module, None);
+        module_data.map(|module_data| {
+            let exports = self.transaction.lookup_export(&module_data);
 
-        // TODO: Design this better.
-        //
-        // Currently to resolve Exports we have to recursively look at `import *` to get the full set of exported symbols.
-        // We write `lookup.get("imported").wildcards(lookup)` to do that.
-        // But that's no longer correct, because the module resolver for "imported" might be different to our resolver, so should be:
-        //
-        // `lookup.get("imported").wildcards(lookup_for_imported)`
-        //
-        // Since Bindings gets this right, we might have a mismatch from the exports, leading to a crash.
-        // Temporary band-aid is to just force it with the right lookup, but we probably want a type distinction
-        // between templated and resolved exports, or a different API that gives the pair of exports and lookup.
-        let transaction2 = TransactionHandle {
-            transaction: self.transaction,
-            module_data,
-        };
-        exports.wildcard(&transaction2);
-        exports.exports(&transaction2);
-        Ok(exports)
+            // TODO: Design this better.
+            //
+            // Currently to resolve Exports we have to recursively look at `import *` to get the full set of exported symbols.
+            // We write `lookup.get("imported").wildcards(lookup)` to do that.
+            // But that's no longer correct, because the module resolver for "imported" might be different to our resolver, so should be:
+            //
+            // `lookup.get("imported").wildcards(lookup_for_imported)`
+            //
+            // Since Bindings gets this right, we might have a mismatch from the exports, leading to a crash.
+            // Temporary band-aid is to just force it with the right lookup, but we probably want a type distinction
+            // between templated and resolved exports, or a different API that gives the pair of exports and lookup.
+            let transaction2 = TransactionHandle {
+                transaction: self.transaction,
+                module_data,
+            };
+            exports.wildcard(&transaction2);
+            exports.exports(&transaction2);
+            exports
+        })
     }
 }
 
@@ -1639,7 +1851,7 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
     {
         // The unwrap is safe because we must have said there were no exports,
         // so no one can be trying to get at them
-        let module_data = self.get_module(module, path).unwrap();
+        let module_data = self.get_module(module, path).finding().unwrap();
         let res = self.transaction.lookup_answer(module_data, k, thread_state);
         if res.is_none() {
             let msg = format!(
@@ -1766,6 +1978,9 @@ impl State {
     }
 
     pub fn transaction<'a>(&'a self) -> Transaction<'a> {
+        // IMPORTANT: the LSP depends on default_require here being Require::Exports for good
+        // startup time performance. See the call to Server::validate_in_memory_without_committing
+        // in Server::did_open for details.
         self.new_transaction(Require::Exports, None)
     }
 

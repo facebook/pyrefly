@@ -15,6 +15,7 @@ use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -163,13 +164,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// specialize(list, [int]) == list[int]
     /// promote(list) == list[Any]
     /// instantiate(list) == list[T]
-    pub fn promote(&self, cls: &Class, range: TextRange) -> Type {
-        let targs = self.create_default_targs(self.get_class_tparams(cls), Some(range));
+    pub fn promote(&self, cls: &Class, range: TextRange, errors: &ErrorCollector) -> Type {
+        let targs = self.create_default_targs(
+            self.get_class_tparams(cls),
+            Some(&|tparam: &TParam| {
+                errors.add(
+                    range,
+                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                    vec1![
+                        format!(
+                            "Cannot determine the type parameter `{}` for generic class `{}`",
+                            tparam.name(),
+                            cls.name(),
+                        ),
+                        "Either specify the type argument explicitly, or specify a default for the type variable.".to_owned(),
+                    ],
+                );
+            }),
+        );
         self.type_of_instance(cls, targs)
     }
 
-    pub fn promote_forall(&self, forall: Forall<Forallable>, range: TextRange) -> Type {
-        let targs = self.create_default_targs(forall.tparams.dupe(), Some(range));
+    pub fn promote_forall(&self, forall: Forall<Forallable>, _range: TextRange) -> Type {
+        // TODO(grievejia): We probably want to error here as well
+        let targs = self.create_default_targs(forall.tparams.dupe(), None);
         forall.apply_targs(targs)
     }
 
@@ -263,23 +281,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn create_default_targs(
         &self,
         tparams: Arc<TParams>,
-        // Placeholder for strict mode: we want to force callers to pass a range so
-        // that we don't refactor in a way where none is available, but this is unused
-        // because we do not have a strict mode yet.
-        _range: Option<TextRange>,
+        on_fallback_to_gradual: Option<&dyn Fn(&TParam)>,
     ) -> TArgs {
         if tparams.is_empty() {
             TArgs::default()
         } else {
-            // TODO(stroxler): We should error here, but the error needs to be
-            // configurable in the long run, and also suppressed in dependencies
-            // no matter what the configuration is.
-            //
-            // Our plumbing isn't ready for that yet, so for now we are silently
-            // using gradual type arguments.
             let tys = tparams
                 .iter()
-                .map(|x| x.quantified.as_gradual_type())
+                .map(|x| {
+                    // TODO(grievejia): This is actually not a 100% accurate way of detecting graudal fallbacks:
+                    // it will trigger when the tparam doesn't have a default, but won't trigger if
+                    // - The tparam has a default, but that default is another type var without a default.
+                    // - The tparam has a default, but part of that default type requires another fallback (e.g. the
+                    //   default is `list[Foo]`, where `Foo` is a generic class whose tparam doesn't have a default).
+                    //
+                    // To make it 100% accurate, we actually need to hook the callback into `as_graudal_type()`. It's doable
+                    // but could add a lot of complexities so let's keep it as an exercise in the future.
+                    if let Some(f) = on_fallback_to_gradual
+                        && x.quantified.default().is_none()
+                    {
+                        f(x);
+                    }
+                    x.quantified.as_gradual_type()
+                })
                 .collect();
             TArgs::new(tparams, tys)
         }

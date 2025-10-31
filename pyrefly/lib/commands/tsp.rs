@@ -15,7 +15,7 @@ use lsp_types::InitializeParams;
 
 use crate::commands::lsp::IndexingMode;
 use crate::commands::util::CommandExitStatus;
-use crate::lsp::queue::LspQueue;
+use crate::lsp::non_wasm::queue::LspQueue;
 use crate::tsp::server::tsp_capabilities;
 use crate::tsp::server::tsp_loop;
 
@@ -42,7 +42,7 @@ pub fn run_tsp(connection: Arc<Connection>, args: TspArgs) -> anyhow::Result<()>
 
     // Create an LSP server instance for the TSP server to use.
     let lsp_queue = LspQueue::new();
-    let lsp_server = Box::new(crate::lsp::server::Server::new(
+    let lsp_server = Box::new(crate::lsp::non_wasm::server::Server::new(
         connection.dupe(),
         lsp_queue.dupe(),
         initialization_params.clone(),

@@ -5,7 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::sys_info::PythonVersion;
+
 use crate::pydantic_testcase;
+use crate::test::pydantic::util::pydantic_env;
+use crate::test::util::TestEnv;
+use crate::testcase;
 
 pydantic_testcase!(
     bug = "we could support ranges, but this is not for v1",
@@ -68,5 +73,21 @@ from pydantic import BaseModel
 class A(BaseModel, validate_by_name=True, validate_by_alias=True):
     x: int
 A()  # E: Missing argument `x`
+    "#,
+);
+
+fn pydantic_env_3_10() -> TestEnv {
+    let env = pydantic_env();
+    env.with_version(PythonVersion::new(3, 10, 0))
+}
+
+testcase!(
+    test_model_3_10,
+    pydantic_env_3_10(),
+    r#"
+from pydantic import BaseModel
+class A(BaseModel, strict=True):
+    x: int
+A(x='')  # E: `Literal['']` is not assignable to parameter `x` with type `int`
     "#,
 );

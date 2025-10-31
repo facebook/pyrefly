@@ -53,7 +53,7 @@ use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
 use crate::error::error::print_error_counts;
 use crate::error::legacy::LegacyErrors;
-use crate::error::summarise::print_error_summary;
+use crate::error::summarize::print_error_summary;
 use crate::error::suppress;
 use crate::module::typeshed::stdlib_search_path;
 use crate::report;

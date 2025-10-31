@@ -107,7 +107,7 @@ child = Child()  # E: Cannot instantiate `Child`
 testcase!(
     test_final_class_with_abstract_methods,
     r#"
-from typing import final
+from typing import final, Protocol
 from abc import ABC, abstractmethod
 
 @final
@@ -117,6 +117,12 @@ class BadClass(ABC):  # E: Final class `BadClass` cannot have unimplemented abst
         pass
 
 x = BadClass()  # E: Cannot instantiate `BadClass`
+
+@final
+class AbstractProtocol(Protocol):
+    @abstractmethod
+    def method(self) -> None:
+        pass
 "#,
 );
 
@@ -222,6 +228,24 @@ class Child(Base):  # E: Class `Child` has unimplemented abstract members: `proc
         super().__init__()
 
 x = Child()  # E: Cannot instantiate `Child`
+"#,
+);
+
+testcase!(
+    test_no_error_for_type_of_class,
+    r#"
+from abc import ABC, abstractmethod
+
+class A(ABC):
+    @abstractmethod
+    def m(self) -> None: ...
+
+    @classmethod
+    def classm(cls) -> None:
+        cls() # should not error
+
+def test(cls: type[A]):
+    cls() # should not error
 "#,
 );
 

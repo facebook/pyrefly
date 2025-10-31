@@ -172,6 +172,10 @@ impl ModuleName {
         Self::from_str("django.db.models.fields")
     }
 
+    pub fn django_models_fields_related() -> Self {
+        Self::from_str("django.db.models.fields.related")
+    }
+
     pub fn django_utils_functional() -> Self {
         Self::from_str("django.utils.functional")
     }
@@ -208,7 +212,9 @@ impl ModuleName {
             None => {}
             Some(file_name) => {
                 let splits: Vec<&str> = file_name.rsplitn(2, '.').collect();
-                if splits.len() != 2 || !(splits[0] == "py" || splits[0] == "pyi") {
+                if splits.len() != 2
+                    || !(splits[0] == "py" || splits[0] == "pyi" || splits[0] == "ipynb")
+                {
                     return Err(anyhow::anyhow!(PathConversionError::InvalidExtension {
                         file_name: file_name.to_owned(),
                     }));
@@ -339,6 +345,12 @@ impl ModuleName {
         }
         None
     }
+
+    /// Pop off the last name component from this [`ModuleName`]. If the `ModuleName`
+    /// would be empty, return `None` instead.
+    pub fn parent(&self) -> Option<Self> {
+        Some(Self::from_str(self.as_str().rsplit_once('.')?.0))
+    }
 }
 
 #[cfg(test)]
@@ -411,8 +423,10 @@ mod tests {
         }
         assert_module_name("foo.py", "foo");
         assert_module_name("foo.pyi", "foo");
+        assert_module_name("foo.ipynb", "foo");
         assert_module_name("foo/bar.py", "foo.bar");
         assert_module_name("foo/bar.pyi", "foo.bar");
+        assert_module_name("foo/bar.ipynb", "foo.bar");
         assert_module_name("foo/bar/__init__.py", "foo.bar");
         assert_module_name("foo/bar/__init__.pyi", "foo.bar");
 

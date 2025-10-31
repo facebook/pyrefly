@@ -14,8 +14,8 @@ use lsp_server::ProtocolError;
 use lsp_types::InitializeParams;
 
 use crate::commands::util::CommandExitStatus;
-use crate::lsp::server::capabilities;
-use crate::lsp::server::lsp_loop;
+use crate::lsp::non_wasm::server::capabilities;
+use crate::lsp::non_wasm::server::lsp_loop;
 
 /// Pyrefly's indexing strategy for open projects when performing go-to-definition
 /// requests.

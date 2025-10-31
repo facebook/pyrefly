@@ -12,7 +12,7 @@ use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::test::util::mk_multi_file_state_assert_no_errors;
 
 fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
-    let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::Indexing);
+    let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::indexing());
     let mut report = String::new();
     for (name, code) in files {
         report.push_str("# ");
@@ -170,6 +170,47 @@ token-type: class
 
 line: 12, column: 13, length: 3, text: bar
 token-type: method
+"#,
+    );
+}
+
+#[test]
+fn deprecated_token_for_disabled_branch() {
+    let code = r#"
+import sys
+
+if sys.version_info < (3, 9):
+    class Legacy:
+        value = 1
+else:
+    class Modern:
+        value = 2
+"#;
+
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 7, length: 3, text: sys
+token-type: namespace
+
+line: 3, column: 3, length: 3, text: sys
+token-type: namespace
+
+line: 3, column: 7, length: 12, text: version_info
+token-type: property
+
+line: 4, column: 10, length: 6, text: Legacy
+token-type: class
+
+line: 5, column: 8, length: 5, text: value
+token-type: variable
+
+line: 7, column: 10, length: 6, text: Modern
+token-type: class
+
+line: 8, column: 8, length: 5, text: value
+token-type: variable
 "#,
     );
 }

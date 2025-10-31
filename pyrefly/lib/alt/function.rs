@@ -150,9 +150,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     acc.reverse();
                     self.check_decorator_consistency_no_implementation(&acc, errors);
                     let metadata = self.merge_overload_metadata_no_implementation(&acc);
+                    let func_name = acc.first().2.kind.function_name().into_owned();
                     Type::Overload(Overload {
                         signatures: self
-                            .extract_signatures(acc.first().2.kind.as_func_id().func, acc, errors)
+                            .extract_signatures(&func_name, acc, errors)
                             .mapped(|(_, sig)| sig),
                         metadata: Box::new(metadata.clone()),
                     })
@@ -181,8 +182,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     let metadata = self
                         .merge_overload_metadata_with_implementation(&defs, def.metadata().clone());
-                    let sigs =
-                        self.extract_signatures(metadata.kind.as_func_id().func, defs, errors);
+                    let sigs = self.extract_signatures(
+                        metadata.kind.function_name().as_ref(),
+                        defs,
+                        errors,
+                    );
                     self.check_signature_consistency(&sigs, &def, errors);
                     Type::Overload(Overload {
                         signatures: sigs.mapped(|(_, sig)| sig),
@@ -280,11 +284,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         tparams.extend(legacy_tparams);
         let tparams = self.validated_tparams(def.range, tparams, TParamsSource::Function, errors);
 
-        let kind = FunctionKind::from_name(
-            self.module().name(),
-            defining_cls.as_ref().map(|cls| cls.name()),
-            &def.name.id,
-        );
+        let kind =
+            FunctionKind::from_name(self.module().dupe(), defining_cls.clone(), &def.name.id);
         let metadata = FuncMetadata { kind, flags };
 
         Arc::new(UndecoratedFunction {
@@ -1013,7 +1014,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn extract_signatures(
         &self,
-        func: Name,
+        func: &Name,
         ts: Vec1<(TextRange, Type, FuncMetadata)>,
         errors: &ErrorCollector,
     ) -> Vec1<(TextRange, OverloadType)> {

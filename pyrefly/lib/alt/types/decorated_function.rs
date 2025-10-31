@@ -8,12 +8,15 @@
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::FuncFlags;
 use pyrefly_types::callable::FuncId;
@@ -88,9 +91,13 @@ impl UndecoratedFunction {
             )),
             metadata: FuncMetadata {
                 kind: FunctionKind::Def(Box::new(FuncId {
-                    module: ModuleName::from_str("__undecorated_function_recursive__"),
+                    module: Module::new(
+                        ModuleName::from_str("__undecorated_function_recursive__"),
+                        ModulePath::filesystem(PathBuf::default()),
+                        Arc::new("".to_owned()),
+                    ),
                     cls: None,
-                    func: Name::default(),
+                    name: Name::default(),
                 })),
                 flags: FuncFlags::default(),
             },
@@ -110,7 +117,7 @@ impl UndecoratedFunction {
 
 impl Display for UndecoratedFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "def {}: ...", self.metadata.kind.as_func_id().func)
+        write!(f, "def {}: ...", self.metadata.kind.function_name())
     }
 }
 

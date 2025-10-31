@@ -23,6 +23,7 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::graph::index::Idx;
 use crate::report::pysa::ast_visitor::AstScopedVisitor;
+use crate::report::pysa::ast_visitor::ScopeExportedFunctionFlags;
 use crate::report::pysa::ast_visitor::ScopeId;
 use crate::report::pysa::ast_visitor::Scopes;
 use crate::report::pysa::ast_visitor::visit_module_ast;
@@ -109,6 +110,10 @@ impl<'a> AstScopedVisitor for DefinitionToScopeMapVisitor<'a> {
         if let Some(kwargs) = &function_def.parameters.kwarg {
             self.bind_name(Key::Definition(ShortIdentifier::new(&kwargs.name)), scopes);
         }
+    }
+
+    fn visit_type_annotations() -> bool {
+        false
     }
 }
 
@@ -208,9 +213,15 @@ impl<'a> AstScopedVisitor for CapturedVariableVisitor<'a> {
         self.current_exported_function = scopes.current_exported_function(
             self.module_context.module_id,
             self.module_context.module_info.name(),
-            /* include_top_level */ true,
-            /* include_class_top_level */ true,
-            /* include_decorators_in_decorated_definition */ false,
+            ScopeExportedFunctionFlags {
+                include_top_level: true,
+                include_class_top_level: true,
+                include_function_decorators:
+                    super::ast_visitor::ExportFunctionDecorators::InParentScope,
+                include_class_decorators: super::ast_visitor::ExportClassDecorators::InParentScope,
+                include_default_arguments:
+                    super::ast_visitor::ExportDefaultArguments::InParentScope,
+            },
         );
     }
 
@@ -254,6 +265,10 @@ impl<'a> AstScopedVisitor for CapturedVariableVisitor<'a> {
             }
             _ => (),
         }
+    }
+
+    fn visit_type_annotations() -> bool {
+        false
     }
 }
 

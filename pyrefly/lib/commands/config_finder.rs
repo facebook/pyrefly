@@ -23,6 +23,7 @@ use crate::config::config::ProjectLayout;
 use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::config::finder::debug_log;
+use crate::module::bundled::BundledStub;
 use crate::module::typeshed::BundledTypeshedStdlib;
 use crate::module::typeshed_third_party::BundledTypeshedThirdParty;
 
@@ -180,7 +181,7 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
             // We couldn't walk up and find a possible root of the project, so let's try to create a search
             // path that is still useful for this import by including all of its parents.
             None => {
-                let path = match path.details() {
+                let parent = match path.details() {
                     ModulePathDetails::FileSystem(x) | ModulePathDetails::Memory(x) => {
                         if let Some(path) = x.parent() {
                             path
@@ -198,22 +199,21 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
                 };
                 cache_parents
                     .lock()
-                    .entry(path.to_owned())
+                    .entry(parent.to_owned())
                     .or_insert_with(|| {
-                        let (config, errors) = configure2.configure(
-                            path.parent(),
-                            ConfigFile {
-                                // We use `fallback_search_path` because otherwise a user with `/sys` on their
-                                // computer (all of them) will override `sys.version` in preference to typeshed.
-                                fallback_search_path: path
-                                    .ancestors()
-                                    .map(|x| x.to_owned())
-                                    .collect::<Vec<_>>(),
-                                root: ConfigBase::default_for_ide_without_config(),
-                                ..Default::default()
-                            },
-                            vec![],
-                        );
+                        let mut config = ConfigFile {
+                            project_includes: ConfigFile::default_project_includes(),
+                            // We use `fallback_search_path` because otherwise a user with `/sys` on their
+                            // computer (all of them) will override `sys.version` in preference to typeshed.
+                            fallback_search_path: parent
+                                .ancestors()
+                                .map(|x| x.to_owned())
+                                .collect::<Vec<_>>(),
+                            root: ConfigBase::default_for_ide_without_config(),
+                            ..Default::default()
+                        };
+                        config.rewrite_with_path_to_config(parent);
+                        let (config, errors) = configure2.configure(Some(parent), config, vec![]);
                         // Since this is a config we generated, these are likely internal errors.
                         debug_log(errors);
                         config
@@ -385,7 +385,7 @@ mod tests {
 
         // check namespace
         let config_file = finder(
-            Some(&root.join("no_config")),
+            Some(&root.join("no_config/foo")),
             ModuleName::unknown(),
             ModulePath::namespace(root.join("no_config/foo")),
         );
@@ -401,7 +401,7 @@ mod tests {
 
         // check filesystem/memory
         let config_file = finder(
-            Some(&root.join("no_config")),
+            Some(&root.join("no_config/foo")),
             ModuleName::unknown(),
             ModulePath::filesystem(root.join("no_config/foo/bar.py")),
         );

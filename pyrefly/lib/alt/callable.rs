@@ -7,6 +7,7 @@
 
 use itertools::Itertools;
 use pyrefly_python::dunder;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
@@ -39,7 +40,6 @@ use crate::error::context::TypeCheckKind;
 use crate::error::display::function_suffix;
 use crate::solver::solver::QuantifiedHandle;
 use crate::types::callable::Callable;
-use crate::types::callable::FuncId;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
@@ -289,7 +289,7 @@ impl CallArgPreEval<'_> {
     fn post_check<Ans: LookupAnswer>(
         &mut self,
         solver: &AnswersSolver<Ans>,
-        callable_name: Option<&FuncId>,
+        callable_name: Option<&FunctionKind>,
         hint: &Type,
         param_name: Option<&Name>,
         vararg: bool,
@@ -427,7 +427,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // See comment on `callable_infer` about `arg_errors` and `call_errors`.
     fn callable_infer_params(
         &self,
-        callable_name: Option<FuncId>,
+        callable_name: Option<&FunctionKind>,
         params: &ParamList,
         // A ParamSpec Var (if any) that comes at the end of the parameter list.
         // See test::paramspec::test_paramspec_twice for an example of this.
@@ -454,7 +454,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 format!(
                     "{}{}",
                     msg,
-                    function_suffix(callable_name.as_ref(), self.module().name())
+                    function_suffix(callable_name, self.module().name())
                 ),
             )
         };
@@ -522,7 +522,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                         arg_pre.post_check(
                             self,
-                            callable_name.as_ref(),
+                            callable_name,
                             ty,
                             name,
                             false,
@@ -549,7 +549,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         kind: PosParamKind::Variadic,
                     }) => arg_pre.post_check(
                         self,
-                        callable_name.as_ref(),
+                        callable_name,
                         ty,
                         name,
                         true,
@@ -629,7 +629,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     kind: TypeCheckKind::CallVarArgs(
                         true,
                         unpacked_name.cloned(),
-                        callable_name.clone(),
+                        callable_name.cloned(),
                     ),
                     context: context.map(|ctx| ctx()),
                 },
@@ -744,7 +744,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     TypeCheckContext {
                                         kind: TypeCheckKind::CallArgument(
                                             Some(name.clone()),
-                                            callable_name.clone(),
+                                            callable_name.cloned(),
                                         ),
                                         context: context.map(|ctx| ctx()),
                                     }
@@ -765,7 +765,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                                 kind: TypeCheckKind::CallKwArgs(
                                                     None,
                                                     name.cloned(),
-                                                    callable_name.clone(),
+                                                    callable_name.cloned(),
                                                 ),
                                                 context: context.map(|ctx| ctx()),
                                             },
@@ -819,12 +819,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     let tcc: &dyn Fn() -> TypeCheckContext = &|| TypeCheckContext {
                         kind: if has_matching_param {
-                            TypeCheckKind::CallArgument(Some(id.id.clone()), callable_name.clone())
+                            TypeCheckKind::CallArgument(Some(id.id.clone()), callable_name.cloned())
                         } else {
                             TypeCheckKind::CallKwArgs(
                                 Some(id.id.clone()),
                                 kwargs.as_ref().and_then(|(name, _)| name.cloned()),
-                                callable_name.clone(),
+                                callable_name.cloned(),
                             )
                         },
                         context: context.map(|ctx| ctx()),
@@ -906,7 +906,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.check_type(ty, want, *range, call_errors, &|| TypeCheckContext {
                         kind: TypeCheckKind::CallUnpackKwArg(
                             (*name).clone(),
-                            callable_name.clone(),
+                            callable_name.cloned(),
                         ),
                         context: context.map(|ctx| ctx()),
                     });
@@ -949,7 +949,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn callable_infer(
         &self,
         callable: Callable,
-        callable_name: Option<FuncId>,
+        callable_name: Option<&FunctionKind>,
         tparams: Option<&TParams>,
         mut self_obj: Option<Type>,
         mut args: &[CallArg],
@@ -986,8 +986,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             callable.params.visit_mut(&mut |t| t.subst_mut(&mp));
             if let Some(obj) = self_obj.as_mut() {
                 obj.subst_mut(&mp);
-            } else if let Some(id) = callable_name.as_ref()
-                && id.func == dunder::NEW
+            } else if let Some(id) = callable_name
+                && id.function_name().as_ref() == &dunder::NEW
                 && let Some((first, rest)) = args.split_first()
                 && let CallArg::Arg(TypeOrExpr::Type(obj, _)) = first
             {

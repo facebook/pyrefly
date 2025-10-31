@@ -260,7 +260,7 @@ fn test_will_rename_files_changes_everything_when_indexed() {
 fn test_will_rename_files_without_config() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::None);
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
     let foo = "foo.py";
@@ -274,7 +274,26 @@ fn test_will_rename_files_without_config() {
     // Expect a response with edits to update imports in foo.py using "changes" format
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!(null)),
+        result: Some(serde_json::json!({
+            "changes": {
+                Url::from_file_path(root.path().join("basic/foo.py")).unwrap().to_string(): [
+                    {
+                        "newText": "baz",
+                        "range": {
+                            "start": {"line": 5, "character": 7},
+                            "end": {"line": 5, "character": 10}
+                        }
+                    },
+                    {
+                        "newText": "baz",
+                        "range": {
+                            "start": {"line": 6, "character": 5},
+                            "end": {"line": 6, "character": 8}
+                        }
+                    }
+                ],
+            }
+        })),
         error: None,
     });
 
@@ -284,27 +303,54 @@ fn test_will_rename_files_without_config() {
 #[test]
 fn test_will_rename_files_without_config_with_workspace_folder() {
     let root = get_test_files_root();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::None);
-    let root_path = root.path();
-    let scope_uri = Url::from_file_path(root_path).unwrap();
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let root_path = root.path().join("basic");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
 
-    interaction.set_root(root_path.to_path_buf());
+    interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings {
         workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
         ..Default::default()
     });
 
-    let foo = "foo.py";
     let bar = "bar.py";
-    interaction.server.did_open(foo);
+    interaction.server.did_open(bar);
 
     // Send will_rename_files request to rename bar.py to baz.py
     interaction.server.will_rename_files(bar, "baz.py");
 
-    // Expect a response with edits to update imports in foo.py using "changes" format
+    // Expect a response with edits to update imports in foo.py and foo_relative.py using "changes" format
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!(null)),
+        result: Some(serde_json::json!({
+            "changes": {
+                Url::from_file_path(root_path.join("foo.py")).unwrap().to_string(): [
+                    {
+                        "newText": "baz",
+                        "range": {
+                            "start": {"line": 5, "character": 7},
+                            "end": {"line": 5, "character": 10}
+                        }
+                    },
+                    {
+                        "newText": "baz",
+                        "range": {
+                            "start": {"line": 6, "character": 5},
+                            "end": {"line": 6, "character": 8}
+                        }
+                    }
+                ],
+                Url::from_file_path(root_path.join("foo_relative.py")).unwrap().to_string(): [
+                    {
+                        "newText": "baz",
+                        "range": {
+                            "start": {"line": 6, "character": 6},
+                            "end": {"line": 6, "character": 9}
+                        }
+                    },
+                ],
+            }
+        })),
         error: None,
     });
 

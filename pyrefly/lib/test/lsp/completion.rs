@@ -410,7 +410,7 @@ class Foo:
 5 |   x.
         ^
 Completion Results:
-- (Field) magic
+- (Field) magic: Unknown
 
 
 # lib.py
@@ -2167,6 +2167,39 @@ Completion Results:
 This has documentation.
 - (Method) undocumented: def undocumented(self: Foo) -> int
 - (Field) x: int
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1257
+// Because the base type for completion is passed to Type::for_display,
+// which converts all unsolved Var to Var::ZERO, we were running into an
+// unexpected Var::ZERO in attribute lookup, leading to a panic.
+#[test]
+fn dot_complete_var_crash_regression() {
+    let code = r#"
+class C[T]:
+    def m(self) -> None: ...
+
+    @property
+    def p(self) -> T: ...
+
+def f[T]() -> C[T]: ...
+f().
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+9 | f().
+        ^
+Completion Results:
+- (Method) m: def m(self: C[Unknown]) -> None
+- (Field) p: Unknown
 "#
         .trim(),
         report.trim(),

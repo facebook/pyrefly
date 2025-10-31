@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_types::simplify::unions_with_literals;
 use pyrefly_types::typed_dict::ExtraItems;
@@ -24,11 +25,13 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::solver::solver::SubsetError;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
@@ -138,14 +141,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             None => {
+                // This is an unpacked item (`**some_dict`).
                 has_expansion = true;
-                self.expr_with_separate_check_errors(
+                let partial_td_ty = Type::PartialTypedDict(typed_dict.clone());
+                let item_ty = self.expr_infer_with_hint(
                     &x.value,
-                    Some((&Type::TypedDict(typed_dict.clone()), check_errors, &|| {
-                        TypeCheckContext::of_kind(TypeCheckKind::TypedDictUnpacking)
-                    })),
+                    Some(HintRef::soft(&partial_td_ty)),
                     item_errors,
                 );
+                let subset_result = self.is_subset_eq_with_reason(&item_ty, &partial_td_ty);
+                if let Some(subset_error) = subset_result.err()
+                // TODO: we should log PartialTypedDictMissingField as a default-off error.
+                    && !matches!(
+                        subset_error,
+                        SubsetError::PartialTypedDictMissingField(_)
+                    )
+                {
+                    self.solver().error(
+                        &item_ty,
+                        &partial_td_ty,
+                        check_errors,
+                        range,
+                        &|| TypeCheckContext::of_kind(TypeCheckKind::TypedDictUnpacking),
+                        subset_error,
+                    );
+                }
             }
         });
         // You can update a TypedDict with a subset of its items. Otherwise, all required fields must be present.
@@ -262,7 +282,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let ty = Type::Function(Box::new(Function {
             signature: Callable::list(ParamList::new(params), Type::None),
-            metadata: FuncMetadata::def(self.module().name(), cls.name().clone(), dunder::INIT),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
         }));
         ClassSynthesizedField::new(ty)
     }
@@ -272,7 +292,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> ClassSynthesizedField {
-        let metadata = FuncMetadata::def(self.module().name(), cls.name().clone(), UPDATE_METHOD);
+        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), UPDATE_METHOD);
         let self_param = self.class_self_param(cls, true);
         let extra = if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(cls) {
             Some(extra.ty)
@@ -398,7 +418,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> ClassSynthesizedField {
-        let metadata = FuncMetadata::def(self.module().name(), cls.name().clone(), GET_METHOD);
+        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), GET_METHOD);
         // Synthesizes signatures for each field and a fallback `(self, key: str, default: object = ...) -> object` signature.
         let self_param = self.class_self_param(cls, true);
         let object_ty = self.stdlib.object().clone().to_type();
@@ -519,7 +539,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> Option<ClassSynthesizedField> {
-        let metadata = FuncMetadata::def(self.module().name(), cls.name().clone(), POP_METHOD);
+        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), POP_METHOD);
         let self_param = self.class_self_param(cls, true);
         let mut literal_signatures: Vec<OverloadType> = Vec::new();
         for (name, field) in self.names_to_fields(cls, fields) {
@@ -559,8 +579,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Synthesizes a `(self, k: Literal["key"], default: ValueType) -> ValueType` signature for each field.
         let fields_iter = self.names_to_fields(cls, fields);
         let self_param = self.class_self_param(cls, true);
-        let metadata =
-            FuncMetadata::def(self.module().name(), cls.name().clone(), SETDEFAULT_METHOD);
+        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), SETDEFAULT_METHOD);
         let make_overload = |name: Option<&Name>, read_only: bool, field_ty: Type| {
             if read_only {
                 None
@@ -663,7 +682,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.stdlib.str().clone().to_type(),
             self.get_typed_dict_value_type_from_fields(cls, fields),
         );
-        let metadata = FuncMetadata::def(self.module().name(), cls.name().clone(), ITEMS_METHOD);
+        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), ITEMS_METHOD);
         ClassSynthesizedField::new(Type::Function(Box::new(Function {
             signature: Callable::list(
                 ParamList::new(vec![self.class_self_param(cls, false)]),
@@ -683,7 +702,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.stdlib.str().clone().to_type(),
             self.get_typed_dict_value_type_from_fields(cls, fields),
         );
-        let metadata = FuncMetadata::def(self.module().name(), cls.name().clone(), VALUES_METHOD);
+        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), VALUES_METHOD);
         ClassSynthesizedField::new(Type::Function(Box::new(Function {
             signature: Callable::list(
                 ParamList::new(vec![self.class_self_param(cls, false)]),
@@ -717,7 +736,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ParamList::new(vec![self.class_self_param(cls, true)]),
                     Type::None,
                 ),
-                metadata: FuncMetadata::def(self.module().name(), cls.name().clone(), CLEAR_METHOD),
+                metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), CLEAR_METHOD),
             },
         ))))
     }
@@ -739,11 +758,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.get_typed_dict_value_type_from_fields(cls, fields),
                     ])),
                 ),
-                metadata: FuncMetadata::def(
-                    self.module().name(),
-                    cls.name().clone(),
-                    POPITEM_METHOD,
-                ),
+                metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), POPITEM_METHOD),
             },
         ))))
     }

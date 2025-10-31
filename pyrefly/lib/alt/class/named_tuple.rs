@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use dupe::Dupe;
 use pyrefly_python::dunder;
 use ruff_python_ast::name::Name;
 use starlark_map::small_set::SmallSet;
@@ -102,7 +103,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ParamList::new(params),
                 Type::SelfType(self.as_class_type_unchecked(cls)),
             ),
-            metadata: FuncMetadata::def(self.module().name(), cls.name().clone(), dunder::NEW),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::NEW),
         }));
         ClassSynthesizedField::new(ty)
     }
@@ -116,7 +117,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         params.extend(self.get_named_tuple_field_params(cls, elements));
         let ty = Type::Function(Box::new(Function {
             signature: Callable::list(ParamList::new(params), Type::None),
-            metadata: FuncMetadata::def(self.module().name(), cls.name().clone(), dunder::INIT),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
         }));
         ClassSynthesizedField::new(ty)
     }
@@ -141,7 +142,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ParamList::new(params),
                 Type::ClassType(self.stdlib.iterable(self.unions(element_types))),
             ),
-            metadata: FuncMetadata::def(self.module().name(), cls.name().clone(), dunder::ITER),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::ITER),
         }));
         ClassSynthesizedField::new(ty)
     }

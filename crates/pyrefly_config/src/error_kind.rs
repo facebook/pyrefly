@@ -117,6 +117,8 @@ pub enum ErrorKind {
     /// A subclass method incorrectly changes the name of a positional parameter while overriding
     /// a method of a parent class.
     BadParamNameOverride,
+    /// Invalid exception or cause in `raise` statement.
+    BadRaise,
     /// Attempting to return a value that does not match the function's return type.
     /// Can also arise when returning values from generators.
     BadReturn,
@@ -236,6 +238,8 @@ pub enum ErrorKind {
     UnsupportedDelete,
     /// Attempting to apply an operation to arguments that do not support it.
     UnsupportedOperation,
+    /// Import is missing an expected stubs package
+    UntypedImport,
     /// Result of async function call is never used or awaited
     UnusedCoroutine,
 }
@@ -277,9 +281,12 @@ impl ErrorKind {
             ErrorKind::RevealType => Severity::Info,
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::RedundantCast => Severity::Warn,
+            // TODO(rechen): re-enable this once we figure out how to make it less noisy.
+            ErrorKind::UntypedImport => Severity::Ignore,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
+            ErrorKind::MissingSource => Severity::Ignore,
             _ => Severity::Error,
         }
     }

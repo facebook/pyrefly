@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::sys_info::PythonVersion;
+
 use crate::test::util::TestEnv;
 use crate::testcase;
 
@@ -393,5 +395,20 @@ import foo
 class C:
     x: int
 C(x=0)
+    "#,
+);
+
+testcase!(
+    test_lower_version,
+    TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),
+    r#"
+from typing_extensions import dataclass_transform
+@dataclass_transform()
+def decorate(cls):
+    return cls
+@decorate
+class A:
+    x: int
+A(x=0)
     "#,
 );

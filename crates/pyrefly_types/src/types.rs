@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
@@ -28,7 +29,6 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::callable::Callable;
-use crate::callable::FuncId;
 use crate::callable::FuncMetadata;
 use crate::callable::Function;
 use crate::callable::FunctionKind;
@@ -562,11 +562,11 @@ impl Forallable {
         }
     }
 
-    pub fn name(&self) -> Name {
+    pub fn name(&self) -> Cow<'_, Name> {
         match self {
-            Self::Function(func) => func.metadata.kind.as_func_id().func,
-            Self::Callable(_) => Name::new_static("<callable>"),
-            Self::TypeAlias(ta) => (*ta.name).clone(),
+            Self::Function(func) => func.metadata.kind.function_name(),
+            Self::Callable(_) => Cow::Owned(Name::new_static("<callable>")),
+            Self::TypeAlias(ta) => Cow::Borrowed(&ta.name),
         }
     }
 
@@ -1479,12 +1479,12 @@ impl Type {
         }
     }
 
-    /// Return the FuncId if this type corresponds to a function or method.
-    pub fn to_funcid(&self) -> Option<FuncId> {
+    /// Return the FunctionKind if this type corresponds to a function or method.
+    pub fn to_func_kind(&self) -> Option<&FunctionKind> {
         match &self {
-            Type::Function(f) => Some(f.metadata.kind.as_func_id()),
-            Type::BoundMethod(m) => Some(m.func.metadata().kind.as_func_id()),
-            Type::Overload(o) => Some(o.metadata.kind.as_func_id()),
+            Type::Function(f) => Some(&f.metadata.kind),
+            Type::BoundMethod(m) => Some(&m.func.metadata().kind),
+            Type::Overload(o) => Some(&o.metadata.kind),
             _ => None,
         }
     }

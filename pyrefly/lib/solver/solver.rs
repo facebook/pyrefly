@@ -69,9 +69,11 @@ enum Variable {
     Partial,
     /// A variable due to generic instantiation, `def f[T](x: T): T` with `f(1)`
     Quantified(Box<Quantified>),
-    /// A variable caused by recursion, e.g. `x = f(); def f(): return x`.
-    /// The second value is the default value of the Var, if one exists.
-    Recursive(Option<Type>),
+    /// A variable caused by general recursion, e.g. `x = f(); def f(): return x`.
+    Recursive,
+    /// A loop-recursive variable, e.g. `x = None; while x is None: x = f()`
+    /// The Variable tracks the prior type bound to this name before the loop.
+    LoopRecursive(Type),
     /// A variable that used to decompose a type, e.g. getting T from Awaitable[T]
     Unwrap,
     /// A variable used for a parameter type (either a function or lambda parameter).
@@ -96,8 +98,8 @@ impl Display for Variable {
                     write!(f, "Quantified({k})")
                 }
             }
-            Variable::Recursive(Some(t)) => write!(f, "Recursive(default={t})"),
-            Variable::Recursive(None) => write!(f, "Recursive"),
+            Variable::LoopRecursive(t) => write!(f, "LoopRecursive(prior={t})"),
+            Variable::Recursive => write!(f, "Recursive"),
             Variable::Parameter => write!(f, "Parameter"),
             Variable::Unwrap => write!(f, "Unwrap"),
             Variable::Answer(t) => write!(f, "{t}"),
@@ -227,6 +229,11 @@ impl Variables {
     }
 
     fn get_node(&self, x: Var) -> &RefCell<VariableNode> {
+        assert_ne!(
+            x,
+            Var::ZERO,
+            "Internal error: unexpected Var::ZERO, which is a dummy value."
+        );
         self.0.get(&x).expect(VAR_LEAK)
     }
 }
@@ -286,7 +293,7 @@ impl Solver {
         let variables = self.variables.lock();
         let mut variable = variables.get_mut(var);
         match &mut *variable {
-            Variable::Recursive(..) | Variable::Answer(..) => {
+            Variable::LoopRecursive(..) | Variable::Recursive | Variable::Answer(..) => {
                 // Nothing to do if we have an answer already, and we want to skip recursive Vars
                 // which do not represent placeholder types.
             }
@@ -330,8 +337,8 @@ impl Solver {
             let lock = self.variables.lock();
             if let Some(_guard) = lock.recurse(*x, recurser) {
                 let variable = lock.get(*x);
-                if let Variable::Answer(w) = &*variable {
-                    *t = w.clone();
+                if let Variable::Answer(ty) = &*variable {
+                    *t = ty.clone();
                     drop(variable);
                     drop(lock);
                     self.expand_with_limit(t, limit - 1, recurser);
@@ -348,23 +355,18 @@ impl Solver {
     /// and returns that answer. Note that if the `Var` is already bound to something that contains a
     /// `Var` (including itself), then we will return the answer.
     pub fn force_var(&self, v: Var) -> Type {
-        assert_ne!(
-            v,
-            Var::ZERO,
-            "Cannot force Var::ZERO, which is a dummy value"
-        );
         let lock = self.variables.lock();
         let mut e = lock.get_mut(v);
         match &mut *e {
             Variable::Answer(t) => t.clone(),
             _ => {
-                let default = match &mut *e {
+                let ty = match &mut *e {
                     Variable::Quantified(q) => q.as_gradual_type(),
-                    Variable::Recursive(Some(default)) => default.clone(),
+                    Variable::LoopRecursive(prior_type) => prior_type.clone(),
                     _ => Type::any_implicit(),
                 };
-                *e = Variable::Answer(default.clone());
-                default
+                *e = Variable::Answer(ty.clone());
+                ty
             }
         }
     }
@@ -731,11 +733,17 @@ impl Solver {
     }
 
     /// Generate a fresh variable used to tie recursive bindings.
-    pub fn fresh_recursive(&self, uniques: &UniqueFactory, default: Option<Type>) -> Var {
+    pub fn fresh_recursive(&self, uniques: &UniqueFactory) -> Var {
+        let v = Var::new(uniques);
+        self.variables.lock().insert_fresh(v, Variable::Recursive);
+        v
+    }
+
+    pub fn fresh_loop_recursive(&self, uniques: &UniqueFactory, prior_type: Type) -> Var {
         let v = Var::new(uniques);
         self.variables
             .lock()
-            .insert_fresh(v, Variable::Recursive(default));
+            .insert_fresh(v, Variable::LoopRecursive(prior_type));
         v
     }
 
@@ -819,11 +827,11 @@ impl Solver {
     /// Record a variable that is used recursively.
     pub fn record_recursive<Ans: LookupAnswer>(
         &self,
-        v: Var,
-        t: Type,
+        var: Var,
+        ty: Type,
         type_order: TypeOrder<Ans>,
         errors: &ErrorCollector,
-        loc: TextRange,
+        range: TextRange,
     ) {
         fn expand(t: Type, variables: &Variables, recurser: &VarRecurser, res: &mut Vec<Type>) {
             match t {
@@ -848,7 +856,7 @@ impl Solver {
         }
 
         let lock = self.variables.lock();
-        let variable = lock.get(v);
+        let variable = lock.get(var);
         match &*variable {
             Variable::Answer(forced) => {
                 let forced = forced.clone();
@@ -857,13 +865,13 @@ impl Solver {
                 // We got forced into choosing a type to satisfy a subset constraint, so check we are OK with that.
                 // Since we have already used `forced`, and will continue to do so, important that what we expect
                 // is more restrictive (so the `forced` is an over-approximation).
-                if self.is_subset_eq(&t, &forced, type_order).is_err() {
+                if self.is_subset_eq(&ty, &forced, type_order).is_err() {
                     // Poor error message, but overall, this is a terrible experience for users.
                     self.error(
-                        &t,
+                        &ty,
                         &forced,
                         errors,
-                        loc,
+                        range,
                         &|| TypeCheckContext::of_kind(TypeCheckKind::CycleBreaking),
                         SubsetError::Other,
                     );
@@ -875,10 +883,10 @@ impl Solver {
                 // possibilities, so just ignore it.
                 let mut res = Vec::new();
                 // First expand all union/var into a list of the possible unions
-                expand(t, &lock, &VarRecurser::new(), &mut res);
+                expand(ty, &lock, &VarRecurser::new(), &mut res);
                 // Then remove any reference to self, before unioning it back together
-                res.retain(|x| x != &Type::Var(v));
-                lock.update(v, Variable::Answer(unions(res)));
+                res.retain(|x| x != &Type::Var(var));
+                lock.update(var, Variable::Answer(unions(res)));
             }
         }
     }
@@ -1020,6 +1028,10 @@ pub enum SubsetError {
     IncompatibleAttribute(Box<(Name, Type, Name, AttrSubsetError)>),
     /// TypedDict subset check failed
     TypedDict(Box<TypedDictSubsetError>),
+    /// `got` is missing a field that exists in PartialTypedDict `want`.
+    /// This is an error because a subclass of `got` could have this field with an incompatible type.
+    /// The names are (got, want, field).
+    PartialTypedDictMissingField(Box<(Name, Name, Name)>),
     // TODO(rechen): replace this with specific reasons
     Other,
 }
@@ -1041,6 +1053,7 @@ impl SubsetError {
                 Some(err.to_error_msg(&Name::new(format!("{got}")), &protocol, &attribute))
             }
             SubsetError::TypedDict(err) => Some(err.to_error_msg()),
+            SubsetError::PartialTypedDictMissingField(_) => None, // TODO
             SubsetError::Other => None,
         }
     }
@@ -1156,7 +1169,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         }
                         Ok(())
                     }
-                    Variable::Partial | Variable::Unwrap | Variable::Recursive(..) => {
+                    Variable::Partial
+                    | Variable::Unwrap
+                    | Variable::LoopRecursive(..)
+                    | Variable::Recursive => {
                         drop(v1_ref);
                         variables.update(*v1, Variable::Answer(t2.clone()));
                         Ok(())
@@ -1215,7 +1231,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         variables.update(*v2, Variable::Answer(t1_p));
                         Ok(())
                     }
-                    Variable::Unwrap | Variable::Recursive(..) => {
+                    Variable::Unwrap | Variable::LoopRecursive(..) | Variable::Recursive => {
                         drop(v2_ref);
                         variables.update(*v2, Variable::Answer(t1.clone()));
                         Ok(())

@@ -59,7 +59,7 @@ pub struct ClassMetadata {
     /// that were passed to the `dataclass_transform` call.
     dataclass_transform_metadata: Option<DataclassTransformKeywords>,
     pydantic_model_kind: Option<PydanticModelKind>,
-    is_django_model: bool,
+    django_model_metadata: Option<DjangoModelMetadata>,
 }
 
 impl VisitMut<Type> for ClassMetadata {
@@ -94,7 +94,7 @@ impl ClassMetadata {
         total_ordering_metadata: Option<TotalOrderingMetadata>,
         dataclass_transform_metadata: Option<DataclassTransformKeywords>,
         pydantic_model_kind: Option<PydanticModelKind>,
-        is_django_model: bool,
+        django_model_metadata: Option<DjangoModelMetadata>,
     ) -> ClassMetadata {
         ClassMetadata {
             metaclass,
@@ -114,7 +114,7 @@ impl ClassMetadata {
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
-            is_django_model,
+            django_model_metadata,
         }
     }
 
@@ -137,7 +137,7 @@ impl ClassMetadata {
             total_ordering_metadata: None,
             dataclass_transform_metadata: None,
             pydantic_model_kind: None,
-            is_django_model: false,
+            django_model_metadata: None,
         }
     }
 
@@ -170,7 +170,7 @@ impl ClassMetadata {
     }
 
     pub fn is_django_model(&self) -> bool {
-        self.is_django_model
+        self.django_model_metadata.is_some()
     }
 
     pub fn pydantic_model_kind(&self) -> Option<PydanticModelKind> {
@@ -266,6 +266,10 @@ impl ClassMetadata {
 
     pub fn dataclass_transform_metadata(&self) -> Option<&DataclassTransformKeywords> {
         self.dataclass_transform_metadata.as_ref()
+    }
+
+    pub fn django_model_metadata(&self) -> Option<&DjangoModelMetadata> {
+        self.django_model_metadata.as_ref()
     }
 }
 
@@ -453,6 +457,13 @@ pub struct DataclassMetadata {
     pub init_defaults: InitDefaults,
     /// Whether a default can be passed positionally to field specifier calls
     pub default_can_be_positional: bool,
+}
+
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
+pub struct DjangoModelMetadata {
+    /// The name of the field that has primary_key=True, if any.
+    /// If None, the model uses the default auto-generated `id` field.
+    pub custom_primary_key_field: Option<Name>,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]

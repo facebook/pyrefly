@@ -60,6 +60,7 @@ use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::bindings::Bindings;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::pydantic::PydanticConfigDict;
+use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::types::annotation::Annotation;
@@ -101,7 +102,7 @@ assert_words!(BindingAnnotation, 15);
 assert_words!(BindingClass, 23);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
-assert_words!(BindingClassMetadata, 8);
+assert_words!(BindingClassMetadata, 11);
 assert_bytes!(BindingClassMro, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_words!(BindingClassField, 21);
@@ -1187,8 +1188,8 @@ pub enum Binding {
     // Unlike the general `Expr` binding above, this separate binding allows us to
     // perform additional checks that are only relevant for expressions in `Stmt::Expr`,
     // such as verifying for unused awaitables.
-    // The boolean is whether the expression is a call to `assert_type()`
-    StmtExpr(Expr, bool),
+    // The boolean is whether the expression is a call to something defined as a `SpecialExport`
+    StmtExpr(Expr, Option<SpecialExport>),
     /// Propagate a type to a new binding. Takes an optional annotation to
     /// check against (which will override the computed type if they disagree).
     MultiTargetAssign(Option<Idx<KeyAnnotation>>, Idx<Key>, TextRange),
@@ -1253,8 +1254,8 @@ pub enum Binding {
     /// A phi node, representing the union of several alternative keys.
     Phi(JoinStyle<Idx<Key>>, SmallSet<Idx<Key>>),
     /// A phi node for a name that was defined above a loop. This can involve recursion
-    /// due to reassingment in the loop, so we provide a default binding that is used
-    /// if the resulting Cyclic var is forced.
+    /// due to reassingment in the loop, so we provide a prior idx of the type from above
+    /// the loop, which can be used if the resulting Var is forced.
     LoopPhi(Idx<Key>, SmallSet<Idx<Key>>),
     /// A narrowed type.
     Narrow(Idx<Key>, Box<NarrowOp>, TextRange),
@@ -2034,6 +2035,9 @@ pub struct BindingClassMetadata {
     /// Is this a new type? True only for synthesized classes created from a `NewType` call.
     pub is_new_type: bool,
     pub pydantic_config_dict: PydanticConfigDict,
+    /// The name of the field that has primary_key=True, if any (for Django models).
+    /// Note that we calculate this field for all classes, but it is ignored unless the class is a django model.
+    pub django_primary_key_field: Option<Name>,
 }
 
 impl DisplayWith<Bindings> for BindingClassMetadata {

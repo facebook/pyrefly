@@ -47,8 +47,8 @@ fn is_pytest_module(context: &ModuleContext) -> bool {
             function
                 .metadata()
                 .kind
-                .as_func_id()
-                .func
+                .function_name()
+                .as_ref()
                 .starts_with("test_")
         })
     }

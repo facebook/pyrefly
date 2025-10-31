@@ -9,6 +9,7 @@ pub mod base_class;
 pub mod binding;
 pub mod bindings;
 pub mod class;
+pub mod django;
 pub mod expr;
 pub mod function;
 pub mod narrow;

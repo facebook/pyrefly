@@ -5,102 +5,55 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-pub mod bundled {
+use std::env;
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::LazyLock;
 
-    use std::collections::HashMap;
-    use std::env;
-    use std::fs;
-    use std::path::Path;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::sync::LazyLock;
+use anyhow::Context as _;
+use pyrefly_config::config::ConfigFile;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::fs_anyhow;
+use pyrefly_util::lock::Mutex;
 
-    use anyhow::Context as _;
-    use dupe::Dupe;
-    use dupe::OptionDupedExt;
-    use pyrefly_config::config::ConfigFile;
-    use pyrefly_config::error::ErrorDisplayConfig;
-    use pyrefly_config::error_kind::ErrorKind;
-    use pyrefly_config::error_kind::Severity;
-    use pyrefly_python::module_name::ModuleName;
-    use pyrefly_python::module_path::ModulePath;
-    use pyrefly_util::arc_id::ArcId;
-    use pyrefly_util::fs_anyhow;
-    use pyrefly_util::lock::Mutex;
+pub fn set_readonly(path: &Path, value: bool) -> anyhow::Result<()> {
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_readonly(value);
+    fs::set_permissions(path, permissions)?;
+    Ok(())
+}
 
-    use crate::module::typeshed::BundledTypeshedStdlib;
-    use crate::module::typeshed::stdlib_search_path;
-    use crate::module::typeshed_third_party::BundledTypeshedThirdParty;
+pub trait BundledStub {
+    fn new() -> anyhow::Result<Self>
+    where
+        Self: Sized;
+    fn find(&self, module: ModuleName) -> Option<ModulePath>;
+    fn load(&self, path: &Path) -> Option<Arc<String>>;
+    fn modules(&self) -> impl Iterator<Item = ModuleName>;
+    fn config() -> ArcId<ConfigFile>;
+    /// Obtain a materialized path for bundled typeshed, writing it all to disk the first time.
+    /// Note: this path is not the source of truth, it simply exists to display typeshed contents
+    /// for informative purposes.
+    fn materialized_path_on_disk(&self) -> anyhow::Result<PathBuf> {
+        static WRITTEN_TO_DISK: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
 
-    #[allow(dead_code)]
-    pub enum Stub {
-        BundledTypeshedStdlib(BundledTypeshedStdlib),
-        BundledTypeshedThirdParty(BundledTypeshedThirdParty),
-    }
+        let temp_dir = env::temp_dir().join(self.get_path_name());
 
-    pub fn set_readonly(path: &Path, value: bool) -> anyhow::Result<()> {
-        let mut permissions = fs::metadata(path)?.permissions();
-        permissions.set_readonly(value);
-        fs::set_permissions(path, permissions)?;
-        Ok(())
-    }
-
-    pub fn find_bundled_stub_module_path(stub: Stub, module: ModuleName) -> Option<ModulePath> {
-        match stub {
-            Stub::BundledTypeshedStdlib(stdlib) => stdlib
-                .find
-                .get(&module)
-                .map(|path| ModulePath::bundled_typeshed(path.clone())),
-            Stub::BundledTypeshedThirdParty(third_party) => third_party
-                .find
-                .get(&module)
-                .map(|path| ModulePath::bundled_typeshed_third_party(path.clone())),
+        let mut written = WRITTEN_TO_DISK.lock();
+        if !*written {
+            self.write(&temp_dir)?;
+            *written = true;
         }
+        Ok(temp_dir)
     }
-
-    pub fn get_modules(stub: &Stub) -> impl Iterator<Item = ModuleName> {
-        match stub {
-            Stub::BundledTypeshedStdlib(stdlib) => stdlib.find.keys().copied(),
-            Stub::BundledTypeshedThirdParty(third_party) => third_party.find.keys().copied(),
-        }
-    }
-
-    pub fn load_stubs_from_path(stub: Stub, path: &Path) -> Option<Arc<String>> {
-        match stub {
-            Stub::BundledTypeshedStdlib(stdlib) => stdlib.load.get(path).duped(),
-            Stub::BundledTypeshedThirdParty(third_party) => third_party.load.get(path).duped(),
-        }
-    }
-
-    pub fn get_config_file() -> ArcId<ConfigFile> {
-        static CONFIG: LazyLock<ArcId<ConfigFile>> = LazyLock::new(|| {
-            let mut config_file = ConfigFile::default();
-            config_file.python_environment.site_package_path = Some(Vec::new());
-            config_file.search_path_from_file = match stdlib_search_path() {
-                Some(path) => vec![path],
-                None => Vec::new(),
-            };
-            config_file.root.errors = Some(ErrorDisplayConfig::new(HashMap::from([
-                // The stdlib is full of deliberately incorrect overrides, so ignore them
-                (ErrorKind::BadOverride, Severity::Ignore),
-                (ErrorKind::BadParamNameOverride, Severity::Ignore),
-            ])));
-            config_file.root.disable_type_errors_in_ide = Some(true);
-            config_file.configure();
-            ArcId::new(config_file)
-        });
-        CONFIG.dupe()
-    }
-
-    pub fn write_stub_files(bundled_typeshed: Stub, temp_dir: &Path) -> anyhow::Result<()> {
+    fn write(&self, temp_dir: &Path) -> anyhow::Result<()> {
         fs_anyhow::create_dir_all(temp_dir)?;
 
-        let load = match bundled_typeshed {
-            Stub::BundledTypeshedStdlib(stdlib) => stdlib.load,
-            Stub::BundledTypeshedThirdParty(third_party) => third_party.load,
-        };
-
-        for (relative_path, contents) in load {
+        for (relative_path, contents) in self.load_map() {
             let mut file_path = temp_dir.to_owned();
             file_path.push(relative_path);
 
@@ -117,7 +70,7 @@ pub mod bundled {
             let _ = set_readonly(&file_path, true); // If this fails, not a big deal
         }
 
-        BundledTypeshedStdlib::config()
+        Self::config()
             .as_ref()
             .write_to_toml_in_directory(temp_dir)
             .with_context(|| {
@@ -125,20 +78,6 @@ pub mod bundled {
             })?;
         Ok(())
     }
-
-    pub fn get_materialized_path_on_disk(
-        bundled_typeshed: Stub,
-        temp_dir_path: &str,
-    ) -> anyhow::Result<PathBuf> {
-        static WRITTEN_TO_DISK: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
-
-        let temp_dir = env::temp_dir().join(temp_dir_path);
-
-        let mut written = WRITTEN_TO_DISK.lock();
-        if !*written {
-            write_stub_files(bundled_typeshed, &temp_dir)?;
-            *written = true;
-        }
-        Ok(temp_dir)
-    }
+    fn get_path_name(&self) -> &'static str;
+    fn load_map(&self) -> impl Iterator<Item = (&PathBuf, &Arc<String>)>;
 }

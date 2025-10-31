@@ -76,7 +76,7 @@ c4: Coord = {"x": 1, "y": "foo"}  # E: `Literal['foo']` is not assignable to Typ
 c5: Coord = {"x": 1}  # E: Missing required key `y` for TypedDict `Coord`
 c6: Coord = {"x": 1, **{"y": 2, **{"z": 3}}}
 d: dict[str, int] = {}
-c7: Coord = {"x": 1, **d}  # E: Unpacked `dict[str, int]` is not assignable to `TypedDict[Coord]`
+c7: Coord = {"x": 1, **d}  # E: Unpacked `dict[str, int]` is not assignable to `Partial[Coord]`
 
 def foo(c: Coord) -> None:
     pass
@@ -171,6 +171,31 @@ def test(a: A) -> None:
     a.update(x=789, y=999)  # E: No matching overload found for function `A.update`
     a.update(y=999)
     "#,
+);
+
+testcase!(
+    test_typed_dict_inheritance_field_qualifiers,
+    r#"
+from typing import NotRequired, ReadOnly, Required, TypedDict
+
+class ParentRequired(TypedDict):
+    x: int
+
+class ChildOptional(ParentRequired):
+    x: NotRequired[int]  # E: TypedDict field `x` in `ChildOptional` must remain required because parent TypedDict `ParentRequired` defines it as required
+
+class ParentOptional(TypedDict, total=False):
+    x: int
+
+class ChildRequired(ParentOptional):
+    x: Required[int]  # E: TypedDict field `x` in `ChildRequired` cannot be made required; parent TypedDict `ParentOptional` defines it as non-required
+
+class ParentMutable(TypedDict):
+    x: int
+
+class ChildReadOnly(ParentMutable):
+    x: ReadOnly[int]  # E: TypedDict field `x` in `ChildReadOnly` cannot be marked read-only; parent TypedDict `ParentMutable` defines it as mutable
+"#,
 );
 
 testcase!(
@@ -1756,5 +1781,36 @@ class MyDict(TypedDict):
 fieldsets: tuple[tuple[str, MyDict], ...] | None = (
     ("A", {"x": 1, "y": "2"}),
 )
+    "#,
+);
+
+testcase!(
+    test_type_of_typeddict_dunder_bool,
+    r#"
+from typing import TypedDict
+class D1(TypedDict):
+    a: int
+    b: str
+def func(d: type[D1] | None) -> int:
+    if d:
+        return 1
+    return 2
+    "#,
+);
+
+testcase!(
+    test_unpack_inherited_typeddict,
+    r#"
+import typing_extensions as te
+    
+class InheritFromMe(te.TypedDict):
+    foo: bool
+    
+class TestBadUnpackingError(InheritFromMe):
+    bar: bool
+    
+unpack_this: InheritFromMe = {"foo": True}
+test1: TestBadUnpackingError = {"bar": True, **unpack_this}
+test2: TestBadUnpackingError = {"bar": True, "foo": True}
     "#,
 );

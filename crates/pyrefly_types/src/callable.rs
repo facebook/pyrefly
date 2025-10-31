@@ -6,21 +6,31 @@
  */
 
 use std::borrow::Cow;
+use std::cmp::Ord;
+use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
+use std::hash::Hash;
+use std::hash::Hasher;
 
+use dupe::Dupe;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
+use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::commas_iter;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
 
+use crate::class::Class;
 use crate::class::ClassType;
+use crate::equality::TypeEq;
 use crate::keywords::DataclassTransformKeywords;
 use crate::types::Type;
 
@@ -297,12 +307,12 @@ pub struct FuncMetadata {
 }
 
 impl FuncMetadata {
-    pub fn def(module: ModuleName, cls: Name, func: Name) -> Self {
+    pub fn def(module: Module, cls: Class, func: Name) -> Self {
         Self {
             kind: FunctionKind::Def(Box::new(FuncId {
                 module,
                 cls: Some(cls),
-                func,
+                name: func,
             })),
             flags: FuncFlags::default(),
         }
@@ -343,29 +353,89 @@ pub struct FuncFlags {
     pub dataclass_transform_metadata: Option<DataclassTransformKeywords>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
+#[derive(Debug, Clone)]
 pub struct FuncId {
-    pub module: ModuleName,
-    pub cls: Option<Name>,
-    pub func: Name,
+    pub module: Module,
+    pub cls: Option<Class>,
+    pub name: Name,
+}
+
+impl PartialEq for FuncId {
+    fn eq(&self, other: &Self) -> bool {
+        self.key_eq().eq(&other.key_eq())
+    }
+}
+
+impl Eq for FuncId {}
+impl TypeEq for FuncId {}
+
+impl Ord for FuncId {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key_ord().cmp(&other.key_ord())
+    }
+}
+
+impl PartialOrd for FuncId {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Hash for FuncId {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key_eq().hash(state)
+    }
+}
+
+impl VisitMut<Type> for FuncId {
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+impl Visit<Type> for FuncId {
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
 }
 
 impl FuncId {
-    pub fn format(&self, current_module: ModuleName) -> String {
+    fn key_eq(&self) -> (ModuleName, ModulePath, Option<Class>, &Name) {
+        (
+            self.module.name(),
+            self.module.path().to_key_eq(),
+            self.cls.clone(),
+            &self.name,
+        )
+    }
+
+    fn key_ord(&self) -> (ModuleName, ModulePath, Option<Class>, &Name) {
+        self.key_eq()
+    }
+
+    fn format_impl(
+        func_module: ModuleName,
+        func_cls: Option<Class>,
+        func_name: &Name,
+        current_module: ModuleName,
+    ) -> String {
         let module_prefix =
-            if self.module == current_module || self.module == ModuleName::builtins() {
+            if func_module == current_module || func_module == ModuleName::builtins() {
                 "".to_owned()
             } else {
-                format!("{}.", self.module)
+                format!("{}.", func_module)
             };
-        let class_prefix = match &self.cls {
+        let class_prefix = match &func_cls {
             Some(cls) => {
-                format!("{cls}.")
+                format!("{}.", cls.name())
             }
             None => "".to_owned(),
         };
-        format!("{module_prefix}{class_prefix}{}", self.func)
+        format!("{module_prefix}{class_prefix}{}", func_name)
+    }
+
+    pub fn format(&self, current_module: ModuleName) -> String {
+        Self::format_impl(
+            self.module.name(),
+            self.cls.clone(),
+            &self.name,
+            current_module,
+        )
     }
 }
 
@@ -630,8 +700,8 @@ impl Display for Param {
 }
 
 impl FunctionKind {
-    pub fn from_name(module: ModuleName, cls: Option<&Name>, func: &Name) -> Self {
-        match (module.as_str(), cls, func.as_str()) {
+    pub fn from_name(module: Module, cls: Option<Class>, func: &Name) -> Self {
+        match (module.name().as_str(), cls.as_ref(), func.as_str()) {
             ("builtins", None, "isinstance") => Self::IsInstance,
             ("builtins", None, "issubclass") => Self::IsSubclass,
             ("builtins", None, "classmethod") => Self::ClassMethod,
@@ -645,100 +715,37 @@ impl FunctionKind {
             ("typing", None, "final") => Self::Final,
             ("typing", None, "runtime_checkable") => Self::RuntimeCheckable,
             ("typing", None, "dataclass_transform") => Self::DataclassTransform,
+            ("typing_extensions", None, "dataclass_transform") => Self::DataclassTransform,
             ("typing_extensions", None, "runtime_checkable") => Self::RuntimeCheckable,
             ("abc", None, "abstractmethod") => Self::AbstractMethod,
             ("functools", None, "total_ordering") => Self::TotalOrdering,
             _ => Self::Def(Box::new(FuncId {
                 module,
-                cls: cls.cloned(),
-                func: func.clone(),
+                cls,
+                name: func.clone(),
             })),
         }
     }
 
-    pub fn as_func_id(&self) -> FuncId {
+    pub fn module_name(&self) -> ModuleName {
         match self {
-            Self::IsInstance => FuncId {
-                module: ModuleName::builtins(),
-                cls: None,
-                func: Name::new_static("isinstance"),
-            },
-            Self::IsSubclass => FuncId {
-                module: ModuleName::builtins(),
-                cls: None,
-                func: Name::new_static("issubclass"),
-            },
-            Self::ClassMethod => FuncId {
-                module: ModuleName::builtins(),
-                cls: None,
-                func: Name::new_static("classmethod"),
-            },
-            Self::Dataclass => FuncId {
-                module: ModuleName::dataclasses(),
-                cls: None,
-                func: Name::new_static("dataclass"),
-            },
-            Self::DataclassField => FuncId {
-                module: ModuleName::dataclasses(),
-                cls: None,
-                func: Name::new_static("field"),
-            },
-            Self::DataclassTransform => FuncId {
-                module: ModuleName::typing(),
-                cls: None,
-                func: Name::new_static("dataclass_transform"),
-            },
-            Self::Final => FuncId {
-                module: ModuleName::typing(),
-                cls: None,
-                func: Name::new_static("final"),
-            },
-            Self::Overload => FuncId {
-                module: ModuleName::typing(),
-                cls: None,
-                func: Name::new_static("overload"),
-            },
-            Self::Override => FuncId {
-                module: ModuleName::typing(),
-                cls: None,
-                func: Name::new_static("override"),
-            },
-            Self::Cast => FuncId {
-                module: ModuleName::typing(),
-                cls: None,
-                func: Name::new_static("cast"),
-            },
-            Self::AssertType => FuncId {
-                module: ModuleName::typing(),
-                cls: None,
-                func: Name::new_static("assert_type"),
-            },
-            Self::RevealType => FuncId {
-                module: ModuleName::typing(),
-                cls: None,
-                func: Name::new_static("reveal_type"),
-            },
-            Self::RuntimeCheckable => FuncId {
-                module: ModuleName::typing(),
-                cls: None,
-                func: Name::new_static("runtime_checkable"),
-            },
-            Self::CallbackProtocol(cls) => FuncId {
-                module: cls.qname().module_name(),
-                cls: Some(cls.name().clone()),
-                func: dunder::CALL,
-            },
-            Self::AbstractMethod => FuncId {
-                module: ModuleName::abc(),
-                cls: None,
-                func: Name::new_static("abstractmethod"),
-            },
-            Self::TotalOrdering => FuncId {
-                module: ModuleName::functools(),
-                cls: None,
-                func: Name::new_static("total_ordering"),
-            },
-            Self::Def(func_id) => (**func_id).clone(),
+            Self::IsInstance => ModuleName::builtins(),
+            Self::IsSubclass => ModuleName::builtins(),
+            Self::ClassMethod => ModuleName::builtins(),
+            Self::Dataclass => ModuleName::dataclasses(),
+            Self::DataclassField => ModuleName::dataclasses(),
+            Self::DataclassTransform => ModuleName::typing(),
+            Self::Final => ModuleName::typing(),
+            Self::Overload => ModuleName::typing(),
+            Self::Override => ModuleName::typing(),
+            Self::Cast => ModuleName::typing(),
+            Self::AssertType => ModuleName::typing(),
+            Self::RevealType => ModuleName::typing(),
+            Self::RuntimeCheckable => ModuleName::typing(),
+            Self::CallbackProtocol(cls) => cls.qname().module_name(),
+            Self::AbstractMethod => ModuleName::abc(),
+            Self::TotalOrdering => ModuleName::functools(),
+            Self::Def(func_id) => func_id.module.name().dupe(),
         }
     }
 
@@ -760,8 +767,39 @@ impl FunctionKind {
             Self::CallbackProtocol(_) => Cow::Owned(dunder::CALL),
             Self::AbstractMethod => Cow::Owned(Name::new_static("abstractmethod")),
             Self::TotalOrdering => Cow::Owned(Name::new_static("total_ordering")),
-            Self::Def(func_id) => Cow::Borrowed(&func_id.func),
+            Self::Def(func_id) => Cow::Borrowed(&func_id.name),
         }
+    }
+
+    pub fn class(&self) -> Option<Class> {
+        match self {
+            Self::IsInstance => None,
+            Self::IsSubclass => None,
+            Self::ClassMethod => None,
+            Self::Dataclass => None,
+            Self::DataclassField => None,
+            Self::DataclassTransform => None,
+            Self::Final => None,
+            Self::Overload => None,
+            Self::Override => None,
+            Self::Cast => None,
+            Self::AssertType => None,
+            Self::RevealType => None,
+            Self::RuntimeCheckable => None,
+            Self::CallbackProtocol(cls) => Some(cls.class_object().dupe()),
+            Self::AbstractMethod => None,
+            Self::TotalOrdering => None,
+            Self::Def(func_id) => func_id.cls.clone(),
+        }
+    }
+
+    pub fn format(&self, current_module: ModuleName) -> String {
+        FuncId::format_impl(
+            self.module_name(),
+            self.class(),
+            self.function_name().as_ref(),
+            current_module,
+        )
     }
 }
 

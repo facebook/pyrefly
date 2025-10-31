@@ -23,7 +23,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let class_bases = self.get_base_types_for_class(cls.class_object());
         if let Some(Type::Tuple(tuple)) = class_bases
-            .tuple_base()
+            .tuple_ancestor()
             .cloned()
             .map(Type::Tuple)
             .map(|ty| cls.targs().substitute_into(ty))

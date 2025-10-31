@@ -7,11 +7,11 @@
 
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::Callable;
+use pyrefly_types::callable::FunctionKind;
 use ruff_python_ast::name::Name;
 
 use crate::binding::binding::AnnotationTarget;
 use crate::config::error_kind::ErrorKind;
-use crate::types::callable::FuncId;
 use crate::types::types::Type;
 
 /// General context for an error. For many errors, the root cause is some steps removed from what
@@ -47,6 +47,7 @@ pub enum ErrorContext {
     /// match x: case Foo(y): ...
     MatchPositional(Type),
     ImportNotFound(ModuleName),
+    ImportNotTyped(ModuleName),
 }
 
 impl ErrorContext {
@@ -64,6 +65,7 @@ impl ErrorContext {
             Self::DelItem(..) => ErrorKind::UnsupportedOperation,
             Self::MatchPositional(..) => ErrorKind::BadMatch,
             Self::ImportNotFound(..) => ErrorKind::MissingImport,
+            Self::ImportNotTyped(..) => ErrorKind::UntypedImport,
         }
     }
 }
@@ -125,13 +127,13 @@ pub enum TypeCheckKind {
     /// Return in a type guard function.
     TypeGuardReturn,
     /// Function call argument against parameter type.
-    CallArgument(Option<Name>, Option<FuncId>),
+    CallArgument(Option<Name>, Option<FunctionKind>),
     /// Function call argument against *arg parameter type. The bool indicates whether the argument is unpacked.
-    CallVarArgs(bool, Option<Name>, Option<FuncId>),
+    CallVarArgs(bool, Option<Name>, Option<FunctionKind>),
     /// Keyword argument against parameter or **kwargs type, as (argument name, parameter name, function name).
-    CallKwArgs(Option<Name>, Option<Name>, Option<FuncId>),
+    CallKwArgs(Option<Name>, Option<Name>, Option<FunctionKind>),
     /// Unpacked keyword argument against named parameter.
-    CallUnpackKwArg(Name, Option<FuncId>),
+    CallUnpackKwArg(Name, Option<FunctionKind>),
     /// Check of a parameter's default value against its type annotation.
     FunctionParameterDefault(Name),
     /// Check against type of a TypedDict key. The name may be None if the type comes from

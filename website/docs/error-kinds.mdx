@@ -272,6 +272,19 @@ def f(base: Base):
 f(Sub())  # oops!
 ```
 
+## bad-raise
+
+In a `raise` statement of the form `raise x from y`, `x` must be an exception, and `y` must be an exception or `None`.
+
+```python
+def bad_raise() -> None:
+  raise Exception()  # ok
+  raise 1  # error
+  raise Exception() from None # ok
+  raise Exception() from Exception() # ok
+  raise Exception() from 1 # error
+```
+
 ## bad-return
 
 Arises when a function does not return a value that is compatible with the function's return type annotation.
@@ -970,6 +983,12 @@ This error arises when attempting to perform an operation between values of two 
 if "hello" in 1:  # int doesn't support `in`!
   ...
 ```
+
+## untyped-import
+
+Type information for some third-party libraries is shipped in a stubs package separate from the
+library's source code. This error is emitted when we detect that a library is being used without
+the recommended stubs package being installed.
 
 ## unused-coroutine
 

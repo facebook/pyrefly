@@ -36,9 +36,7 @@ mod compat;
 mod error;
 mod export;
 mod graph;
-#[cfg(not(target_arch = "wasm32"))]
 mod lsp;
-mod lsp_features;
 mod module;
 pub mod playground;
 pub mod query;

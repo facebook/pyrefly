@@ -805,18 +805,30 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     ) -> Result<(), SubsetError> {
         let got_fields = self.type_order.typed_dict_fields(got);
         let want_fields = self.type_order.typed_dict_fields(want);
-        let got_extra_item = self
-            .type_order
-            .typed_dict_extra_items(got.class_object())
-            .extra_item(self.type_order.stdlib())
-            .ty;
-        let want_extra_item = self
+        let got_extra_items = self.type_order.typed_dict_extra_items(got.class_object());
+        let want_extra_items_type = self
             .type_order
             .typed_dict_extra_items(want.class_object())
             .extra_item(self.type_order.stdlib())
             .ty;
         all(want_fields.iter(), |(k, want_v)| {
-            let got_ty = got_fields.get(k).map_or(&got_extra_item, |got_v| &got_v.ty);
+            let got_field_ty = got_fields.get(k).map(|got_v| &got_v.ty);
+            let got_ty = match (got_field_ty, &got_extra_items) {
+                (Some(got_ty), _) => got_ty,
+                (None, ExtraItems::Extra(item)) => &item.ty,
+                (None, ExtraItems::Closed) => {
+                    // If `got` is closed, it definitely doesn't have this item, so we can skip it.
+                    return Ok(());
+                }
+                (None, ExtraItems::Default) => {
+                    // A subclass of `got` could have this item with an incompatible type.
+                    return Err(SubsetError::PartialTypedDictMissingField(Box::new((
+                        got.name().clone(),
+                        want.name().clone(),
+                        k.clone(),
+                    ))));
+                }
+            };
             if want_v.is_read_only() {
                 // ReadOnly can only be updated with Never (i.e., no update)
                 self.is_subset_eq(got_ty, &Type::never())
@@ -824,7 +836,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 self.is_subset_eq(got_ty, &want_v.ty)
             }
         })?;
-        self.is_subset_eq(&got_extra_item, &want_extra_item)
+        self.is_subset_eq(
+            &got_extra_items.extra_item(self.type_order.stdlib()).ty,
+            &want_extra_items_type,
+        )
     }
 
     /// Implementation of subset equality for Type, other than Var.

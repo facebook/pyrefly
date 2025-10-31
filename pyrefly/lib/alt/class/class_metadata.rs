@@ -34,6 +34,7 @@ use crate::alt::types::abstract_class::AbstractClassMembers;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::DataclassMetadata;
+use crate::alt::types::class_metadata::DjangoModelMetadata;
 use crate::alt::types::class_metadata::EnumMetadata;
 use crate::alt::types::class_metadata::InitDefaults;
 use crate::alt::types::class_metadata::Metaclass;
@@ -112,6 +113,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         decorators: &[(Idx<Key>, TextRange)],
         is_new_type: bool,
         pydantic_config_dict: &PydanticConfigDict,
+        django_primary_key_field: Option<&Name>,
         errors: &ErrorCollector,
     ) -> ClassMetadata {
         // Get class decorators.
@@ -178,15 +180,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
-        // TODO Zeina: This pattern is repeated a lot in this file. See if we can refactor it (BE).
-        let has_django_model = bases_with_metadata.iter().any(|(base_class_object, _)| {
-            base_class_object.has_toplevel_qname(ModuleName::django_models().as_str(), "Model")
-        });
+        let mut directly_inherits_model = false;
+        let mut inherited_django_metadata: Option<&DjangoModelMetadata> = None;
 
-        let is_django_model = has_django_model
-            || bases_with_metadata
-                .iter()
-                .any(|(_, metadata)| metadata.is_django_model());
+        // TODO Zeina: This pattern is repeated a lot in this file. See if we can refactor it (BE).
+        for (base_class_object, metadata) in &bases_with_metadata {
+            if base_class_object.has_toplevel_qname(ModuleName::django_models().as_str(), "Model") {
+                directly_inherits_model = true;
+            }
+
+            if let Some(dm) = metadata.django_model_metadata() {
+                inherited_django_metadata = Some(dm);
+            }
+        }
+
+        let django_model_metadata =
+            if directly_inherits_model || inherited_django_metadata.is_some() {
+                Some(DjangoModelMetadata {
+                    custom_primary_key_field: django_primary_key_field.cloned().or_else(|| {
+                        inherited_django_metadata.and_then(|dm| dm.custom_primary_key_field.clone())
+                    }),
+                })
+            } else {
+                None
+            };
 
         // Compute various pieces of special metadata.
         let has_base_any = contains_base_class_any
@@ -329,7 +346,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
-            is_django_model,
+            django_model_metadata,
         )
     }
 
@@ -460,7 +477,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         extra_items = Some(ExtraItems::Default);
                     }
                     ("extra_items", value_ty) => {
-                        let ty = self.untype_opt(value_ty.clone(), cls.range()).unwrap_or_else(|| {
+                        let ty = self.untype_opt(value_ty.clone(), cls.range(), errors).unwrap_or_else(|| {
                             self.error(
                                 errors,
                                 cls.range(),
@@ -870,7 +887,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Ignore all type errors here since they'll be reported in `class_bases_of` anyway
                 let errors = ErrorCollector::new(self.module().dupe(), ErrorStyle::Never);
                 let ty = self.base_class_expr_infer_for_metadata(x, &errors);
-                match self.untype_opt(ty.clone(), x.range()) {
+                match self.untype_opt(ty.clone(), x.range(), &errors) {
                     None => BaseClassParseResult::InvalidType(ty, x.range()),
                     Some(ty) => parse_base_class_type(ty),
                 }

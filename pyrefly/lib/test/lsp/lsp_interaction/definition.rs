@@ -6,6 +6,7 @@
  */
 
 use std::env::temp_dir;
+use std::path::PathBuf;
 
 use lsp_server::Message;
 use lsp_server::Request;
@@ -20,7 +21,7 @@ use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 fn test_go_to_def(
-    root: &TempDir,
+    root: PathBuf,
     workspace_folders: Option<Vec<(String, Url)>>,
     // request file name, relative to root
     request_file_name: &'static str,
@@ -28,7 +29,7 @@ fn test_go_to_def(
     requests: Vec<(u32, u32, &'static str, u32, u32, u32, u32)>,
 ) {
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root);
     interaction.initialize(InitializeSettings {
         workspace_folders,
         ..Default::default()
@@ -60,7 +61,7 @@ fn test_go_to_def(
 
 fn test_go_to_def_basic(root: &TempDir, workspace_folders: Option<Vec<(String, Url)>>) {
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.path().join("basic"));
     let file = "foo.py";
     interaction.initialize(InitializeSettings {
         workspace_folders: workspace_folders.clone(),
@@ -92,7 +93,7 @@ fn test_go_to_def_single_root() {
         &root,
         Some(vec![(
             "test".to_owned(),
-            Url::from_file_path(root.path()).unwrap(),
+            Url::from_file_path(root.path().join("basic")).unwrap(),
         )]),
     );
 }
@@ -111,8 +112,27 @@ fn test_go_to_def_no_folder_capability() {
 
 #[test]
 fn test_go_to_def_relative_path() {
+    let root = get_test_files_root();
+    let basic_root = root.path().join("basic");
     test_go_to_def(
-        &get_test_files_root(),
+        basic_root,
+        None,
+        "foo_relative.py",
+        vec![
+            (5, 14, "bar.py", 0, 0, 0, 0),
+            (6, 17, "bar.py", 6, 6, 6, 9),
+            (8, 9, "bar.py", 7, 4, 7, 7),
+            (9, 7, "bar.py", 6, 6, 6, 9),
+        ],
+    );
+}
+
+#[test]
+fn test_go_to_def_relative_path_helper() {
+    let root = get_test_files_root();
+    let basic_root = root.path().join("basic");
+    test_go_to_def(
+        basic_root,
         None,
         "foo_relative.py",
         vec![
@@ -198,7 +218,7 @@ fn definition_in_builtins_without_interpreter_goes_to_stub() {
 fn malformed_missing_position() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings {
         ..Default::default()
     });
@@ -209,7 +229,7 @@ fn malformed_missing_position() {
         // Missing position
         params: serde_json::json!({
             "textDocument": {
-                "uri": Url::from_file_path(root.path().join("foo.py")).unwrap().to_string()
+                "uri": Url::from_file_path(root.path().join("basic/foo.py")).unwrap().to_string()
             },
         }),
     }));

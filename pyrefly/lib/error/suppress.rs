@@ -27,27 +27,32 @@ use crate::state::errors::Errors;
 /// Combines all errors that affect one line into a single entry.
 // The current format is: `# pyrefly: ignore  # error1, error2, ...`
 fn dedup_errors(errors: &[Error]) -> SmallMap<usize, String> {
-    let mut deduped_errors = SmallMap::new();
+    let mut deduped_errors: SmallMap<usize, Vec<String>> = SmallMap::new();
     for error in errors {
-        let e: &mut String = deduped_errors
-            .entry(error.display_range().start.line.to_zero_indexed() as usize)
-            .or_default();
-        let contains_error = e.contains(error.error_kind().to_name());
-        if e.is_empty() {
-            e.push_str("# pyrefly: ignore  # ");
-        } else if !contains_error {
-            e.push_str(", ");
-        }
-
-        if !contains_error {
-            e.push_str(error.error_kind().to_name());
-        }
+        let line = error
+            .display_range()
+            .start
+            .line_within_file()
+            .to_zero_indexed() as usize;
+        let error_name = error.error_kind().to_name().to_owned();
+        deduped_errors.entry(line).or_default().push(error_name);
     }
-    deduped_errors
+    let mut formatted_errors = SmallMap::new();
+    for (line, error_set) in deduped_errors {
+        let mut error_codes: Vec<_> = error_set.into_iter().collect();
+        error_codes.sort();
+        let error_codes_str = error_codes.join(", ");
+        let comment = format!("# pyrefly: ignore [{}]", error_codes_str);
+        formatted_errors.insert(line, comment);
+    }
+    formatted_errors
 }
 
 // TODO: In future have this return an ast as well as the string for comparison
 fn read_and_validate_file(path: &Path) -> anyhow::Result<String> {
+    if path.extension().and_then(|e| e.to_str()) == Some("ipynb") {
+        return Err(anyhow!("Cannot suppress errors in notebook file"));
+    }
     let file = fs_anyhow::read_to_string(path);
     match file {
         Ok(file) => {
@@ -178,7 +183,7 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) -> usize {
             suppressed_errors
                 .entry(path)
                 .or_default()
-                .insert(e.display_range().start.line);
+                .insert(e.display_range().start.line_within_file());
         }
     }
 
@@ -326,18 +331,18 @@ f(x)
 
 "#,
             r#"
-# pyrefly: ignore  # bad-assignment
+# pyrefly: ignore [bad-assignment]
 x: str = 1
 
 
 def f(y: int) -> None:
     """Doc comment"""
-    # pyrefly: ignore  # unsupported-operation
+    # pyrefly: ignore [unsupported-operation]
     x = "one" + y
     return x
 
 
-# pyrefly: ignore  # bad-argument-type
+# pyrefly: ignore [bad-argument-type]
 f(x)
 
 "#,
@@ -355,7 +360,7 @@ def foo() -> int:
             r#"
 def foo() -> int:
     # comment
-    # pyrefly: ignore  # bad-return
+    # pyrefly: ignore [bad-return]
     return ""
 "#,
         );
@@ -370,7 +375,7 @@ def foo() -> int: pass
 "#,
             r#"
 # comment
-# pyrefly: ignore  # bad-return
+# pyrefly: ignore [bad-return]
 def foo() -> int: pass
 "#,
         );
@@ -389,7 +394,7 @@ x: int = foo("Hello")
 # comment
 def foo(x: int) -> str:
     return ""
-# pyrefly: ignore  # bad-assignment, bad-argument-type
+# pyrefly: ignore [bad-argument-type, bad-assignment]
 x: int = foo("Hello")
 "#,
         );
@@ -423,8 +428,8 @@ def foo() -> None:
             r#"
 {GENERATED_TOKEN}
 
-def bar() -> None: 
-pass 
+def bar() -> None:
+pass
     "#,
         );
         assert_suppress_errors(&file_contents, &file_contents);
@@ -434,7 +439,7 @@ pass
     fn test_remove_suppression_above() {
         let input = r#"
 def f() -> int:
-    # pyrefly: ignore # bad-return
+    # pyrefly: ignore [bad-return]
     return 1
 "#;
         let want = r#"
@@ -449,7 +454,7 @@ def f() -> int:
     fn test_remove_suppression_above_two() {
         let input = r#"
 def g() -> str:
-    # pyrefly: ignore # bad-return
+    # pyrefly: ignore [bad-return]
     return "hello"
 "#;
         let want = r#"
@@ -464,7 +469,7 @@ def g() -> str:
     fn test_remove_suppression_inline() {
         let input = r#"
 def g() -> str:
-    return "hello" # pyrefly: ignore # bad-return
+    return "hello" # pyrefly: ignore [bad-return]
 "#;
         let want = r#"
 def g() -> str:
@@ -477,7 +482,7 @@ def g() -> str:
     fn test_remove_suppression_multiple() {
         let input = r#"
 def g() -> str:
-    return "hello" # pyrefly: ignore # bad-return
+    return "hello" # pyrefly: ignore [bad-return]
 def f() -> int:
     # pyrefly: ignore
     return 1
@@ -507,7 +512,7 @@ def f() -> int:
             r#"
 {GENERATED_TOKEN}
 def g() -> str:
-    return "hello" # pyrefly: ignore # bad-return
+    return "hello" # pyrefly: ignore [bad-return]
 def f() -> int:
     # pyrefly: ignore
     return 1
@@ -520,7 +525,7 @@ def f() -> int:
     fn test_no_remove_suppression() {
         let input = r#"
 def g() -> int:
-    return "hello" # pyrefly: ignore # bad-return
+    return "hello" # pyrefly: ignore [bad-return]
 "#;
         assert_remove_ignores(input, input, false, 0);
     }
@@ -528,7 +533,7 @@ def g() -> int:
     fn test_remove_generic_suppression() {
         let before = r#"
 def g() -> str:
-    return "hello" # type: ignore # bad-return
+    return "hello" # type: ignore [bad-return]
 "#;
         let after = r#"
 def g() -> str:
@@ -556,7 +561,7 @@ x: str = 1
 
 "#,
             r#"
-x: str = 1 # pyrefly: ignore  # bad-assignment
+x: str = 1 # pyrefly: ignore [bad-assignment]
 
 "#,
         );

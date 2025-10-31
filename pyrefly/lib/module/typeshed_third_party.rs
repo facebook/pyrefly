@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use anyhow::anyhow;
+use dupe::Dupe;
 use pyrefly_bundled::bundled_third_party_stubs;
 use pyrefly_config::config::ConfigFile;
 use pyrefly_python::module_name::ModuleName;
@@ -18,29 +19,23 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use starlark_map::small_map::SmallMap;
 
-use crate::module::bundled::bundled::Stub;
-use crate::module::bundled::bundled::find_bundled_stub_module_path;
-use crate::module::bundled::bundled::get_config_file;
-use crate::module::bundled::bundled::get_materialized_path_on_disk;
-use crate::module::bundled::bundled::get_modules;
-use crate::module::bundled::bundled::load_stubs_from_path;
-#[cfg(test)]
-use crate::module::bundled::bundled::write_stub_files;
+use crate::module::bundled::BundledStub;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct BundledTypeshedThirdParty {
     pub find: SmallMap<ModuleName, PathBuf>,
     pub load: SmallMap<PathBuf, Arc<String>>,
+    pub temp_dir: &'static str,
 }
 
-impl BundledTypeshedThirdParty {
-    #[allow(dead_code)]
+impl BundledStub for BundledTypeshedThirdParty {
     fn new() -> anyhow::Result<Self> {
         let contents = bundled_third_party_stubs()?;
         let mut res = Self {
             find: SmallMap::new(),
             load: SmallMap::new(),
+            temp_dir: "pyrefly_bundled_typeshed_third_party",
         };
         for (relative_path, contents) in contents {
             let module_name = ModuleName::from_relative_path(&relative_path)?;
@@ -51,35 +46,37 @@ impl BundledTypeshedThirdParty {
     }
 
     #[allow(dead_code)]
-    pub fn find(&self, module: ModuleName) -> Option<ModulePath> {
-        find_bundled_stub_module_path(Stub::BundledTypeshedThirdParty(self.clone()), module)
+    fn find(&self, module: ModuleName) -> Option<ModulePath> {
+        self.find
+            .get(&module)
+            .map(|path| ModulePath::bundled_typeshed_third_party(path.clone()))
     }
 
-    pub fn load(&self, path: &Path) -> Option<Arc<String>> {
-        load_stubs_from_path(Stub::BundledTypeshedThirdParty(self.clone()), path)
+    fn load(&self, path: &Path) -> Option<Arc<String>> {
+        self.load.get(path).cloned()
     }
 
-    #[allow(dead_code)]
-    pub fn modules(&self) -> impl Iterator<Item = ModuleName> {
-        let stub = Stub::BundledTypeshedThirdParty(self.clone());
-        get_modules(&stub).collect::<Vec<_>>().into_iter()
+    fn load_map(&self) -> impl Iterator<Item = (&PathBuf, &Arc<String>)> {
+        self.load.iter()
     }
 
-    pub fn materialized_path_on_disk(&self) -> anyhow::Result<PathBuf> {
-        get_materialized_path_on_disk(
-            Stub::BundledTypeshedThirdParty(self.clone()),
-            "pyrefly_bundled_typeshed_third_party",
-        )
+    fn modules(&self) -> impl Iterator<Item = ModuleName> {
+        self.find.keys().copied()
     }
 
-    #[cfg(test)]
-    fn write(&self, temp_dir: &Path) -> anyhow::Result<()> {
-        write_stub_files(Stub::BundledTypeshedThirdParty(self.clone()), temp_dir)
+    fn get_path_name(&self) -> &'static str {
+        self.temp_dir
     }
 
-    #[allow(dead_code)]
-    pub fn config() -> ArcId<ConfigFile> {
-        get_config_file()
+    fn config() -> ArcId<ConfigFile> {
+        static CONFIG: LazyLock<ArcId<ConfigFile>> = LazyLock::new(|| {
+            let mut config_file = ConfigFile::default();
+            config_file.python_environment.site_package_path = Some(Vec::new());
+            config_file.root.disable_type_errors_in_ide = Some(true);
+            config_file.configure();
+            ArcId::new(config_file)
+        });
+        CONFIG.dupe()
     }
 }
 

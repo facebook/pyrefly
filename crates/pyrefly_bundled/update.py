@@ -115,8 +115,8 @@ def should_include_member(info: tarfile.TarInfo) -> bool:
     #   for stdlib typeshed is the correct way to get them.
     # - The "stubs" directory contains stubs for third-party libraries, which
     #   are mirrorored into various `xyz-stubs` packages on PyPI.
-    # We only want to vendor the stdlib stubs.
-    if parts[1] != "stdlib":
+    # We include both the stdlib stubs as well as third party stubs.
+    if parts[1] not in ("stdlib", "stubs"):
         return False
 
     # Only Python source files are interesting to us

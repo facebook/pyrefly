@@ -1074,6 +1074,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ExprOrBinding::Expr(e) => {
                 let (inherited_ty, inherited_annot) = if direct_annotation.is_some() {
                     (None, None)
+                } else if Self::is_mangled_attr(name) {
+                    // Private (double-underscore) attributes are name-mangled at runtime and should not
+                    // inherit types or annotations from parent classes.
+                    is_inherited = IsInherited::No;
+                    (None, None)
                 } else {
                     let (inherited_ty, annotation) =
                         self.get_inherited_type_and_annotation(class, name);
@@ -1353,6 +1358,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             direct_annotation.as_ref(),
             &ty,
             &initialization,
+            initial_value,
             descriptor.is_some(),
             range,
             errors,
@@ -1446,6 +1452,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         direct_annotation: Option<&Annotation>,
         ty: &Type,
         initialization: &ClassFieldInitialization,
+        initial_value: &RawClassFieldInitialization,
         is_descriptor: bool,
         range: TextRange,
         errors: &ErrorCollector,
@@ -1461,7 +1468,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             errors,
         )
         .or_else(|| self.get_pydantic_root_model_class_field_type(class, name))
-        .or_else(|| self.get_django_field_type(ty, class))
+        .or_else(|| {
+            let initial_value_expr = match initial_value {
+                RawClassFieldInitialization::ClassBody(e) => e.as_ref(),
+                _ => None,
+            };
+            self.get_django_field_type(ty, class, Some(name), initial_value_expr)
+        })
     }
 
     fn determine_read_only_reason(
@@ -1801,6 +1814,100 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .is_some_and(|metadata| metadata.fields.contains_key(field_name))
     }
 
+    fn typed_dict_field_info(
+        &self,
+        metadata: &ClassMetadata,
+        field_name: &Name,
+        field: &ClassField,
+    ) -> Option<TypedDictField> {
+        metadata
+            .typed_dict_metadata()
+            .and_then(|typed_dict| typed_dict.fields.get(field_name))
+            .and_then(|is_total| field.clone().as_typed_dict_field_info(*is_total))
+    }
+
+    fn validate_typed_dict_field_override(
+        &self,
+        child_cls: &Class,
+        child_metadata: &ClassMetadata,
+        parent_cls: &Class,
+        parent_metadata: &ClassMetadata,
+        field_name: &Name,
+        child_field: &ClassField,
+        parent_field: &ClassField,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> bool {
+        let Some(child_info) = self.typed_dict_field_info(child_metadata, field_name, child_field)
+        else {
+            return true;
+        };
+        let Some(parent_info) =
+            self.typed_dict_field_info(parent_metadata, field_name, parent_field)
+        else {
+            return true;
+        };
+
+        let parent_mutable = !parent_info.is_read_only();
+        let child_mutable = !child_info.is_read_only();
+
+        if parent_mutable {
+            if !child_mutable {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                    format!(
+                        "TypedDict field `{field_name}` in `{}` cannot be marked read-only; parent TypedDict `{}` defines it as mutable",
+                        child_cls.name(),
+                        parent_cls.name()
+                    ),
+                );
+                return false;
+            }
+            if parent_info.required && !child_info.required {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                    format!(
+                        "TypedDict field `{field_name}` in `{}` must remain required because parent TypedDict `{}` defines it as required",
+                        child_cls.name(),
+                        parent_cls.name()
+                    ),
+                );
+                return false;
+            }
+            if !parent_info.required && child_info.required {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                    format!(
+                        "TypedDict field `{field_name}` in `{}` cannot be made required; parent TypedDict `{}` defines it as non-required",
+                        child_cls.name(),
+                        parent_cls.name()
+                    ),
+                );
+                return false;
+            }
+        } else if parent_info.required && !child_info.required {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                format!(
+                    "TypedDict field `{field_name}` in `{}` cannot be made non-required; parent TypedDict `{}` defines it as required",
+                    child_cls.name(),
+                    parent_cls.name()
+                ),
+            );
+            return false;
+        }
+
+        true
+    }
+
     fn should_check_field_for_override_consistency(&self, field_name: &Name) -> bool {
         // Object construction (`__new__`, `__init__`, `__init_subclass__`) should not participate in override checks
         if field_name == &dunder::NEW
@@ -1828,7 +1935,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         // Private attributes should not participate in override checks
-        if field_name.starts_with("__") && !field_name.ends_with("__") {
+        if Self::is_mangled_attr(field_name) {
             return false;
         }
 
@@ -1848,6 +1955,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         true
+    }
+
+    pub fn is_mangled_attr(name: &Name) -> bool {
+        name.starts_with("__") && !name.ends_with("__")
     }
 
     pub fn check_consistent_override_for_field(
@@ -1876,8 +1987,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut got_attribute = None;
         let mut parent_attr_found = false;
         let mut parent_has_any = false;
-        let is_typed_dict_field =
-            self.is_typed_dict_field(&self.get_metadata_for_class(cls), field_name);
+        let metadata = self.get_metadata_for_class(cls);
+        let is_typed_dict_field = self.is_typed_dict_field(metadata.as_ref(), field_name);
 
         let bases_to_check: Box<dyn Iterator<Item = &ClassType>> = if bases.is_empty() {
             // If the class doesn't have any base type, we should just use `object` as base to ensure
@@ -1956,6 +2067,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // keys but not regular fields.
                 continue;
             }
+            if is_typed_dict_field
+                && !self.validate_typed_dict_field_override(
+                    cls,
+                    metadata.as_ref(),
+                    parent_cls,
+                    parent_metadata.as_ref(),
+                    field_name,
+                    class_field,
+                    &want_class_field,
+                    range,
+                    errors,
+                )
+            {
+                continue;
+            }
+            // Special case: if parent field is an unannotated `x = None`, allow child to override
+            // with any type (effectively treating it as Optional[T])
+            if !want_class_field.has_explicit_annotation()
+                && matches!(want_class_field.ty(), Type::None)
+            {
+                continue;
+            }
             // Substitute `Self` with derived class to support contravariant occurrences of `Self`
             let want_attribute = self.as_instance_attribute(
                 &want_class_field,
@@ -2026,38 +2159,56 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// For classes with multiple inheritance, check that fields inherited from multiple base classes are consistent.
     pub fn check_consistent_multiple_inheritance(&self, cls: &Class, errors: &ErrorCollector) {
-        // Maps field from inherited class
+        struct InheritedFieldInfo {
+            class: Class,
+            metadata: Arc<ClassMetadata>,
+            field: ClassField,
+            ty: Type,
+        }
+
         let mro = self.get_mro_for_class(cls);
-        let mut inherited_fields: SmallMap<&Name, Vec<(&Name, Type)>> = SmallMap::new();
+        let mut inherited_fields: SmallMap<&Name, Vec<InheritedFieldInfo>> = SmallMap::new();
         let current_class_fields: SmallSet<_> = cls.fields().collect();
 
         for parent_cls in mro.ancestors_no_object().iter() {
-            let class_fields = parent_cls.class_object().fields();
+            let class_object = parent_cls.class_object();
+            let class_fields = class_object.fields();
+            let parent_metadata = self.get_metadata_for_class(class_object);
             for field in class_fields {
-                // Skip fields that are not relevant for override consistency checks
                 if !self.should_check_field_for_override_consistency(field) {
                     continue;
                 }
-                let key = KeyClassField(parent_cls.class_object().index(), field.clone());
+                if current_class_fields.contains(field) {
+                    continue;
+                }
+                let key = KeyClassField(class_object.index(), field.clone());
                 let field_entry = self.get_from_class(cls, &key);
-                if let Some(field_entry) = field_entry.as_ref() {
-                    // Skip fields that are overridden in the current class,
-                    // they will have been checked by
-                    // `check_consistent_override_for_field` already
-                    if current_class_fields.contains(field) {
-                        continue;
-                    }
+                let Some(field_entry) = field_entry.as_ref() else {
+                    continue;
+                };
+                if let Some(parent_member) = self.get_class_member(class_object, field) {
+                    let parent_field = Arc::unwrap_or_clone(parent_member.value.clone());
                     inherited_fields
                         .entry(field)
                         .or_default()
-                        .push((parent_cls.name(), field_entry.ty()));
+                        .push(InheritedFieldInfo {
+                            class: class_object.dupe(),
+                            metadata: parent_metadata.clone(),
+                            field: parent_field,
+                            ty: field_entry.ty(),
+                        });
                 }
             }
         }
 
-        for (field_name, class_and_types) in inherited_fields.iter() {
-            if class_and_types.len() > 1 {
-                let types: Vec<Type> = class_and_types.iter().map(|(_, ty)| ty.clone()).collect();
+        let child_metadata = self.get_metadata_for_class(cls);
+
+        for (field_name, inherited_field_infos_by_ancestor) in inherited_fields.iter() {
+            if inherited_field_infos_by_ancestor.len() > 1 {
+                let types: Vec<Type> = inherited_field_infos_by_ancestor
+                    .iter()
+                    .map(|info| info.ty.clone())
+                    .collect();
                 if types.iter().any(|ty| {
                     matches!(
                         ty,
@@ -2067,8 +2218,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             | Type::Overload(_)
                     )
                 }) {
-                    // TODO(fangyizhou): Handle bound methods and functions properly.
-                    // This is a leftover from https://github.com/facebook/pyrefly/pull/1196
                     continue;
                 }
                 let intersect = self.intersects(&types);
@@ -2079,11 +2228,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ),
                         "Inherited types include:".to_owned()
                     ];
-                    for (cls, ty) in class_and_types.iter() {
+                    for info in inherited_field_infos_by_ancestor.iter() {
                         error_msg.push(format!(
                             "  `{}` from `{}`",
-                            self.for_display(ty.clone()),
-                            cls
+                            self.for_display(info.ty.clone()),
+                            info.class.name()
                         ));
                     }
                     errors.add(
@@ -2091,6 +2240,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ErrorInfo::Kind(ErrorKind::InconsistentInheritance),
                         error_msg,
                     );
+                }
+
+                if let Some(child_member) = self.get_class_member(cls, field_name) {
+                    let child_field = Arc::unwrap_or_clone(child_member.value.clone());
+                    if self
+                        .typed_dict_field_info(child_metadata.as_ref(), field_name, &child_field)
+                        .is_some()
+                    {
+                        for info in inherited_field_infos_by_ancestor {
+                            if self
+                                .typed_dict_field_info(
+                                    info.metadata.as_ref(),
+                                    field_name,
+                                    &info.field,
+                                )
+                                .is_some()
+                                && !self.validate_typed_dict_field_override(
+                                    cls,
+                                    child_metadata.as_ref(),
+                                    &info.class,
+                                    info.metadata.as_ref(),
+                                    field_name,
+                                    &child_field,
+                                    &info.field,
+                                    cls.range(),
+                                    errors,
+                                )
+                            {
+                                continue;
+                            }
+                        }
+                    }
                 }
             }
         }

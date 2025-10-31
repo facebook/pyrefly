@@ -622,10 +622,10 @@ fn join_types(
     match join_style {
         JoinStyle::SimpleMerge => union_types(types),
         JoinStyle::NarrowOf(base_ty) => {
-            simplify_join(union_types(types), base_ty, true, is_subset_eq)
+            join_types_impl(types, base_ty, true, union_types, is_subset_eq)
         }
         JoinStyle::ReassignmentOf(base_ty) => {
-            simplify_join(union_types(types), base_ty, false, is_subset_eq)
+            join_types_impl(types, base_ty, false, union_types, is_subset_eq)
         }
     }
 }
@@ -642,21 +642,33 @@ fn join_types(
 ///   - general union simplification is quadratic given our current architecture
 ///   - but this particular simplification is linear, since we have an initial guess
 ///   - the simplified join types are much more readable and performant downstream
-fn simplify_join(
-    joined_ty: Type,
+fn join_types_impl(
+    types: Vec<Type>,
     base_ty: Type,
     is_narrow: bool,
+    union_types: &impl Fn(Vec<Type>) -> Type,
     is_subset_eq: &impl Fn(&Type, &Type) -> bool,
 ) -> Type {
     if matches!(base_ty, Type::Any(AnyStyle::Explicit | AnyStyle::Implicit))
-        && let Type::Union(tys) = &joined_ty
-        && tys.iter().any(|t| t.is_any())
+        && types.iter().any(|t| t.is_any())
     {
         base_ty
-    } else if is_narrow && is_subset_eq(&base_ty, &joined_ty) {
-        base_ty
+    } else if is_narrow {
+        // Check for the case where `base_ty` is directly in the merge before doing
+        // a subset check. We do this to avoid the possibility of pinning a `Var` to
+        // itself inside the join (which at one point caused a stack overflow).
+        if types.iter().any(|t| t == &base_ty) {
+            base_ty
+        } else {
+            let joined_ty = union_types(types);
+            if is_subset_eq(&base_ty, &joined_ty) {
+                base_ty
+            } else {
+                joined_ty
+            }
+        }
     } else {
-        joined_ty
+        union_types(types)
     }
 }
 

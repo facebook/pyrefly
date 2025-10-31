@@ -27,12 +27,12 @@ use crate::export::definitions::DunderAllEntry;
 use crate::export::special::SpecialExport;
 use crate::graph::calculation::Calculation;
 use crate::module::module_info::ModuleInfo;
-use crate::state::loader::FindError;
+use crate::state::loader::FindingOrError;
 
 /// Find the exports of a given module.
 pub trait LookupExport {
     /// Get the exports of a given module, or an error if the module is not available.
-    fn get(&self, module: ModuleName) -> Result<Exports, FindError>;
+    fn get(&self, module: ModuleName) -> FindingOrError<Exports>;
 }
 
 #[derive(Debug, Clone)]
@@ -126,7 +126,7 @@ impl Exports {
                     }
                     DunderAllEntry::Module(_, x) => {
                         // They did `__all__.extend(foo.__all__)`, but didn't import `foo`.
-                        if let Ok(import) = lookup.get(*x) {
+                        if let Some(import) = lookup.get(*x).finding() {
                             let wildcard = import.wildcard(lookup);
                             for y in wildcard.iter_hashed() {
                                 result.insert_hashed(y.cloned());
@@ -205,7 +205,7 @@ impl Exports {
                 result.insert_hashed(name.cloned(), export);
             }
             for m in self.0.definitions.import_all.keys() {
-                if let Ok(exports) = lookup.get(*m) {
+                if let Some(exports) = lookup.get(*m).finding() {
                     for name in exports.wildcard(lookup).iter_hashed() {
                         result.insert_hashed(name.cloned(), ExportLocation::OtherModule(*m, None));
                     }
@@ -229,12 +229,13 @@ mod tests {
     use starlark_map::smallmap;
 
     use super::*;
+    use crate::state::loader::FindError;
 
     impl LookupExport for SmallMap<ModuleName, Exports> {
-        fn get(&self, module: ModuleName) -> Result<Exports, FindError> {
+        fn get(&self, module: ModuleName) -> FindingOrError<Exports> {
             match self.get(&module) {
-                Some(x) => Ok(x.dupe()),
-                None => Err(FindError::not_found(anyhow!("Error"), module)),
+                Some(x) => FindingOrError::new_finding(x.dupe()),
+                None => FindingOrError::Error(FindError::not_found(anyhow!("Error"), module)),
             }
         }
     }

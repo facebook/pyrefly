@@ -6,10 +6,10 @@
  */
 
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_types::callable::FunctionKind;
 
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckKind;
-use crate::types::callable::FuncId;
 use crate::types::display::TypeDisplayContext;
 use crate::types::types::Type;
 
@@ -52,6 +52,7 @@ impl ErrorContext {
             Self::ImportNotFound(import) => {
                 format!("Could not find import of `{import}`")
             }
+            Self::ImportNotTyped(import) => format!("Missing type stubs for `{import}`"),
         }
     }
 }
@@ -254,8 +255,8 @@ impl TypeCheckKind {
     }
 }
 
-pub fn function_suffix(func_id: Option<&FuncId>, current_module: ModuleName) -> String {
-    match func_id {
+pub fn function_suffix(func_kind: Option<&FunctionKind>, current_module: ModuleName) -> String {
+    match func_kind {
         Some(func) => format!(" in function `{}`", func.format(current_module)),
         None => "".to_owned(),
     }

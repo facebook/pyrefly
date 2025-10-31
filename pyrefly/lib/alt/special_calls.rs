@@ -56,7 +56,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let self_form = Type::SpecialForm(SpecialForm::SelfType);
             let normalize_type = |ty: Type, expr: &Expr| {
                 let mut ty = self
-                    .canonicalize_all_class_types(self.solver().deep_force(ty), expr.range())
+                    .canonicalize_all_class_types(
+                        self.solver().deep_force(ty),
+                        expr.range(),
+                        errors,
+                    )
                     .promote_typevar_values(self.stdlib)
                     .explicit_any()
                     .noreturn_to_never()
@@ -225,7 +229,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         let ret = if let Some(t) = typ {
-            match self.untype_opt(self.expr_infer(t, errors), range) {
+            match self.untype_opt(self.expr_infer(t, errors), range, errors) {
                 Some(t) => t,
                 None => self.error(
                     errors,
@@ -296,7 +300,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &|| {
                 TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
                     Some(Name::new_static("cls")),
-                    Some(FunctionKind::IsSubclass.as_func_id()),
+                    Some(FunctionKind::IsSubclass),
                 ))
             },
         );
@@ -323,8 +327,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 let metadata = self.get_metadata_for_class(cls);
-                let func_display =
-                    || format!("{}()", func_kind.as_func_id().format(self.module().name()));
+                let func_display = || format!("{}()", func_kind.format(self.module().name()));
                 if metadata.is_new_type() {
                     self.error(
                         errors,
@@ -397,7 +400,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &|| {
                         TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
                             Some(Name::new_static("class_or_tuple")),
-                            Some(func_kind.as_func_id()),
+                            Some(func_kind.clone()),
                         ))
                     },
                 );

@@ -133,7 +133,7 @@
     "Line 98: Expected 1 errors"
   ],
   "generics_basic.py": [
-    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`\\n  Protocol `Buffer` requires attribute `__buffer__`', '`+` is not supported between `AnyStr` and `AnyStr`\\n  No matching overload found for function `str.__add__`\\n  Possible overloads:\\n  (value: LiteralString, /) -> LiteralString\\n  (value: str, /) -> str [closest match]', 'Returned type `bytes | Unknown` is not assignable to declared return type `AnyStr`']",
+    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`\\n  Protocol `Buffer` requires attribute `__buffer__`', '`+` is not supported between `AnyStr` and `AnyStr`\\n  No matching overload found for function `str.__add__` called with arguments: (AnyStr)\\n  Possible overloads:\\n  (value: LiteralString, /) -> LiteralString\\n  (value: str, /) -> str [closest match]', 'Returned type `bytes | Unknown` is not assignable to declared return type `AnyStr`']",
     "Line 67: Unexpected errors ['assert_type(MyStr, str) failed']",
     "Line 68: Unexpected errors ['assert_type(MyStr, str) failed', 'Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`']"
   ],
@@ -330,10 +330,7 @@
   "typeddicts_readonly.py": [],
   "typeddicts_readonly_consistency.py": [],
   "typeddicts_readonly_inheritance.py": [
-    "Line 98: Expected 1 errors",
-    "Line 106: Expected 1 errors",
-    "Line 119: Expected 1 errors",
-    "Line 132: Expected 1 errors"
+    "Line 119: Expected 1 errors"
   ],
   "typeddicts_readonly_kwargs.py": [],
   "typeddicts_readonly_update.py": [],

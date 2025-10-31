@@ -23,6 +23,7 @@ use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_build::source_db::Target;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
@@ -41,7 +42,7 @@ use starlark_map::small_set::SmallSet;
 use crate::config::config::ConfigFile;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
-use crate::lsp_features::hover::get_hover;
+use crate::lsp::wasm::hover::get_hover;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::state::State;
@@ -88,7 +89,7 @@ impl SourceDatabase for PlaygroundSourceDatabase {
         Some(Handle::new(name.dupe(), path, self.sys_info.dupe()))
     }
 
-    fn requery_source_db(&self, _: SmallSet<PathBuf>) -> anyhow::Result<bool> {
+    fn requery_source_db(&self, _: SmallSet<ModulePathBuf>) -> anyhow::Result<bool> {
         Ok(false)
     }
 
@@ -119,14 +120,14 @@ impl Position {
 
     fn from_display_pos(position: DisplayPos) -> Self {
         Self {
-            line: position.line.get() as i32,
-            column: position.column.get() as i32,
+            line: position.line_within_file().get() as i32,
+            column: position.column().get() as i32,
         }
     }
 
     // This should always succeed, but we are being conservative
     fn to_display_pos(&self) -> Option<DisplayPos> {
-        Some(DisplayPos {
+        Some(DisplayPos::Source {
             line: LineNumber::new(u32::try_from(self.line).ok()?)?,
             column: NonZeroU32::new(u32::try_from(self.column).ok()?)?,
         })
@@ -148,20 +149,20 @@ pub struct Range {
 impl Range {
     fn new(range: DisplayRange) -> Self {
         Self {
-            start_line: range.start.line.get() as i32,
-            start_col: range.start.column.get() as i32,
-            end_line: range.end.line.get() as i32,
-            end_col: range.end.column.get() as i32,
+            start_line: range.start.line_within_file().get() as i32,
+            start_col: range.start.column().get() as i32,
+            end_line: range.end.line_within_file().get() as i32,
+            end_col: range.end.column().get() as i32,
         }
     }
 
     fn to_display_range(&self) -> Option<DisplayRange> {
         Some(DisplayRange {
-            start: DisplayPos {
+            start: DisplayPos::Source {
                 line: LineNumber::new(u32::try_from(self.start_line).ok()?)?,
                 column: NonZeroU32::new(u32::try_from(self.start_col).ok()?)?,
             },
-            end: DisplayPos {
+            end: DisplayPos::Source {
                 line: LineNumber::new(u32::try_from(self.end_line).ok()?)?,
                 column: NonZeroU32::new(u32::try_from(self.end_col).ok()?)?,
             },
@@ -392,10 +393,10 @@ impl Playground {
                 .into_map(|e| {
                     let range = e.display_range();
                     Diagnostic {
-                        start_line: range.start.line.get() as i32,
-                        start_col: range.start.column.get() as i32,
-                        end_line: range.end.line.get() as i32,
-                        end_col: range.end.column.get() as i32,
+                        start_line: range.start.line_within_file().get() as i32,
+                        start_col: range.start.column().get() as i32,
+                        end_line: range.end.line_within_file().get() as i32,
+                        end_col: range.end.column().get() as i32,
                         message_header: e.msg_header().to_owned(),
                         message_details: e.msg_details().unwrap_or("").to_owned(),
                         kind: e.error_kind().to_name().to_owned(),

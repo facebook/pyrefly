@@ -387,7 +387,7 @@ impl Static {
 
         let mut wildcards = Vec::with_capacity(d.import_all.len());
         for (m, range) in d.import_all {
-            if let Ok(exports) = lookup.get(m) {
+            if let Some(exports) = lookup.get(m).finding() {
                 wildcards.push((range, exports.wildcard(lookup)));
             }
         }
@@ -469,10 +469,10 @@ struct FlowInfo {
     /// The most recent narrow for this name, if any. Always set to `None` when
     /// `value` is re-bound.
     narrow: Option<FlowNarrow>,
-    /// The loop default - used to wrap loop Phi with our guess at the type above the loop.
+    /// An idx used to wrap loop Phi with our guess at the type above the loop.
     /// - Always set to our current inferred type when a flow info is created
     /// - Updated whenever we update the inferred type outside of all loops, but not inside
-    default: Idx<Key>,
+    loop_prior: Idx<Key>,
 }
 
 /// The most recent value for a name. Used in several cases:
@@ -499,7 +499,7 @@ impl FlowInfo {
         Self {
             value: Some(FlowValue { idx, style }),
             narrow: None,
-            default: idx,
+            loop_prior: idx,
         }
     }
 
@@ -507,7 +507,7 @@ impl FlowInfo {
         Self {
             value: None,
             narrow: Some(FlowNarrow { idx }),
-            default: idx,
+            loop_prior: idx,
         }
     }
 
@@ -516,7 +516,7 @@ impl FlowInfo {
             value: Some(FlowValue { idx, style }),
             // Note that any existing narrow is wiped when a new value is bound.
             narrow: None,
-            default: if in_loop { self.default } else { idx },
+            loop_prior: if in_loop { self.loop_prior } else { idx },
         }
     }
 
@@ -524,7 +524,7 @@ impl FlowInfo {
         Self {
             value: self.value.clone(),
             narrow: Some(FlowNarrow { idx }),
-            default: if in_loop { self.default } else { idx },
+            loop_prior: if in_loop { self.loop_prior } else { idx },
         }
     }
 
@@ -1306,7 +1306,7 @@ impl Scopes {
         lookup: &dyn LookupExport,
     ) -> Option<SpecialExport> {
         let mut seen = HashSet::new();
-        let mut exports = lookup.get(module).ok()?.exports(lookup);
+        let mut exports = lookup.get(module).finding()?.exports(lookup);
         loop {
             if let Some(special) = SpecialExport::new(&name)
                 && special.defined_in(module)
@@ -1325,7 +1325,7 @@ impl Scopes {
                         name = original_name.clone();
                     }
                     module = *other_module;
-                    exports = lookup.get(module).ok()?.exports(lookup);
+                    exports = lookup.get(module).finding()?.exports(lookup);
                 }
             }
         }
@@ -1929,7 +1929,7 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         branch_idxs: SmallSet<Idx<Key>>,
         phi_idx: Idx<Key>,
-        loop_default: Option<Idx<Key>>,
+        loop_prior: Option<Idx<Key>>,
         join_style: JoinStyle<Idx<Key>>,
     ) -> Idx<Key> {
         if branch_idxs.len() == 1 {
@@ -1941,8 +1941,8 @@ impl<'a> BindingsBuilder<'a> {
             let idx = *branch_idxs.first().unwrap();
             self.insert_binding_idx(phi_idx, Binding::Forward(idx));
             idx
-        } else if let Some(default) = loop_default {
-            self.insert_binding_idx(phi_idx, Binding::LoopPhi(default, branch_idxs));
+        } else if let Some(loop_prior) = loop_prior {
+            self.insert_binding_idx(phi_idx, Binding::LoopPhi(loop_prior, branch_idxs));
             phi_idx
         } else {
             self.insert_binding_idx(phi_idx, Binding::Phi(join_style, branch_idxs));
@@ -1955,8 +1955,8 @@ impl<'a> BindingsBuilder<'a> {
     /// flow styles.
     ///
     /// The binding for the phi key is typically a Phi, but if this merge is from a loop
-    /// we'll wrap that in a Default, and if all branches were the same we'll
-    /// just use a Forward instead.
+    /// we'll use a LoopPhi, and if all branches were the same we'll just use a
+    /// Forward instead.
     ///
     /// The default value will depend on whether we are still in a loop after the
     /// current merge. If so, we preserve the existing default; if not, the
@@ -1972,20 +1972,20 @@ impl<'a> BindingsBuilder<'a> {
         let mut flow_infos = merge_item.branches;
         // If this is a loop, we want to use the current default in any phis we produce,
         // and the base flow is part of the merge.
-        let loop_default = if matches!(merge_style, MergeStyle::Loop)
+        let loop_prior = if matches!(merge_style, MergeStyle::Loop)
             && let Some(base) = merge_item.base
         {
-            let default = base.default;
+            let loop_prior = base.loop_prior;
             flow_infos.push(base);
-            Some(default)
+            Some(loop_prior)
         } else {
             None
         };
-        let merged_default = {
+        let merged_loop_prior = {
             let contained_in_loop = self.scopes.loop_depth() > 0;
             move |merged_idx| {
-                if contained_in_loop && let Some(default) = loop_default {
-                    default
+                if contained_in_loop && let Some(prior) = loop_prior {
+                    prior
                 } else {
                     merged_idx
                 }
@@ -2035,13 +2035,13 @@ impl<'a> BindingsBuilder<'a> {
                 let merged_idx = self.merge_idxs(
                     branch_idxs,
                     phi_idx,
-                    loop_default,
+                    loop_prior,
                     base_idx.map_or(JoinStyle::SimpleMerge, JoinStyle::NarrowOf),
                 );
                 FlowInfo {
                     value: None,
                     narrow: Some(FlowNarrow { idx: merged_idx }),
-                    default: merged_default(merged_idx),
+                    loop_prior: merged_loop_prior(merged_idx),
                 }
             }
             // If there is exactly one value (after discarding the phi itself,
@@ -2051,7 +2051,7 @@ impl<'a> BindingsBuilder<'a> {
                 let merged_idx = self.merge_idxs(
                     branch_idxs,
                     phi_idx,
-                    loop_default,
+                    loop_prior,
                     base_idx.map_or(JoinStyle::SimpleMerge, JoinStyle::NarrowOf),
                 );
                 FlowInfo {
@@ -2064,7 +2064,7 @@ impl<'a> BindingsBuilder<'a> {
                         ),
                     }),
                     narrow: Some(FlowNarrow { idx: merged_idx }),
-                    default: merged_default(merged_idx),
+                    loop_prior: merged_loop_prior(merged_idx),
                 }
             }
             // If there are multiple values, then the phi should be treated
@@ -2074,7 +2074,7 @@ impl<'a> BindingsBuilder<'a> {
                 let merged_idx = self.merge_idxs(
                     branch_idxs,
                     phi_idx,
-                    loop_default,
+                    loop_prior,
                     base_idx.map_or(JoinStyle::SimpleMerge, JoinStyle::ReassignmentOf),
                 );
                 FlowInfo {
@@ -2087,7 +2087,7 @@ impl<'a> BindingsBuilder<'a> {
                         ),
                     }),
                     narrow: None,
-                    default: merged_default(merged_idx),
+                    loop_prior: merged_loop_prior(merged_idx),
                 }
             }
         }

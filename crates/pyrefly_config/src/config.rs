@@ -8,6 +8,7 @@
 use std::ffi::OsStr;
 use std::fmt;
 use std::fmt::Display;
+use std::mem;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -136,6 +137,58 @@ impl ProjectLayout {
     }
 }
 
+/// A struct for getting, storing, and evaluating fallback search paths. A fallback
+/// search path is a search path consisting of ancestor paths from a start path
+/// (usually some Python file) up to and including an end directory, which is usually
+/// the filesystem root (`/`), but can also be the config.
+#[derive(Default, Clone, PartialEq, Eq)]
+pub enum FallbackSearchPath {
+    /// A previously found fallback search path, which will never change. For all inputs,
+    /// this will never change. We use this in configs where we have no idea what the
+    /// project root is, and just try to import anything. This should be a path consisting
+    /// of the starting path to the filesystem root.
+    Static(Arc<Vec<PathBuf>>),
+    /// There is no fallback search path. These aren't the droids you're looking for.
+    #[default]
+    Empty,
+}
+
+impl fmt::Debug for FallbackSearchPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Static(paths) => write!(f, "{paths:?}"),
+            Self::Empty => write!(f, "None"),
+        }
+    }
+}
+
+impl fmt::Display for FallbackSearchPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <Self as fmt::Debug>::fmt(self, f)
+    }
+}
+
+impl FallbackSearchPath {
+    /// Attempt to get a fallback search path for the given directory, if any.
+    /// When we have a Static variant, we return the stored path without doing anything.
+    /// When we have a Dynamic variant, it only has meaning in the context of
+    /// the provided path, so we can only (possibly) return a non-empty vec if the provided path
+    /// is `Some`.
+    pub fn for_directory(&self, directory: Option<&Path>) -> Arc<Vec<PathBuf>> {
+        match (self, directory) {
+            (Self::Static(paths), _) => paths.dupe(),
+            (Self::Empty, _) => Arc::new(vec![]),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Static(paths) => paths.is_empty(),
+            Self::Empty => true,
+        }
+    }
+}
+
 pub enum ImportLookupPathPart<'a> {
     SearchPathFromArgs(&'a [PathBuf]),
     SearchPathFromFile(&'a [PathBuf]),
@@ -159,9 +212,9 @@ impl Display for ImportLookupPathPart<'_> {
                 write!(f, "Import root (inferred from project layout): {root:?}")
             }
             Self::ImportRoot(None) => write!(f, "Import root (inferred from project layout): None"),
-            Self::FallbackSearchPath(paths) => write!(
+            Self::FallbackSearchPath(fallback) => write!(
                 f,
-                "Fallback search path (guessed from project_includes): {paths:?}"
+                "Fallback search path (guessed from project_includes): {fallback:?}"
             ),
             Self::SitePackagePath(paths) => {
                 write!(f, "Site package path from user: {paths:?}")
@@ -185,10 +238,10 @@ impl ImportLookupPathPart<'_> {
         match self {
             Self::SearchPathFromArgs(paths)
             | Self::SearchPathFromFile(paths)
-            | Self::FallbackSearchPath(paths)
             | Self::SitePackagePath(paths)
             | Self::InterpreterSitePackagePath(paths) => paths.is_empty(),
             Self::ImportRoot(root) => root.is_none(),
+            Self::FallbackSearchPath(inner) => inner.is_empty(),
             Self::BuildSystem(_) => false,
         }
     }
@@ -218,7 +271,7 @@ pub struct ConfigFile {
     /// NOTE: unlike other configs, this is never replaced with CLI arg overrides
     /// in this config, but may be overridden by CLI args where used.
     #[serde(
-             default = "ConfigFile::default_project_excludes",
+             default,
              skip_serializing_if = "Globs::is_empty",
              // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
              // alias while we migrate existing fields from snake case to kebab case.
@@ -325,6 +378,11 @@ pub struct ConfigFile {
                      alias = "ignore_missing_source",
                  )]
     pub ignore_missing_source: bool,
+
+    /// Should we let Pyrefly try to index the project's files? Disabling this
+    /// may speed up LSP operations on large projects.
+    #[serde(default, skip_serializing_if = "crate::util::skip_default_false")]
+    pub skip_lsp_config_indexing: bool,
 }
 
 impl Default for ConfigFile {
@@ -353,6 +411,7 @@ impl Default for ConfigFile {
             use_ignore_files: true,
             ignore_missing_source: true,
             typeshed_path: None,
+            skip_lsp_config_indexing: false,
         }
     }
 }
@@ -363,7 +422,6 @@ impl ConfigFile {
     pub fn init_at_root(root: &Path, layout: &ProjectLayout, fallback: bool) -> Self {
         let mut result = Self {
             project_includes: Self::default_project_includes(),
-            project_excludes: Self::default_project_excludes(),
             root: ConfigBase::default_for_ide_without_config(),
             ..Default::default()
         };
@@ -382,19 +440,27 @@ impl ConfigFile {
         result
     }
 
+    /// Get the project excludes, properly excluding site packages and required excludes.
+    fn get_full_project_excludes(&self, mut excludes: Globs) -> Globs {
+        excludes.append(Self::required_project_excludes().globs());
+        excludes.append(
+            &self
+                .site_package_path()
+                .filter(|p| self.import_root.as_ref().is_none_or(|r| !r.starts_with(p)))
+                .filter_map(|p| Glob::new(p.to_string_lossy().to_string()).ok())
+                .collect::<Vec<_>>(),
+        );
+        excludes
+    }
+
     /// Gets a [`FilteredGlobs`] from the optional `custom_excludes` or this
     /// [`ConfigFile`]s `project_excludes`, adding all `site_package_path` entries
     /// as extra exclude items.
     pub fn get_filtered_globs(&self, custom_excludes: Option<Globs>) -> FilteredGlobs {
-        let mut project_excludes = custom_excludes.unwrap_or_else(|| self.project_excludes.clone());
-        project_excludes.append(
-            &self
-                .site_package_path()
-                // filter out project directory when editable installs add project path to PYTHONPATH
-                .filter(|p| self.import_root.as_ref().is_none_or(|r| !r.starts_with(p)))
-                .filter_map(|pattern| Glob::new(pattern.to_string_lossy().to_string()).ok())
-                .collect::<Vec<_>>(),
-        );
+        let project_excludes = match custom_excludes {
+            None => self.project_excludes.clone(),
+            Some(custom_excludes) => self.get_full_project_excludes(custom_excludes),
+        };
         let root = if self.use_ignore_files {
             self.import_root.as_deref()
         } else {
@@ -427,22 +493,28 @@ impl ConfigFile {
         Globs::new(vec!["**/*.py*".to_owned()]).unwrap_or_else(|_| Globs::empty())
     }
 
-    pub fn default_project_excludes() -> Globs {
+    /// Project excludes that should always be set, even if a user or config specifies
+    /// something else. These should not be absolutized, since we always want to block these
+    /// files and directories, no matter where on disk they occur (outside of the project too).
+    pub fn required_project_excludes() -> Globs {
         Globs::new(vec![
             // Align with https://code.visualstudio.com/docs/python/settings-reference#_pylance-language-server
             "**/node_modules".to_owned(),
             "**/__pycache__".to_owned(),
-            // match any `.venv` or `venv` directory
-            "**/*venv/**".to_owned(),
-            // Dot directories aside from `.` and `..`
+            // match any `venv` directory
+            "**/venv/**".to_owned(),
+            // Dot directories aside from `.` and `..` (will include .venv and .env)
             "**/.[!/.]*/**".to_owned(),
-            // Note: dot files are now excluded at the Glob::files() level
         ])
         .unwrap_or_else(|_| Globs::empty())
     }
 
     pub fn default_true() -> bool {
         true
+    }
+
+    pub fn from_real_config_file(&self) -> bool {
+        matches!(self.source, ConfigSource::File(_))
     }
 
     pub fn python_version(&self) -> PythonVersion {
@@ -608,6 +680,7 @@ impl ConfigFile {
             self.errors(path),
             self.ignore_errors_in_generated_code(path),
             self.permissive_ignores(path),
+            self.ignore_missing_source,
         )
     }
 
@@ -628,6 +701,14 @@ impl ConfigFile {
     }
 
     pub fn handle_from_module_path(&self, module_path: ModulePath) -> Handle {
+        self.handle_from_module_path_with_fallback(module_path, std::iter::empty())
+    }
+
+    pub fn handle_from_module_path_with_fallback<'a>(
+        &'a self,
+        module_path: ModulePath,
+        fallback_search_paths: impl Iterator<Item = &'a PathBuf>,
+    ) -> Handle {
         match &self
             .source_db
             .as_ref()
@@ -635,8 +716,11 @@ impl ConfigFile {
         {
             Some(handle) => handle.dupe(),
             None => {
-                let name = ModuleName::from_path(module_path.as_path(), self.search_path())
-                    .unwrap_or_else(ModuleName::unknown);
+                let name = ModuleName::from_path(
+                    module_path.as_path(),
+                    self.search_path().chain(fallback_search_paths),
+                )
+                .unwrap_or_else(ModuleName::unknown);
                 Handle::new(name, module_path, self.get_sys_info())
             }
         }
@@ -672,7 +756,7 @@ impl ConfigFile {
             return Ok(false);
         };
 
-        let files = files.iter().map(|p| p.as_path().to_path_buf()).collect();
+        let files = files.iter().map(|p| p.module_path_buf()).collect();
         source_db.requery_source_db(files)
     }
 
@@ -706,6 +790,11 @@ impl ConfigFile {
                 }
             }
         }
+
+        let project_excludes = mem::take(&mut self.project_excludes);
+        // do this after overwriting CLI values so that we can preserve the required
+        // project excludes and add the site package path.
+        self.project_excludes = self.get_full_project_excludes(project_excludes);
 
         if self.root.errors.is_none() {
             self.root.errors = Some(Default::default());
@@ -784,7 +873,7 @@ impl ConfigFile {
     /// We do this as a step separate from `configure()` because CLI args may override some of these
     /// values, but CLI args will always be relative to CWD, whereas config values should be relative
     /// to the config root.
-    fn rewrite_with_path_to_config(&mut self, config_root: &Path) {
+    pub fn rewrite_with_path_to_config(&mut self, config_root: &Path) {
         self.project_includes = self.project_includes.clone().from_root(config_root);
         self.project_excludes = self.project_excludes.clone().from_root(config_root);
         self.search_path_from_file
@@ -1009,6 +1098,7 @@ mod tests {
                     site_package_path: Some(vec![PathBuf::from(
                         "venv/lib/python1.2.3/site-packages"
                     )]),
+                    interpreter_stdlib_path: vec![],
                     interpreter_site_package_path: config
                         .python_environment
                         .interpreter_site_package_path
@@ -1056,6 +1146,7 @@ mod tests {
                 }],
                 ignore_missing_source: true,
                 typeshed_path: None,
+                skip_lsp_config_indexing: false,
             }
         );
     }
@@ -1107,7 +1198,6 @@ mod tests {
             config,
             ConfigFile {
                 project_includes: ConfigFile::default_project_includes(),
-                project_excludes: ConfigFile::default_project_excludes(),
                 ..Default::default()
             }
         );
@@ -1154,7 +1244,6 @@ mod tests {
                     "./implementation".to_owned()
                 ])
                 .unwrap(),
-                project_excludes: ConfigFile::default_project_excludes(),
                 python_environment: PythonEnvironment {
                     python_platform: Some(PythonPlatform::mac()),
                     python_version: Some(PythonVersion::new(1, 2, 3)),
@@ -1162,6 +1251,10 @@ mod tests {
                     interpreter_site_package_path: config
                         .python_environment
                         .interpreter_site_package_path
+                        .clone(),
+                    interpreter_stdlib_path: config
+                        .python_environment
+                        .interpreter_stdlib_path
                         .clone(),
                 },
                 ..Default::default()
@@ -1194,7 +1287,6 @@ mod tests {
             config,
             ConfigFile {
                 project_includes: ConfigFile::default_project_includes(),
-                project_excludes: ConfigFile::default_project_excludes(),
                 python_environment: PythonEnvironment {
                     python_version: Some(PythonVersion::new(1, 2, 3)),
                     python_platform: None,
@@ -1202,6 +1294,10 @@ mod tests {
                     interpreter_site_package_path: config
                         .python_environment
                         .interpreter_site_package_path
+                        .clone(),
+                    interpreter_stdlib_path: config
+                        .python_environment
+                        .interpreter_stdlib_path
                         .clone(),
                 },
                 ..Default::default()
@@ -1282,6 +1378,7 @@ mod tests {
             }],
             ignore_missing_source: false,
             typeshed_path: None,
+            skip_lsp_config_indexing: false,
         };
 
         let current_dir = std::env::current_dir().unwrap();
@@ -1327,7 +1424,7 @@ mod tests {
             disable_search_path_heuristics: false,
             use_ignore_files: true,
             import_root: None,
-            fallback_search_path: Vec::new(),
+            fallback_search_path: Default::default(),
             python_environment,
             root: Default::default(),
             build_system: Default::default(),
@@ -1338,6 +1435,7 @@ mod tests {
             }],
             ignore_missing_source: false,
             typeshed_path: None,
+            skip_lsp_config_indexing: false,
         };
         assert_eq!(config, expected_config);
     }
@@ -1574,13 +1672,16 @@ mod tests {
             "venv/site_packages".to_owned(),
             "system/site_packages".to_owned(),
         ];
+        config.interpreters.skip_interpreter_query = true;
         config.python_environment.site_package_path = Some(
             site_package_path
                 .iter()
                 .map(PathBuf::from)
                 .collect::<Vec<_>>(),
         );
-        config.project_excludes = ConfigFile::default_project_excludes();
+        config.project_excludes = ConfigFile::required_project_excludes();
+
+        config.configure();
 
         assert_eq!(
             config.get_filtered_globs(None),
@@ -1590,10 +1691,16 @@ mod tests {
                     vec![
                         "**/node_modules".to_owned(),
                         "**/__pycache__".to_owned(),
-                        "**/*venv/**".to_owned(),
+                        "**/venv/**".to_owned(),
                         "**/.[!/.]*/**".to_owned(),
                     ]
                     .into_iter()
+                    .chain(vec![
+                        "**/node_modules".to_owned(),
+                        "**/__pycache__".to_owned(),
+                        "**/venv/**".to_owned(),
+                        "**/.[!/.]*/**".to_owned(),
+                    ])
                     .chain(site_package_path.clone())
                     .collect::<Vec<_>>()
                 )
@@ -1610,6 +1717,12 @@ mod tests {
                 Globs::new(
                     vec!["custom_excludes".to_owned()]
                         .into_iter()
+                        .chain(vec![
+                            "**/node_modules".to_owned(),
+                            "**/__pycache__".to_owned(),
+                            "**/venv/**".to_owned(),
+                            "**/.[!/.]*/**".to_owned(),
+                        ])
                         .chain(site_package_path)
                         .collect::<Vec<_>>()
                 )
@@ -1665,7 +1778,6 @@ mod tests {
                 skip_interpreter_query: false,
             },
             project_includes: ConfigFile::default_project_includes(),
-            project_excludes: ConfigFile::default_project_excludes(),
             ..Default::default()
         };
         let reparsed = ConfigFile::parse_config(&toml::to_string(&config).unwrap()).unwrap();

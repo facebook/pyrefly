@@ -17,7 +17,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_types::callable::FuncId;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
@@ -132,7 +132,7 @@ enum ConditionRedundantReason {
     BytesLiteral(bool),
     /// Class name + member name
     EnumLiteral(Name, Name),
-    Function(ModuleName, FuncId),
+    Function(ModuleName, FunctionKind),
     Class(Name),
 }
 
@@ -238,8 +238,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return;
         }
         let deprecated_function = ty
-            .to_funcid()
-            .map(|func_id| func_id.format(self.module().name()));
+            .to_func_kind()
+            .map(|func_kind| func_kind.format(self.module().name()));
         if let Some(deprecated_function) = deprecated_function {
             self.error(
                 errors,
@@ -971,6 +971,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }))
     }
 
+    /// Determine the boolean behavior of a type:
+    /// - `Some(true)` or `Some(false)` when it is known to be statically truthy
+    ///   or falsey (as determined by some baked in rules for literals
+    ///   and looking at the `__bool__` method, if it is present).
+    /// - `None` if it's truthiness is not statically known.
     pub fn as_bool(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) -> Option<bool> {
         ty.as_bool().or_else(|| {
             // If the object defines `__bool__`, we can check if it returns a statically known value
@@ -1006,10 +1011,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for (i, value) in values.iter().enumerate() {
             // If there isn't a hint for the overall expression, use the preceding branches as a "soft" hint
             // for the next one. Most useful for expressions like `optional_list or []`.
-            let hint = hint.or_else(|| Some(HintRef::new(&t_acc, None)));
+            let hint = hint.or_else(|| Some(HintRef::soft(&t_acc)));
             let mut t = self.expr_infer_with_hint(value, hint, errors);
             self.expand_vars_mut(&mut t);
-            if should_shortcircuit(&t, value.range()) {
+            if i < last_index && should_shortcircuit(&t, value.range()) {
                 t_acc = self.union(t_acc, t);
                 break;
             }
@@ -1127,7 +1132,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// are gradual if needed (e.g. `list` is treated as `list[Any]` when used as an annotation).
     ///
     /// This function canonicalizes to `Type::ClassType` or `Type::TypedDict`
-    pub fn canonicalize_all_class_types(&self, ty: Type, range: TextRange) -> Type {
+    pub fn canonicalize_all_class_types(
+        &self,
+        ty: Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
         ty.transform(&mut |ty| match ty {
             Type::SpecialForm(SpecialForm::Tuple) => {
                 *ty = Type::Tuple(Tuple::unbounded(Type::Any(AnyStyle::Implicit)));
@@ -1146,7 +1156,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else if cls.has_toplevel_qname("typing", "Any") {
                     *ty = Type::type_form(Type::any_explicit())
                 } else {
-                    *ty = Type::type_form(self.promote(cls, range));
+                    *ty = Type::type_form(self.promote(cls, range, errors));
                 }
             }
             _ => {}
@@ -1920,9 +1930,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range,
                     Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                 ),
-                Type::LiteralString | Type::Literal(Lit::Str(_)) if xs.len() <= 3 => {
+                Type::LiteralString if xs.len() <= 3 => {
                     // We could have a more precise type here, but this matches Pyright.
                     self.stdlib.str().clone().to_type()
+                }
+                Type::Literal(Lit::Str(ref value)) if xs.len() <= 3 => {
+                    let base_ty = Type::Literal(Lit::Str(value.clone()));
+                    let context = || ErrorContext::Index(self.for_display(base_ty.clone()));
+                    self.subscript_str_literal(
+                        value.as_str(),
+                        &base_ty,
+                        slice,
+                        errors,
+                        range,
+                        Some(&context),
+                    )
                 }
                 Type::ClassType(ref cls) | Type::SelfType(ref cls)
                     if let Some(Tuple::Concrete(elts)) = self.as_tuple(cls) =>
@@ -2095,6 +2117,191 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn subscript_str_literal(
+        &self,
+        value: &str,
+        base_type: &Type,
+        index_expr: &Expr,
+        errors: &ErrorCollector,
+        range: TextRange,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) -> Type {
+        let fallback = || {
+            self.call_method_or_error(
+                base_type,
+                &dunder::GETITEM,
+                range,
+                &[CallArg::expr(index_expr)],
+                &[],
+                errors,
+                context,
+            )
+        };
+
+        if matches!(index_expr, Expr::Tuple(_)) {
+            return fallback();
+        }
+
+        let literal_index = |expr: &Expr| -> Option<i64> {
+            match self.expr_infer(expr, errors) {
+                Type::Literal(ref lit) => lit.as_index_i64(),
+                _ => None,
+            }
+        };
+
+        let chars: Vec<char> = value.chars().collect();
+        let len_usize = chars.len();
+        if len_usize > i64::MAX as usize {
+            return fallback();
+        }
+        let len = len_usize as i64;
+
+        if let Expr::Slice(slice) = index_expr {
+            let step = match slice.step.as_deref() {
+                Some(expr) => match literal_index(expr) {
+                    Some(value) if value != 0 => value,
+                    _ => return fallback(),
+                },
+                None => 1,
+            };
+
+            if step == i64::MIN {
+                return fallback();
+            }
+
+            let mut start = match slice.lower.as_deref() {
+                Some(expr) => match literal_index(expr) {
+                    Some(value) => value,
+                    None => return fallback(),
+                },
+                None => {
+                    if step < 0 {
+                        len.saturating_sub(1)
+                    } else {
+                        0
+                    }
+                }
+            };
+
+            let mut stop = match slice.upper.as_deref() {
+                Some(expr) => match literal_index(expr) {
+                    Some(value) => value,
+                    None => return fallback(),
+                },
+                None => {
+                    if step < 0 {
+                        match len.checked_add(1) {
+                            Some(v) => -v,
+                            None => return fallback(),
+                        }
+                    } else {
+                        len
+                    }
+                }
+            };
+
+            if step > 0 {
+                if start < 0 {
+                    start += len;
+                    if start < 0 {
+                        start = 0;
+                    }
+                } else if start > len {
+                    start = len;
+                }
+
+                if stop < 0 {
+                    stop += len;
+                    if stop < 0 {
+                        stop = 0;
+                    }
+                } else if stop > len {
+                    stop = len;
+                }
+            } else {
+                if start < 0 {
+                    start += len;
+                    if start < 0 {
+                        start = -1;
+                    }
+                } else if start >= len {
+                    start = len.saturating_sub(1);
+                }
+
+                if stop < 0 {
+                    stop += len;
+                    if stop < 0 {
+                        stop = -1;
+                    }
+                } else if stop >= len {
+                    stop = len.saturating_sub(1);
+                }
+            }
+
+            let slice_length = if step < 0 {
+                if stop < start {
+                    (start - stop - 1) / (-step) + 1
+                } else {
+                    0
+                }
+            } else if start < stop {
+                (stop - start - 1) / step + 1
+            } else {
+                0
+            };
+
+            if slice_length <= 0 {
+                return Type::Literal(Lit::Str("".into()));
+            }
+
+            if slice_length as usize as i64 != slice_length {
+                return fallback();
+            }
+
+            let mut result = String::new();
+            let mut idx = start;
+            for _ in 0..slice_length as usize {
+                if idx < 0 || idx >= len {
+                    return fallback();
+                }
+                let Some(&ch) = chars.get(idx as usize) else {
+                    return fallback();
+                };
+                result.push(ch);
+                idx = match idx.checked_add(step) {
+                    Some(next) => next,
+                    None => return fallback(),
+                };
+            }
+
+            Type::Literal(Lit::Str(result.into()))
+        } else {
+            let idx_ty = self.expr_infer(index_expr, errors);
+            if let Type::Literal(lit) = idx_ty
+                && let Some(idx) = lit.as_index_i64()
+            {
+                let normalized = if idx < 0 { len + idx } else { idx };
+                if normalized >= 0 && normalized < len {
+                    let ch = chars[normalized as usize];
+                    let mut buf = String::new();
+                    buf.push(ch);
+                    return Type::Literal(Lit::Str(buf.into()));
+                } else {
+                    return self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::BadIndex),
+                        format!(
+                            "Index `{idx}` out of range for string with {} elements",
+                            chars.len()
+                        ),
+                    );
+                }
+            }
+            fallback()
+        }
+    }
+
     fn subscript_bytes_literal(
         &self,
         bytes: &[u8],
@@ -2169,15 +2376,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )),
             Type::Function(f) => Some(ConditionRedundantReason::Function(
                 self.module().name(),
-                f.metadata.kind.as_func_id(),
+                f.metadata.kind.clone(),
             )),
             Type::Overload(f) => Some(ConditionRedundantReason::Function(
                 self.module().name(),
-                f.metadata.kind.as_func_id(),
+                f.metadata.kind.clone(),
             )),
             Type::BoundMethod(f) => Some(ConditionRedundantReason::Function(
                 self.module().name(),
-                f.func.metadata().kind.as_func_id(),
+                f.func.metadata().kind.clone(),
             )),
             Type::ClassDef(cls) => Some(ConditionRedundantReason::Class(cls.name().clone())),
             _ => None,

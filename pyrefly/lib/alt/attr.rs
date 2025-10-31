@@ -945,7 +945,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 Attribute::Simple(_) => {
-                    // Allow deleting most attributes for now, for compatbility with mypy.
+                    // Allow deleting most attributes for now, for compatibility with mypy.
                 }
                 Attribute::ClassAttribute(class_attr) => {
                     self.check_class_attr_delete(class_attr, attr_name, range, errors, context);
@@ -1460,7 +1460,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn get_module_exports(&self, module_name: ModuleName) -> Option<Exports> {
-        self.exports.get(module_name).ok()
+        self.exports.get(module_name).finding()
     }
 
     fn get_module_attr(&self, module: &ModuleType, attr_name: &Name) -> Option<Attribute> {
@@ -1514,13 +1514,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn force_var_for_attribute_base(&self, var: Var) -> Type {
+    fn force_var_for_attribute_base(&self, var: Var, f: impl FnOnce(Type)) {
         if let Some(_guard) = self.recurse(var) {
-            self.solver().force_var(var)
+            // Ensure that the guard is still held when we call `f`, to avoid
+            // non-termination when the var appears inside itself.
+            f(self.solver().force_var(var))
         } else {
-            Type::any_implicit()
+            f(Type::any_implicit())
         }
     }
+
     fn as_attribute_base(&self, ty: Type) -> Option<AttributeBase> {
         let mut acc = Vec::new();
         self.as_attribute_base1(ty, &mut acc);
@@ -1539,6 +1542,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::TypedDict(td) | Type::PartialTypedDict(td) => {
                 acc.push(AttributeBase1::TypedDict(td.clone()))
+            }
+            Type::Type(box (Type::TypedDict(_) | Type::PartialTypedDict(_))) => {
+                acc.push(AttributeBase1::ClassObject(ClassBase::ClassDef(
+                    self.stdlib.typed_dict_fallback().clone(),
+                )))
             }
             Type::Tuple(tuple) => {
                 acc.push(AttributeBase1::ClassInstance(self.erase_tuple_type(tuple)))
@@ -1707,10 +1715,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Type::Forall(forall) => self.as_attribute_base1(forall.body.as_type(), acc),
-            Type::Var(v) => self.as_attribute_base1(self.force_var_for_attribute_base(v), acc),
-            Type::Type(box Type::Var(v)) => {
-                self.as_attribute_base1(Type::type_form(self.force_var_for_attribute_base(v)), acc)
+            Type::Var(v) => {
+                self.force_var_for_attribute_base(v, |ty| self.as_attribute_base1(ty, acc))
             }
+            Type::Type(box Type::Var(v)) => self.force_var_for_attribute_base(v, |ty| {
+                self.as_attribute_base1(Type::type_form(ty), acc)
+            }),
             Type::SuperInstance(box (cls, obj)) => {
                 acc.push(AttributeBase1::SuperInstance(cls, obj))
             }
@@ -1810,39 +1820,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.unions(results)
     }
 
-    // When coercing an instance of condition_type to bool, check that either it does not override
-    // __bool__, or that condition_type.__bool__ is callable.
+    // When determining the boolean value of some term used in a boolean context
+    // to bool, check that either it does not override __bool__, or the
+    // condition_type.__bool__ is callable.
+    //
+    // This allows users to mark a class as not allowing truthiness checks by
+    // explicitly setting `__bool__` to any non-callable type.
     pub fn check_dunder_bool_is_callable(
         &self,
-        condition_type: &Type,
+        type_of_term_used_as_bool: &Type,
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        let cond_bool_ty = self.type_of_magic_dunder_attr(
-            condition_type,
-            &dunder::BOOL,
-            range,
-            errors,
-            None,
-            "__bool__",
-            false,
-        );
-
-        if let Some(ty) = cond_bool_ty
-            && !ty.is_never()
-            && self.as_call_target(ty.clone()).is_none()
-        {
-            self.error(
-                errors,
+        // TODO(stroxler): Ideally, we would collect up the error messages and produce a single
+        // error here. But non-callable `__bool__` failures are likely to be rare in most
+        // codebases so this is not urgent unless we get complaints.
+        let f = |union_member_ty: &Type| {
+            let dunder_bool_ty = self.type_of_magic_dunder_attr(
+                union_member_ty,
+                &dunder::BOOL,
                 range,
-                ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                format!(
-                    "The `__bool__` attribute of `{}` has type `{}`, which is not callable",
-                    self.for_display(condition_type.clone()),
-                    self.for_display(ty.clone()),
-                ),
+                errors,
+                None,
+                "__bool__",
+                false,
             );
-        }
+
+            if let Some(dunder_bool_ty) = dunder_bool_ty
+                && !dunder_bool_ty.is_never()
+                && self.as_call_target(dunder_bool_ty.clone()).is_none()
+            {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    format!(
+                        "The `__bool__` attribute of `{}` has type `{}`, which is not callable",
+                        self.for_display(union_member_ty.clone()),
+                        self.for_display(dunder_bool_ty.clone()),
+                    ),
+                );
+            }
+        };
+        self.map_over_union(type_of_term_used_as_bool, f)
     }
 }
 
@@ -2057,21 +2077,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 }
                                 _ => {}
                             }
-                            let result = self
-                                .resolve_get_access(
-                                    attr,
-                                    // Important we do not use the resolved TextRange, as it might be in a different module.
-                                    // Whereas the empty TextRange is valid for all modules.
-                                    TextRange::default(),
-                                    &self.error_swallower(),
-                                    None,
-                                )
-                                .ok();
-                            if matches!(&result, Some(Type::Any(_))) {
-                                None
-                            } else {
-                                result
-                            }
+                            self.resolve_get_access(
+                                attr,
+                                // Important we do not use the resolved TextRange, as it might be in a different module.
+                                // Whereas the empty TextRange is valid for all modules.
+                                TextRange::default(),
+                                &self.error_swallower(),
+                                None,
+                            )
+                            .ok()
                         })
                         .collect();
                     if !found_types.is_empty() {

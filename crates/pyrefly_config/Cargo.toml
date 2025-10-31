@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_config"
-version = "0.38.2"
+version = "0.39.4"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -29,7 +29,7 @@ serde_jsonrc = "0.1"
 serde_with = { version = "3", features = ["hex", "json"] }
 starlark_map = "0.13.0"
 thiserror = "2.0.12"
-toml = { version = "0.9.2", features = ["preserve_order"] }
+toml = { version = "0.9.8", features = ["preserve_order"] }
 toml_edit = { version = "0.23.1", features = ["serde"] }
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 walkdir = "2.3"

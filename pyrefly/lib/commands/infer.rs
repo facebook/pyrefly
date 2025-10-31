@@ -24,7 +24,6 @@ use crate::commands::files::FilesArgs;
 use crate::commands::files::get_project_config_for_current_dir;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::ErrorKind;
-use crate::lsp::module_helpers::handle_from_module_path;
 use crate::state::ide::insert_import_edit_with_forced_import_format;
 use crate::state::lsp::AnnotationKind;
 use crate::state::lsp::ParameterAnnotation;
@@ -281,7 +280,12 @@ impl InferArgs {
                     match error.error_kind() {
                         ErrorKind::UnknownName => {
                             let module_info = error.module();
-                            let handle = handle_from_module_path(state, module_info.path().clone());
+                            let module_path = module_info.path().clone();
+                            let config = state.config_finder().python_file(
+                                pyrefly_python::module_name::ModuleName::unknown(),
+                                &module_path,
+                            );
+                            let handle = config.handle_from_module_path(module_path);
                             if let Some(ast) = transaction.get_ast(&handle) {
                                 let error_range = error.range();
                                 let unknown_name = module_info.code_at(error_range);
@@ -390,7 +394,7 @@ mod test {
         ]
         project_excludes = []
         "#;
-        let tdir = tempfile::tempdir().unwrap();
+        let tdir = tempfile::TempDir::with_prefix("pyrefly_infer_test").unwrap();
         let file_one_path = tdir.path().join("file_one.py");
         fs_anyhow::write(&file_one_path, file_one).unwrap();
         let file_two_path = tdir.path().join("file_two.py");

@@ -128,26 +128,27 @@ Configuration at * (glob)
 [0]
 ```
 
-## Interpreter priority takes activated interpreter
+## Interpreter priority takes config-file interpreter
 
 <!-- Reusing interpreters dir set up in "Interpreter priority takes CLI interpreter" -->
 
 ```scrut {output_stream: stdout}
 $ VIRTUAL_ENV=$TMPDIR/alternative-venv $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml
 Configuration at * (glob)
-  Using interpreter: */alternative-venv/python3 (glob)
+  Using interpreter: */test-interpreter (glob)
 * (glob+)
 [0]
 ```
 
-## Interpreter priority takes config-file interpreter
+## Interpreter priority takes activated interpreter
 
 <!-- Reusing interpreters dir set up in "Interpreter priority takes CLI interpreter" -->
 
 ```scrut {output_stream: stdout}
-$ $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml
+$ echo "" > $TMPDIR/interpreters/pyrefly.toml && \
+> VIRTUAL_ENV=$TMPDIR/alternative-venv $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml
 Configuration at * (glob)
-  Using interpreter: */test-interpreter (glob)
+  Using interpreter: */alternative-venv/python3 (glob)
 * (glob+)
 [0]
 ```
@@ -285,7 +286,7 @@ $ mkdir $TMPDIR/contains_hidden && \
 ```scrut {output_stream.stdout}
 $ mkdir $TMPDIR/site_package_missing_source && \
 > mkdir $TMPDIR/site_package_missing_source/pkg-stubs && \
-> echo "class X: ..." > $TMPDIR/site_package_missing_source/pkg-stubs/pkg.py && \
+> echo "class X: ..." > $TMPDIR/site_package_missing_source/pkg-stubs/__init__.py && \
 > echo "import pkg" > $TMPDIR/foo.py && \
 > $PYREFLY check $TMPDIR/foo.py --ignore-missing-source=false --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
 ERROR * Found stubs for `pkg`, but no source* (glob)
@@ -296,5 +297,37 @@ ERROR * Found stubs for `pkg`, but no source* (glob)
 $ echo "from pkg import X" > $TMPDIR/foo.py && \
 > $PYREFLY check $TMPDIR/foo.py --ignore-missing-source=false --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
 ERROR * Found stubs for `pkg`, but no source* (glob)
+[1]
+```
+
+```scrut {output_stream.stdout}
+$ echo "from pkg import X" > $TMPDIR/foo.py && \
+> $PYREFLY check $TMPDIR/foo.py --error=missing-source --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
+ERROR * Found stubs for `pkg`, but no source* (glob)
+[1]
+```
+
+## We can disable `missing-source` on the command line
+
+```scrut {output_stream.stdout}
+$ mkdir $TMPDIR/error_missing_source && \
+> echo -e '[errors]\nmissing-source="error"' > $TMPDIR/error_missing_source/pyrefly.toml && \
+> echo "from pkg import X" > $TMPDIR/error_missing_source/foo.py && \
+> $PYREFLY check $TMPDIR/error_missing_source/foo.py --ignore-missing-source --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
+[0]
+```
+
+## Regression test: we should still be able to find submodules when stubs are missing
+
+```scrut {output_stream.stdout}
+$ mkdir $TMPDIR/site_package_missing_stubs && \
+> mkdir $TMPDIR/site_package_missing_stubs/django && \
+> touch $TMPDIR/site_package_missing_stubs/django/__init__.py && \
+> mkdir $TMPDIR/site_package_missing_stubs/django/forms && \
+> touch $TMPDIR/site_package_missing_stubs/django/forms/__init__.py && \
+> echo "from django import forms; from typing import reveal_type; reveal_type(forms)" > $TMPDIR/foo.py && \
+> $PYREFLY check $TMPDIR/foo.py --error untyped-import --site-package-path $TMPDIR/site_package_missing_stubs --output-format=min-text
+ERROR * Missing type stubs for `django` * (glob)
+ INFO * revealed type: Module[django.forms] * (glob)
 [1]
 ```

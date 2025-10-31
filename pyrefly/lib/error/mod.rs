@@ -13,5 +13,5 @@ pub mod error;
 pub mod expectation;
 pub mod legacy;
 pub mod style;
-pub mod summarise;
+pub mod summarize;
 pub mod suppress;

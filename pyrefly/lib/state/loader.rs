@@ -9,6 +9,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModuleStyle;
@@ -24,7 +25,7 @@ use crate::error::context::ErrorContext;
 use crate::module::finder::find_import;
 use crate::module::finder::find_import_filtered;
 
-#[derive(Debug, Clone, Dupe)]
+#[derive(Debug, Clone, Dupe, PartialEq, Eq)]
 pub enum FindError {
     /// This module could not be found, and we should emit an error
     NotFound(ModuleName, Arc<Vec1<String>>),
@@ -33,6 +34,10 @@ pub enum FindError {
     /// We found stubs, but no source files were found. This means it's likely stubs
     /// are installed for a project, but the library is not actually importable
     NoSource(ModuleName),
+    /// We have the source files, but do not have the stubs. In this case we should send
+    /// a message to the user which will allow them to install the stubs for the package.
+    /// The string will hold the name of the pip package that we will tell the user to install.
+    MissingStubs(ModuleName, Arc<String>),
 }
 
 impl FindError {
@@ -85,9 +90,80 @@ impl FindError {
                 None,
                 vec1![format!(
                     "Found stubs for `{module}`, but no source. This means it's likely not \
-                    installed/unimportable. See `ignore-missing-source` to disable this error."
+                    installed/unimportable."
                 )],
             ),
+            Self::MissingStubs(source_package, stubs_package) => (
+                Some(Box::new(|| ErrorContext::ImportNotTyped(*source_package))),
+                vec1![format!("Hint: install the `{stubs_package}` package")],
+            ),
+        }
+    }
+
+    pub fn kind(&self) -> Option<ErrorKind> {
+        match self {
+            Self::NotFound(..) => Some(ErrorKind::MissingImport),
+            Self::NoSource(..) => Some(ErrorKind::MissingSource),
+            Self::MissingStubs(..) => Some(ErrorKind::UntypedImport),
+            Self::Ignored => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Dupe, PartialEq, Eq)]
+pub struct Finding<T> {
+    pub finding: T,
+    pub error: Option<FindError>,
+}
+
+/// Result of an attempt to find a module
+#[derive(Debug, Clone, Dupe, PartialEq, Eq)]
+pub enum FindingOrError<T> {
+    /// Information about a found module. May have a non-fatal error attached.
+    Finding(Finding<T>),
+    /// A fatal error that prevented us from finding a module.
+    Error(FindError),
+}
+
+impl<T> FindingOrError<T> {
+    pub fn new_finding(finding: T) -> Self {
+        Self::Finding(Finding {
+            finding,
+            error: None,
+        })
+    }
+
+    pub fn finding(self) -> Option<T> {
+        match self {
+            Self::Finding(finding) => Some(finding.finding),
+            Self::Error(_) => None,
+        }
+    }
+
+    pub fn error(self) -> Option<FindError> {
+        match self {
+            Self::Finding(Finding { error, finding: _ }) => error,
+            Self::Error(error) => Some(error),
+        }
+    }
+
+    pub fn map<T2>(self, f: impl Fn(T) -> T2) -> FindingOrError<T2> {
+        match self {
+            Self::Finding(Finding { finding, error }) => FindingOrError::Finding(Finding {
+                finding: f(finding),
+                error,
+            }),
+            Self::Error(e) => FindingOrError::Error(e),
+        }
+    }
+
+    pub fn with_error(self, error: FindError) -> Self {
+        match self {
+            Self::Finding(x) if x.error.is_none() => Self::Finding(Finding {
+                finding: x.finding,
+                error: Some(error),
+            }),
+            x => x,
         }
     }
 }
@@ -95,7 +171,7 @@ impl FindError {
 #[derive(Debug)]
 pub struct LoaderFindCache {
     config: ArcId<ConfigFile>,
-    cache: LockedMap<(ModuleName, Option<ModulePath>), Result<ModulePath, FindError>>,
+    cache: LockedMap<(ModuleName, Option<ModulePath>), FindingOrError<ModulePath>>,
     // If a python executable module (excludes .pyi) exists and differs from the imported python module, store it here
     executable_cache: LockedMap<(ModuleName, Option<ModulePath>), Option<ModulePath>>,
 }
@@ -113,10 +189,10 @@ impl LoaderFindCache {
         &self,
         module: ModuleName,
         origin: Option<&ModulePath>,
-    ) -> Result<ModulePath, FindError> {
+    ) -> FindingOrError<ModulePath> {
         let key = (module.dupe(), origin.cloned());
         match self.executable_cache.get(&key) {
-            Some(Some(module)) => Ok(module.dupe()),
+            Some(Some(module)) => FindingOrError::new_finding(module.dupe()),
             Some(None) => self.find_import(module, origin),
             None => {
                 match find_import_filtered(
@@ -125,11 +201,12 @@ impl LoaderFindCache {
                     origin,
                     Some(ModuleStyle::Executable),
                 ) {
-                    Ok(import) => {
-                        self.executable_cache.insert(key, Some(import.dupe()));
-                        Ok(import)
+                    FindingOrError::Finding(import) => {
+                        self.executable_cache
+                            .insert(key, Some(import.finding.dupe()));
+                        FindingOrError::Finding(import)
                     }
-                    Err(_) => {
+                    FindingOrError::Error(_) => {
                         self.executable_cache.insert(key, None);
                         self.find_import(module, origin)
                     }
@@ -142,7 +219,7 @@ impl LoaderFindCache {
         &self,
         module: ModuleName,
         origin: Option<&ModulePath>,
-    ) -> Result<ModulePath, FindError> {
+    ) -> FindingOrError<ModulePath> {
         self.cache
             .ensure(&(module.dupe(), origin.cloned()), || {
                 find_import(&self.config, module, origin)

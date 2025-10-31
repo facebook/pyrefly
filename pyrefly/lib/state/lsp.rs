@@ -24,6 +24,7 @@ use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
+use pyrefly_python::dunder;
 use pyrefly_python::keywords::get_keywords;
 use pyrefly_python::module::Module;
 use pyrefly_python::module::TextRangeWithModule;
@@ -52,6 +53,7 @@ use ruff_python_ast::ModModule;
 use ruff_python_ast::ParameterWithDefault;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImportFrom;
+use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -76,6 +78,7 @@ use crate::state::ide::key_to_intermediate_definition;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokenBuilder;
 use crate::state::semantic_tokens::SemanticTokensLegends;
+use crate::state::semantic_tokens::disabled_ranges_for_module;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
@@ -488,9 +491,33 @@ impl<'a> Transaction<'a> {
         ans.get_chosen_overload_trace(range)
     }
 
+    fn type_from_expression_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        let module = self.get_ast(handle)?;
+        let covering_nodes = Ast::locate_node(&module, position);
+        for node in covering_nodes {
+            if node.as_expr_ref().is_none() {
+                continue;
+            }
+            let range = node.range();
+            if let Some(callable) = self.get_chosen_overload_trace(handle, range) {
+                return Some(callable);
+            }
+            if let Some(ty) = self.get_type_trace(handle, range) {
+                return Some(ty);
+            }
+        }
+        None
+    }
+
     fn identifier_at(&self, handle: &Handle, position: TextSize) -> Option<IdentifierWithContext> {
         let mod_module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&mod_module, position);
+        Self::identifier_from_covering_nodes(&covering_nodes)
+    }
+
+    fn identifier_from_covering_nodes(
+        covering_nodes: &[AnyNodeRef],
+    ) -> Option<IdentifierWithContext> {
         match (
             covering_nodes.first(),
             covering_nodes.get(1),
@@ -810,7 +837,7 @@ impl<'a> Transaction<'a> {
                     self.get_type_trace(handle, range)
                 }
             }
-            None => None,
+            None => self.type_from_expression_at(handle, position),
         }
     }
 
@@ -944,8 +971,10 @@ impl<'a> Transaction<'a> {
         let mut name = name;
         while !gas.stop() {
             let handle = match preference.prefer_pyi {
-                true => self.import_handle(handle, m, None).ok()?,
-                false => self.import_handle_prefer_executable(handle, m, None).ok()?,
+                true => self.import_handle(handle, m, None).finding()?,
+                false => self
+                    .import_handle_prefer_executable(handle, m, None)
+                    .finding()?,
             };
             match self.get_exports(&handle).get(&name) {
                 Some(ExportLocation::ThisModule(export)) => {
@@ -996,10 +1025,10 @@ impl<'a> Transaction<'a> {
             }
             IntermediateDefinition::Module(name) => {
                 let handle = match preference.prefer_pyi {
-                    true => self.import_handle(handle, name, None).ok()?,
+                    true => self.import_handle(handle, name, None).finding()?,
                     false => self
                         .import_handle_prefer_executable(handle, name, None)
-                        .ok()?,
+                        .finding()?,
                 };
                 let docstring_range = self.get_module_docstring_range(&handle);
                 Some((
@@ -1143,6 +1172,124 @@ impl<'a> Transaction<'a> {
         })
     }
 
+    fn find_definition_for_base_type(
+        &self,
+        handle: &Handle,
+        preference: &FindPreference,
+        completions: Vec<AttrInfo>,
+        name: &Identifier,
+    ) -> Option<FindDefinitionItemWithDocstring> {
+        completions.into_iter().find_map(|x| {
+            if &x.name == name.id() {
+                let (definition, docstring_range) = self.resolve_attribute_definition(
+                    handle,
+                    &x.name,
+                    x.definition?,
+                    x.docstring_range,
+                    preference,
+                )?;
+                Some(FindDefinitionItemWithDocstring {
+                    metadata: DefinitionMetadata::Attribute(x.name),
+                    definition_range: definition.range,
+                    module: definition.module,
+                    docstring_range,
+                })
+            } else {
+                None
+            }
+        })
+    }
+
+    fn find_attribute_definition_for_base_type(
+        &self,
+        handle: &Handle,
+        preference: &FindPreference,
+        base_type: Type,
+        name: &Identifier,
+    ) -> Vec<FindDefinitionItemWithDocstring> {
+        self.ad_hoc_solve(handle, |solver| {
+            let completions = |ty| solver.completions(ty, Some(name.id()), false);
+
+            match base_type {
+                Type::Union(tys) | Type::Intersect(tys) => tys
+                    .into_iter()
+                    .filter_map(|ty_| {
+                        self.find_definition_for_base_type(
+                            handle,
+                            preference,
+                            completions(ty_),
+                            name,
+                        )
+                    })
+                    .collect(),
+                ty => self
+                    .find_definition_for_base_type(handle, preference, completions(ty), name)
+                    .map_or(vec![], |item| vec![item]),
+            }
+        })
+        .unwrap_or_default()
+    }
+
+    fn find_definition_for_operator(
+        &self,
+        handle: &Handle,
+        covering_nodes: &[AnyNodeRef],
+        preference: &FindPreference,
+    ) -> Vec<FindDefinitionItemWithDocstring> {
+        let Some((base_type, dunder_method_name)) =
+            covering_nodes.iter().find_map(|node| match node {
+                AnyNodeRef::ExprCompare(compare) => {
+                    for op in &compare.ops {
+                        if let Some(dunder_name) = dunder::rich_comparison_dunder(*op)
+                            && let Some(answers) = self.get_answers(handle)
+                            && let Some(left_type) = answers.get_type_trace(compare.left.range())
+                        {
+                            return Some((left_type, dunder_name));
+                        }
+                    }
+                    None
+                }
+                AnyNodeRef::ExprBinOp(binop) => {
+                    let dunder_name = Name::new_static(binop.op.dunder());
+                    if let Some(answers) = self.get_answers(handle)
+                        && let Some(left_type) = answers.get_type_trace(binop.left.range())
+                    {
+                        return Some((left_type, dunder_name));
+                    }
+                    None
+                }
+                AnyNodeRef::ExprUnaryOp(unaryop) => {
+                    let dunder_name = match unaryop.op {
+                        UnaryOp::Invert => Some(dunder::INVERT),
+                        UnaryOp::Not => None,
+                        UnaryOp::UAdd => Some(dunder::POS),
+                        UnaryOp::USub => Some(dunder::NEG),
+                    };
+                    if let Some(dunder_name) = dunder_name
+                        && let Some(answers) = self.get_answers(handle)
+                        && let Some(operand_type) = answers.get_type_trace(unaryop.operand.range())
+                    {
+                        return Some((operand_type, dunder_name));
+                    }
+                    None
+                }
+                _ => None,
+            })
+        else {
+            return vec![];
+        };
+
+        // Create a fake identifier for the dunder method name
+        let identifier = Identifier {
+            node_index: Default::default(),
+            id: dunder_method_name,
+            range: TextRange::default(),
+        };
+
+        // Find the attribute definition for the dunder method on the base type
+        self.find_attribute_definition_for_base_type(handle, preference, base_type, &identifier)
+    }
+
     pub fn find_definition_for_attribute(
         &self,
         handle: &Handle,
@@ -1153,41 +1300,7 @@ impl<'a> Transaction<'a> {
         if let Some(answers) = self.get_answers(handle)
             && let Some(base_type) = answers.get_type_trace(base_range)
         {
-            self.ad_hoc_solve(handle, |solver| {
-                let find_definition_for_base_type = |ty: Type| {
-                    solver
-                        .completions(ty, Some(name.id()), false)
-                        .into_iter()
-                        .find_map(|x| {
-                            if &x.name == name.id() {
-                                let (definition, docstring_range) = self
-                                    .resolve_attribute_definition(
-                                        handle,
-                                        &x.name,
-                                        x.definition?,
-                                        x.docstring_range,
-                                        preference,
-                                    )?;
-                                Some(FindDefinitionItemWithDocstring {
-                                    metadata: DefinitionMetadata::Attribute(x.name),
-                                    definition_range: definition.range,
-                                    module: definition.module,
-                                    docstring_range,
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                };
-                match base_type {
-                    Type::Union(tys) | Type::Intersect(tys) => tys
-                        .into_iter()
-                        .filter_map(&find_definition_for_base_type)
-                        .collect(),
-                    ty => find_definition_for_base_type(ty).map_or(vec![], |item| vec![item]),
-                }
-            })
-            .unwrap_or_default()
+            self.find_attribute_definition_for_base_type(handle, preference, base_type, name)
         } else {
             vec![]
         }
@@ -1201,10 +1314,10 @@ impl<'a> Transaction<'a> {
     ) -> Option<FindDefinitionItemWithDocstring> {
         // TODO: Handle relative import (via ModuleName::new_maybe_relative)
         let handle = match preference.prefer_pyi {
-            true => self.import_handle(handle, module_name, None).ok()?,
+            true => self.import_handle(handle, module_name, None).finding()?,
             false => self
                 .import_handle_prefer_executable(handle, module_name, None)
-                .ok()?,
+                .finding()?,
         };
         // if the module is not yet loaded, force loading by asking for exports
         // necessary for imports that are not in tdeps (e.g. .py when there is also a .pyi)
@@ -1299,7 +1412,12 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         preference: &FindPreference,
     ) -> Vec<FindDefinitionItemWithDocstring> {
-        match self.identifier_at(handle, position) {
+        let Some(mod_module) = self.get_ast(handle) else {
+            return vec![];
+        };
+        let covering_nodes = Ast::locate_node(&mod_module, position);
+
+        match Self::identifier_from_covering_nodes(&covering_nodes) {
             Some(IdentifierWithContext {
                 identifier: id,
                 context: IdentifierContext::Expr(expr_context),
@@ -1429,7 +1547,7 @@ impl<'a> Transaction<'a> {
                 identifier,
                 context: IdentifierContext::Attribute { base_range, .. },
             }) => self.find_definition_for_attribute(handle, base_range, &identifier, preference),
-            None => vec![],
+            None => self.find_definition_for_operator(handle, &covering_nodes, preference),
         }
     }
 
@@ -1519,7 +1637,8 @@ impl<'a> Transaction<'a> {
                             if module_name == handle.module() {
                                 continue;
                             }
-                            if let Ok(module_handle) = self.import_handle(handle, module_name, None)
+                            if let Some(module_handle) =
+                                self.import_handle(handle, module_name, None).finding()
                             {
                                 let (position, insert_text) =
                                     import_regular_import_edit(&ast, module_handle);
@@ -1793,7 +1912,10 @@ impl<'a> Transaction<'a> {
         identifier: Option<&Identifier>,
         completions: &mut Vec<CompletionItem>,
     ) {
-        if let Ok(builtin_handle) = self.import_handle(handle, ModuleName::builtins(), None) {
+        if let Some(builtin_handle) = self
+            .import_handle(handle, ModuleName::builtins(), None)
+            .finding()
+        {
             let builtin_exports = self.get_exports(&builtin_handle);
             for (name, location) in builtin_exports.iter() {
                 if let Some(identifier) = identifier
@@ -1886,7 +2008,8 @@ impl<'a> Transaction<'a> {
                     continue;
                 }
                 let module_name_str = module_name.as_str();
-                if let Ok(module_handle) = self.import_handle(handle, module_name, None) {
+                if let Some(module_handle) = self.import_handle(handle, module_name, None).finding()
+                {
                     let (insert_text, additional_text_edits) = {
                         let (position, insert_text) =
                             import_regular_import_edit(&ast, module_handle);
@@ -2077,13 +2200,27 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    // Kept for backwards compatibility - used by external callers (lsp/server.rs, playground.rs)
+    // who don't need the is_incomplete flag
     pub fn completion(
         &self,
         handle: &Handle,
         position: TextSize,
         import_format: ImportFormat,
     ) -> Vec<CompletionItem> {
-        let mut results = self.completion_sorted_opt(handle, position, import_format);
+        self.completion_with_incomplete(handle, position, import_format)
+            .0
+    }
+
+    // Returns the completions, and true if they are incomplete so client will keep asking for more completions
+    pub fn completion_with_incomplete(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        import_format: ImportFormat,
+    ) -> (Vec<CompletionItem>, bool) {
+        let (mut results, is_incomplete) =
+            self.completion_sorted_opt_with_incomplete(handle, position, import_format);
         results.sort_by(|item1, item2| {
             item1
                 .sort_text
@@ -2092,22 +2229,23 @@ impl<'a> Transaction<'a> {
                 .then_with(|| item1.detail.cmp(&item2.detail))
         });
         results.dedup_by(|item1, item2| item1.label == item2.label && item1.detail == item2.detail);
-        results
+        (results, is_incomplete)
     }
 
-    fn completion_sorted_opt(
+    fn completion_sorted_opt_with_incomplete(
         &self,
         handle: &Handle,
         position: TextSize,
         import_format: ImportFormat,
-    ) -> Vec<CompletionItem> {
+    ) -> (Vec<CompletionItem>, bool) {
         let mut result = Vec::new();
+        let mut is_incomplete = false;
         match self.identifier_at(handle, position) {
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::ImportedName { module_name, .. },
             }) => {
-                if let Ok(handle) = self.import_handle(handle, module_name, None) {
+                if let Some(handle) = self.import_handle(handle, module_name, None).finding() {
                     // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
                     // If the user might be typing the `import` keyword, add that as an autocomplete option.
                     if "import".starts_with(identifier.as_str()) {
@@ -2200,18 +2338,26 @@ impl<'a> Transaction<'a> {
             Some(IdentifierWithContext { identifier, .. }) => {
                 self.add_kwargs_completions(handle, position, &mut result);
                 self.add_keyword_completions(handle, &mut result);
-                if !self.add_local_variable_completions(
+                let has_local_completions = self.add_local_variable_completions(
                     handle,
                     Some(&identifier),
                     position,
                     &mut result,
-                ) {
+                );
+                if !has_local_completions {
                     self.add_autoimport_completions(
                         handle,
                         &identifier,
                         &mut result,
                         import_format,
                     );
+                }
+                // If autoimport completions were skipped due to character threshold,
+                // mark the results as incomplete so clients keep asking for completions.
+                // This ensures autoimport completions will be checked once the threshold is reached,
+                // even if local completions are currently available.
+                if identifier.as_str().len() < MIN_CHARACTERS_TYPED_AUTOIMPORT {
+                    is_incomplete = true;
                 }
                 self.add_builtins_autoimport_completions(handle, Some(&identifier), &mut result);
             }
@@ -2251,7 +2397,7 @@ impl<'a> Transaction<'a> {
             .to_owned();
             item.sort_text = Some(sort_text);
         }
-        result
+        (result, is_incomplete)
     }
 
     fn collect_types_from_callees(&self, range: TextRange, handle: &Handle) -> Vec<Type> {
@@ -2664,7 +2810,8 @@ impl<'a> Transaction<'a> {
         let bindings = self.get_bindings(handle)?;
         let ast = self.get_ast(handle)?;
         let legends = SemanticTokensLegends::new();
-        let mut builder = SemanticTokenBuilder::new(limit_range);
+        let disabled_ranges = disabled_ranges_for_module(ast.as_ref(), handle.sys_info());
+        let mut builder = SemanticTokenBuilder::new(limit_range, disabled_ranges);
         for NamedBinding {
             definition_handle,
             definition_export,

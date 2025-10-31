@@ -275,18 +275,44 @@ impl ConfigOverrideArgs {
             config.root.infer_with_first_use = Some(*x);
         }
         let apply_error_settings = |error_config: &mut ErrorDisplayConfig| {
+            let mut missing_source_severity = None;
+            let mut apply_severity = |error_kind: &ErrorKind, severity| {
+                error_config.set_error_severity(*error_kind, severity);
+                if *error_kind == ErrorKind::MissingSource {
+                    missing_source_severity = Some(severity);
+                }
+            };
             for error_kind in &self.error {
-                error_config.set_error_severity(*error_kind, Severity::Error);
+                apply_severity(error_kind, Severity::Error);
             }
             for error_kind in &self.warn {
-                error_config.set_error_severity(*error_kind, Severity::Warn);
+                apply_severity(error_kind, Severity::Warn);
             }
             for error_kind in &self.ignore {
-                error_config.set_error_severity(*error_kind, Severity::Ignore);
+                apply_severity(error_kind, Severity::Ignore);
             }
+            missing_source_severity
         };
         let root_errors = config.root.errors.get_or_insert_default();
-        apply_error_settings(root_errors);
+        let missing_source_severity = apply_error_settings(root_errors);
+        // Make sure CLI takes precedence by overriding both the error config and ignore_missing_source
+        // if only one is explicitly overridden.
+        match (missing_source_severity, self.ignore_missing_source) {
+            (Some(severity), None) => {
+                config.ignore_missing_source = severity == Severity::Ignore;
+            }
+            (None, Some(ignore_missing_source)) => {
+                root_errors.set_error_severity(
+                    ErrorKind::MissingSource,
+                    if ignore_missing_source {
+                        Severity::Ignore
+                    } else {
+                        Severity::Error
+                    },
+                );
+            }
+            _ => {}
+        }
         for sub_config in config.sub_configs.iter_mut() {
             let sub_config_errors = sub_config.settings.errors.get_or_insert_default();
             apply_error_settings(sub_config_errors);

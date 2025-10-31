@@ -20,11 +20,11 @@ use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 fn test_edits_while_recheck() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
     interaction.server.did_open("foo.py");
-    let path = root.path().join("foo.py");
+    let path = root.path().join("basic/foo.py");
     // In this test, we trigger didSave and didChange to try to exercise the behavior
     // where we have concurrent in-memory recheck and on-disk recheck.
     interaction
@@ -90,6 +90,7 @@ fn test_file_watcher() {
                     "watchers": [
                         {"globPattern": root.path().join("**/*.py").to_str().unwrap(), "kind": 7},
                         {"globPattern": root.path().join("**/*.pyi").to_str().unwrap(), "kind": 7},
+                        {"globPattern": root.path().join("**/*.ipynb").to_str().unwrap(), "kind": 7},
                         {"globPattern": root.path().join("**/pyrefly.toml"), "kind": 7},
                         {"globPattern": root.path().join("**/pyproject.toml"), "kind": 7}
                     ]

@@ -33,29 +33,41 @@ use crate::types::class::Class;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 
-/// The bases of a class, in type form.
+/// Information computed from the full base types of a class
+/// - The base types themselves
+/// - Some additional metadata derived from the bases
+///
 /// This is intended to be used for any downstream computation that needs to inspect the full types
 /// (in particular, the targs of generic bases) of the bases of a class. If only the class objects are
 /// needed, query `ClassMetadata` instead since that one doesn't require calculating the full types.
+///
+/// The reason this is tracked separately from `ClassMetadata` is to avoid the possiblity of
+/// cycles when type arguments of the base classes may depend on the class itself.
 #[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut, Default)]
 pub struct ClassBases {
+    /// The direct base types in the base class list
     base_types: Box<[ClassType]>,
-    tuple_base: Option<Tuple>,
-    // Is this a pydatic strict model?
-    pub has_strict: bool,
+    /// The first tuple ancestor, if there is one in the inheritance tree.
+    ///
+    /// This is recursively computed, not just a direct tuple base. We throw an error and keep only
+    /// the first tuple ancestor if there are multiple (unless one of them is `tuple[Any, ...]` in which
+    /// case we prefer the more precise type).
+    tuple_ancestor: Option<Tuple>,
+    /// Is this a pydantic strict model? Part of ClassBases because computation for this involves matching base class ASTs.
+    pub has_pydantic_strict_metadata: bool,
 }
 
 impl ClassBases {
     pub fn recursive() -> Self {
         Self {
             base_types: Box::new([]),
-            tuple_base: None,
-            has_strict: false,
+            tuple_ancestor: None,
+            has_pydantic_strict_metadata: false,
         }
     }
 
-    pub fn tuple_base(&self) -> Option<&Tuple> {
-        self.tuple_base.as_ref()
+    pub fn tuple_ancestor(&self) -> Option<&Tuple> {
+        self.tuple_ancestor.as_ref()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &ClassType> {
@@ -170,12 +182,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn type_has_strict_metadata(&self, ty: &Type) -> bool {
+    fn is_type_alias_with_pydantic_strict_metadata(&self, ty: &Type) -> bool {
         matches!(ty, Type::TypeAlias(ta) if ta.annotated_metadata()
             .iter()
             .any(|metadata| self.is_pydantic_strict_metadata(metadata)))
     }
 
+    /// Get the untyped form (in other words, the instance type, after applying
+    /// any type arguments) for a base class.
+    ///
+    /// Also return whether the base class implies pydantic strict metadata through
+    /// a type alias. This is used to handle inheriting from `RootModel[X]` in some cases.
     fn base_class_expr_untype(
         &self,
         base_expr: &BaseClassExpr,
@@ -183,15 +200,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> (Type, bool) {
         let range = base_expr.range();
-
         let (inferred_ty, has_strict_from_infer) = self.base_class_expr_infer(base_expr, errors);
-
-        let has_strict = self.type_has_strict_metadata(&inferred_ty) || has_strict_from_infer;
-
+        let has_pydantic_strict_metadata =
+            self.is_type_alias_with_pydantic_strict_metadata(&inferred_ty) || has_strict_from_infer;
         let ty = self.untype(inferred_ty, range, errors);
         (
             self.validate_type_form(ty, range, type_form_context, errors),
-            has_strict,
+            has_pydantic_strict_metadata,
         )
     }
 
@@ -205,7 +220,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Make sure errors in base class expr are not reported during expr_untype -- they'll be checked in
         // another binding.
         let fake_error_collector = ErrorCollector::new(self.module().dupe(), ErrorStyle::Never);
-        let mut has_strict = false;
+        let mut has_pydantic_strict_metadata = false;
 
         let base_types_with_ranges = bases
             .iter()
@@ -217,7 +232,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &fake_error_collector,
                     );
                     if base_has_strict {
-                        has_strict = true;
+                        has_pydantic_strict_metadata = true;
                     }
                     Some((ty, x.range()))
                 }
@@ -231,7 +246,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
             .collect::<Vec<_>>();
 
-        let mut tuple_base = base_types_with_ranges.iter().find_map(|(ty, _)| {
+        let mut tuple_ancestor = base_types_with_ranges.iter().find_map(|(ty, _)| {
             if let Type::Tuple(tuple) = ty {
                 Some(tuple.clone())
             } else {
@@ -247,8 +262,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     (Type::ClassType(c), range) => {
                         let bases = self.get_base_types_for_class(c.class_object());
                         // Propagate has_strict from parent class
-                        if bases.has_strict {
-                            has_strict = true;
+                        if bases.has_pydantic_strict_metadata {
+                            has_pydantic_strict_metadata = true;
                         }
                         Some((c, bases, range))
                     }
@@ -302,12 +317,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         "Second argument to NewType cannot be an unbound generic".to_owned(),
                     );
                 }
-                if let Some(base_class_tuple_base) = base_class_bases.tuple_base() {
-                    if let Some(existing_tuple_base) = &tuple_base {
-                        if existing_tuple_base.is_any_tuple() {
-                            tuple_base = Some(base_class_tuple_base.clone());
-                        } else if !base_class_tuple_base.is_any_tuple()
-                            && base_class_tuple_base != existing_tuple_base
+                if let Some(base_tuple_ancestor) = base_class_bases.tuple_ancestor() {
+                    if let Some(existing_tuple_ancestor) = &tuple_ancestor {
+                        if existing_tuple_ancestor.is_any_tuple() {
+                            tuple_ancestor = Some(base_tuple_ancestor.clone());
+                        } else if !base_tuple_ancestor.is_any_tuple()
+                            && base_tuple_ancestor != existing_tuple_ancestor
                         {
                             self.error(
                                 errors,
@@ -315,13 +330,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ErrorInfo::Kind(ErrorKind::InvalidInheritance),
                                 format!(
                                     "Cannot extend multiple incompatible tuples: `{}` and `{}`",
-                                    self.for_display(Type::Tuple(existing_tuple_base.clone())),
-                                    self.for_display(Type::Tuple(base_class_tuple_base.clone())),
+                                    self.for_display(Type::Tuple(existing_tuple_ancestor.clone())),
+                                    self.for_display(Type::Tuple(base_tuple_ancestor.clone())),
                                 ),
                             );
                         }
                     } else {
-                        tuple_base = Some(base_class_tuple_base.clone());
+                        tuple_ancestor = Some(base_tuple_ancestor.clone());
                     }
                 }
                 base_class_type
@@ -339,8 +354,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         ClassBases {
             base_types: base_class_types.into_boxed_slice(),
-            tuple_base,
-            has_strict,
+            tuple_ancestor,
+            has_pydantic_strict_metadata,
         }
     }
 }
