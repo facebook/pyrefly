@@ -7,6 +7,7 @@
 
 use lsp_server::RequestId;
 use lsp_server::Response;
+use lsp_types::Url;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;

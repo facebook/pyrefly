@@ -184,6 +184,20 @@ impl TestServer {
         }));
     }
 
+    pub fn did_open_uri(&self, uri: &Url, language_id: &str, text: impl Into<String>) {
+        self.send_message(Message::Notification(Notification {
+            method: "textDocument/didOpen".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": uri.to_string(),
+                    "languageId": language_id,
+                    "version": 1,
+                    "text": text.into(),
+                },
+            }),
+        }));
+    }
+
     pub fn did_change(&self, file: &str, contents: &str) {
         let path = self.get_root_or_panic().join(file);
         self.send_message(Message::Notification(Notification {
@@ -226,6 +240,23 @@ impl TestServer {
         }));
     }
 
+    pub fn completion_uri(&mut self, uri: &Url, line: u32, col: u32) {
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/completion".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": uri.to_string()
+                },
+                "position": {
+                    "line": line,
+                    "character": col
+                }
+            }),
+        }));
+    }
+
     pub fn diagnostic(&mut self, file: &'static str) {
         let path = self.get_root_or_panic().join(file);
         let id = self.next_request_id();
@@ -252,6 +283,19 @@ impl TestServer {
                 "position": {
                     "line": line,
                     "character": col
+                }
+            }),
+        }));
+    }
+
+    pub fn diagnostic_uri(&mut self, uri: &Url) {
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/diagnostic".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": uri.to_string()
                 }
             }),
         }));
