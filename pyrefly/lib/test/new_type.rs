@@ -137,6 +137,15 @@ y: type[Any] = Foo  # E: `type[Foo]` is not assignable to `type[Any]`
 );
 
 testcase!(
+    test_new_type_missing_mro,
+    r#"
+from typing import NewType
+Foo = NewType("Foo", int)
+Foo.mro()  # E: Class `Foo` has no class attribute `mro`
+    "#,
+);
+
+testcase!(
     test_tuple,
     r#"
 from typing import NewType

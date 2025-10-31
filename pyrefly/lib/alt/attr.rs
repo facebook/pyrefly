@@ -1219,15 +1219,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
 
-            AttributeBase1::ClassObject(class) => {
-                match self.get_class_attribute(class, attr_name) {
-                    Some(attr) => acc.found_class_attribute(attr, base),
-                    None => {
-                        // Classes are instances of their metaclass, which defaults to `builtins.type`.
-                        // NOTE(grievejia): This lookup serves as fallback for normal class attribute lookup for regular
-                        // attributes, but for magic dunder methods it needs to supersede normal class attribute lookup.
-                        // See `lookup_magic_dunder_attr()`.
-                        let metadata = self.get_metadata_for_class(class.class_object());
+            AttributeBase1::ClassObject(class) => match self.get_class_attribute(class, attr_name)
+            {
+                Some(attr) => acc.found_class_attribute(attr, base),
+                None => {
+                    // Classes are instances of their metaclass, which defaults to `builtins.type`.
+                    // NOTE(grievejia): This lookup serves as fallback for normal class attribute lookup for regular
+                    // attributes, but for magic dunder methods it needs to supersede normal class attribute lookup.
+                    // See `lookup_magic_dunder_attr()`.
+                    let metadata = self.get_metadata_for_class(class.class_object());
+                    if metadata.is_new_type() {
+                        acc.not_found(NotFoundOn::ClassObject(
+                            class.class_object().dupe(),
+                            base,
+                        ));
+                    } else {
                         let instance_attr = self.get_metaclass_attribute(
                             class,
                             metadata.metaclass(self.stdlib),
@@ -1251,7 +1257,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                 }
-            }
+            },
             AttributeBase1::Module(module) => match self.get_module_attr(module, attr_name) {
                 // TODO(samzhou19815): Support module attribute go-to-definition
                 Some(attr) => acc.found(attr, base),
