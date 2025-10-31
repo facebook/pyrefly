@@ -915,19 +915,8 @@ impl Server {
                             x.method, x.id,
                         );
                         self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
-                        let mut transaction =
+                        let transaction =
                             ide_transaction_manager.non_committable_transaction(&self.state);
-
-                        // If requesting diagnostics for a file in workspace mode, analyze it
-                        let file_path = params.text_document.uri.to_file_path().unwrap();
-                        let diagnostic_mode = self.workspaces.get_diagnostic_mode(&file_path);
-                        let is_file_open = self.open_files.read().contains_key(&file_path);
-                        if matches!(diagnostic_mode, DiagnosticMode::Workspace) && !is_file_open {
-                            // Use filesystem path for unopened files
-                            let module_path = ModulePath::filesystem(file_path.clone());
-                            let handle = handle_from_module_path(&self.state, module_path);
-                            transaction.run(&[handle], Require::Errors);
-                        }
 
                         self.send_response(new_response(
                             x.id,
