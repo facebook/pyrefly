@@ -72,6 +72,9 @@ pub struct PythonEnvironment {
 
     #[serde(skip, default)]
     pub interpreter_site_package_path: Vec<PathBuf>,
+
+    #[serde(skip, default)]
+    pub interpreter_stdlib_path: Vec<PathBuf>,
 }
 
 impl PythonEnvironment {
@@ -113,6 +116,7 @@ impl PythonEnvironment {
             self.site_package_path = other.site_package_path;
         }
         self.interpreter_site_package_path = other.interpreter_site_package_path.clone();
+        self.interpreter_stdlib_path = other.interpreter_stdlib_path.clone();
     }
 
     /// Given a path to a Python interpreter executable, query that interpreter for its
@@ -127,12 +131,13 @@ impl PythonEnvironment {
         }
 
         let script = "\
-import json, sys
+import json, sys, sysconfig
 platform = sys.platform
 v = sys.version_info
 version = '{}.{}.{}'.format(v.major, v.minor, v.micro)
 site_package_path = list(filter(lambda x: x != '' and '.zip' not in x, sys.path))
-print(json.dumps({'python_platform': platform, 'python_version': version, 'site_package_path': site_package_path}))
+stdlib_paths = [sysconfig.get_path('stdlib'), sysconfig.get_path('platstdlib')]
+print(json.dumps({'python_platform': platform, 'python_version': version, 'site_package_path': site_package_path, 'stdlib_paths': stdlib_paths}))
 ";
 
         let mut command = Command::new(interpreter);
@@ -211,7 +216,7 @@ impl Display for PythonEnvironment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{{python_platform: {}, python_version: {}, site_package_path: [{}], interpreter_site_package_path: [{}]}}",
+            "{{python_platform: {}, python_version: {}, site_package_path: [{}], interpreter_site_package_path: [{}], interpreter_stdlib_path: [{}]}}",
             self.python_platform
                 .as_ref()
                 .map_or_else(|| "None".to_owned(), |platform| platform.to_string()),
@@ -225,6 +230,69 @@ impl Display for PythonEnvironment {
                 .iter()
                 .map(|p| p.display())
                 .join(", "),
+            self.interpreter_stdlib_path
+                .iter()
+                .map(|p| p.display())
+                .join(", "),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use pyrefly_python::sys_info::PythonPlatform;
+    use pyrefly_python::sys_info::PythonVersion;
+
+    use super::*;
+
+    #[test]
+    fn test_display_includes_stdlib_path() {
+        let env = PythonEnvironment {
+            python_platform: Some(PythonPlatform::mac()),
+            python_version: Some(PythonVersion::new(3, 10, 5)),
+            site_package_path: Some(vec![PathBuf::from("/path/to/site-packages")]),
+            interpreter_site_package_path: vec![PathBuf::from("/path/to/site-packages")],
+            interpreter_stdlib_path: vec![
+                PathBuf::from("/usr/lib/python3.10"),
+                PathBuf::from("/usr/lib/python3.10/lib-dynload"),
+            ],
+        };
+
+        let display = format!("{}", env);
+        assert!(display.contains("interpreter_stdlib_path"));
+        assert!(display.contains("/usr/lib/python3.10"));
+    }
+
+    #[test]
+    fn test_override_empty_propagates_stdlib_path() {
+        let mut env1 = PythonEnvironment {
+            python_platform: None,
+            python_version: None,
+            site_package_path: None,
+            interpreter_site_package_path: Vec::new(),
+            interpreter_stdlib_path: Vec::new(),
+        };
+
+        let env2 = PythonEnvironment {
+            python_platform: Some(PythonPlatform::mac()),
+            python_version: Some(PythonVersion::new(3, 10, 0)),
+            site_package_path: Some(vec![PathBuf::from("/path/to/site-packages")]),
+            interpreter_site_package_path: vec![PathBuf::from("/path/to/site-packages")],
+            interpreter_stdlib_path: vec![
+                PathBuf::from("/usr/lib/python3.10"),
+                PathBuf::from("/usr/lib/python3.10/lib-dynload"),
+            ],
+        };
+
+        env1.override_empty(env2.clone());
+
+        // Verify interpreter_stdlib_path is correctly propagated
+        assert_eq!(env1.interpreter_stdlib_path, env2.interpreter_stdlib_path);
+        assert_eq!(
+            env1.interpreter_site_package_path,
+            env2.interpreter_site_package_path
+        );
     }
 }

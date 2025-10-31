@@ -334,24 +334,17 @@ impl Solver {
             // but don't have any good location information to hand.
             *t = Type::any_implicit();
         } else if let Type::Var(x) = t {
-            if *x == Var::ZERO {
-                // This shouldn't happen, but we currently can see this in the LSP
-                // where we do type operations on a type value which has been passed
-                // to `for_display`.
-                *t = Type::any_implicit();
-            } else {
-                let lock = self.variables.lock();
-                if let Some(_guard) = lock.recurse(*x, recurser) {
-                    let variable = lock.get(*x);
-                    if let Variable::Answer(ty) = &*variable {
-                        *t = ty.clone();
-                        drop(variable);
-                        drop(lock);
-                        self.expand_with_limit(t, limit - 1, recurser);
-                    }
-                } else {
-                    *t = Type::any_implicit();
+            let lock = self.variables.lock();
+            if let Some(_guard) = lock.recurse(*x, recurser) {
+                let variable = lock.get(*x);
+                if let Variable::Answer(ty) = &*variable {
+                    *t = ty.clone();
+                    drop(variable);
+                    drop(lock);
+                    self.expand_with_limit(t, limit - 1, recurser);
                 }
+            } else {
+                *t = Type::any_implicit();
             }
         } else {
             t.recurse_mut(&mut |t| self.expand_with_limit(t, limit - 1, recurser));
@@ -834,11 +827,11 @@ impl Solver {
     /// Record a variable that is used recursively.
     pub fn record_recursive<Ans: LookupAnswer>(
         &self,
-        v: Var,
-        t: Type,
+        var: Var,
+        ty: Type,
         type_order: TypeOrder<Ans>,
         errors: &ErrorCollector,
-        loc: TextRange,
+        range: TextRange,
     ) {
         fn expand(t: Type, variables: &Variables, recurser: &VarRecurser, res: &mut Vec<Type>) {
             match t {
@@ -863,7 +856,7 @@ impl Solver {
         }
 
         let lock = self.variables.lock();
-        let variable = lock.get(v);
+        let variable = lock.get(var);
         match &*variable {
             Variable::Answer(forced) => {
                 let forced = forced.clone();
@@ -872,13 +865,13 @@ impl Solver {
                 // We got forced into choosing a type to satisfy a subset constraint, so check we are OK with that.
                 // Since we have already used `forced`, and will continue to do so, important that what we expect
                 // is more restrictive (so the `forced` is an over-approximation).
-                if self.is_subset_eq(&t, &forced, type_order).is_err() {
+                if self.is_subset_eq(&ty, &forced, type_order).is_err() {
                     // Poor error message, but overall, this is a terrible experience for users.
                     self.error(
-                        &t,
+                        &ty,
                         &forced,
                         errors,
-                        loc,
+                        range,
                         &|| TypeCheckContext::of_kind(TypeCheckKind::CycleBreaking),
                         SubsetError::Other,
                     );
@@ -890,10 +883,10 @@ impl Solver {
                 // possibilities, so just ignore it.
                 let mut res = Vec::new();
                 // First expand all union/var into a list of the possible unions
-                expand(t, &lock, &VarRecurser::new(), &mut res);
+                expand(ty, &lock, &VarRecurser::new(), &mut res);
                 // Then remove any reference to self, before unioning it back together
-                res.retain(|x| x != &Type::Var(v));
-                lock.update(v, Variable::Answer(unions(res)));
+                res.retain(|x| x != &Type::Var(var));
+                lock.update(var, Variable::Answer(unions(res)));
             }
         }
     }
@@ -977,7 +970,7 @@ pub enum TypedDictSubsetError {
 }
 
 impl TypedDictSubsetError {
-    pub fn to_error_msg(self) -> String {
+    fn to_error_msg(self) -> String {
         match self {
             TypedDictSubsetError::MissingField { got, want, field } => {
                 format!("Field `{field}` is present in `{want}` and absent in `{got}`")
@@ -1019,6 +1012,53 @@ impl TypedDictSubsetError {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum OpenTypedDictSubsetError {
+    /// `got` is missing a field in `want`
+    MissingField { got: Name, want: Name, field: Name },
+    /// `got` may contain unknown fields contradicting the `extra_items` type in `want`
+    UnknownFields {
+        got: Name,
+        want: Name,
+        extra_items: Type,
+    },
+}
+
+impl OpenTypedDictSubsetError {
+    fn to_error_msg(self) -> String {
+        let (msg, got) = match self {
+            Self::MissingField { got, want, field } => (
+                format!(
+                    "`{got}` is an open TypedDict with unknown extra items, which may include `{want}` item `{field}` with an incompatible type"
+                ),
+                got,
+            ),
+            Self::UnknownFields {
+                got,
+                want,
+                extra_items: Type::Never(_),
+            } => (
+                format!(
+                    "`{got}` is an open TypedDict with unknown extra items, which cannot be unpacked into closed TypedDict `{want}`",
+                ),
+                got,
+            ),
+            Self::UnknownFields {
+                got,
+                want,
+                extra_items,
+            } => (
+                format!(
+                    "`{got}` is an open TypedDict with unknown extra items, which may not be compatible with `extra_items` type `{}` in `{want}`",
+                    extra_items.deterministic_printing(),
+                ),
+                got,
+            ),
+        };
+        format!("{msg}. Hint: add `closed=True` to the definition of `{got}` to close it.")
+    }
+}
+
 /// If a got <: want check fails, the failure reason
 #[derive(Debug, Clone)]
 pub enum SubsetError {
@@ -1035,6 +1075,8 @@ pub enum SubsetError {
     IncompatibleAttribute(Box<(Name, Type, Name, AttrSubsetError)>),
     /// TypedDict subset check failed
     TypedDict(Box<TypedDictSubsetError>),
+    /// Errors involving arbitrary unknown fields in open TypedDicts
+    OpenTypedDict(Box<OpenTypedDictSubsetError>),
     // TODO(rechen): replace this with specific reasons
     Other,
 }
@@ -1056,6 +1098,7 @@ impl SubsetError {
                 Some(err.to_error_msg(&Name::new(format!("{got}")), &protocol, &attribute))
             }
             SubsetError::TypedDict(err) => Some(err.to_error_msg()),
+            SubsetError::OpenTypedDict(err) => Some(err.to_error_msg()),
             SubsetError::Other => None,
         }
     }

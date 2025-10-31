@@ -1,6 +1,10 @@
 [
   {
     "facts": [],
+    "predicate": "gencode.GenCode.1"
+  },
+  {
+    "facts": [],
     "predicate": "python.ImportStarLocation.4"
   },
   {
@@ -2048,6 +2052,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "e58db6a216a862a9e127d2986d1c377f"
+    "schema_id": "b53ee776cd31801ec9f22ea9787a58ad"
   }
 ]

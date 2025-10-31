@@ -13,6 +13,7 @@ use std::iter;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use dashmap::DashMap;
 use dupe::Dupe;
 use itertools::Itertools;
 use pyrefly_build::handle::Handle;
@@ -47,6 +48,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
@@ -65,6 +67,7 @@ use crate::alt::answers::Answers;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassSynthesizedFields;
+use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
 use crate::config::finder::ConfigFinder;
 use crate::module::module_info::ModuleInfo;
@@ -77,6 +80,41 @@ use crate::state::state::TransactionHandle;
 use crate::types::display::TypeDisplayContext;
 
 const REPR: Name = Name::new_static("__repr__");
+
+/// Cache for type resolution to avoid expensive re-typechecking.
+/// Thread-safe via DashMap for concurrent query access.
+struct TypeCache {
+    // Maps type_string -> Type
+    // Key is just the type string (e.g., "int", "typing.List[str]")
+    // since module name/path are constant per session
+    cache: DashMap<String, Type>,
+}
+
+impl TypeCache {
+    fn new() -> Self {
+        Self {
+            cache: DashMap::new(),
+        }
+    }
+
+    /// Get a cached type by its string representation
+    fn get(&self, type_string: &str) -> Option<Type> {
+        self.cache
+            .get(type_string)
+            .map(|entry| entry.value().clone())
+    }
+
+    /// Insert a type into the cache
+    fn insert(&self, type_string: String, ty: Type) {
+        self.cache.insert(type_string, ty);
+    }
+
+    /// Clear all cached types (called on file changes)
+    fn clear(&self) {
+        self.cache.clear();
+    }
+}
+
 pub struct Query {
     /// The state that we use.
     state: State,
@@ -84,6 +122,8 @@ pub struct Query {
     sys_info: SysInfo,
     /// The files that have been used with `add_files`, used when files change.
     files: Mutex<SmallSet<(ModuleName, ModulePath)>>,
+    /// Cache for type resolution
+    type_cache: TypeCache,
 }
 
 const CALLEE_KIND_FUNCTION: &str = "function";
@@ -249,6 +289,7 @@ fn type_to_string(ty: &Type) -> String {
 }
 
 struct CalleesWithLocation<'a> {
+    query: &'a Query,
     transaction: Transaction<'a>,
     handle: Handle,
     module_info: Module,
@@ -257,17 +298,66 @@ struct CalleesWithLocation<'a> {
 }
 
 impl<'a> CalleesWithLocation<'a> {
-    pub fn new(transaction: Transaction<'a>, handle: Handle) -> Option<CalleesWithLocation<'a>> {
+    pub fn new(
+        query: &'a Query,
+        transaction: Transaction<'a>,
+        handle: Handle,
+    ) -> Option<CalleesWithLocation<'a>> {
         let module_info = transaction.get_module_info(&handle)?;
         let answers = transaction.get_answers(&handle)?;
         let ast: Arc<ModModule> = transaction.get_ast(&handle)?;
         Some(Self {
+            query,
             transaction,
             handle,
             module_info,
             ast,
             answers,
         })
+    }
+    fn _try_unwrap_lru_cache_wrapper(
+        &self,
+        call: &ExprCall,
+        func_ty: &Type,
+    ) -> Option<Vec<Callee>> {
+        if let Type::ClassType(class) = &func_ty
+            && class.name() == "_lru_cache_wrapper"
+            && let [def] = self
+                .transaction
+                .find_definition(
+                    &self.handle,
+                    call.func
+                        .range()
+                        .end()
+                        .checked_sub(TextSize::from(1))
+                        .unwrap(),
+                    &FindPreference::default(),
+                )
+                .into_iter()
+                .collect_vec()
+                .as_slice()
+        {
+            let h = self
+                .query
+                .make_handle(def.module.name(), def.module.path().clone());
+            let module = self.transaction.get_module_info(&h)?;
+            let bindings = self.transaction.get_bindings(&h)?;
+            let answers = self.transaction.get_answers(&h)?;
+
+            let name = module.code_at(def.definition_range);
+            let id = Identifier::new(name, def.definition_range);
+            let key = bindings.key_to_idx(&KeyDecoratedFunction(ShortIdentifier::new(&id)));
+
+            // Get the undecorated function using ad_hoc_solve
+            let answer = answers.get_idx(bindings.get(key).undecorated_idx)?;
+            Some(vec![self.callee_from_function_metadata(
+                &answer.metadata,
+                None,
+                None,
+            )])
+        } else {
+            None
+        }
     }
     fn process_expr(&self, x: &Expr, res: &mut Vec<(PythonASTRange, Callee)>) {
         let (callees, callee_range) = match x {
@@ -295,12 +385,15 @@ impl<'a> CalleesWithLocation<'a> {
             Expr::Call(call) => {
                 let callees = if let Some(func_ty) = self.answers.get_type_trace(call.func.range())
                 {
-                    self.callee_from_type(
-                        &func_ty,
-                        Some(&*call.func),
-                        call.func.range(),
-                        Some(&call.arguments),
-                    )
+                    self._try_unwrap_lru_cache_wrapper(call, &func_ty)
+                        .unwrap_or_else(|| {
+                            self.callee_from_type(
+                                &func_ty,
+                                Some(&*call.func),
+                                call.func.range(),
+                                Some(&call.arguments),
+                            )
+                        })
                 } else {
                     vec![]
                 };
@@ -469,22 +562,30 @@ impl<'a> CalleesWithLocation<'a> {
         call_target: Option<&Expr>,
         call_arguments: Option<&Arguments>,
     ) -> Callee {
-        if f.metadata.flags.is_staticmethod {
+        self.callee_from_function_metadata(&f.metadata, call_target, call_arguments)
+    }
+    fn callee_from_function_metadata(
+        &self,
+        metadata: &FuncMetadata,
+        call_target: Option<&Expr>,
+        call_arguments: Option<&Arguments>,
+    ) -> Callee {
+        if metadata.flags.is_staticmethod {
             Callee {
                 kind: String::from(CALLEE_KIND_STATICMETHOD),
-                target: Self::target_from_def_kind(&f.metadata.kind, None),
-                class_name: Some(Self::class_name_from_def_kind(&f.metadata.kind)),
+                target: Self::target_from_def_kind(&metadata.kind, None),
+                class_name: Some(Self::class_name_from_def_kind(&metadata.kind)),
             }
-        } else if f.metadata.flags.is_classmethod {
+        } else if metadata.flags.is_classmethod {
             Callee {
                 kind: String::from(CALLEE_KIND_CLASSMETHOD),
-                target: Self::target_from_def_kind(&f.metadata.kind, None),
+                target: Self::target_from_def_kind(&metadata.kind, None),
                 // TODO: use type of receiver
-                class_name: Some(Self::class_name_from_def_kind(&f.metadata.kind)),
+                class_name: Some(Self::class_name_from_def_kind(&metadata.kind)),
             }
         } else {
             // Check if this is a builtins function that needs special casing.
-            if let FunctionKind::Def(def) = &f.metadata.kind
+            if let FunctionKind::Def(def) = &metadata.kind
                 && def.module.name().as_str() == "builtins"
                 && def.name == "repr"
                 && let Some(args) = call_arguments
@@ -502,7 +603,7 @@ impl<'a> CalleesWithLocation<'a> {
 
             Callee {
                 kind,
-                target: Self::target_from_def_kind(&f.metadata.kind, None),
+                target: Self::target_from_def_kind(&metadata.kind, None),
                 class_name,
             }
         }
@@ -803,6 +904,7 @@ impl Query {
             state,
             sys_info: SysInfo::default(),
             files: Mutex::new(SmallSet::new()),
+            type_cache: TypeCache::new(),
         }
     }
 
@@ -816,6 +918,10 @@ impl Query {
     }
 
     pub fn change_files(&self, events: &CategorizedEvents) {
+        // Clear type cache when files change since types may be invalidated
+        // Examples: class definitions change, type aliases change, imports change
+        self.type_cache.clear();
+
         let mut transaction = self
             .state
             .new_committable_transaction(Require::Exports, None);
@@ -916,7 +1022,7 @@ impl Query {
     ) -> Option<Vec<(PythonASTRange, Callee)>> {
         let transaction = self.state.transaction();
         let handle = self.make_handle(name, path);
-        let find_callees = CalleesWithLocation::new(transaction, handle)?;
+        let find_callees = CalleesWithLocation::new(self, transaction, handle)?;
         Some(find_callees.process(location))
     }
 
@@ -942,11 +1048,16 @@ impl Query {
             range: TextRange,
             module_info: &ModuleInfo,
             res: &mut Vec<(PythonASTRange, String)>,
+            type_cache: &TypeCache,
         ) {
+            let type_string = type_to_string(ty);
             res.push((
                 python_ast_range_for_expr(module_info, range, e, parent),
-                type_to_string(ty),
+                type_string.clone(),
             ));
+
+            // Pre-warm the cache with this type
+            type_cache.insert(type_string, ty.clone());
         }
         fn try_find_key_for_name(name: &ExprName, bindings: &Bindings) -> Option<Key> {
             let key = Key::BoundName(ShortIdentifier::expr_name(name));
@@ -967,20 +1078,31 @@ impl Query {
             answers: &Answers,
             bindings: &Bindings,
             res: &mut Vec<(PythonASTRange, String)>,
+            type_cache: &TypeCache,
         ) {
             let range = x.range();
             if let Expr::Name(name) = x
                 && let Some(key) = try_find_key_for_name(name, bindings)
                 && let Some(ty) = answers.get_type_at(bindings.key_to_idx(&key))
             {
-                add_type(&ty, x, parent, range, module_info, res);
+                add_type(&ty, x, parent, range, module_info, res, type_cache);
             } else if let Some(ty) = answers.get_type_trace(range) {
-                add_type(&ty, x, parent, range, module_info, res);
+                add_type(&ty, x, parent, range, module_info, res, type_cache);
             }
-            x.recurse(&mut |c| f(c, Some(x), module_info, answers, bindings, res));
+            x.recurse(&mut |c| f(c, Some(x), module_info, answers, bindings, res, type_cache));
         }
 
-        ast.visit(&mut |x| f(x, None, &module_info, &answers, &bindings, &mut res));
+        ast.visit(&mut |x| {
+            f(
+                x,
+                None,
+                &module_info,
+                &answers,
+                &bindings,
+                &mut res,
+                &self.type_cache,
+            )
+        });
         Some(res)
     }
 
@@ -1085,6 +1207,31 @@ impl Query {
         Ok(())
     }
 
+    fn find_types(
+        ast: &ModModule,
+        bindings: Bindings,
+        answers: &Answers,
+        return_first: bool,
+    ) -> (Type, Option<Type>) {
+        let mut first: Option<Type> = None;
+        for p in &ast.body {
+            if let Stmt::AnnAssign(assign) = p
+                && let Expr::Name(n) = &*assign.target
+            {
+                let key = bindings.key_to_idx(&Key::Definition(ShortIdentifier::expr_name(n)));
+                let ty = answers.get_type_at(key).unwrap();
+                if return_first {
+                    return (ty, None);
+                } else if let Some(v) = first {
+                    return (v, Some(ty));
+                } else {
+                    first = Some(ty);
+                }
+            }
+        }
+        unreachable!("No type aliases in ast")
+    }
+
     /// Return `Err` if you can't resolve them to types, otherwise return `lt <: gt`.
     pub fn is_subtype(
         &self,
@@ -1093,57 +1240,92 @@ impl Query {
         lt: &str,
         gt: &str,
     ) -> Result<bool, String> {
+        let is_typed_dict_request = gt == "TypedDictionary" || gt == "NonTotalTypedDictionary";
+
+        // Check cache for both types
+        let cached_lt = self.type_cache.get(lt);
+        let cached_gt = if !is_typed_dict_request {
+            self.type_cache.get(gt)
+        } else {
+            None
+        };
+
+        // Determine what needs to be computed
+        let need_lt = cached_lt.is_none();
+        let need_gt = !is_typed_dict_request && cached_gt.is_none();
+
+        // Fast path: everything is cached
+        if !need_lt && (!need_gt || is_typed_dict_request) {
+            let sub_ty = cached_lt.unwrap();
+            if is_typed_dict_request {
+                return Ok(matches!(
+                    sub_ty,
+                    Type::TypedDict(_) | Type::PartialTypedDict(_)
+                ));
+            } else {
+                let super_ty = cached_gt.unwrap();
+                let t = self.state.transaction();
+                let h = self.make_handle(name, ModulePath::filesystem(path));
+                let result = t
+                    .ad_hoc_solve(&h, |solver| solver.is_subset_eq(&sub_ty, &super_ty))
+                    .unwrap_or(false);
+                return Ok(result);
+            }
+        }
+
+        // Slow path: compute missing types
         let mut t = self.state.transaction();
         let h = self.make_handle(name, ModulePath::memory(path.clone()));
 
-        fn find_types(
-            ast: &ModModule,
-            bindings: Bindings,
-            answers: &Answers,
-            return_first: bool,
-        ) -> (Type, Option<Type>) {
-            let mut first: Option<Type> = None;
-            for p in &ast.body {
-                if let Stmt::AnnAssign(assign) = p
-                    && let Expr::Name(n) = &*assign.target
-                {
-                    let key = bindings.key_to_idx(&Key::Definition(ShortIdentifier::expr_name(n)));
-                    let ty = answers.get_type_at(key).unwrap();
-                    if return_first {
-                        return (ty, None);
-                    } else if let Some(v) = first {
-                        return (v, Some(ty));
-                    } else {
-                        first = Some(ty);
-                    }
-                }
-            }
-            unreachable!("No type aliases in ast")
-        }
-
-        let is_typed_dict_request = gt == "TypedDictionary" || gt == "NonTotalTypedDictionary";
-        let snippet = if is_typed_dict_request {
-            format!("X: ({lt})")
-        } else {
-            format!("X : ({lt})\nY : ({gt})")
+        // Create minimal snippet for only the types we need
+        let snippet = match (need_lt, need_gt) {
+            (true, true) => format!("X : ({lt})\nY : ({gt})"),
+            (true, false) => format!("X : ({lt})"),
+            (false, true) => format!("Y : ({gt})"),
+            (false, false) => unreachable!("handled by fast path"),
         };
+
         self.check_snippet(&mut t, &h, path, &snippet)?;
 
         let ast = t.get_ast(&h).ok_or("No ast")?;
         let answers = t.get_answers(&h).ok_or("No answers")?;
-        let bindings: Bindings = t.get_bindings(&h).ok_or("No bindings")?;
+        let bindings = t.get_bindings(&h).ok_or("No bindings")?;
 
+        // Extract and cache the computed types
+        let (sub_ty, super_ty_opt) = match (need_lt, need_gt) {
+            (true, true) => {
+                // Computed both: X is lt, Y is gt
+                let (lt_type, gt_type_opt) = Query::find_types(&ast, bindings, &answers, false);
+                let gt_type = gt_type_opt.unwrap();
+                self.type_cache.insert(lt.to_owned(), lt_type.clone());
+                self.type_cache.insert(gt.to_owned(), gt_type.clone());
+                (lt_type, Some(gt_type))
+            }
+            (true, false) => {
+                // Computed only lt: X is lt, use cached gt
+                let (lt_type, _) = Query::find_types(&ast, bindings, &answers, true);
+                self.type_cache.insert(lt.to_owned(), lt_type.clone());
+                (lt_type, cached_gt)
+            }
+            (false, true) => {
+                // Computed only gt: Y is gt, use cached lt
+                let (gt_type, _) = Query::find_types(&ast, bindings, &answers, true);
+                self.type_cache.insert(gt.to_owned(), gt_type.clone());
+                (cached_lt.unwrap(), Some(gt_type))
+            }
+            (false, false) => unreachable!("handled by fast path"),
+        };
+
+        // Compute final result
         let result = if is_typed_dict_request {
-            let (ty, _) = find_types(&ast, bindings, &answers, true);
-            matches!(ty, Type::TypedDict(_) | Type::PartialTypedDict(_))
+            matches!(sub_ty, Type::TypedDict(_) | Type::PartialTypedDict(_))
         } else {
-            let (sub_ty, super_ty) = find_types(&ast, bindings, &answers, false);
-
             t.ad_hoc_solve(&h, |solver| {
-                solver.is_subset_eq(&sub_ty, &super_ty.unwrap())
+                solver.is_subset_eq(&sub_ty, &super_ty_opt.unwrap())
             })
             .unwrap_or(false)
         };
+
         Ok(result)
     }
 
@@ -1167,7 +1349,7 @@ impl Query {
             }
             None
         }
-        let find_callees = CalleesWithLocation::new(t, h)?;
+        let find_callees = CalleesWithLocation::new(self, t, h)?;
         let mut res = Vec::new();
         if let Some(expr) = find_expr(&ast) {
             find_callees.callee_from_text_range(expr.range(), Some(expr), |c| {

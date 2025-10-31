@@ -354,7 +354,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn atomic_narrow(
+    fn atomic_narrow(
         &self,
         ty: &Type,
         op: &AtomicNarrowOp,

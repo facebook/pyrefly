@@ -1412,21 +1412,57 @@ Definition Result:
     );
 }
 
-// todo(kylei): go-to definition on __eq__ should go to stdlib
 #[test]
-fn dunder_equal_itself() {
+fn operator_comparison_overload() {
     let code = r#"
-3 == 5
-#  ^
+class My:
+    def __lt__(self, other: object) -> bool:
+        return True
+    def __le__(self, other: object) -> bool:
+        return True
+    def __gt__(self, other: object) -> bool:
+        return True
+    def __ge__(self, other: object) -> bool:
+        return True
+
+a = My()
+b = My()
+result1 = a < b
+#           ^
+result2 = a <= b
+#            ^
+result3 = a > b
+#           ^
+result4 = a >= b
+#            ^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
     assert_eq!(
         r#"
 # main.py
-2 | 3 == 5
-       ^
-Definition Result: None
+14 | result1 = a < b
+                 ^
+Definition Result:
+3 |     def __lt__(self, other: object) -> bool:
+            ^^^^^^
 
+16 | result2 = a <= b
+                  ^
+Definition Result:
+5 |     def __le__(self, other: object) -> bool:
+            ^^^^^^
+
+18 | result3 = a > b
+                 ^
+Definition Result:
+7 |     def __gt__(self, other: object) -> bool:
+            ^^^^^^
+
+20 | result4 = a >= b
+                  ^
+Definition Result:
+9 |     def __ge__(self, other: object) -> bool:
+            ^^^^^^
 "#
         .trim(),
         report.trim(),
@@ -1449,6 +1485,109 @@ if False:
               ^
 Definition Result: None
 
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn operator_binop_overload() {
+    let code = r#"
+class My:
+    def __add__(self, other: object) -> "My":
+        return self
+    def __sub__(self, other: object) -> "My":
+        return self
+    def __mul__(self, other: object) -> "My":
+        return self
+    def __truediv__(self, other: object) -> "My":
+        return self
+
+a = My()
+b = My()
+result1 = a + b
+#           ^
+result2 = a - b
+#           ^
+result3 = a * b
+#           ^
+result4 = a / b
+#           ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+14 | result1 = a + b
+                 ^
+Definition Result:
+3 |     def __add__(self, other: object) -> "My":
+            ^^^^^^^
+
+16 | result2 = a - b
+                 ^
+Definition Result:
+5 |     def __sub__(self, other: object) -> "My":
+            ^^^^^^^
+
+18 | result3 = a * b
+                 ^
+Definition Result:
+7 |     def __mul__(self, other: object) -> "My":
+            ^^^^^^^
+
+20 | result4 = a / b
+                 ^
+Definition Result:
+9 |     def __truediv__(self, other: object) -> "My":
+            ^^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn operator_unaryop_overload() {
+    let code = r#"
+class My:
+    def __neg__(self) -> "My":
+        return self
+    def __pos__(self) -> "My":
+        return self
+    def __invert__(self) -> "My":
+        return self
+
+a = My()
+result1 = -a
+#         ^
+result2 = +a
+#         ^
+result3 = ~a
+#         ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+11 | result1 = -a
+               ^
+Definition Result:
+3 |     def __neg__(self) -> "My":
+            ^^^^^^^
+
+13 | result2 = +a
+               ^
+Definition Result:
+5 |     def __pos__(self) -> "My":
+            ^^^^^^^
+
+15 | result3 = ~a
+               ^
+Definition Result:
+7 |     def __invert__(self) -> "My":
+            ^^^^^^^^^^
 "#
         .trim(),
         report.trim(),

@@ -53,6 +53,16 @@
                 "title": "Restart Pyrefly Client",
                 "category": "pyrefly",
                 "command": "pyrefly.restartClient"
+            },
+            {
+                "title": "Fold All Docstrings",
+                "category": "pyrefly",
+                "command": "pyrefly.foldAllDocstrings"
+            },
+            {
+                "title": "Unfold All Docstrings",
+                "category": "pyrefly",
+                "command": "pyrefly.unfoldAllDocstrings"
             }
         ],
         "configuration": {
@@ -108,6 +118,68 @@
                         "Show diagnostics only for files that are currently open in the editor",
                         "Show diagnostics for all files in the workspace, similar to Pyright's workspace mode"
                     ]
+                "python.pyrefly.analysis.disabledLanguageServices": {
+                    "type": "object",
+                    "default": {},
+                    "description": "Disable specific language services. Set individual services to true to disable them.",
+                    "properties": {
+                        "hover": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "documentSymbol": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "workspaceSymbol": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "inlayHint": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "completion": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "codeAction": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "definition": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "typeDefinition": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "references": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "documentHighlight": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "rename": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "codeLens": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "semanticTokens": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "signatureHelp": {
+                            "type": "boolean",
+                            "default": false
+                        }
+                    }
                 }
             }
         }

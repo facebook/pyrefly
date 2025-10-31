@@ -212,6 +212,8 @@ pub enum ErrorKind {
     NotCallable,
     /// Attempting to use a non-iterable value as an iterable.
     NotIterable,
+    /// Unpacking an open TypedDict that may contain a bad key via inheritance.
+    OpenUnpacking,
     /// An error related to parsing or syntax.
     ParseError,
     /// A protocol attribute was first defined inside a method instead of the class body.
@@ -287,6 +289,7 @@ impl ErrorKind {
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,
+            ErrorKind::OpenUnpacking => Severity::Ignore,
             _ => Severity::Error,
         }
     }

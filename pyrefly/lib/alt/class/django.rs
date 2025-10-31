@@ -39,6 +39,7 @@ const VALUES: Name = Name::new_static("values");
 const ID: Name = Name::new_static("id");
 const PK: Name = Name::new_static("pk");
 const AUTO_FIELD: Name = Name::new_static("AutoField");
+const FOREIGN_KEY: Name = Name::new_static("ForeignKey");
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_django_field_type(
@@ -86,17 +87,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         field: &Class,
         class: &Class,
-        _field_name: Option<&Name>,
-        _initial_value_expr: Option<&Expr>,
+        field_name: Option<&Name>,
+        initial_value_expr: Option<&Expr>,
     ) -> Option<Type> {
-        if self.get_metadata_for_class(class).is_django_model()
-            && self.inherits_from_django_field(field)
+        if !(self.get_metadata_for_class(class).is_django_model()
+            && self.inherits_from_django_field(field))
         {
-            self.get_class_member(field, &DJANGO_PRIVATE_GET_TYPE)
-                .map(|member| member.value.ty())
-        } else {
-            None
+            return None;
         }
+
+        // Check if this is a ForeignKey field
+        if self.is_foreign_key_field(field)
+            && field_name.is_some()
+            && let Some(e) = initial_value_expr
+            && let Some(to_expr) = e.as_call_expr()?.arguments.args.first()
+        {
+            // Resolve the expression to a type and convert to instance type
+            let related_model_type = self.resolve_foreign_key_target(to_expr, class)?;
+            return Some(related_model_type);
+        }
+
+        // Default: use _pyi_private_get_type from the field class
+        self.get_class_member(field, &DJANGO_PRIVATE_GET_TYPE)
+            .map(|member| member.value.ty())
     }
 
     /// Check if a class inherits from Django's Field class
@@ -106,6 +119,41 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .any(|ancestor| {
                 ancestor.has_qname(ModuleName::django_models_fields().as_str(), "Field")
             })
+    }
+
+    fn resolve_foreign_key_target(
+        &self,
+        to_expr: &ruff_python_ast::Expr,
+        class: &Class,
+    ) -> Option<Type> {
+        // Extract the model name from the expression
+        let model_name = match to_expr {
+            // Direct name reference. Ex: ForeignKey(Reporter, ...)
+            Expr::Name(name_expr) => name_expr.id.clone(),
+            // TODO: handle self references and forward references
+            _ => return None,
+        };
+
+        // Look up the model in the current module and convert to instance type
+        let export_key = KeyExport(model_name);
+        let related_model_type =
+            self.get_from_export(class.module_name(), Some(class.module_path()), &export_key);
+        Some(self.class_def_to_instance_type(&related_model_type))
+    }
+
+    fn class_def_to_instance_type(&self, ty: &Type) -> Type {
+        if let Type::ClassDef(class) = ty {
+            self.instantiate(class)
+        } else {
+            ty.clone()
+        }
+    }
+
+    fn is_foreign_key_field(&self, field: &Class) -> bool {
+        field.has_toplevel_qname(
+            ModuleName::django_models_fields_related().as_str(),
+            FOREIGN_KEY.as_str(),
+        )
     }
 
     pub fn get_django_enum_synthesized_fields(
@@ -127,14 +175,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Type::Tuple(Tuple::Concrete(elements)) = &lit_enum.ty
                     && elements.len() >= 2
                 {
-                    Some(elements[elements.len() - 1].clone())
+                    Some(
+                        elements[elements.len() - 1]
+                            .clone()
+                            .promote_literals(self.stdlib),
+                    )
                 } else {
                     None
                 }
             })
             .collect();
 
-        label_types.push(self.stdlib.str().clone().to_type());
+        if label_types.is_empty() || label_types.len() < enum_members.len() {
+            // Members without a custom label type have default label type str.
+            label_types.push(self.stdlib.str().clone().to_type());
+        }
 
         // Also include the type of __empty__ field if it exists, since it contributes to label types
         let empty_name = Name::new_static("__empty__");

@@ -49,6 +49,7 @@ fn test_initialize_basic() {
                 "hoverProvider": true,
                 "inlayHintProvider": true,
                 "documentSymbolProvider": true,
+                "foldingRangeProvider":true,
                 "workspaceSymbolProvider": true,
                 "workspace": {
                     "workspaceFolders": {

@@ -272,6 +272,10 @@ mod tests {
                         .python_environment
                         .interpreter_site_package_path
                         .clone(),
+                    interpreter_stdlib_path: config
+                        .python_environment
+                        .interpreter_stdlib_path
+                        .clone(),
                 },
                 root: ConfigBase {
                     infer_with_first_use: Some(false),
@@ -311,6 +315,10 @@ mod tests {
                     interpreter_site_package_path: config
                         .python_environment
                         .interpreter_site_package_path
+                        .clone(),
+                    interpreter_stdlib_path: config
+                        .python_environment
+                        .interpreter_stdlib_path
                         .clone(),
                 },
                 root: ConfigBase {

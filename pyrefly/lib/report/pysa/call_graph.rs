@@ -226,6 +226,7 @@ impl Unresolved {
 pub struct HigherOrderParameter<Function: FunctionTrait> {
     pub(crate) index: u32,
     pub(crate) call_targets: Vec<CallTarget<Function>>,
+    #[serde(skip_serializing_if = "Unresolved::is_resolved")]
     pub(crate) unresolved: Unresolved,
 }
 
@@ -703,11 +704,7 @@ fn method_name_from_function(function: &pyrefly_types::callable::Function) -> Co
 }
 
 // Whether the call is non-dynamically dispatched
-fn is_direct_call(
-    callee: AnyNodeRef,
-    callee_type: Option<&Type>,
-    receiver_type: Option<&Type>,
-) -> bool {
+fn is_direct_call(callee: AnyNodeRef, callee_type: Option<&Type>) -> bool {
     fn is_super_call(callee: AnyNodeRef) -> bool {
         match callee {
             AnyNodeRef::ExprCall(call) => is_super_call(call.func.as_ref().into()),
@@ -718,17 +715,30 @@ fn is_direct_call(
     }
 
     is_super_call(callee) || {
-        match (callee_type, receiver_type) {
-            (Some(Type::BoundMethod(_)), Some(Type::ClassDef(_))) => true,
-            (Some(Type::BoundMethod(_)), Some(Type::ClassType(_))) => {
+        match callee_type {
+            Some(Type::BoundMethod(box BoundMethod {
+                obj: Type::ClassDef(_) | Type::Type(_),
+                ..
+            })) => true,
+            Some(Type::BoundMethod(box BoundMethod {
+                obj: Type::ClassType(_) | Type::SelfType(_),
+                ..
+            })) => {
                 // Dynamic dispatch if calling a method via an attribute lookup
                 // on an instance
                 false
             }
-            (Some(Type::Function(_)), _) => true,
-            (Some(Type::Union(types)), _) => {
-                is_direct_call(callee, Some(types.first().unwrap()), receiver_type)
+            Some(Type::BoundMethod(bound_method)) => {
+                eprintln!(
+                    "For callee `{:#?}`, unknown object type in bound method `{:#?}`",
+                    callee, bound_method
+                );
+                // `true` would skip overrides, which may lead to false negatives. But we prefer false positives since
+                // we are blind to false negatives.
+                false
             }
+            Some(Type::Function(_)) => true,
+            Some(Type::Union(types)) => is_direct_call(callee, Some(types.first().unwrap())),
             _ => false,
         }
     }
@@ -831,9 +841,13 @@ impl<'a> CallGraphVisitor<'a> {
     //  2) the real target otherwise
     fn compute_indirect_targets(
         &self,
-        receiver_type: Option<&Type>,
+        callee_type: Option<&Type>,
         callee: FunctionRef,
     ) -> Vec<Target<FunctionRef>> {
+        let receiver_type = match callee_type {
+            Some(Type::BoundMethod(bound_method)) => Some(&bound_method.obj),
+            _ => None,
+        };
         if receiver_type.is_none() {
             return vec![Target::Function(callee)];
         }
@@ -1351,14 +1365,11 @@ impl<'a> CallGraphVisitor<'a> {
             .module_context
             .answers
             .get_type_trace(attribute.value.range());
-        let is_direct_call = is_direct_call(
-            attribute.into(),
-            self.module_context
-                .answers
-                .get_type_trace(attribute.range())
-                .as_ref(),
-            receiver_type.as_ref(),
-        );
+        let callee_type = self
+            .module_context
+            .answers
+            .get_type_trace(attribute.range());
+        let is_direct_call = is_direct_call(AnyNodeRef::from(attribute), callee_type.as_ref());
         let call_target_from_function_ref =
             |function_ref: FunctionRef, return_type: Option<ScalarTypeProperties>| {
                 if is_direct_call {
@@ -1371,7 +1382,7 @@ impl<'a> CallGraphVisitor<'a> {
                         /* override_implicit_receiver*/ None,
                     )]
                 } else {
-                    self.compute_indirect_targets(receiver_type.as_ref(), function_ref)
+                    self.compute_indirect_targets(callee_type.as_ref(), function_ref)
                         .into_iter()
                         .map(|target| match target {
                             Target::Function(function_ref) => self.call_target_from_function_ref(

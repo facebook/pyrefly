@@ -513,6 +513,10 @@ impl ConfigFile {
         true
     }
 
+    pub fn from_real_config_file(&self) -> bool {
+        matches!(self.source, ConfigSource::File(_))
+    }
+
     pub fn python_version(&self) -> PythonVersion {
         // we can use unwrap here, because the value in the root config must
         // be set in `ConfigFile::configure()`.
@@ -1094,6 +1098,7 @@ mod tests {
                     site_package_path: Some(vec![PathBuf::from(
                         "venv/lib/python1.2.3/site-packages"
                     )]),
+                    interpreter_stdlib_path: vec![],
                     interpreter_site_package_path: config
                         .python_environment
                         .interpreter_site_package_path
@@ -1247,6 +1252,10 @@ mod tests {
                         .python_environment
                         .interpreter_site_package_path
                         .clone(),
+                    interpreter_stdlib_path: config
+                        .python_environment
+                        .interpreter_stdlib_path
+                        .clone(),
                 },
                 ..Default::default()
             }
@@ -1285,6 +1294,10 @@ mod tests {
                     interpreter_site_package_path: config
                         .python_environment
                         .interpreter_site_package_path
+                        .clone(),
+                    interpreter_stdlib_path: config
+                        .python_environment
+                        .interpreter_stdlib_path
                         .clone(),
                 },
                 ..Default::default()

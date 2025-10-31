@@ -20,6 +20,7 @@ use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::visit::Visit;
+use regex::RegexBuilder;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
@@ -264,6 +265,70 @@ impl GleanState<'_> {
         }
 
         module_names
+    }
+
+    fn gencode_fact(&mut self) -> Option<gencode::GenCode> {
+        let generated_pattern = RegexBuilder::new(
+            r"^.*@(?P<tag>(partially-)?generated)( SignedSource<<(?P<sign>[0-9a-f]+)>>)?$",
+        )
+        .multi_line(true)
+        .build()
+        .unwrap();
+
+        let codegen_pattern = RegexBuilder::new(
+            r"^.*@codegen-(?P<key>(command|class|source))\s*.*?\s+(?P<value>[A-Za-z0-9_\/\.\-\\\\]+)\n?$",
+        )
+        .multi_line(true)
+        .build()
+        .unwrap();
+
+        let contents = self.module.contents();
+        let generated_tag_match = generated_pattern.captures(contents);
+        generated_tag_match.map(|tag_match| {
+            let codegen_details = codegen_pattern
+                .captures_iter(contents)
+                .filter_map(|codegen_match| {
+                    codegen_match.name("key").and_then(|key| {
+                        codegen_match
+                            .name("value")
+                            .map(|value| (key.as_str().to_owned(), value.as_str().to_owned()))
+                    })
+                })
+                .collect::<HashMap<String, String>>();
+
+            let tag = tag_match.name("tag").map(|x| x.as_str());
+
+            let variant = if Some(&"generated") == tag.as_ref() {
+                gencode::GenCodeVariant::Full
+            } else {
+                gencode::GenCodeVariant::Partial
+            };
+
+            let signature = tag_match
+                .name("sign")
+                .map(|x| gencode::GenCodeSignature::new(x.as_str().to_owned()));
+
+            let source = codegen_details
+                .get("source")
+                .map(|x| src::File::new(x.to_owned()));
+
+            let class_ = codegen_details
+                .get("class")
+                .map(|x| gencode::GenCodeClass::new(x.to_owned()));
+
+            let command = codegen_details
+                .get("command")
+                .map(|x| gencode::GenCodeCommand::new(x.to_owned()));
+
+            gencode::GenCode::new(
+                self.file_fact(),
+                variant,
+                source,
+                command,
+                class_,
+                signature,
+            )
+        })
     }
 
     fn module_facts(&mut self, range: TextRange) {
@@ -1363,6 +1428,8 @@ impl Glean {
         glean_state.generate_facts(&ast.body, ast.range());
 
         let file_fact = glean_state.file_fact();
+        let gencode_fact = glean_state.gencode_fact();
+
         let facts = glean_state.facts;
 
         let xrefs_via_name_by_file_fact =
@@ -1447,6 +1514,10 @@ impl Glean {
             GleanEntry::Predicate {
                 predicate: python::NameToSName::GLEAN_name(),
                 facts: facts.name_to_sname.into_iter().map(json).collect(),
+            },
+            GleanEntry::Predicate {
+                predicate: gencode::GenCode::GLEAN_name(),
+                facts: gencode_fact.map_or(vec![], |f| vec![json(f)]),
             },
         ];
         Glean { entries }

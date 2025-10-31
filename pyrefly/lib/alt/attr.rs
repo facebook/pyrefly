@@ -2069,21 +2069,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 }
                                 _ => {}
                             }
-                            let result = self
-                                .resolve_get_access(
-                                    attr,
-                                    // Important we do not use the resolved TextRange, as it might be in a different module.
-                                    // Whereas the empty TextRange is valid for all modules.
-                                    TextRange::default(),
-                                    &self.error_swallower(),
-                                    None,
-                                )
-                                .ok();
-                            if matches!(&result, Some(Type::Any(_))) {
-                                None
-                            } else {
-                                result
-                            }
+                            self.resolve_get_access(
+                                attr,
+                                // Important we do not use the resolved TextRange, as it might be in a different module.
+                                // Whereas the empty TextRange is valid for all modules.
+                                TextRange::default(),
+                                &self.error_swallower(),
+                                None,
+                            )
+                            .ok()
                         })
                         .collect();
                     if !found_types.is_empty() {

@@ -410,7 +410,7 @@ class Foo:
 5 |   x.
         ^
 Completion Results:
-- (Field) magic
+- (Field) magic: Unknown
 
 
 # lib.py
@@ -2181,8 +2181,11 @@ This has documentation.
 fn dot_complete_var_crash_regression() {
     let code = r#"
 class C[T]:
-    def m(self):
-        pass
+    def m(self) -> None: ...
+
+    @property
+    def p(self) -> T: ...
+
 def f[T]() -> C[T]: ...
 f().
 #   ^
@@ -2192,10 +2195,11 @@ f().
     assert_eq!(
         r#"
 # main.py
-6 | f().
+9 | f().
         ^
 Completion Results:
 - (Method) m: def m(self: C[Unknown]) -> None
+- (Field) p: Unknown
 "#
         .trim(),
         report.trim(),
