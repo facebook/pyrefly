@@ -2214,27 +2214,14 @@ impl Server {
         params: DocumentDiagnosticParams,
     ) -> DocumentDiagnosticReport {
         let file_path = params.text_document.uri.to_file_path().unwrap();
-
-        // Check if we should show diagnostics for this file based on diagnostic mode
-        let diagnostic_mode = self.workspaces.get_diagnostic_mode(&file_path);
         let is_file_open = self.open_files.read().contains_key(&file_path);
 
-        // Use the appropriate handle based on whether the file is open
-        // For unopened files in workspace mode, use filesystem handle
+        // When diagnostics are explicitly requested, always return them regardless of mode
         let handle = if is_file_open {
             make_open_handle(&self.state, &file_path)
-        } else if matches!(diagnostic_mode, DiagnosticMode::Workspace) {
+        } else {
             let module_path = ModulePath::filesystem(file_path.clone());
             handle_from_module_path(&self.state, module_path)
-        } else {
-            // File is neither open nor in workspace mode, return empty diagnostics
-            return DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
-                full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                    items: Vec::new(),
-                    result_id: None,
-                },
-                related_documents: None,
-            });
         };
 
         let mut items = Vec::new();
