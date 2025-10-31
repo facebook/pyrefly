@@ -1281,6 +1281,12 @@ impl Server {
             let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
             let open_files = self.open_files.read();
 
+            // Pre-populate with empty arrays for all open files to ensure we send
+            // publishDiagnostics notifications even when errors are cleared
+            for x in open_files.keys() {
+                diags.insert(x.as_path().to_owned(), Vec::new());
+            }
+
             // In workspace mode, use get_all_errors() to get errors from all project files.
             // In open-files-only mode, use get_errors(&handles) to only get errors from open files.
             // The filtering by diagnostic mode and project includes/excludes is handled in get_diag_if_shown.
