@@ -232,3 +232,23 @@ def use(td: TD) -> None:
         assert_type(value, None)
 "#,
 );
+
+testcase!(
+    bug = "https://github.com/facebook/pyrefly/issues/238",
+    test_non_dict_get_does_not_narrow,
+    r#"
+from typing import assert_type
+
+class NotDict:
+    def get(self, key: str) -> int | None: ...
+    def __getitem__(self, key: str) -> int | None: ...
+
+def use(mapping: NotDict) -> None:
+    if mapping.get("foo") is not None:
+        assert_type(mapping.get("foo"), int | None)
+        assert_type(mapping["foo"], int | None)
+    else:
+        assert_type(mapping.get("foo"), int | None)
+        assert_type(mapping["foo"], int | None)
+"#,
+);

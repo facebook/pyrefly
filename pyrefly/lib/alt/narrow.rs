@@ -26,6 +26,8 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::binding::narrow::AtomicNarrowOp;
+use crate::binding::narrow::FacetOrigin;
+use crate::binding::narrow::FacetSubject;
 use crate::binding::narrow::NarrowOp;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
@@ -809,15 +811,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match op {
             NarrowOp::Atomic(subject, AtomicNarrowOp::HasAttr(attr)) => {
                 let base_ty = match subject {
-                    Some(facet_chain) => self.get_facet_chain_type(type_info, facet_chain, range),
+                    Some(facet_subject) => {
+                        self.get_facet_chain_type(type_info, &facet_subject.chain, range)
+                    }
                     None => type_info.ty().clone(),
                 };
                 // We only narrow the attribute to `Any` if the attribute does not exist
                 if !self.has_attr(&base_ty, attr) {
                     let attr_facet = FacetKind::Attribute(attr.clone());
                     let facets = match subject {
-                        Some(chain) => {
-                            let mut new_facets = chain.facets().clone();
+                        Some(facet_subject) => {
+                            let mut new_facets = facet_subject.chain.facets().clone();
                             new_facets.push(attr_facet);
                             new_facets
                         }
@@ -839,15 +843,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return type_info.clone();
                 }
                 let base_ty = match subject {
-                    Some(facet_chain) => self.get_facet_chain_type(type_info, facet_chain, range),
+                    Some(facet_subject) => {
+                        self.get_facet_chain_type(type_info, &facet_subject.chain, range)
+                    }
                     None => type_info.ty().clone(),
                 };
                 let attr_ty =
                     self.attr_infer_for_type(&base_ty, attr, range, &suppress_errors, None);
                 let attr_facet = FacetKind::Attribute(attr.clone());
                 let facets = match subject {
-                    Some(chain) => {
-                        let mut new_facets = chain.facets().clone();
+                    Some(facet_subject) => {
+                        let mut new_facets = facet_subject.chain.facets().clone();
                         new_facets.push(attr_facet);
                         new_facets
                     }
@@ -872,16 +878,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let ty = self.atomic_narrow(type_info.ty(), op, range, errors);
                 type_info.clone().with_ty(ty)
             }
-            NarrowOp::Atomic(Some(facet_chain), op) => {
+            NarrowOp::Atomic(Some(facet_subject), op) => {
+                if facet_subject.origin == FacetOrigin::DictGet
+                    && !self.supports_dict_get_subject(type_info, &facet_subject, range)
+                {
+                    return type_info.clone();
+                }
                 let ty = self.atomic_narrow(
-                    &self.get_facet_chain_type(type_info, facet_chain, range),
+                    &self.get_facet_chain_type(type_info, &facet_subject.chain, range),
                     op,
                     range,
                     errors,
                 );
-                let mut narrowed = type_info.with_narrow(facet_chain.facets(), ty);
+                let mut narrowed = type_info.with_narrow(facet_subject.chain.facets(), ty);
                 // For certain types of narrows, we can also narrow the parent of the current subject
-                if let Some((last, prefix)) = facet_chain.facets().split_last() {
+                if let Some((last, prefix)) = facet_subject.chain.facets().split_last() {
                     match Vec1::try_from(prefix) {
                         Ok(prefix_facets) => {
                             let prefix_chain = FacetChain::new(prefix_facets);
@@ -925,6 +936,52 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &|got, want| self.is_subset_eq(got, want),
                 JoinStyle::SimpleMerge,
             ),
+        }
+    }
+
+    fn supports_dict_get_subject(
+        &self,
+        type_info: &TypeInfo,
+        subject: &FacetSubject,
+        range: TextRange,
+    ) -> bool {
+        let base_ty = if subject.chain.facets().len() == 1 {
+            type_info.ty().clone()
+        } else {
+            let prefix: Vec<_> = subject
+                .chain
+                .facets()
+                .iter()
+                .take(subject.chain.facets().len() - 1)
+                .cloned()
+                .collect();
+            match Vec1::try_from_vec(prefix) {
+                Ok(vec1) => {
+                    let prefix_chain = FacetChain::new(vec1);
+                    self.get_facet_chain_type(type_info, &prefix_chain, range)
+                }
+                Err(_) => return false,
+            }
+        };
+        self.is_dict_like_type(&base_ty)
+    }
+
+    fn is_dict_like_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassType(cls) => cls.is_builtin("dict"),
+            Type::TypedDict(_) | Type::PartialTypedDict(_) => true,
+            Type::Union(types) => types.iter().all(|t| self.is_dict_like_type(t)),
+            Type::TypeAlias(alias) => self.is_dict_like_type(&alias.as_value(self.stdlib)),
+            Type::Var(var) => {
+                let Some(_guard) = self.recurse(*var) else {
+                    return false;
+                };
+                let forced = self.solver().force_var(*var);
+                self.is_dict_like_type(&forced)
+            }
+            Type::Forall(forall) => self.is_dict_like_type(&forall.body.clone().as_type()),
+            Type::Type(box inner) => self.is_dict_like_type(inner),
+            _ => false,
         }
     }
 }

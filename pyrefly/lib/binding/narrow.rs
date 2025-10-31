@@ -44,7 +44,7 @@ use crate::types::facet::FacetKind;
 use crate::types::types::Type;
 
 assert_words!(AtomicNarrowOp, 11);
-assert_words!(NarrowOp, 12);
+assert_words!(NarrowOp, 13);
 
 #[derive(Clone, Debug)]
 pub enum AtomicNarrowOp {
@@ -92,7 +92,7 @@ pub enum AtomicNarrowOp {
 
 #[derive(Clone, Debug)]
 pub enum NarrowOp {
-    Atomic(Option<FacetChain>, AtomicNarrowOp),
+    Atomic(Option<FacetSubject>, AtomicNarrowOp),
     And(Vec<NarrowOp>),
     Or(Vec<NarrowOp>),
 }
@@ -176,7 +176,7 @@ impl DisplayWith<ModuleInfo> for NarrowOp {
         match self {
             Self::Atomic(prop, op) => match prop {
                 None => write!(f, "{}", op.display_with(ctx)),
-                Some(prop) => write!(f, "[{prop}] {}", op.display_with(ctx)),
+                Some(prop) => write!(f, "[{}] {}", prop.chain, op.display_with(ctx)),
             },
             Self::And(ops) => {
                 write!(
@@ -234,19 +234,43 @@ impl AtomicNarrowOp {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FacetOrigin {
+    Direct,
+    DictGet,
+}
+
+#[derive(Clone, Debug)]
+pub struct FacetSubject {
+    pub chain: FacetChain,
+    pub origin: FacetOrigin,
+}
+
 #[derive(Clone, Debug)]
 pub enum NarrowingSubject {
     Name(Name),
-    Facets(Name, FacetChain),
+    Facets(Name, FacetSubject),
 }
 
 impl NarrowingSubject {
     pub fn with_facet(&self, prop: FacetKind) -> Self {
         match self {
-            Self::Name(name) => Self::Facets(name.clone(), FacetChain::new(Vec1::new(prop))),
-            Self::Facets(name, props) => {
-                let props = Vec1::from_vec_push(props.facets().to_vec(), prop);
-                Self::Facets(name.clone(), FacetChain::new(props))
+            Self::Name(name) => Self::Facets(
+                name.clone(),
+                FacetSubject {
+                    chain: FacetChain::new(Vec1::new(prop)),
+                    origin: FacetOrigin::Direct,
+                },
+            ),
+            Self::Facets(name, facets) => {
+                let props = Vec1::from_vec_push(facets.chain.facets().to_vec(), prop);
+                Self::Facets(
+                    name.clone(),
+                    FacetSubject {
+                        chain: FacetChain::new(props),
+                        origin: facets.origin,
+                    },
+                )
             }
         }
     }
@@ -372,7 +396,7 @@ impl NarrowOps {
         for subject in expr_to_subjects(left) {
             let (name, prop) = match subject {
                 NarrowingSubject::Name(name) => (name, None),
-                NarrowingSubject::Facets(name, prop) => (name, Some(prop)),
+                NarrowingSubject::Facets(name, facets) => (name, Some(facets)),
             };
             if let Some((existing, _)) = narrow_ops.0.get_mut(&name) {
                 existing.and(NarrowOp::Atomic(prop, op.clone()));
@@ -393,7 +417,7 @@ impl NarrowOps {
         let mut narrow_ops = Self::new();
         let (name, prop) = match subject {
             NarrowingSubject::Name(name) => (name, None),
-            NarrowingSubject::Facets(name, prop) => (name, Some(prop)),
+            NarrowingSubject::Facets(name, facets) => (name, Some(facets)),
         };
         if let Some((existing, _)) = narrow_ops.0.get_mut(&name) {
             existing.and(NarrowOp::Atomic(prop, op.clone()));
@@ -772,7 +796,13 @@ pub fn identifier_and_chain_prefix_for_expr(expr: &Expr) -> Option<(Identifier, 
 
 fn subject_for_expr(expr: &Expr) -> Option<NarrowingSubject> {
     if let Some((identifier, attr)) = identifier_and_chain_for_expr(expr) {
-        return Some(NarrowingSubject::Facets(identifier.id, attr));
+        return Some(NarrowingSubject::Facets(
+            identifier.id,
+            FacetSubject {
+                chain: attr,
+                origin: FacetOrigin::Direct,
+            },
+        ));
     }
 
     if let Expr::Call(ExprCall {
@@ -789,12 +819,18 @@ fn subject_for_expr(expr: &Expr) -> Option<NarrowingSubject> {
             let props = Vec1::from_vec_push(facets.facets().to_vec(), FacetKind::Key(key.clone()));
             return Some(NarrowingSubject::Facets(
                 identifier.id,
-                FacetChain::new(props),
+                FacetSubject {
+                    chain: FacetChain::new(props),
+                    origin: FacetOrigin::DictGet,
+                },
             ));
         } else if let Expr::Name(name) = &*attr.value {
             return Some(NarrowingSubject::Facets(
                 name.id.clone(),
-                FacetChain::new(Vec1::new(FacetKind::Key(key))),
+                FacetSubject {
+                    chain: FacetChain::new(Vec1::new(FacetKind::Key(key))),
+                    origin: FacetOrigin::DictGet,
+                },
             ));
         }
     }
