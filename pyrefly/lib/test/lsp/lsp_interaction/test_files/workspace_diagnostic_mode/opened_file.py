@@ -3,5 +3,5 @@
 def greet(name: str) -> str:
     return f"Hello, {name}"
 
-# No errors in this file
-message = greet("World")
+# Type error: passing int to str parameter
+message = greet(123)

@@ -1211,6 +1211,43 @@ impl Server {
             )
         });
 
+        // In workspace mode, analyze all project files so get_all_errors() includes unopened files
+        if has_workspace_mode {
+            let open_file_paths: std::collections::HashSet<_> =
+                self.open_files.read().keys().cloned().collect();
+            if let Some(first_open_file) = open_file_paths.iter().next() {
+                let module_path = ModulePath::filesystem(first_open_file.clone());
+                let config = self
+                    .state
+                    .config_finder()
+                    .python_file(ModuleName::unknown(), &module_path);
+                let project_path_blobs = config.get_filtered_globs(None);
+                if let Ok(paths) = project_path_blobs.files() {
+                    let project_handles: Vec<_> = paths
+                        .into_iter()
+                        .filter_map(|path| {
+                            // Skip files that are already open (already in handles)
+                            if open_file_paths.contains(&path) {
+                                return None;
+                            }
+                            let module_path = ModulePath::filesystem(path.clone());
+                            let path_config = self
+                                .state
+                                .config_finder()
+                                .python_file(ModuleName::unknown(), &module_path);
+                            if config == path_config {
+                                Some(handle_from_module_path(&self.state, module_path))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    // Analyze only for errors, not full indexing
+                    transaction.run(&project_handles, Require::Errors);
+                }
+            }
+        }
+
         let publish = |transaction: &Transaction| {
             let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
             let open_files = self.open_files.read();

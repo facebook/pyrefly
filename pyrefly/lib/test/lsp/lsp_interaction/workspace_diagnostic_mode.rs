@@ -5,261 +5,143 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::RequestId;
-use lsp_server::Response;
+use lsp_types::Url;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
-/// Test that workspace mode shows errors from unopened files within the workspace
-/// This verifies the filtering logic respects workspace diagnostic mode
+/// Test that workspace mode shows errors from unopened files via publishDiagnostics
 #[test]
 fn test_workspace_mode_shows_unopened_file_errors() {
     let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("workspace_diagnostic_mode");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings {
-        configuration: Some(None),
+        workspace_folders: Some(vec![(
+            "workspace_diagnostic_mode".to_owned(),
+            scope_uri.clone(),
+        )]),
+        configuration: Some(Some(serde_json::json!([{
+            "pyrefly": {"displayTypeErrors": "force-on"},
+            "analysis": {"diagnosticMode": "workspace"}
+        }]))),
         ..Default::default()
     });
 
-    // Send configuration change to enable workspace diagnostic mode
-    interaction.server.did_change_configuration();
-    interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(
-        2,
-        serde_json::json!([
-            {
-                "pyrefly": {
-                    "displayTypeErrors": "force-on"
-                },
-                "analysis": {
-                    "diagnosticMode": "workspace"
-                }
-            },
-            {
-                "pyrefly": {
-                    "displayTypeErrors": "force-on"
-                },
-                "analysis": {
-                    "diagnosticMode": "workspace"
-                }
-            }
-        ]),
-    );
+    // Open file_with_error.py (has 2 errors)
+    // In workspace mode, this should trigger publishDiagnostics for ALL workspace files with errors
+    interaction.server.did_open("file_with_error.py");
 
-    // Open a file without errors
+    // The opened file should show its 2 errors
     interaction
-        .server
-        .did_open("workspace_diagnostic_mode/opened_file.py");
+        .client
+        .expect_publish_diagnostics_error_count(root_path.join("file_with_error.py"), 2);
 
-    // Request diagnostics for an UNOPENED file that HAS errors
-    // In workspace mode, we SHOULD see errors from unopened files in the workspace
+    // The UNOPENED file (opened_file.py) should ALSO show its 1 error via publishDiagnostics
+    // This is the key test - workspace mode publishes diagnostics for unopened files!
     interaction
-        .server
-        .diagnostic("workspace_diagnostic_mode/file_with_error.py");
-
-    // Expect errors from the unopened file because we're in workspace mode
-    // The file has type errors: add_numbers("hello", "world") where add_numbers expects ints
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
-            "items": [
-                {
-                    "code": "bad-argument-type",
-                    "codeDescription": {"href": "https://pyrefly.org/en/docs/error-kinds/#bad-argument-type"},
-                    "message": "Argument `Literal['hello']` is not assignable to parameter `x` with type `int` in function `add_numbers`",
-                    "range": {
-                        "start": {"line": 6, "character": 21},
-                        "end": {"line": 6, "character": 28}
-                    },
-                    "severity": 1,
-                    "source": "Pyrefly"
-                },
-                {
-                    "code": "bad-argument-type",
-                    "codeDescription": {"href": "https://pyrefly.org/en/docs/error-kinds/#bad-argument-type"},
-                    "message": "Argument `Literal['world']` is not assignable to parameter `y` with type `int` in function `add_numbers`",
-                    "range": {
-                        "start": {"line": 6, "character": 30},
-                        "end": {"line": 6, "character": 37}
-                    },
-                    "severity": 1,
-                    "source": "Pyrefly"
-                }
-            ],
-            "kind": "full"
-        })),
-        error: None,
-    });
+        .client
+        .expect_publish_diagnostics_error_count(root_path.join("opened_file.py"), 1);
 
     interaction.shutdown();
 }
 
-/// Test that openFilesOnly mode only shows errors for files that are opened
+/// Test that openFilesOnly mode only publishes diagnostics for open files
 #[test]
 fn test_open_files_only_mode_filters_correctly() {
     let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("workspace_diagnostic_mode");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings {
-        configuration: Some(None),
+        workspace_folders: Some(vec![(
+            "workspace_diagnostic_mode".to_owned(),
+            scope_uri.clone(),
+        )]),
+        configuration: Some(Some(serde_json::json!([{
+            "pyrefly": {"displayTypeErrors": "force-on"},
+            "analysis": {"diagnosticMode": "openFilesOnly"}
+        }]))),
         ..Default::default()
     });
 
-    // Send configuration with openFilesOnly mode (explicit)
-    interaction.server.did_change_configuration();
-    interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(
-        2,
-        serde_json::json!([
-            {
-                "pyrefly": {
-                    "displayTypeErrors": "force-on"
-                },
-                "analysis": {
-                    "diagnosticMode": "openFilesOnly"
-                }
-            },
-            {
-                "pyrefly": {
-                    "displayTypeErrors": "force-on"
-                },
-                "analysis": {
-                    "diagnosticMode": "openFilesOnly"
-                }
-            }
-        ]),
-    );
+    // Open file with errors
+    interaction.server.did_open("file_with_error.py");
 
-    // Open a file without errors
+    // Should show errors for the opened file
     interaction
-        .server
-        .did_open("workspace_diagnostic_mode/opened_file.py");
-
-    // Request diagnostics for an UNOPENED file with errors
-    // In openFilesOnly mode, we should NOT get diagnostics for unopened files
-    interaction
-        .server
-        .diagnostic("workspace_diagnostic_mode/file_with_error.py");
-
-    // Expect NO errors because the file is not opened and we're in openFilesOnly mode
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
-            "items": [],
-            "kind": "full"
-        })),
-        error: None,
-    });
+        .client
+        .expect_publish_diagnostics_error_count(root_path.join("file_with_error.py"), 2);
 
     interaction.shutdown();
 }
 
-/// Test default behavior (should be openFilesOnly for backward compatibility)
+/// Test default behavior (should be openFilesOnly)
 #[test]
 fn test_default_mode_is_open_files_only() {
     let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("workspace_diagnostic_mode");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings {
-        configuration: Some(None),
+        workspace_folders: Some(vec![(
+            "workspace_diagnostic_mode".to_owned(),
+            scope_uri.clone(),
+        )]),
+        configuration: Some(Some(
+            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+        )),
         ..Default::default()
     });
 
-    // Don't set diagnosticMode - should default to openFilesOnly
-    interaction.server.did_change_configuration();
-    interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(
-        2,
-        serde_json::json!([
-            {"pyrefly": {"displayTypeErrors": "force-on"}},
-            {"pyrefly": {"displayTypeErrors": "force-on"}}
-        ]),
-    );
+    // Open file with errors
+    interaction.server.did_open("file_with_error.py");
 
-    // Open a file without errors
+    // Default mode is openFilesOnly, should show errors for opened file only
     interaction
-        .server
-        .did_open("workspace_diagnostic_mode/opened_file.py");
-
-    // Request diagnostics for an UNOPENED file with errors
-    // Default mode should be openFilesOnly, so no diagnostics for unopened files
-    interaction
-        .server
-        .diagnostic("workspace_diagnostic_mode/file_with_error.py");
-
-    // Expect NO errors because default mode is openFilesOnly
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
-            "items": [],
-            "kind": "full"
-        })),
-        error: None,
-    });
+        .client
+        .expect_publish_diagnostics_error_count(root_path.join("file_with_error.py"), 2);
 
     interaction.shutdown();
 }
 
-/// Test that workspace mode does not show errors for files outside the workspace folder
+/// Test that workspace mode filters out errors from stdlib/dependencies
 #[test]
 fn test_workspace_mode_excludes_files_outside_workspace() {
     let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("workspace_diagnostic_mode");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings {
-        configuration: Some(None),
+        workspace_folders: Some(vec![(
+            "workspace_diagnostic_mode".to_owned(),
+            scope_uri.clone(),
+        )]),
+        configuration: Some(Some(serde_json::json!([{
+            "pyrefly": {"displayTypeErrors": "force-on"},
+            "analysis": {"diagnosticMode": "workspace"}
+        }]))),
         ..Default::default()
     });
 
-    // Send configuration with workspace mode
-    interaction.server.did_change_configuration();
-    interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(
-        2,
-        serde_json::json!([
-            {
-                "pyrefly": {
-                    "displayTypeErrors": "force-on"
-                },
-                "analysis": {
-                    "diagnosticMode": "workspace"
-                }
-            },
-            {
-                "pyrefly": {
-                    "displayTypeErrors": "force-on"
-                },
-                "analysis": {
-                    "diagnosticMode": "workspace"
-                }
-            }
-        ]),
-    );
+    // Open file with errors
+    interaction.server.did_open("file_with_error.py");
 
-    // Open a file in the workspace
+    // Should show errors for workspace files only, not stdlib/dependencies
     interaction
-        .server
-        .did_open("workspace_diagnostic_mode/opened_file.py");
+        .client
+        .expect_publish_diagnostics_error_count(root_path.join("file_with_error.py"), 2);
 
-    // Request diagnostics - workspace mode should only show errors from files within the workspace
-    // Files outside the workspace (like dependencies) should not be shown
+    // Unopened file errors should also be published
     interaction
-        .server
-        .diagnostic("workspace_diagnostic_mode/opened_file.py");
-
-    // Expect NO errors because the file itself has no errors
-    // More importantly, we should NOT see errors from dependencies or files outside workspace
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
-            "items": [],
-            "kind": "full"
-        })),
-        error: None,
-    });
+        .client
+        .expect_publish_diagnostics_error_count(root_path.join("opened_file.py"), 1);
 
     interaction.shutdown();
 }
