@@ -195,6 +195,7 @@ use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::lsp::non_wasm::workspace::DiagnosticMode;
 use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
 use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
@@ -923,6 +924,7 @@ impl Server {
                         self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
                         let transaction =
                             ide_transaction_manager.non_committable_transaction(&self.state);
+
                         self.send_response(new_response(
                             x.id,
                             Ok(self.document_diagnostics(&transaction, params)),
@@ -1121,9 +1123,24 @@ impl Server {
                 .state
                 .config_finder()
                 .python_file(ModuleName::unknown(), e.path());
-            if open_files.contains_key(&path)
-                && config.project_includes.covers(&path)
-                && !config.project_excludes.covers(&path)
+
+            // Get diagnostic mode for this file's workspace
+            let diagnostic_mode = self.workspaces.get_diagnostic_mode(&path);
+
+            // File must be in project (not excluded) to show diagnostics
+            let is_in_project =
+                config.project_includes.covers(&path) && !config.project_excludes.covers(&path);
+
+            // Then check based on diagnostic mode
+            let is_open = open_files.contains_key(&path);
+            let should_show = match diagnostic_mode {
+                // Workspace mode: show if in project (open or closed files)
+                DiagnosticMode::Workspace => is_in_project,
+                // OpenFilesOnly mode: show if open AND in project
+                DiagnosticMode::OpenFilesOnly => is_open && is_in_project,
+            };
+
+            if should_show
                 && self
                     .type_error_display_status(e.path().as_path())
                     .is_enabled()
@@ -1215,19 +1232,84 @@ impl Server {
         let handles =
             Self::validate_in_memory_for_transaction(&self.state, &self.open_files, transaction);
 
+        // Check if any workspace is in workspace diagnostic mode
+        let has_workspace_mode = self.workspaces.roots().iter().any(|root| {
+            matches!(
+                self.workspaces.get_diagnostic_mode(root),
+                DiagnosticMode::Workspace
+            )
+        });
+
+        // In workspace mode, analyze all project files so get_all_errors() includes unopened files
+        if has_workspace_mode {
+            let open_file_paths: std::collections::HashSet<_> =
+                self.open_files.read().keys().cloned().collect();
+            if let Some(first_open_file) = open_file_paths.iter().next() {
+                let module_path = ModulePath::filesystem(first_open_file.clone());
+                let config = self
+                    .state
+                    .config_finder()
+                    .python_file(ModuleName::unknown(), &module_path);
+                let project_path_blobs = config.get_filtered_globs(None);
+                if let Ok(paths) = project_path_blobs.files() {
+                    let project_handles: Vec<_> = paths
+                        .into_iter()
+                        .filter_map(|path| {
+                            // Skip files that are already open (already in handles)
+                            if open_file_paths.contains(&path) {
+                                return None;
+                            }
+                            let module_path = ModulePath::filesystem(path.clone());
+                            let path_config = self
+                                .state
+                                .config_finder()
+                                .python_file(ModuleName::unknown(), &module_path);
+                            if config == path_config {
+                                Some(handle_from_module_path(&self.state, module_path))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    // Analyze only for errors, not full indexing
+                    transaction.run(&project_handles, Require::Errors);
+                }
+            }
+        }
+
         let publish = |transaction: &Transaction| {
             let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
             let open_files = self.open_files.read();
+
+            // Pre-populate with empty arrays for all open files to ensure we send
+            // publishDiagnostics notifications even when errors are cleared
             for x in open_files.keys() {
                 diags.insert(x.as_path().to_owned(), Vec::new());
             }
-            for e in transaction.get_errors(&handles).collect_errors().shown {
+
+            // In workspace mode, use get_all_errors() to get errors from all project files.
+            // In open-files-only mode, use get_errors(&handles) to only get errors from open files.
+            // The filtering by diagnostic mode and project includes/excludes is handled in get_diag_if_shown.
+            let errors = if has_workspace_mode {
+                transaction.get_all_errors()
+            } else {
+                transaction.get_errors(&handles)
+            };
+
+            for e in errors.collect_errors().shown {
                 if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files) {
                     diags.entry(path.to_owned()).or_default().push(diag);
                 }
             }
+
             for (path, diagnostics) in diags.iter_mut() {
-                let handle = make_open_handle(&self.state, path);
+                // Use appropriate handle type: memory handle for open files, filesystem for others
+                let is_open = open_files.contains_key(path);
+                let handle = if is_open {
+                    make_open_handle(&self.state, path)
+                } else {
+                    handle_from_module_path(&self.state, ModulePath::filesystem(path.clone()))
+                };
                 Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
             }
             self.connection.publish_diagnostics(diags);
@@ -2256,10 +2338,17 @@ impl Server {
         transaction: &Transaction<'_>,
         params: DocumentDiagnosticParams,
     ) -> DocumentDiagnosticReport {
-        let handle = make_open_handle(
-            &self.state,
-            &params.text_document.uri.to_file_path().unwrap(),
-        );
+        let file_path = params.text_document.uri.to_file_path().unwrap();
+        let is_file_open = self.open_files.read().contains_key(&file_path);
+
+        // When diagnostics are explicitly requested, always return them regardless of mode
+        let handle = if is_file_open {
+            make_open_handle(&self.state, &file_path)
+        } else {
+            let module_path = ModulePath::filesystem(file_path.clone());
+            handle_from_module_path(&self.state, module_path)
+        };
+
         let mut items = Vec::new();
         let open_files = &self.open_files.read();
         for e in transaction.get_errors(once(&handle)).collect_errors().shown {
@@ -2268,6 +2357,7 @@ impl Server {
             }
         }
         Self::append_unreachable_diagnostics(transaction, &handle, &mut items);
+
         DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
             full_document_diagnostic_report: FullDocumentDiagnosticReport {
                 items,
