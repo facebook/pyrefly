@@ -114,6 +114,36 @@ class C:
 );
 
 testcase!(
+    test_super_protocol_unimplemented_method,
+    r#"
+from typing import Protocol
+
+class PColor(Protocol):
+    def draw(self) -> str: ...
+
+class BadColor(PColor):
+    def draw(self) -> str:
+        return super().draw()  # E: Method `draw` inherited from class `PColor` has no implementation and cannot be accessed via `super()`
+    "#,
+);
+
+testcase!(
+    test_super_abstract_method,
+    r#"
+from abc import ABC, abstractmethod
+
+class Shape(ABC):
+    @abstractmethod
+    def area(self) -> float:
+        ...
+
+class Triangle(Shape):
+    def area(self) -> float:
+        return super().area()  # E: Method `area` inherited from class `Shape` has no implementation and cannot be accessed via `super()`
+    "#,
+);
+
+testcase!(
     test_illegal_location,
     r#"
 class A:

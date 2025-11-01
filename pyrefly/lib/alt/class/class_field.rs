@@ -556,6 +556,27 @@ impl ClassField {
         }
     }
 
+    pub fn is_stub_method(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Simple { ty, .. } => Self::type_is_stub_function(ty),
+        }
+    }
+
+    fn type_is_stub_function(ty: &Type) -> bool {
+        match ty {
+            Type::Function(func) => func.metadata.flags.lacks_implementation,
+            Type::Forall(box Forall {
+                body: Forallable::Function(func),
+                ..
+            }) => func.metadata.flags.lacks_implementation,
+            Type::Overload(overload) => overload.signatures.iter().all(|sig| match sig {
+                OverloadType::Function(function) => function.metadata.flags.lacks_implementation,
+                OverloadType::Forall(forall) => forall.body.metadata.flags.lacks_implementation,
+            }),
+            _ => false,
+        }
+    }
+
     pub fn as_named_tuple_type(&self) -> Type {
         self.ty()
     }
@@ -2520,13 +2541,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             SuperObj::Instance(obj) => self
                 .get_super_class_member(obj.class_object(), Some(start_lookup_cls), name)
                 .map(|member| {
-                    self.as_instance_attribute(&member.value, &Instance::of_self_type(obj))
+                    if let Some(reason) = self.super_method_needs_impl_reason(&member) {
+                        ClassAttribute::no_access(reason)
+                    } else {
+                        self.as_instance_attribute(&member.value, &Instance::of_self_type(obj))
+                    }
                 }),
             SuperObj::Class(obj) => self
                 .get_super_class_member(obj.class_object(), Some(start_lookup_cls), name)
                 .map(|member| {
-                    self.as_class_attribute(&member.value, &ClassBase::SelfType(obj.clone()))
+                    if let Some(reason) = self.super_method_needs_impl_reason(&member) {
+                        ClassAttribute::no_access(reason)
+                    } else {
+                        self.as_class_attribute(&member.value, &ClassBase::SelfType(obj.clone()))
+                    }
                 }),
+        }
+    }
+
+    fn super_method_needs_impl_reason(
+        &self,
+        member: &WithDefiningClass<Arc<ClassField>>,
+    ) -> Option<NoAccessReason> {
+        if member.value.is_abstract() {
+            return Some(NoAccessReason::SuperMethodNeedsImplementation(
+                member.defining_class.dupe(),
+            ));
+        }
+        let metadata = self.get_metadata_for_class(&member.defining_class);
+        if metadata.is_protocol() && member.value.is_stub_method() {
+            Some(NoAccessReason::SuperMethodNeedsImplementation(
+                member.defining_class.dupe(),
+            ))
+        } else {
+            None
         }
     }
 
