@@ -895,7 +895,7 @@ def f(x: int, y: int) -> int: ...
 def f(x: int, y: int = 0) -> int:
     return x + y
 
-f(0, 1, 2)  # E: (\n    x: int,\n    y: int\n) -> int [closest match]
+f(0, 1, 2)  # E: (\n    x: int,\n    y: int\n) -> int:# [closest match]
     "#,
 );
 
