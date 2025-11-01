@@ -9,6 +9,7 @@ use std::env;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn get_input_path() -> PathBuf {
     match env::var_os("TYPESHED_ROOT") {
@@ -39,6 +40,15 @@ fn main() -> Result<(), std::io::Error> {
     // Only watch for metadata changes to avoid having Cargo repeatedly crawling for
     // changes in the entire typeshed dir.
     println!("cargo::rerun-if-changed=third_party/typeshed_metadata.json");
+
+    println!("cargo::rerun-if-changed=crates/pyrefly_bundled/generate_docstubs.py");
+
+    let status = Command::new("uv")
+        .args(["run", "generate_docstubs.py"])
+        .status()
+        .expect("failed to invoke uv");
+
+    assert!(status.success(), "`uv run …` returned non-zero");
 
     let input_path = get_input_path();
     let output_path = get_output_path().unwrap();
