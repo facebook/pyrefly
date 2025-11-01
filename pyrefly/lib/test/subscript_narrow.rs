@@ -183,10 +183,72 @@ class ErrorContext:
             self.system_context = {"status": "active"}
 
         assert_type(self.system_context, dict[str, Any])
-            
+
         self.system_context["timestamp"] = "2024-01-01"
 
         assert_type(self.system_context, dict[str, Any])
         assert_type(self.system_context["timestamp"], Literal["2024-01-01"])
+"#,
+);
+
+testcase!(
+    bug = "https://github.com/facebook/pyrefly/issues/238",
+    test_dict_get_literal_key_narrow,
+    r#"
+from typing import assert_type
+
+def narrow_with_explicit_none(data: dict[str, int]) -> None:
+    value = data.get("foo")
+    if value is not None:
+        assert_type(value, int)
+        assert_type(data["foo"], int)
+    else:
+        assert_type(value, None)
+
+def narrow_with_truthy_check(data: dict[str, int]) -> None:
+    if data.get("bar"):
+        assert_type(data["bar"], int)
+    else:
+        fallback = data.get("bar")
+        assert_type(fallback, int | None)
+"#,
+);
+
+testcase!(
+    bug = "https://github.com/facebook/pyrefly/issues/238",
+    test_typeddict_get_literal_key_narrow,
+    r#"
+from typing import TypedDict, assert_type
+
+class TD(TypedDict, total=False):
+    foo: int
+
+def use(td: TD) -> None:
+    value = td.get("foo")
+    if value is not None:
+        assert_type(value, int)
+        assert_type(td["foo"], int)
+    else:
+        assert_type(value, None)
+"#,
+);
+
+testcase!(
+    bug = "https://github.com/facebook/pyrefly/issues/238",
+    test_non_dict_get_does_not_narrow,
+    r#"
+from typing import assert_type
+
+class NotDict:
+    def get(self, key: str) -> int | None: ...
+    def __getitem__(self, key: str) -> int | None: ...
+
+def use(mapping: NotDict) -> None:
+    if mapping.get("foo") is not None:
+        assert_type(mapping.get("foo"), int | None)
+        assert_type(mapping["foo"], int | None)
+    else:
+        assert_type(mapping.get("foo"), int | None)
+        assert_type(mapping["foo"], int | None)
 "#,
 );
