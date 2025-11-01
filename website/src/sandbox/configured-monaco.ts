@@ -17,8 +17,13 @@ type InlayHint = monaco.languages.InlayHint;
 type SemanticTokens = monaco.languages.SemanticTokens;
 type SemanticTokensLegend = monaco.languages.SemanticTokensLegend;
 
+interface DefinitionResult {
+    range: Range;
+    filename: string;
+}
+
 type AutoCompleteFunction = (line: number, column: number) => CompletionItem[];
-type GetDefFunction = (line: number, column: number) => Range | null;
+type GetDefFunction = (line: number, column: number) => DefinitionResult | null;
 type HoverFunction = (line: number, column: number) => Hover | null;
 type InlayHintFunction = () => InlayHint[];
 type SemanticTokensFunction = (range: Range | null) => SemanticTokens | null;
@@ -49,7 +54,7 @@ function setAutoCompleteFunction(
 const defaultGetDefFunctionForMonaco: GetDefFunction = (
     _l: number,
     _c: number
-): Range | null => null;
+): DefinitionResult | null => null;
 const getDefFunctionsForMonaco = new Map<
     monaco.editor.ITextModel,
     GetDefFunction
@@ -90,6 +95,12 @@ function setInlayHintFunctionForMonaco(
     f: InlayHintFunction
 ): void {
     inlayHintFunctionsForMonaco.set(model, f);
+}
+
+function findModelByFilename(filename: string): monaco.editor.ITextModel | null {
+    const models = monaco.editor.getModels();
+    const foundModel = models.find(model => model.uri.path === `/${filename}`);
+    return foundModel || null;
 }
 
 const defaultSemanticTokensFunctionForMonaco: SemanticTokensFunction =
@@ -217,9 +228,18 @@ monaco.languages.registerDefinitionProvider('python', {
             const f =
                 getDefFunctionsForMonaco.get(model) ??
                 defaultGetDefFunctionForMonaco;
-            const range = f(position.lineNumber, position.column);
-            return range != null ? { uri: model.uri, range } : null;
-        } catch (e) {
+            const result = f(position.lineNumber, position.column);
+            
+            if (result != null) {
+                // Find the target model based on the filename
+                const targetModel = findModelByFilename(result.filename);
+                const targetUri = targetModel ? targetModel.uri : model.uri;
+                
+                return { uri: targetUri, range: result.range };
+            }
+            
+            return null;
+            } catch (e) {
             console.error(e);
             return null;
         }
