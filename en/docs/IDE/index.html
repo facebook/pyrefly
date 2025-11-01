@@ -34,8 +34,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.409aac25.css">
-<script src="/assets/js/runtime~main.4ce5aeb7.js" defer="defer"></script>
-<script src="/assets/js/main.6baa6a5d.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.1c4a341b.js" defer="defer"></script>
+<script src="/assets/js/main.84e969df.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -53,9 +53,14 @@
 <p>By default, Pyrefly should work in the IDE with no configuration necessary. But to ensure your project is set up properly, see <a href="/en/docs/configuration/">configurations</a>.</p>
 <p>The following configuration options are IDE-specific and exposed as VSCode settings:</p>
 <ul>
-<li>Disable language services<!-- -->
+<li>Disable all language services<!-- -->
 <ul>
 <li><code>python.pyrefly.disableLanguageServices</code> [boolean: false]: By default, Pyrefly will provide both type errors and other language features like go-to definition, intellisense, hover, etc. Set <code>disableLanguageServices</code> to <code>true</code> to keep type errors from Pyrefly unchanged but use VSCode&#x27;s Python extension for everything else.</li>
+</ul>
+</li>
+<li>Disable certain language services<!-- -->
+<ul>
+<li><code>python.pyrefly.disabledLanguageServices</code> [json: <!-- -->]: a config to disable certain lsp methods from pyrefly. For example, if you want go-to definition but not find-references.</li>
 </ul>
 </li>
 <li>Disable type errors<!-- -->

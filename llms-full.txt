@@ -269,8 +269,10 @@ Want type error squiggles to show up in VS Code? Try setting `python.pyrefly.dis
 By default, Pyrefly should work in the IDE with no configuration necessary. But to ensure your project is set up properly, see [configurations](../configuration).
 
 The following configuration options are IDE-specific and exposed as VSCode settings:
-- Disable language services
+- Disable all language services
   - `python.pyrefly.disableLanguageServices` [boolean: false]: By default, Pyrefly will provide both type errors and other language features like go-to definition, intellisense, hover, etc. Set `disableLanguageServices` to `true` to keep type errors from Pyrefly unchanged but use VSCode's Python extension for everything else.
+- Disable certain language services
+  - `python.pyrefly.disabledLanguageServices` [json: {}]: a config to disable certain lsp methods from pyrefly. For example, if you want go-to definition but not find-references.
 - Disable type errors
   - `python.pyrefly.displayTypeErrors` [string: 'default']: If `'default'`, Pyrefly will only provide type check squiggles in the IDE if your file is covered by a [Pyrefly configuration](../configuration). If `'force-off'`, Pyrefly will never provide type check squiggles in the IDE. If `'force-on'`, Pyrefly will always provide type check squiggles in the IDE.
 - Specify a custom Pyrefly Binary (lspPath)
@@ -2409,6 +2411,37 @@ x = 1  # Or some other value
 for val in x:  # not-iterable
   ...
 ```
+
+## open-unpacking
+
+This error is reported on an attempt to unpack an
+[open](https://typing.python.org/en/latest/spec/glossary.html#term-open) TypedDict that potentially
+has items incompatible with the TypedDict it is being unpacked into.
+
+Example:
+```python
+from typing import TypedDict
+
+class OpenTypedDict(TypedDict):
+    x: int
+
+class UnpackingTarget(TypedDict):
+    x: int
+    y: str
+
+def f(o: OpenTypedDict) -> UnpackingTarget:
+    # Error: `o` could be an instance of a subclass of `OpenTypedDict` with an
+    # item `y` with an incompatible type.
+    return {"y": "", **o}
+```
+
+To fix this error, close the open TypedDict to indicate it does not contain any unknown items:
+```python
+class OpenTypedDict(TypedDict, closed=True): ...
+```
+
+Note: In Python versions before 3.15, import `TypedDict` from `typing_extensions` rather than
+`typing` to use the `closed` feature.
 
 ## parse-error
 
