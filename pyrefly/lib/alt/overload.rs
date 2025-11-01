@@ -384,6 +384,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let signature = self
                     .solver()
                     .for_display(Type::Callable(Box::new(signature)));
+                let signature = signature.as_hover_string();
                 msg.push(format!("{signature}{suffix}"));
             }
             // We intentionally discard closest_overload.call_errors. When no overload matches,
