@@ -39,6 +39,9 @@ jobs:
       with:
         toolchain: nightly-2025-08-01
         components: clippy, rustfmt
+    # to generate stub doc
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
     - run: cargo fmt -- --check
     - run: cargo clippy --release
     - run: cargo build --release
