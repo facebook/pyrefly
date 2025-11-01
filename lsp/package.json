@@ -168,6 +168,38 @@
                             "default": false
                         }
                     }
+                },
+                "python.pyrefly.analysis.inlayHints": {
+                    "type": "object",
+                    "default": {},
+                    "description": "Configure inlay hints provided by Pyrefly in the editor.",
+                    "properties": {
+                        "callArgumentNames": {
+                            "type": "string",
+                            "enum": [
+                                "off",
+                                "partial",
+                                "all"
+                            ],
+                            "default": "off",
+                            "description": "Show parameter name hints for positional arguments (\"off\", \"partial\", or \"all\")."
+                        },
+                        "functionReturnTypes": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Show inlay hints for inferred function return types."
+                        },
+                        "variableTypes": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Show inlay hints for inferred variable types."
+                        },
+                        "pytestParameters": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Show inlay hints for pytest parameter names."
+                        }
+                    }
                 }
             }
         }
