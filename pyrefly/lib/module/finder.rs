@@ -213,12 +213,6 @@ fn find_one_part_prefix<'a>(
                 let file_name = path.file_name().and_then(|n| n.to_str());
 
                 if let Some(name) = file_name {
-                    // Skip hidden filesystem entries (e.g. `.venv`, `.git`) so they don't
-                    // surface in import completion lists. These entries are not valid module
-                    // names in user code and previously cluttered suggestions.
-                    if name.starts_with('.') {
-                        continue;
-                    }
                     // Check if the name starts with the prefix
                     if name.starts_with(prefix.as_str()) {
                         // Check if it's a regular package
