@@ -18,7 +18,7 @@ fn get_input_path() -> PathBuf {
         }
         None => {
             // When building with Cargo, we could locate typeshed directly using relative dir
-            PathBuf::from("third_party/typeshed")
+            PathBuf::from("third_party/docstubs")
         }
     }
 }
