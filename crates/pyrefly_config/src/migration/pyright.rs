@@ -169,6 +169,9 @@ pub struct RuleOverrides {
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     #[serde(default)]
     pub report_missing_module_source: Option<bool>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[serde(default)]
+    pub report_unused_parameter: Option<bool>,
 }
 
 impl RuleOverrides {
@@ -190,6 +193,17 @@ impl RuleOverrides {
                 ErrorKind::MissingImport,
                 if import_error {
                     Severity::Error
+                } else {
+                    Severity::Ignore
+                },
+            );
+        }
+
+        if let Some(unused_parameter) = self.report_unused_parameter {
+            map.insert(
+                ErrorKind::UnusedParameter,
+                if unused_parameter {
+                    Severity::Warn
                 } else {
                     Severity::Ignore
                 },

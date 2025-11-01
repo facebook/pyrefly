@@ -708,6 +708,7 @@ impl<'a> BindingsBuilder<'a> {
                 if let Some(used_idx) = first_use {
                     self.record_first_use(used_idx, usage);
                 }
+                self.scopes.mark_parameter_used(name.key());
                 NameLookupResult::Found {
                     idx,
                     uninitialized: is_initialized,
@@ -716,10 +717,13 @@ impl<'a> BindingsBuilder<'a> {
             NameReadInfo::Anywhere {
                 key,
                 uninitialized: is_initialized,
-            } => NameLookupResult::Found {
-                idx: self.table.types.0.insert(key),
-                uninitialized: is_initialized,
-            },
+            } => {
+                self.scopes.mark_parameter_used(name.key());
+                NameLookupResult::Found {
+                    idx: self.table.types.0.insert(key),
+                    uninitialized: is_initialized,
+                }
+            }
             NameReadInfo::NotFound => NameLookupResult::NotFound,
         }
     }
@@ -955,6 +959,9 @@ impl<'a> BindingsBuilder<'a> {
         class_key: Option<Idx<KeyClass>>,
     ) {
         let name = x.name();
+        let allow_unused = name.id.as_str().starts_with('_')
+            || matches!(name.id.as_str(), "self" | "cls")
+            || matches!(&x, AnyParameterRef::Variadic(_));
         let annot = x.annotation().map(|x| {
             self.insert_binding(
                 KeyAnnotation::Annotation(ShortIdentifier::new(name)),
@@ -972,6 +979,7 @@ impl<'a> BindingsBuilder<'a> {
             }),
         );
         self.scopes.add_parameter_to_current_static(name, annot);
+        self.scopes.register_parameter(name, allow_unused);
         self.bind_name(&name.id, key, FlowStyle::Other);
     }
 }

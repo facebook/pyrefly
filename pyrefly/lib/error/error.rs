@@ -14,6 +14,7 @@ use std::path::Path;
 use itertools::Itertools;
 use lsp_types::CodeDescription;
 use lsp_types::Diagnostic;
+use lsp_types::DiagnosticTag;
 use lsp_types::Url;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
@@ -184,6 +185,10 @@ impl Error {
         let code_description = Url::parse(&self.error_kind().docs_url())
             .ok()
             .map(|href| CodeDescription { href });
+        let tags = match self.error_kind() {
+            ErrorKind::UnusedParameter => Some(vec![DiagnosticTag::UNNECESSARY]),
+            _ => None,
+        };
         Diagnostic {
             range: self.lined_buffer().to_lsp_range(self.range()),
             severity: Some(match self.severity() {
@@ -197,6 +202,7 @@ impl Error {
             message: self.msg().to_owned(),
             code: Some(lsp_types::NumberOrString::String(code)),
             code_description,
+            tags,
             ..Default::default()
         }
     }

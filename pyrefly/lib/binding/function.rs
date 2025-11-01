@@ -54,8 +54,11 @@ use crate::binding::expr::Usage;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
 use crate::binding::scope::Scope;
+use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::YieldsAndReturns;
 use crate::config::base::UntypedDefBehavior;
+use crate::config::error_kind::ErrorKind;
+use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::types::types::Type;
@@ -280,7 +283,11 @@ impl<'a> BindingsBuilder<'a> {
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
         is_async: bool,
-    ) -> (YieldsAndReturns, Option<SelfAssignments>) {
+    ) -> (
+        YieldsAndReturns,
+        Option<SelfAssignments>,
+        Vec<UnusedParameter>,
+    ) {
         self.scopes
             .push_function_scope(range, func_name, class_key.is_some(), is_async);
         self.parameters(parameters, undecorated_idx, class_key);
@@ -290,6 +297,16 @@ impl<'a> BindingsBuilder<'a> {
             &NestingContext::function(ShortIdentifier::new(func_name), parent.dupe()),
         );
         self.scopes.pop_function_scope()
+    }
+
+    fn report_unused_parameters(&self, unused_parameters: Vec<UnusedParameter>) {
+        for unused in unused_parameters {
+            self.error(
+                unused.range,
+                ErrorInfo::Kind(ErrorKind::UnusedParameter),
+                format!("Parameter `{}` is unused", unused.name),
+            );
+        }
     }
 
     fn unchecked_function_body_scope(
@@ -496,16 +513,18 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             match self.untyped_def_behavior {
                 UntypedDefBehavior::SkipAndInferReturnAny => {
-                    let (yields_and_returns, self_assignments) = self.function_body_scope(
-                        parameters,
-                        body,
-                        range,
-                        func_name,
-                        parent,
-                        undecorated_idx,
-                        class_key,
-                        is_async,
-                    );
+                    let (yields_and_returns, self_assignments, unused_parameters) = self
+                        .function_body_scope(
+                            parameters,
+                            body,
+                            range,
+                            func_name,
+                            parent,
+                            undecorated_idx,
+                            class_key,
+                            is_async,
+                        );
+                    self.report_unused_parameters(unused_parameters);
                     self.analyze_return_type(
                         func_name,
                         is_async,
@@ -520,16 +539,18 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 UntypedDefBehavior::CheckAndInferReturnAny => {
                     let implicit_return = self.implicit_return(&body, func_name);
-                    let (yields_and_returns, self_assignments) = self.function_body_scope(
-                        parameters,
-                        body,
-                        range,
-                        func_name,
-                        parent,
-                        undecorated_idx,
-                        class_key,
-                        is_async,
-                    );
+                    let (yields_and_returns, self_assignments, unused_parameters) = self
+                        .function_body_scope(
+                            parameters,
+                            body,
+                            range,
+                            func_name,
+                            parent,
+                            undecorated_idx,
+                            class_key,
+                            is_async,
+                        );
+                    self.report_unused_parameters(unused_parameters);
                     self.analyze_return_type(
                         func_name,
                         is_async,
@@ -544,16 +565,18 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 UntypedDefBehavior::CheckAndInferReturnType => {
                     let implicit_return = self.implicit_return(&body, func_name);
-                    let (yields_and_returns, self_assignments) = self.function_body_scope(
-                        parameters,
-                        body,
-                        range,
-                        func_name,
-                        parent,
-                        undecorated_idx,
-                        class_key,
-                        is_async,
-                    );
+                    let (yields_and_returns, self_assignments, unused_parameters) = self
+                        .function_body_scope(
+                            parameters,
+                            body,
+                            range,
+                            func_name,
+                            parent,
+                            undecorated_idx,
+                            class_key,
+                            is_async,
+                        );
+                    self.report_unused_parameters(unused_parameters);
                     self.analyze_return_type(
                         func_name,
                         is_async,

@@ -1034,3 +1034,14 @@ async def bar():
     await foo()  # ok
     x = foo()  # ok
 ```
+
+## unused-parameter
+
+This diagnostic is emitted when a function parameter's value is never read inside the
+function body. Prefix the parameter name with `_` (for example, `_unused`) or use
+conventions such as `self`/`cls` to indicate intentional non-use.
+
+```python
+def greet(name: str, unused: int) -> str:
+    return f"Hello {name}"
+```
