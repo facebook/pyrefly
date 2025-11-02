@@ -74,6 +74,22 @@ impl KwCall {
     }
 }
 
+/// Numeric range constraints extracted from metadata such as `annotated_types.Gt`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, VisitMut, TypeEq)]
+pub struct RangeConstraints {
+    pub lt: Option<Type>,
+    pub gt: Option<Type>,
+    pub ge: Option<Type>,
+    pub le: Option<Type>,
+}
+
+impl RangeConstraints {
+    pub fn is_empty(&self) -> bool {
+        self.lt.is_none() && self.gt.is_none() && self.ge.is_none() && self.le.is_none()
+    }
+}
+
 /// Parameters to `typing.dataclass_transform`.
 /// See https://typing.python.org/en/latest/spec/dataclasses.html#dataclass-transform-parameters.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -132,6 +148,7 @@ pub struct DataclassFieldKeywords {
     pub lt: Option<Type>,
     pub gt: Option<Type>,
     pub ge: Option<Type>,
+    pub le: Option<Type>,
     /// Whether we should strictly evaluate the type of the field
     pub strict: Option<bool>,
     /// If a converter callable is passed in, its first positional parameter
@@ -160,6 +177,7 @@ impl DataclassFieldKeywords {
             lt: None,
             gt: None,
             ge: None,
+            le: None,
             converter_param: None,
             strict: None,
         }

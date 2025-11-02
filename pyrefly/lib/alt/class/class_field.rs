@@ -28,6 +28,7 @@ use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -64,6 +65,8 @@ use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::keywords::DataclassFieldKeywords;
+use crate::types::keywords::RangeConstraints;
+use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::quantified::Quantified;
 use crate::types::read_only::ReadOnlyReason;
@@ -79,6 +82,13 @@ use crate::types::types::OverloadType;
 use crate::types::types::SuperObj;
 use crate::types::types::TArgs;
 use crate::types::types::Type;
+
+fn int_literal_from_type(ty: &Type) -> Option<LitInt> {
+    match ty {
+        Type::Literal(Lit::Int(lit)) => Some(lit.clone()),
+        _ => None,
+    }
+}
 
 /// The result of looking up an attribute access on a class (either as an instance or a
 /// class access, and possibly through a special case lookup such as a type var with a bound).
@@ -583,6 +593,7 @@ impl ClassField {
                     Some(Annotation {
                         ty: Some(ty),
                         qualifiers,
+                        range_constraints: _,
                     }),
                 ..
             } => Some(TypedDictField {
@@ -961,6 +972,86 @@ pub enum DataclassMember {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn merge_range_constraints_into_keywords(
+        &self,
+        keywords: &mut DataclassFieldKeywords,
+        constraints: &RangeConstraints,
+    ) {
+        if keywords.gt.is_none() {
+            if let Some(gt) = &constraints.gt {
+                keywords.gt = Some(gt.clone());
+            }
+        }
+        if keywords.ge.is_none() {
+            if let Some(ge) = &constraints.ge {
+                keywords.ge = Some(ge.clone());
+            }
+        }
+        if keywords.lt.is_none() {
+            if let Some(lt) = &constraints.lt {
+                keywords.lt = Some(lt.clone());
+            }
+        }
+        if keywords.le.is_none() {
+            if let Some(le) = &constraints.le {
+                keywords.le = Some(le.clone());
+            }
+        }
+    }
+
+    fn check_pydantic_range_default(
+        &self,
+        field_name: &Name,
+        expr: &Expr,
+        value_ty: &Type,
+        keywords: &DataclassFieldKeywords,
+        errors: &ErrorCollector,
+    ) {
+        let Some(value_lit) = int_literal_from_type(value_ty) else {
+            return;
+        };
+        let emit_violation = |label: &str, constraint_ty: &Type| {
+            let Some(constraint_lit) = int_literal_from_type(constraint_ty) else {
+                return;
+            };
+            let comparison = value_lit.cmp(&constraint_lit);
+            let violates = match label {
+                "gt" => !matches!(comparison, std::cmp::Ordering::Greater),
+                "ge" => matches!(comparison, std::cmp::Ordering::Less),
+                "lt" => !matches!(comparison, std::cmp::Ordering::Less),
+                "le" => matches!(comparison, std::cmp::Ordering::Greater),
+                _ => false,
+            };
+            if violates {
+                self.error(
+                    errors,
+                    expr.range(),
+                    ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                    format!(
+                        "Default value `{}` violates Pydantic `{}` constraint `{}` for field `{}`",
+                        self.for_display(value_ty.clone()),
+                        label,
+                        self.for_display(constraint_ty.clone()),
+                        field_name
+                    ),
+                );
+            }
+        };
+
+        if let Some(gt) = &keywords.gt {
+            emit_violation("gt", gt);
+        }
+        if let Some(ge) = &keywords.ge {
+            emit_violation("ge", ge);
+        }
+        if let Some(lt) = &keywords.lt {
+            emit_violation("lt", lt);
+        }
+        if let Some(le) = &keywords.le {
+            emit_violation("le", le);
+        }
+    }
+
     pub fn calculate_class_field(
         &self,
         class: &Class,
@@ -1113,24 +1204,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .as_ref()
                 .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar))
         };
-        let initialization =
+        let mut initialization =
             self.get_class_field_initialization(&metadata, initial_value, magically_initialized);
+
+        if metadata.is_pydantic_base_model() {
+            if let Some(annot) = &direct_annotation {
+                if !annot.range_constraints.is_empty() {
+                    let mut maybe_keywords = match &initialization {
+                        ClassFieldInitialization::ClassBody(Some(k)) => Some(k.clone()),
+                        _ => None,
+                    };
+                    let keywords = maybe_keywords.get_or_insert_with(DataclassFieldKeywords::new);
+                    self.merge_range_constraints_into_keywords(keywords, &annot.range_constraints);
+                    initialization = ClassFieldInitialization::ClassBody(Some(keywords.clone()));
+                }
+            }
+        }
 
         // Note: the subset check here is too conservative when it comes to modeling runtime behavior
         // we want to check if the bound_val is coercible to the annotation type at runtime.
         // statically, this could be a challenge, which is why we go with this more conservative approach for now.
         if metadata.is_pydantic_base_model()
             && let Some(annot) = &direct_annotation
-            && let ClassFieldInitialization::ClassBody(Some(DataclassFieldKeywords {
-                gt,
-                lt,
-                ge,
-                ..
-            })) = &initialization
+            && let ClassFieldInitialization::ClassBody(Some(field_flags)) = &initialization
         {
             let field_ty = annot.get_type();
 
-            for (bound_val, label) in [(gt, "gt"), (lt, "lt"), (ge, "ge")] {
+            let DataclassFieldKeywords { gt, lt, ge, le, .. } = field_flags;
+            for (bound_val, label) in [(gt, "gt"), (lt, "lt"), (ge, "ge"), (le, "le")] {
                 let Some(val) = bound_val else { continue };
                 if !self.is_subset_eq(val, field_ty) {
                     self.error(
@@ -1159,6 +1260,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ErrorInfo::Kind(ErrorKind::BadClassDefinition),
                 format!("TypedDict item `{name}` may not be initialized"),
             );
+        }
+        if metadata.is_pydantic_base_model()
+            && let ClassFieldInitialization::ClassBody(Some(keywords)) = &initialization
+            && let RawClassFieldInitialization::ClassBody(Some(expr)) = initial_value
+        {
+            self.check_pydantic_range_default(name, expr, &value_ty, keywords, errors);
         }
         if metadata.is_typed_dict()
             || metadata
