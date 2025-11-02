@@ -218,9 +218,9 @@ fn test_unused_parameter_diagnostic() {
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
-        configuration: Some(Some(
-            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
-        )),
+        configuration: Some(Some(serde_json::json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]))),
         ..Default::default()
     });
 
@@ -228,7 +228,9 @@ fn test_unused_parameter_diagnostic() {
     interaction.client.expect_configuration_request(2, None);
     interaction.server.send_configuration_response(
         2,
-        serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+        serde_json::json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]),
     );
 
     interaction.server.did_open("unused_parameter/example.py");
@@ -267,9 +269,9 @@ fn test_unused_parameter_ignores_pass_body() {
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
-        configuration: Some(Some(
-            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
-        )),
+        configuration: Some(Some(serde_json::json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]))),
         ..Default::default()
     });
 
@@ -277,7 +279,9 @@ fn test_unused_parameter_ignores_pass_body() {
     interaction.client.expect_configuration_request(2, None);
     interaction.server.send_configuration_response(
         2,
-        serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+        serde_json::json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]),
     );
 
     interaction.server.did_open("unused_parameter/pass_only.py");

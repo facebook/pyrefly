@@ -285,7 +285,7 @@ impl ErrorKind {
             ErrorKind::RevealType => Severity::Info,
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::RedundantCast => Severity::Warn,
-            ErrorKind::UnusedParameter => Severity::Warn,
+            ErrorKind::UnusedParameter => Severity::Ignore,
             // TODO(rechen): re-enable this once we figure out how to make it less noisy.
             ErrorKind::UntypedImport => Severity::Ignore,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,

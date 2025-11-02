@@ -1,0 +1,2 @@
+[errors]
+unused-parameter = "warn"
