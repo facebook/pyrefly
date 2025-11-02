@@ -32,6 +32,7 @@ use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::types::pydantic::PydanticModelKind;
 use crate::binding::pydantic::GE;
 use crate::binding::pydantic::GT;
+use crate::binding::pydantic::LE;
 use crate::binding::pydantic::LT;
 use crate::binding::pydantic::STRICT;
 use crate::config::error_kind::ErrorKind;
@@ -287,6 +288,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let gt = map.0.get(&GT).cloned();
         let lt = map.0.get(&LT).cloned();
         let ge = map.0.get(&GE).cloned();
+        let le = map.0.get(&LE).cloned();
 
         let strict: Option<bool> = map.0.get(&STRICT).and_then(|v| v.as_bool());
 
@@ -321,6 +323,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             lt,
             gt,
             ge,
+            le,
             strict,
             converter_param,
         }

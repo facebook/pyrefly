@@ -25,6 +25,7 @@ pub const VALIDATE_BY_ALIAS: Name = Name::new_static("validate_by_alias");
 pub const GT: Name = Name::new_static("gt");
 pub const LT: Name = Name::new_static("lt");
 pub const GE: Name = Name::new_static("ge");
+pub const LE: Name = Name::new_static("le");
 pub const ROOT: Name = Name::new_static("root");
 pub const STRICT: Name = Name::new_static("strict");
 pub const STRICT_DEFAULT: bool = false;

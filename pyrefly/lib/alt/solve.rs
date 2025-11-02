@@ -14,6 +14,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::facet::FacetKind;
+use pyrefly_types::keywords::RangeConstraints;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
@@ -137,6 +138,26 @@ use crate::types::types::TypeAlias;
 use crate::types::types::TypeAliasStyle;
 use crate::types::types::Var;
 
+#[derive(Debug, Clone, Copy)]
+enum RangeConstraintKind {
+    Gt,
+    Ge,
+    Lt,
+    Le,
+}
+
+fn expr_qualified_name(expr: &Expr) -> Option<Vec<String>> {
+    match expr {
+        Expr::Name(name) => Some(vec![name.id.to_string()]),
+        Expr::Attribute(attr) => {
+            let mut base = expr_qualified_name(&attr.value)?;
+            base.push(attr.attr.id.to_string());
+            Some(base)
+        }
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TypeFormContext {
     /// Expression in a base class list
@@ -217,6 +238,29 @@ pub enum Iterable {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn parse_range_constraint_metadata(&self, expr: &Expr) -> Option<(RangeConstraintKind, Type)> {
+        let call = expr.as_call_expr()?;
+        let qual_name = expr_qualified_name(&call.func)?;
+        let last = qual_name.last()?.as_str();
+        let kind = match last {
+            "Gt" => RangeConstraintKind::Gt,
+            "Ge" => RangeConstraintKind::Ge,
+            "Lt" => RangeConstraintKind::Lt,
+            "Le" => RangeConstraintKind::Le,
+            _ => return None,
+        };
+        let arg_expr = call.arguments.args.first()?;
+        if call.arguments.args.len() != 1 {
+            return None;
+        }
+        // Ignore keyword arguments for now; we only handle positional constraints.
+        if !call.arguments.keywords.is_empty() {
+            return None;
+        }
+        let ty = self.expr_infer(arg_expr, &self.error_swallower());
+        Some((kind, ty))
+    }
+
     pub fn solve_legacy_tparam(
         &self,
         binding: &BindingLegacyTypeParam,
@@ -422,6 +466,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Annotation {
                     qualifiers: vec![qualifier],
                     ty: Some(self.expr_infer(&x.slice, errors)),
+                    range_constraints: RangeConstraints::default(),
                 }
             }
             _ => Annotation::new_type(self.expr_infer(x, errors)),
@@ -597,6 +642,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Annotation {
                     qualifiers: vec![qualifier],
                     ty: None,
+                    range_constraints: RangeConstraints::default(),
                 }
             }
             Expr::Subscript(x)
@@ -628,6 +674,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 let mut ann = self.expr_annotation(&unpacked_slice[0], type_form_context, errors);
+                if qualifier == Qualifier::Annotated {
+                    for meta in unpacked_slice.iter().skip(1) {
+                        if let Some((kind, constraint_ty)) =
+                            self.parse_range_constraint_metadata(meta)
+                        {
+                            match kind {
+                                RangeConstraintKind::Gt => {
+                                    ann.range_constraints.gt = Some(constraint_ty.clone())
+                                }
+                                RangeConstraintKind::Ge => {
+                                    ann.range_constraints.ge = Some(constraint_ty.clone())
+                                }
+                                RangeConstraintKind::Lt => {
+                                    ann.range_constraints.lt = Some(constraint_ty.clone())
+                                }
+                                RangeConstraintKind::Le => {
+                                    ann.range_constraints.le = Some(constraint_ty.clone())
+                                }
+                            }
+                        }
+                    }
+                }
                 if qualifier == Qualifier::ClassVar && ann.get_type().any(|x| x.is_type_variable())
                 {
                     self.error(
@@ -671,8 +739,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ann
             }
             _ => {
-                let ann_ty = self.expr_untype(x, type_form_context, errors);
-                if let Type::SpecialForm(special_form) = ann_ty
+                let inferred_ty = self.expr_infer(x, errors);
+                if type_form_context == TypeFormContext::BaseClassList
+                    && let Type::TypeAlias(ta) = &inferred_ty
+                    && ta.style == TypeAliasStyle::Scoped
+                {
+                    self.error(
+                        errors,
+                        x.range(),
+                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                        format!(
+                            "Cannot use scoped type alias `{}` as a base class. Use a legacy type alias instead: `{}: TypeAlias = {}`",
+                            ta.name,
+                            ta.name,
+                            self.for_display(ta.as_type())
+                        ),
+                    );
+                    return Annotation::new_type(Type::any_error());
+                }
+                let ann_ty = self.untype(inferred_ty.clone(), x.range(), errors);
+                let ann_ty = self.validate_type_form(ann_ty, x.range(), type_form_context, errors);
+                if let Type::SpecialForm(special_form) = ann_ty.clone()
                     && !type_form_context.is_valid_unparameterized_annotation(special_form)
                 {
                     if special_form.can_be_subscripted() {
@@ -691,7 +778,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                     }
                 }
-                Annotation::new_type(ann_ty)
+                let mut annotation = Annotation::new_type(ann_ty);
+                if let Type::TypeAlias(ta) = inferred_ty {
+                    annotation.range_constraints = ta.range_constraints().clone();
+                }
+                annotation
             }
         }
     }
@@ -1177,23 +1268,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         // Extract Annotated metadata; skip the first element since that's the type and collect the rest of the vector
-        let annotated_metadata = match expr {
+        let (annotated_metadata, range_constraints) = match expr {
             Expr::Subscript(s)
                 if matches!(
                     self.expr_qualifier(&s.value, TypeFormContext::TypeAlias, errors),
                     Some(Qualifier::Annotated)
                 ) =>
             {
-                Ast::unpack_slice(&s.slice)
-                    .iter()
-                    .skip(1)
-                    .map(|e| self.expr_infer(e, &self.error_swallower()))
-                    .collect()
+                let mut metadata = Vec::new();
+                let mut constraints = RangeConstraints::default();
+                for e in Ast::unpack_slice(&s.slice).iter().skip(1) {
+                    if let Some((kind, ty)) = self.parse_range_constraint_metadata(e) {
+                        match kind {
+                            RangeConstraintKind::Gt => constraints.gt = Some(ty.clone()),
+                            RangeConstraintKind::Ge => constraints.ge = Some(ty.clone()),
+                            RangeConstraintKind::Lt => constraints.lt = Some(ty.clone()),
+                            RangeConstraintKind::Le => constraints.le = Some(ty.clone()),
+                        }
+                    }
+                    metadata.push(self.expr_infer(e, &self.error_swallower()));
+                }
+                (metadata, constraints)
             }
-            _ => Vec::new(),
+            _ => (Vec::new(), RangeConstraints::default()),
         };
 
-        let ta = TypeAlias::new(name.clone(), Type::type_form(ty), style, annotated_metadata);
+        let ta = TypeAlias::new(
+            name.clone(),
+            Type::type_form(ty),
+            style,
+            annotated_metadata,
+            range_constraints,
+        );
 
         Forallable::TypeAlias(ta).forall(self.validated_tparams(
             range,
@@ -2874,6 +2980,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Annotation {
                                 ty: Some(want),
                                 qualifiers: _,
+                                range_constraints: _,
                             },
                     } = &*self.get_idx(*k)
                 {
@@ -2893,6 +3000,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Annotation {
                                 ty: Some(want),
                                 qualifiers: _,
+                                range_constraints: _,
                             },
                     } = &*self.get_idx(*k)
                 {
@@ -2914,6 +3022,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Annotation {
                                 ty: Some(want),
                                 qualifiers: _,
+                                range_constraints: _,
                             },
                     } = &*self.get_idx(*k)
                 {
@@ -3468,6 +3577,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Annotation {
                                 ty: Some(want),
                                 qualifiers: _,
+                                range_constraints: _,
                             },
                     } = &*self.get_idx(*k)
                 {
