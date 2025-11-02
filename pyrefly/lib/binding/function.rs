@@ -496,6 +496,10 @@ impl<'a> BindingsBuilder<'a> {
             FunctionStubOrImpl::Impl
         };
 
+        let body_is_single_pass = matches!(body.as_slice(), [Stmt::Pass(_)]);
+        let should_report_unused_parameters =
+            stub_or_impl == FunctionStubOrImpl::Impl && !body_is_single_pass;
+
         let self_assignments = if decorators.has_no_type_check
             || (self.untyped_def_behavior == UntypedDefBehavior::SkipAndInferReturnAny
                 && !is_annotated(&return_ann_with_range, parameters))
@@ -524,7 +528,7 @@ impl<'a> BindingsBuilder<'a> {
                             class_key,
                             is_async,
                         );
-                    if stub_or_impl == FunctionStubOrImpl::Impl {
+                    if should_report_unused_parameters {
                         self.report_unused_parameters(unused_parameters);
                     }
                     self.analyze_return_type(
@@ -552,7 +556,7 @@ impl<'a> BindingsBuilder<'a> {
                             class_key,
                             is_async,
                         );
-                    if stub_or_impl == FunctionStubOrImpl::Impl {
+                    if should_report_unused_parameters {
                         self.report_unused_parameters(unused_parameters);
                     }
                     self.analyze_return_type(
@@ -580,7 +584,7 @@ impl<'a> BindingsBuilder<'a> {
                             class_key,
                             is_async,
                         );
-                    if stub_or_impl == FunctionStubOrImpl::Impl {
+                    if should_report_unused_parameters {
                         self.report_unused_parameters(unused_parameters);
                     }
                     self.analyze_return_type(

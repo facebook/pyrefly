@@ -261,6 +261,42 @@ fn test_unused_parameter_diagnostic() {
     interaction.shutdown();
 }
 
+#[test]
+fn test_unused_parameter_ignores_pass_body() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(Some(
+            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+        )),
+        ..Default::default()
+    });
+
+    interaction.server.did_change_configuration();
+    interaction.client.expect_configuration_request(2, None);
+    interaction.server.send_configuration_response(
+        2,
+        serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+    );
+
+    interaction.server.did_open("unused_parameter/pass_only.py");
+    interaction
+        .server
+        .diagnostic("unused_parameter/pass_only.py");
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
+        result: Some(serde_json::json!({
+            "items": [],
+            "kind": "full"
+        })),
+        error: None,
+    });
+
+    interaction.shutdown();
+}
+
 #[cfg(unix)]
 #[test]
 fn test_publish_diagnostics_preserves_symlink_uri() {
