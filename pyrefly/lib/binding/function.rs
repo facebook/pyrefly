@@ -524,7 +524,9 @@ impl<'a> BindingsBuilder<'a> {
                             class_key,
                             is_async,
                         );
-                    self.report_unused_parameters(unused_parameters);
+                    if stub_or_impl == FunctionStubOrImpl::Impl {
+                        self.report_unused_parameters(unused_parameters);
+                    }
                     self.analyze_return_type(
                         func_name,
                         is_async,
@@ -550,7 +552,9 @@ impl<'a> BindingsBuilder<'a> {
                             class_key,
                             is_async,
                         );
-                    self.report_unused_parameters(unused_parameters);
+                    if stub_or_impl == FunctionStubOrImpl::Impl {
+                        self.report_unused_parameters(unused_parameters);
+                    }
                     self.analyze_return_type(
                         func_name,
                         is_async,
@@ -576,7 +580,9 @@ impl<'a> BindingsBuilder<'a> {
                             class_key,
                             is_async,
                         );
-                    self.report_unused_parameters(unused_parameters);
+                    if stub_or_impl == FunctionStubOrImpl::Impl {
+                        self.report_unused_parameters(unused_parameters);
+                    }
                     self.analyze_return_type(
                         func_name,
                         is_async,
