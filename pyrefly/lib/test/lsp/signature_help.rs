@@ -94,7 +94,7 @@ Signature Help Result: active=0
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 0
+) -> None: ..., parameters=[a: str, b: int, c: bool], active parameter = 0
 
 6 | f("", )
          ^
@@ -103,7 +103,7 @@ Signature Help Result: active=0
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 1
+) -> None: ..., parameters=[a: str, b: int, c: bool], active parameter = 1
 
 8 | f("",3, )
            ^
@@ -112,7 +112,7 @@ Signature Help Result: active=0
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 2
+) -> None: ..., parameters=[a: str, b: int, c: bool], active parameter = 2
 
 10 | f("",3,True)
             ^
@@ -121,7 +121,7 @@ Signature Help Result: active=0
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 2
+) -> None: ..., parameters=[a: str, b: int, c: bool], active parameter = 2
 "#
         .trim(),
         report.trim(),
@@ -143,7 +143,7 @@ f(
 4 | f(
       ^
 Signature Help Result: active=0
-- def f(a: str) -> None, parameters=[a: str], active parameter = 0
+- def f(a: str) -> None: ..., parameters=[a: str], active parameter = 0
 "#
         .trim(),
         report.trim(),
@@ -168,12 +168,12 @@ f(g())
 5 | f()
       ^
 Signature Help Result: active=0
-- def f(a: str) -> None, parameters=[a: str], active parameter = 0
+- def f(a: str) -> None: ..., parameters=[a: str], active parameter = 0
 
 7 | f(g())
         ^
 Signature Help Result: active=0
-- def g(b: int) -> None, parameters=[b: int], active parameter = 0
+- def g(b: int) -> None: ..., parameters=[b: int], active parameter = 0
 "#
         .trim(),
         report.trim(),
@@ -208,7 +208,7 @@ Signature Help Result: active=0
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 0
+) -> None: ..., parameters=[a: str, b: int, c: bool], active parameter = 0
 
 8 | foo.f("", )
              ^
@@ -218,7 +218,7 @@ Signature Help Result: active=0
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 1
+) -> None: ..., parameters=[a: str, b: int, c: bool], active parameter = 1
 
 10 | foo.f("",3, )
                 ^
@@ -228,7 +228,7 @@ Signature Help Result: active=0
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 2
+) -> None: ..., parameters=[a: str, b: int, c: bool], active parameter = 2
 
 12 | foo.f("",3,True)
                 ^
@@ -238,7 +238,7 @@ Signature Help Result: active=0
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 2
+) -> None: ..., parameters=[a: str, b: int, c: bool], active parameter = 2
 "#
         .trim(),
         report.trim(),
