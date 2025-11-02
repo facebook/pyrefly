@@ -41,6 +41,7 @@ use crate::class::ClassKind;
 use crate::class::ClassType;
 use crate::keywords::DataclassTransformKeywords;
 use crate::keywords::KwCall;
+use crate::keywords::RangeConstraints;
 use crate::literal::Lit;
 use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
@@ -327,20 +328,32 @@ pub struct TypeAlias {
     ty: Box<Type>,
     pub style: TypeAliasStyle,
     annotated_metadata: Box<[Type]>,
+    range_constraints: RangeConstraints,
 }
 
 impl TypeAlias {
-    pub fn new(name: Name, ty: Type, style: TypeAliasStyle, annotated_metadata: Vec<Type>) -> Self {
+    pub fn new(
+        name: Name,
+        ty: Type,
+        style: TypeAliasStyle,
+        annotated_metadata: Vec<Type>,
+        range_constraints: RangeConstraints,
+    ) -> Self {
         Self {
             name: Box::new(name),
             ty: Box::new(ty),
             style,
             annotated_metadata: annotated_metadata.into_boxed_slice(),
+            range_constraints,
         }
     }
 
     pub fn annotated_metadata(&self) -> &[Type] {
         &self.annotated_metadata
+    }
+
+    pub fn range_constraints(&self) -> &RangeConstraints {
+        &self.range_constraints
     }
 
     /// Gets the type contained within the type alias for use in a value
