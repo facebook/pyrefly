@@ -906,7 +906,7 @@ impl<'a> Transaction<'a> {
             |(callables, chosen_overload_index, arg_index)| SignatureHelp {
                 signatures: callables
                     .into_iter()
-                    .map(|t| Self::create_signature_information(t, arg_index))
+                    .map(|t| Self::create_signature_information(t)) // Remove arg_index parameter
                     .collect_vec(),
                 active_signature: Some(chosen_overload_index as u32),
                 active_parameter: Some(arg_index as u32),
@@ -914,31 +914,23 @@ impl<'a> Transaction<'a> {
         )
     }
 
-    fn create_signature_information(type_: Type, arg_index: usize) -> SignatureInformation {
+    fn create_signature_information(type_: Type) -> SignatureInformation {
         let type_ = type_.deterministic_printing();
         let label = type_.as_hover_string();
-        let (parameters, active_parameter) =
+        let parameters =
             if let Some(params) = Self::normalize_singleton_function_type_into_params(type_) {
-                let active_parameter = if arg_index < params.len() {
-                    Some(arg_index as u32)
-                } else {
-                    None
-                };
-                (
-                    Some(params.map(|param| ParameterInformation {
-                        label: ParameterLabel::Simple(format!("{param}")),
-                        documentation: None,
-                    })),
-                    active_parameter,
-                )
+                Some(params.map(|param| ParameterInformation {
+                    label: ParameterLabel::Simple(format!("{param}")),
+                    documentation: None,
+                }))
             } else {
-                (None, None)
+                None
             };
         SignatureInformation {
             label,
             documentation: None,
             parameters,
-            active_parameter,
+            active_parameter: None, // Don't set this per-signature
         }
     }
 

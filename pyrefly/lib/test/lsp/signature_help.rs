@@ -20,11 +20,16 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
     if let Some(SignatureHelp {
         signatures,
         active_signature,
-        active_parameter: _,
+        active_parameter,
     }) = state.transaction().get_signature_help_at(handle, position)
     {
         let active_signature_result = if let Some(active) = active_signature {
             format!(" active={active}")
+        } else {
+            "".to_owned()
+        };
+        let active_parameter_result = if let Some(active) = active_parameter {
+            format!(", active parameter={active}")
         } else {
             "".to_owned()
         };
@@ -63,7 +68,10 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
                 },
             )
             .join("\n");
-        format!("Signature Help Result:{active_signature_result}\n{signatures_result}")
+        // format!("Signature Help Result:{active_signature_result}\n{signatures_result}")
+        format!(
+            "Signature Help Result:{active_signature_result}{active_parameter_result}\n{signatures_result}"
+        )
     } else {
         "Signature Help: None".to_owned()
     }
@@ -89,39 +97,39 @@ f("",3,True)
 # main.py
 4 | f()
       ^
-Signature Help Result: active=0
+Signature Help Result: active=0, active parameter=0
 - def f(
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 0
+) -> None, parameters=[a: str, b: int, c: bool]
 
 6 | f("", )
          ^
-Signature Help Result: active=0
+Signature Help Result: active=0, active parameter=1
 - def f(
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 1
+) -> None, parameters=[a: str, b: int, c: bool]
 
 8 | f("",3, )
            ^
-Signature Help Result: active=0
+Signature Help Result: active=0, active parameter=2
 - def f(
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 2
+) -> None, parameters=[a: str, b: int, c: bool]
 
 10 | f("",3,True)
             ^
-Signature Help Result: active=0
+Signature Help Result: active=0, active parameter=2
 - def f(
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 2
+) -> None, parameters=[a: str, b: int, c: bool]
 "#
         .trim(),
         report.trim(),
@@ -142,8 +150,8 @@ f(
 # main.py
 4 | f(
       ^
-Signature Help Result: active=0
-- def f(a: str) -> None, parameters=[a: str], active parameter = 0
+Signature Help Result: active=0, active parameter=0
+- def f(a: str) -> None, parameters=[a: str]
 "#
         .trim(),
         report.trim(),
@@ -167,13 +175,13 @@ f(g())
 # main.py
 5 | f()
       ^
-Signature Help Result: active=0
-- def f(a: str) -> None, parameters=[a: str], active parameter = 0
+Signature Help Result: active=0, active parameter=0
+- def f(a: str) -> None, parameters=[a: str]
 
 7 | f(g())
         ^
-Signature Help Result: active=0
-- def g(b: int) -> None, parameters=[b: int], active parameter = 0
+Signature Help Result: active=0, active parameter=0
+- def g(b: int) -> None, parameters=[b: int]
 "#
         .trim(),
         report.trim(),
@@ -202,43 +210,43 @@ foo.f("",3,True)
 # main.py
 6 | foo.f()
           ^
-Signature Help Result: active=0
+Signature Help Result: active=0, active parameter=0
 - def f(
     self: Foo,
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 0
+) -> None, parameters=[a: str, b: int, c: bool]
 
 8 | foo.f("", )
              ^
-Signature Help Result: active=0
+Signature Help Result: active=0, active parameter=1
 - def f(
     self: Foo,
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 1
+) -> None, parameters=[a: str, b: int, c: bool]
 
 10 | foo.f("",3, )
                 ^
-Signature Help Result: active=0
+Signature Help Result: active=0, active parameter=2
 - def f(
     self: Foo,
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 2
+) -> None, parameters=[a: str, b: int, c: bool]
 
 12 | foo.f("",3,True)
                 ^
-Signature Help Result: active=0
+Signature Help Result: active=0, active parameter=2
 - def f(
     self: Foo,
     a: str,
     b: int,
     c: bool
-) -> None, parameters=[a: str, b: int, c: bool], active parameter = 2
+) -> None, parameters=[a: str, b: int, c: bool]
 "#
         .trim(),
         report.trim(),
@@ -272,30 +280,30 @@ overloaded_func(1, T)
 # main.py
 13 | overloaded_func()
                      ^
-Signature Help Result: active=0
-- (a: str) -> bool, parameters=[a: str], active parameter = 0
+Signature Help Result: active=0, active parameter=0
+- (a: str) -> bool, parameters=[a: str]
 - (
     a: int,
     b: bool
-) -> str, parameters=[a: int, b: bool], active parameter = 0
+) -> str, parameters=[a: int, b: bool]
 
 15 | overloaded_func(1, )
                        ^
-Signature Help Result: active=0
+Signature Help Result: active=0, active parameter=1
 - (a: str) -> bool, parameters=[a: str]
 - (
     a: int,
     b: bool
-) -> str, parameters=[a: int, b: bool], active parameter = 1
+) -> str, parameters=[a: int, b: bool]
 
 17 | overloaded_func(1, T)
                         ^
-Signature Help Result: active=1
+Signature Help Result: active=1, active parameter=1
 - (a: str) -> bool, parameters=[a: str]
 - (
     a: int,
     b: bool
-) -> str, parameters=[a: int, b: bool], active parameter = 1
+) -> str, parameters=[a: int, b: bool]
 "#
         .trim(),
         report.trim(),
@@ -331,20 +339,20 @@ foo.overloaded_meth(1, F)
 # main.py
 15 | foo.overloaded_meth()
                          ^
-Signature Help Result: active=0
+Signature Help Result: active=0, active parameter=0
 - (
     self: Foo,
     a: str
-) -> bool, parameters=[a: str], active parameter = 0
+) -> bool, parameters=[a: str]
 - (
     self: Foo,
     a: int,
     b: bool
-) -> str, parameters=[a: int, b: bool], active parameter = 0
+) -> str, parameters=[a: int, b: bool]
 
 17 | foo.overloaded_meth(1, )
                             ^
-Signature Help Result: active=0
+Signature Help Result: active=0, active parameter=1
 - (
     self: Foo,
     a: str
@@ -353,11 +361,11 @@ Signature Help Result: active=0
     self: Foo,
     a: int,
     b: bool
-) -> str, parameters=[a: int, b: bool], active parameter = 1
+) -> str, parameters=[a: int, b: bool]
 
 19 | foo.overloaded_meth(1, F)
                             ^
-Signature Help Result: active=1
+Signature Help Result: active=1, active parameter=1
 - (
     self: Foo,
     a: str
@@ -366,7 +374,7 @@ Signature Help Result: active=1
     self: Foo,
     a: int,
     b: bool
-) -> str, parameters=[a: int, b: bool], active parameter = 1
+) -> str, parameters=[a: int, b: bool]
 "#
         .trim(),
         report.trim(),
