@@ -137,11 +137,13 @@ y: type[Any] = Foo  # E: `type[Foo]` is not assignable to `type[Any]`
 );
 
 testcase!(
-    test_new_type_missing_mro,
+    test_new_type_runtime_attrs,
     r#"
 from typing import NewType
 Foo = NewType("Foo", int)
-Foo.mro()  # E: Class `Foo` has no class attribute `mro`
+Foo.__getattribute__
+Foo.__repr__
+Foo.mro()  # E: Object of class `object` has no attribute `mro`
     "#,
 );
 
