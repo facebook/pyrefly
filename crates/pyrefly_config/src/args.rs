@@ -156,6 +156,9 @@ pub struct ConfigOverrideArgs {
     /// Do not emit diagnostics for this rule. Can be used multiple times.
     #[arg(long, hide_possible_values = true)]
     ignore: Vec<ErrorKind>,
+    /// Force this rule to emit an info-level diagnostic. Can be used multiple times.
+    #[arg(long, hide_possible_values = true)]
+    info: Vec<ErrorKind>,
 }
 
 impl ConfigOverrideArgs {
@@ -173,6 +176,7 @@ impl ConfigOverrideArgs {
         let ignored_errors = &self.ignore.iter().collect::<HashSet<_>>();
         let warn_errors = &self.warn.iter().collect::<HashSet<_>>();
         let error_errors = self.error.iter().collect::<HashSet<_>>();
+        let info_errors = self.info.iter().collect::<HashSet<_>>();
         let error_ignore_conflicts: Vec<_> = error_errors.intersection(ignored_errors).collect();
         if !error_ignore_conflicts.is_empty() {
             return Err(anyhow::anyhow!(
@@ -192,6 +196,27 @@ impl ConfigOverrideArgs {
             return Err(anyhow::anyhow!(
                 "Error types are specified for both --warn and --ignore: [{}]",
                 display::commas_iter(|| ignore_warn_conflicts.iter().map(|&&s| s))
+            ));
+        }
+        let error_info_conflicts: Vec<_> = error_errors.intersection(&info_errors).collect();
+        if !error_info_conflicts.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Error types are specified for both --info and --error: [{}]",
+                display::commas_iter(|| error_info_conflicts.iter().map(|&&s| s))
+            ));
+        }
+        let warn_info_conflicts: Vec<_> = warn_errors.intersection(&info_errors).collect();
+        if !warn_info_conflicts.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Error types are specified for both --info and --warn: [{}]",
+                display::commas_iter(|| warn_info_conflicts.iter().map(|&&s| s))
+            ));
+        }
+        let ignore_info_conflicts: Vec<_> = ignored_errors.intersection(&info_errors).collect();
+        if !ignore_info_conflicts.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Error types are specified for both --info and --ignore: [{}]",
+                display::commas_iter(|| ignore_info_conflicts.iter().map(|&&s| s))
             ));
         }
         Ok(())
@@ -290,6 +315,9 @@ impl ConfigOverrideArgs {
             }
             for error_kind in &self.ignore {
                 apply_severity(error_kind, Severity::Ignore);
+            }
+            for error_kind in &self.info{
+                apply_severity(error_kind, Severity::Info);
             }
             missing_source_severity
         };
