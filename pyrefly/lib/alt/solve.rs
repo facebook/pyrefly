@@ -147,6 +147,8 @@ enum RangeConstraintKind {
 }
 
 fn expr_qualified_name(expr: &Expr) -> Option<Vec<String>> {
+    /// Walks attribute/name expressions like `annotated_types.Gt`
+    /// so we can match against the exact helper that produced a Pydantic metadata value.
     match expr {
         Expr::Name(name) => Some(vec![name.id.to_string()]),
         Expr::Attribute(attr) => {
@@ -239,6 +241,10 @@ pub enum Iterable {
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn parse_range_constraint_metadata(&self, expr: &Expr) -> Option<(RangeConstraintKind, Type)> {
+        // Annotated metadata can contain arbitrary expressions; we only care about the small set
+        // of `annotated_types.Gt/Ge/Lt/Le` helpers. When we see one, capture the literal argument
+        // as a Type so downstream consumers (Pydantic field synthesis) can reason about
+        // the numeric bound without having to re-parse the AST.
         let call = expr.as_call_expr()?;
         let qual_name = expr_qualified_name(&call.func)?;
         let last = qual_name.last()?.as_str();

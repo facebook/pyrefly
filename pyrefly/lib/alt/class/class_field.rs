@@ -87,6 +87,8 @@ use crate::types::types::TArgs;
 use crate::types::types::Type;
 
 fn int_literal_from_type(ty: &Type) -> Option<LitInt> {
+    // We only currently enforce range constraints for literal defaults, so carve out
+    // the `Literal[int]` case and ignore everything else.
     match ty {
         Type::Literal(Lit::Int(lit)) => Some(lit.clone()),
         _ => None,
@@ -1057,6 +1059,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         keywords: &mut DataclassFieldKeywords,
         constraints: &RangeConstraints,
     ) {
+        // `DataclassFieldKeywords` already carries any `Field(gt=...)` metadata.  When a type alias
+        // such as `PositiveInt` supplies additional bounds, merge them in so that the analysis for
+        // class-body defaults sees the tightest possible range.
         if keywords.gt.is_none() {
             if let Some(gt) = &constraints.gt {
                 keywords.gt = Some(gt.clone());
@@ -1087,6 +1092,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         keywords: &DataclassFieldKeywords,
         errors: &ErrorCollector,
     ) {
+        // This is the connective tissue that turns the static range information into actionable
+        // diagnostics.  Whenever a field has a class-body default, we compute the literal value
+        // and ensure it satisfies every bound coming from `Field(...)` keywords as well as from
+        // type aliases layered on the annotation.  If the metadata disagrees with the default we
+        // surface a precise `BadArgumentType` error that mirrors the runtime Pydantic failure.
         let Some(value_lit) = int_literal_from_type(value_ty) else {
             return;
         };
