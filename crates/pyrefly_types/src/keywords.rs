@@ -75,6 +75,19 @@ impl KwCall {
 }
 
 /// Numeric range constraints extracted from metadata such as `annotated_types.Gt`.
+///
+/// These bounds are intentionally conservative:
+/// * Only constraints that can be recovered statically (e.g. literal arguments to
+///   `annotated_types.Gt/Ge/Lt/Le` or equivalent Field keywords) are recorded here.
+/// * The information is used primarily to vet class-body defaults; call sites that
+///   pass dynamic values are still enforced at runtime by Pydantic.
+/// * When the metadata cannot be evaluated to a literal (for example, it depends on
+///   a value computed at runtime), the corresponding entry remains `None` and the
+///   solver defers to runtime validation.
+///
+/// In other words, `RangeConstraints` lets us catch the obvious mismatches during
+/// static analysis without attempting to replicate every bit of Pydantic’s runtime
+/// behaviour.
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct RangeConstraints {
