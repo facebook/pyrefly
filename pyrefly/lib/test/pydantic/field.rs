@@ -168,6 +168,26 @@ class Model(BaseModel):
     "#,
 );
 
+pydantic_testcase!(
+    test_field_default_gt_violation,
+    r#"
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+    value: int = Field(0, gt=0)  # E: Default value `Literal[0]` violates Pydantic `gt` constraint `Literal[0]` for field `value`
+    "#,
+);
+
+pydantic_testcase!(
+    test_field_default_gt_ok,
+    r#"
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+    value: int = Field(1, gt=0)
+    "#,
+);
+
 fn pydantic_env_3_10() -> TestEnv {
     let env = pydantic_env();
     env.with_version(PythonVersion::new(3, 10, 0))

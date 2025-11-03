@@ -147,8 +147,8 @@ enum RangeConstraintKind {
 }
 
 fn expr_qualified_name(expr: &Expr) -> Option<Vec<String>> {
-    /// Walks attribute/name expressions like `annotated_types.Gt`
-    /// so we can match against the exact helper that produced a Pydantic metadata value.
+    // Walk attribute/name expressions like `annotated_types.Gt` so we can
+    // match against the exact helper that produced a Pydantic metadata value.
     match expr {
         Expr::Name(name) => Some(vec![name.id.to_string()]),
         Expr::Attribute(attr) => {
