@@ -1228,15 +1228,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // attributes, but for magic dunder methods it needs to supersede normal class attribute lookup.
                         // See `lookup_magic_dunder_attr()`.
                         let metadata = self.get_metadata_for_class(class.class_object());
-                    if metadata.is_new_type() {
-                        // NewType values are runtime Python objects (functions). They should behave like ordinary
-                        // objects for attribute access even though they don't expose class-level APIs such as `mro`.
-                        self.lookup_attr_from_attribute_base1(
-                            AttributeBase1::ClassInstance(self.stdlib.object().clone()),
-                            attr_name,
-                            acc,
-                        );
-                    } else {
+                        if metadata.is_new_type() {
+                            // NewType values are runtime Python objects (functions). They should behave like ordinary
+                            // objects for attribute access even though they don't expose class-level APIs such as `mro`.
+                            self.lookup_attr_from_attribute_base1(
+                                AttributeBase1::ClassInstance(self.stdlib.object().clone()),
+                                attr_name,
+                                acc,
+                            );
+                        } else {
                             let instance_attr = self.get_metaclass_attribute(
                                 class,
                                 metadata.metaclass(self.stdlib),
