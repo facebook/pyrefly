@@ -95,6 +95,18 @@ fn int_literal_from_type(ty: &Type) -> Option<LitInt> {
     }
 }
 
+fn expr_qualified_name(expr: &Expr) -> Option<Vec<String>> {
+    match expr {
+        Expr::Name(name) => Some(vec![name.id.to_string()]),
+        Expr::Attribute(attr) => {
+            let mut base = expr_qualified_name(&attr.value)?;
+            base.push(attr.attr.id.to_string());
+            Some(base)
+        }
+        _ => None,
+    }
+}
+
 /// The result of looking up an attribute access on a class (either as an instance or a
 /// class access, and possibly through a special case lookup such as a type var with a bound).
 #[derive(Debug, Clone)]
@@ -1084,6 +1096,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn class_field_default_type(
+        &self,
+        expr: &Expr,
+        value_ty: &Type,
+        errors: &ErrorCollector,
+    ) -> Type {
+        if let Some(call) = expr.as_call_expr()
+            && let Some(parts) = expr_qualified_name(&call.func)
+            && parts.last().map(|s| s.as_str()) == Some("Field")
+        {
+            if let Some(arg0) = call.arguments.args.first() {
+                return self.expr_infer(arg0, errors);
+            }
+            if let Some(keyword) = call
+                .arguments
+                .keywords
+                .iter()
+                .find(|kw| kw.arg.as_ref().map(|n| n.id.as_str()) == Some("default"))
+            {
+                return self.expr_infer(&keyword.value, errors);
+            }
+        }
+        value_ty.clone()
+    }
+
     fn check_pydantic_range_default(
         &self,
         field_name: &Name,
@@ -1097,7 +1134,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // and ensure it satisfies every bound coming from `Field(...)` keywords as well as from
         // type aliases layered on the annotation.  If the metadata disagrees with the default we
         // surface a precise `BadArgumentType` error that mirrors the runtime Pydantic failure.
-        let Some(value_lit) = int_literal_from_type(value_ty) else {
+        let default_ty = self.class_field_default_type(expr, value_ty, errors);
+        let Some(value_lit) = int_literal_from_type(&default_ty) else {
             return;
         };
         let emit_violation = |label: &str, constraint_ty: &Type| {
@@ -1119,7 +1157,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ErrorInfo::Kind(ErrorKind::BadArgumentType),
                     format!(
                         "Default value `{}` violates Pydantic `{}` constraint `{}` for field `{}`",
-                        self.for_display(value_ty.clone()),
+                        self.for_display(default_ty.clone()),
                         label,
                         self.for_display(constraint_ty.clone()),
                         field_name
