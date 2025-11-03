@@ -70,6 +70,7 @@ use crate::types::facet::FacetKind;
 use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::param_spec::ParamSpec;
+use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::special_form::SpecialForm;
 use crate::types::tuple::Tuple;
@@ -1773,6 +1774,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Collect class-like representations from `ty`, querying unions and `Type[...]` wrappers.
+    /// Returns `true` when every branch contributes a `ClassType`, `false` otherwise.
     fn collect_class_type_candidates(&self, ty: &Type, out: &mut Vec<ClassType>) -> bool {
         match ty {
             Type::ClassType(cls) | Type::SelfType(cls) => {
@@ -1926,29 +1929,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let quantified = *quantified;
                     let base_display_ty =
                         Type::Type(Box::new(Type::Quantified(Box::new(quantified.clone()))));
-                    let mut enum_classes: Vec<ClassType> = Vec::new();
-                    let mut usable = match quantified.restriction() {
-                        Restriction::Unrestricted => false,
-                        Restriction::Bound(bound) => {
-                            self.collect_class_type_candidates(bound, &mut enum_classes)
-                        }
-                        Restriction::Constraints(constraints) => {
-                            !constraints.is_empty()
-                                && constraints.iter().all(|constraint| {
-                                    self.collect_class_type_candidates(
-                                        constraint,
-                                        &mut enum_classes,
-                                    )
-                                })
-                        }
-                    };
-                    if usable {
-                        let enum_base = self.stdlib.enum_class().class_object();
-                        usable = enum_classes
-                            .iter()
-                            .all(|cls| self.has_superclass(cls.class_object(), enum_base));
-                    }
-                    if usable && !enum_classes.is_empty() {
+                    if self.is_enum_class_def_type(&quantified) {
                         if self.is_subset_eq(
                             &self.expr(slice, None, errors),
                             &self.stdlib.str().clone().to_type(),
@@ -2082,6 +2063,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             }
         })
+    }
+
+    fn is_enum_class_def_type(&self, quantified: &Quantified) -> bool {
+        let mut enum_classes = Vec::new();
+        let supports_enum = match quantified.restriction() {
+            Restriction::Unrestricted => false,
+            Restriction::Bound(bound) => {
+                self.collect_class_type_candidates(bound, &mut enum_classes)
+            }
+            Restriction::Constraints(constraints) => {
+                !constraints.is_empty()
+                    && constraints.iter().all(|constraint| {
+                        self.collect_class_type_candidates(constraint, &mut enum_classes)
+                    })
+            }
+        };
+        if !supports_enum || enum_classes.is_empty() {
+            return false;
+        }
+        let enum_base = self.stdlib.enum_class().class_object();
+        enum_classes
+            .iter()
+            .all(|cls| self.has_superclass(cls.class_object(), enum_base))
     }
 
     /// When indexing/slicing concrete tuples with literals, try to infer a more precise type
