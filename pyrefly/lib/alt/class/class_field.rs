@@ -671,7 +671,6 @@ impl ClassField {
                     Some(Annotation {
                         ty: Some(ty),
                         qualifiers,
-                        range_constraints: _,
                     }),
                 ..
             } => Some(TypedDictField {
@@ -1246,6 +1245,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 false,
             ),
         };
+        let metadata = self.get_metadata_for_class(class);
 
         // Get the inferred value type if the value is an expression
         //
@@ -1300,14 +1300,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.get_class_field_initialization(&metadata, initial_value, magically_initialized);
 
         if metadata.is_pydantic_base_model() {
-            if let Some(annot) = &direct_annotation {
-                if !annot.range_constraints.is_empty() {
+            if let Some(range_constraints) = &direct_range_constraints {
+                if !range_constraints.is_empty() {
                     let mut maybe_keywords = match &initialization {
                         ClassFieldInitialization::ClassBody(Some(k)) => Some(k.clone()),
                         _ => None,
                     };
                     let keywords = maybe_keywords.get_or_insert_with(DataclassFieldKeywords::new);
-                    self.merge_range_constraints_into_keywords(keywords, &annot.range_constraints);
+                    self.merge_range_constraints_into_keywords(keywords, range_constraints);
                     initialization = ClassFieldInitialization::ClassBody(Some(keywords.clone()));
                 }
             }

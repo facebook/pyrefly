@@ -16,7 +16,6 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_util::display::intersperse_iter;
 
-use crate::keywords::RangeConstraints;
 use crate::types::AnyStyle;
 use crate::types::Substitution;
 use crate::types::Type;
@@ -25,7 +24,6 @@ use crate::types::Type;
 pub struct Annotation {
     pub qualifiers: Vec<Qualifier>,
     pub ty: Option<Type>,
-    pub range_constraints: RangeConstraints,
 }
 
 impl Display for Annotation {
@@ -50,7 +48,6 @@ impl Annotation {
         Self {
             qualifiers: Vec::new(),
             ty: Some(ty),
-            range_constraints: RangeConstraints::default(),
         }
     }
 
@@ -78,7 +75,6 @@ impl Annotation {
         Self {
             qualifiers: self.qualifiers,
             ty: self.ty.map(|ty| substitution.substitute_into(ty)),
-            range_constraints: self.range_constraints,
         }
     }
 }
@@ -105,7 +101,6 @@ mod tests {
             Annotation {
                 qualifiers: Vec::new(),
                 ty: Some(Type::None),
-                range_constraints: RangeConstraints::default(),
             }
             .to_string(),
             "None"
@@ -114,7 +109,6 @@ mod tests {
             Annotation {
                 qualifiers: vec![Qualifier::Required, Qualifier::ReadOnly],
                 ty: None,
-                range_constraints: RangeConstraints::default(),
             }
             .to_string(),
             "Required[ReadOnly]"
@@ -123,7 +117,6 @@ mod tests {
             Annotation {
                 qualifiers: vec![Qualifier::Required, Qualifier::ReadOnly],
                 ty: Some(Type::LiteralString),
-                range_constraints: RangeConstraints::default(),
             }
             .to_string(),
             "Required[ReadOnly[LiteralString]]"
