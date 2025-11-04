@@ -607,7 +607,6 @@ impl ClassField {
                     Some(Annotation {
                         ty: Some(ty),
                         qualifiers,
-                        range_constraints: _,
                     }),
                 ..
             } => Some(TypedDictField {
@@ -1115,10 +1114,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // which requires us having a place to store synthesized dummy values until we've refactored more.
         let value_storage = Owner::new();
         let initial_value_storage = Owner::new();
-        let (value, direct_annotation, initial_value, is_function_without_return_annotation) =
+        let (value, direct_annotation_entry, initial_value, is_function_without_return_annotation) =
             match field_definition {
                 ClassFieldDefinition::DeclaredByAnnotation { annotation } => {
-                    let annotation = self.get_idx(*annotation).as_ref().annotation.clone();
+                    let annotation = self.get_idx(*annotation).as_ref().clone();
                     (
                         value_storage
                             .push(ExprOrBinding::Binding(Binding::Type(Type::any_implicit()))),
@@ -1136,8 +1135,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ClassFieldDefinition::AssignedInBody { value, annotation } => {
                     let annotation = annotation
                         .map(|a| self.get_idx(a))
-                        .as_deref()
-                        .map(|annot| annot.annotation.clone());
+                        .map(|annot| annot.as_ref().clone());
                     (
                         value,
                         annotation,
@@ -1172,8 +1170,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } => {
                     let annotation = annotation
                         .map(|a| self.get_idx(a))
-                        .as_deref()
-                        .map(|annot| annot.annotation.clone());
+                        .map(|annot| annot.as_ref().clone());
                     (
                         value,
                         annotation,
@@ -1183,6 +1180,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
             };
+
+        let (direct_annotation, direct_range_constraints) = match direct_annotation_entry {
+            Some(annot) => (Some(annot.annotation), Some(annot.range_constraints)),
+            None => (None, None),
+        };
 
         // Optimisation. If we can determine that the name definitely doesn't exist in the inheritance
         // then we can avoid a bunch of work with checking for override errors.
@@ -1214,7 +1216,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else if let Some(annot) = &inherited_annot {
                     let ctx: &dyn Fn() -> TypeCheckContext =
                         &|| TypeCheckContext::of_kind(TypeCheckKind::Attribute(name.clone()));
-                    let hint = Some((annot.get_type(), ctx));
+                    let hint: Option<(&Type, &dyn Fn() -> TypeCheckContext)> =
+                        Some((annot.get_type(), ctx));
                     self.expr(e, hint, errors)
                 } else {
                     self.expr_infer(e, errors)
@@ -1228,6 +1231,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None,
             ),
         };
+
         let metadata = self.get_metadata_for_class(class);
 
         if let Some(named_tuple_metadata) = metadata.named_tuple_metadata()
@@ -1256,14 +1260,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.get_class_field_initialization(&metadata, initial_value, magically_initialized);
 
         if metadata.is_pydantic_base_model() {
-            if let Some(annot) = &direct_annotation {
-                if !annot.range_constraints.is_empty() {
+            if let Some(range_constraints) = &direct_range_constraints {
+                if !range_constraints.is_empty() {
                     let mut maybe_keywords = match &initialization {
                         ClassFieldInitialization::ClassBody(Some(k)) => Some(k.clone()),
                         _ => None,
                     };
                     let keywords = maybe_keywords.get_or_insert_with(DataclassFieldKeywords::new);
-                    self.merge_range_constraints_into_keywords(keywords, &annot.range_constraints);
+                    self.merge_range_constraints_into_keywords(keywords, range_constraints);
                     initialization = ClassFieldInitialization::ClassBody(Some(keywords.clone()));
                 }
             }
