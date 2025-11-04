@@ -795,7 +795,7 @@ testcase!(
         "from typing import TypeVar\nT = TypeVar('T')\nclass C: pass"
     ),
     r#"
-from typing import Generic, assert_type
+from typing import Generic, Literal, assert_type
 import foo
 
 # Here, the `foo.C` possible-legacy-tparam binding is the one that winds up in scope, we
@@ -804,7 +804,7 @@ import foo
 def f(x: foo.T, y: foo.C) -> foo.T:
     z: foo.T = x  # E: `T` is not assignable to `TypeVar[T]`
     return z  # E: Returned type `TypeVar[T]` is not assignable to declared return type `T
-assert_type(f(1, foo.C()), int)
+assert_type(f(1, foo.C()), Literal[1])
 
 # The same thing happens here, but it's a much bigger problem because now we forget
 # about the type variable identity for the entire class body, so the signatures come out
