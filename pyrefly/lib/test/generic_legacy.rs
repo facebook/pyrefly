@@ -680,11 +680,11 @@ testcase!(
     env_exported_type_var(),
     r#"
 import lib
-from typing import assert_type
+from typing import assert_type, Literal
 
 def f(x: lib.T) -> lib.T:
     return x
-assert_type(f(0), int)
+assert_type(f(0), Literal[0])
     "#,
 );
 

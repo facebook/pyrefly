@@ -143,6 +143,17 @@ assert_type(f(1), Literal[1])
 );
 
 testcase!(
+    test_invariant_generic_literal_widens,
+    r#"
+from typing import assert_type
+class A[T]:
+    def __init__(self, x: T) -> None: ...
+a = A(1)
+assert_type(a, A[int])
+"#,
+);
+
+testcase!(
     test_untype_with_missing_targs_annotation,
     TestEnv::new().enable_implicit_any_error(),
     r#"
