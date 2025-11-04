@@ -71,6 +71,7 @@ use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
 use crate::types::equality::TypeEq;
 use crate::types::globals::ImplicitGlobal;
+use crate::types::keywords::RangeConstraints;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::stdlib::Stdlib;
 use crate::types::type_info::JoinStyle;
@@ -1805,6 +1806,7 @@ pub enum AnnAssignHasValue {
 pub struct AnnotationWithTarget {
     pub target: AnnotationTarget,
     pub annotation: Annotation,
+    pub range_constraints: RangeConstraints,
 }
 
 impl AnnotationWithTarget {

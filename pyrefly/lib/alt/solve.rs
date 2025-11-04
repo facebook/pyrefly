@@ -420,9 +420,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match binding {
             BindingAnnotation::AnnotateExpr(target, x, class_key) => {
                 let type_form_context = target.type_form_context();
-                let mut ann = self.expr_annotation(x, type_form_context, errors);
+                let (mut annotation, range_constraints) =
+                    self.expr_annotation(x, type_form_context, errors);
                 if let Some(class_key) = class_key
-                    && let Some(ty) = &mut ann.ty
+                    && let Some(ty) = &mut annotation.ty
                 {
                     let class = &*self.get_idx(*class_key);
                     if let Some(cls) = &class.0 {
@@ -433,12 +434,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Arc::new(AnnotationWithTarget {
                     target: target.clone(),
-                    annotation: ann,
+                    annotation,
+                    range_constraints,
                 })
             }
             BindingAnnotation::Type(target, x) => Arc::new(AnnotationWithTarget {
                 target: target.clone(),
                 annotation: Annotation::new_type(x.clone()),
+                range_constraints: RangeConstraints::default(),
             }),
         }
     }
@@ -472,7 +475,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Annotation {
                     qualifiers: vec![qualifier],
                     ty: Some(self.expr_infer(&x.slice, errors)),
-                    range_constraints: RangeConstraints::default(),
                 }
             }
             _ => Annotation::new_type(self.expr_infer(x, errors)),
@@ -621,9 +623,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         x: &Expr,
         type_form_context: TypeFormContext,
         errors: &ErrorCollector,
-    ) -> Annotation {
+    ) -> (Annotation, RangeConstraints) {
         if !self.has_valid_annotation_syntax(x, errors) {
-            return Annotation::new_type(Type::any_error());
+            return (
+                Annotation::new_type(Type::any_error()),
+                RangeConstraints::default(),
+            );
         }
         match x {
             _ if let Some(qualifier) = self.expr_qualifier(x, type_form_context, errors) => {
@@ -645,11 +650,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                     }
                 }
-                Annotation {
-                    qualifiers: vec![qualifier],
-                    ty: None,
-                    range_constraints: RangeConstraints::default(),
-                }
+                (
+                    Annotation {
+                        qualifiers: vec![qualifier],
+                        ty: None,
+                    },
+                    RangeConstraints::default(),
+                )
             }
             Expr::Subscript(x)
                 if let unpacked_slice = Ast::unpack_slice(&x.slice)
@@ -679,7 +686,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ),
                     );
                 }
-                let mut ann = self.expr_annotation(&unpacked_slice[0], type_form_context, errors);
+                let (mut ann, mut range_constraints) =
+                    self.expr_annotation(&unpacked_slice[0], type_form_context, errors);
                 if qualifier == Qualifier::Annotated {
                     for meta in unpacked_slice.iter().skip(1) {
                         if let Some((kind, constraint_ty)) =
@@ -687,16 +695,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         {
                             match kind {
                                 RangeConstraintKind::Gt => {
-                                    ann.range_constraints.gt = Some(constraint_ty.clone())
+                                    range_constraints.gt = Some(constraint_ty.clone())
                                 }
                                 RangeConstraintKind::Ge => {
-                                    ann.range_constraints.ge = Some(constraint_ty.clone())
+                                    range_constraints.ge = Some(constraint_ty.clone())
                                 }
                                 RangeConstraintKind::Lt => {
-                                    ann.range_constraints.lt = Some(constraint_ty.clone())
+                                    range_constraints.lt = Some(constraint_ty.clone())
                                 }
                                 RangeConstraintKind::Le => {
-                                    ann.range_constraints.le = Some(constraint_ty.clone())
+                                    range_constraints.le = Some(constraint_ty.clone())
                                 }
                             }
                         }
@@ -742,7 +750,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     ann.qualifiers.insert(0, qualifier);
                 }
-                ann
+                (ann, range_constraints)
             }
             _ => {
                 let inferred_ty = self.expr_infer(x, errors);
@@ -761,7 +769,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.for_display(ta.as_type())
                         ),
                     );
-                    return Annotation::new_type(Type::any_error());
+                    return (
+                        Annotation::new_type(Type::any_error()),
+                        RangeConstraints::default(),
+                    );
                 }
                 let ann_ty = self.untype(inferred_ty.clone(), x.range(), errors);
                 let ann_ty = self.validate_type_form(ann_ty, x.range(), type_form_context, errors);
@@ -784,11 +795,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                     }
                 }
-                let mut annotation = Annotation::new_type(ann_ty);
-                if let Type::TypeAlias(ta) = inferred_ty {
-                    annotation.range_constraints = ta.range_constraints().clone();
+                let mut range_constraints = RangeConstraints::default();
+                if let Type::TypeAlias(ta) = inferred_ty.clone() {
+                    range_constraints = ta.range_constraints().clone();
                 }
-                annotation
+                (Annotation::new_type(ann_ty), range_constraints)
             }
         }
     }
@@ -2986,8 +2997,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Annotation {
                                 ty: Some(want),
                                 qualifiers: _,
-                                range_constraints: _,
                             },
+                        ..
                     } = &*self.get_idx(*k)
                 {
                     self.check_and_return_type(ty, want, x.range, errors, &|| {
@@ -3006,8 +3017,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Annotation {
                                 ty: Some(want),
                                 qualifiers: _,
-                                range_constraints: _,
                             },
+                        ..
                     } = &*self.get_idx(*k)
                 {
                     self.check_and_return_type(ty, want, x.range, errors, &|| {
@@ -3028,8 +3039,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Annotation {
                                 ty: Some(want),
                                 qualifiers: _,
-                                range_constraints: _,
                             },
+                        ..
                     } = &*self.get_idx(*k)
                 {
                     self.check_and_return_type(ty, want, x.range, errors, &|| {
@@ -3583,8 +3594,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Annotation {
                                 ty: Some(want),
                                 qualifiers: _,
-                                range_constraints: _,
                             },
+                        ..
                     } = &*self.get_idx(*k)
                 {
                     self.check_and_return_type(ta.clone(), want, x.range, errors, &|| {
