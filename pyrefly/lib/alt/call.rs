@@ -894,7 +894,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-<<<<<<< HEAD
     /// If the class has a registered init capture, extract constructor arg values
     /// and wrap the result in `Type::NNModule`. Otherwise return the result as-is.
     ///
@@ -948,15 +947,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         self.heap
             .mk_nn_module(NNModuleType::new(ct.clone(), fields))
-||||||| parent of 2efc64019 (class parameter back to A[int])
-=======
+    }
+
     fn promote_invariant_targs(&self, targs: &mut TArgs) {
         targs.iter_paired_mut().for_each(|(param, targ)| {
-            if !matches!(param.variance, PreInferenceVariance::PCovariant) {
-                *targ = targ.clone().promote_literals(self.stdlib);
+            if !matches!(param.variance(), PreInferenceVariance::Covariant) {
+                *targ = targ.clone().transform(&mut |ty| match ty {
+                    Type::Literal(lit) => {
+                        *ty = lit.value.general_class_type(self.stdlib).clone().to_type()
+                    }
+                    Type::LiteralString(_) => *ty = self.stdlib.str().clone().to_type(),
+                    _ => {}
+                });
             }
         });
->>>>>>> 2efc64019 (class parameter back to A[int])
     }
 
     fn construct_typed_dict(
@@ -1006,7 +1010,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.add_specialization_errors(e, arguments_range, errors, context);
         }
         typed_dict.targs_mut().as_mut().iter_mut().for_each(|targ| {
-            let promoted = targ.clone().promote_literals(self.stdlib);
+            let promoted = targ.clone().promote_implicit_literals(self.stdlib);
             *targ = promoted;
         });
         Type::TypedDict(TypedDict::TypedDict(typed_dict))
@@ -1267,7 +1271,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
         let res = match res {
-            Type::Union(members) => self.unions(members),
+            Type::Union(members) => self.unions(members.members),
             other => other,
         };
         if let Some(func_metadata) = kw_metadata {

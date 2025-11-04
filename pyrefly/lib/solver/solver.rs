@@ -2010,8 +2010,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         match self.is_subset_eq(&t1, t2) {
                             Ok(()) => Ok(()),
                             Err(err) => {
-                                let t1_promoted =
-                                    t1.clone().promote_literals(self.type_order.stdlib());
+                                let t1_promoted = t1
+                                    .clone()
+                                    .promote_implicit_literals(self.type_order.stdlib());
                                 if t1_promoted != t1 {
                                     self.solver
                                         .variables
@@ -2156,8 +2157,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         match self.is_subset_eq(t1, &t2) {
                             Ok(()) => Ok(()),
                             Err(err) => {
-                                let t2_promoted =
-                                    t2.clone().promote_literals(self.type_order.stdlib());
+                                let t2_promoted = t2
+                                    .clone()
+                                    .promote_implicit_literals(self.type_order.stdlib());
                                 if t2_promoted != t2 {
                                     self.solver
                                         .variables

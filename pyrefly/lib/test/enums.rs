@@ -184,7 +184,6 @@ class MyEnum(Enum):
     W = auto()
     X = 1
     Y = "FOO"  # E: Enum member `Y` has type `str`, must match the `_value_` attribute annotation of `int`
-    Z = member("FOO")  # E: Enum member `Z` has type `str`, must match the `_value_` attribute annotation of `int`
     Z = member("FOO")  # E: Enum member `Z` has type `Literal['FOO']`, must match the `_value_` attribute annotation of `int`
 
     def get_value(self) -> int:
@@ -255,7 +254,7 @@ class MyEnum(Enum):
     def D(self) -> None: pass
 
 reveal_type(MyEnum.A)  # E: revealed type: Literal[MyEnum.A]
-reveal_type(MyEnum.B)  # E: revealed type: nonmember[Literal[2]]
+reveal_type(MyEnum.B)  # E: revealed type: nonmember[int]
 reveal_type(MyEnum.C)  # E: revealed type: Literal[MyEnum.C]
 reveal_type(MyEnum.D)  # E: revealed type: (self: MyEnum) -> None
 "#,

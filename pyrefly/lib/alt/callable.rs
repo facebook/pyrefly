@@ -1402,7 +1402,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         };
-        if let Some(targs) = ctor_targs {
+        if let Some(targs) = ctor_targs.as_mut() {
             self.solver().generalize_class_targs(targs);
         }
         let mut errors = self
@@ -1414,6 +1414,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .finish_quantified(ctor_qs, self.solver().infer_with_first_use)
         {
             errors.extend(e);
+        }
+        if let Some(targs) = ctor_targs.as_mut() {
+            targs
+                .as_mut()
+                .iter_mut()
+                .for_each(|t| self.solver().expand_vars_mut(t));
         }
 
         // Apply meta-shape inference if bound args were collected
