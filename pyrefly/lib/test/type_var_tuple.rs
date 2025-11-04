@@ -124,12 +124,12 @@ v2: Cls[Unpack[tuple[int, str, int, str]]]
 testcase!(
     test_type_var_tuple_solve,
     r#"
-from typing import assert_type
+from typing import assert_type, Literal
 class A[*Ts]:
     def x(self) -> tuple[*Ts]: ...
 def test[*Ts](x: tuple[*Ts]) -> tuple[*Ts]:
     return x
-assert_type(test((1, 2, 3)), tuple[int, int, int])
+assert_type(test((1, 2, 3)), tuple[Literal[1], Literal[2], Literal[3]])
 "#,
 );
 
