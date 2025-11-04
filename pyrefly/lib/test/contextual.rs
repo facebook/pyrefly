@@ -513,15 +513,15 @@ xs[0] = [B()]
 testcase!(
     test_generic_get_literal,
     r#"
-from typing import assert_type, TypeVar, Literal
+from typing import TypeVar, assert_type
 
 class Foo[T]:
     def __init__(self, x: T) -> None: ...
     def get(self) -> T: ...
 
 # Should propagate the context to the argument 42
-x: Foo[Literal[42]] = Foo(42)
-assert_type(x.get(), Literal[42])
+x: Foo[int] = Foo(42)
+assert_type(x.get(), int)
 "#,
 );
 

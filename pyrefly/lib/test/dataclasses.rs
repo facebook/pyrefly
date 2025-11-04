@@ -41,14 +41,14 @@ def f(d: Data):
 testcase!(
     test_generic,
     r#"
-from typing import Literal, assert_type
+from typing import assert_type
 import dataclasses
 @dataclasses.dataclass
 class Data[T]:
     x: T
 def f(d: Data[int]):
     assert_type(d.x, int)
-assert_type(Data(x=0), Data[Literal[0]])
+assert_type(Data(x=0), Data[int])
 Data[int](x=0)  # OK
 Data[int](x="")  # E: Argument `Literal['']` is not assignable to parameter `x` with type `int` in function `Data.__init__`
     "#,
