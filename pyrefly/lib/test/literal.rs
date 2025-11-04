@@ -224,7 +224,7 @@ testcase!(
 testcase!(
     test_promote_literal,
     r#"
-from typing import assert_type, LiteralString
+from typing import assert_type, Literal, LiteralString
 
 x = list("abcdefg")
 assert_type(x, list[LiteralString])

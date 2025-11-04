@@ -113,13 +113,13 @@ assert_type(foo(), Literal[42])
 testcase!(
     test_generic_inference,
     r#"
-from typing import assert_type
+from typing import assert_type, Literal
 
 class C[T]:
     def __init__(self, x: T) -> None:
         pass
 
-assert_type(C(42), C[int])
+assert_type(C(42), C[Literal[42]])
 "#,
 );
 
