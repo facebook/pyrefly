@@ -165,7 +165,7 @@ assert_type(another_generator(), Generator[Literal[2], Any, None])
 testcase!(
     test_parametric_generator_type,
     r#"
-from typing import Generator, TypeVar, assert_type
+from typing import Generator, Literal, TypeVar, assert_type
 
 T = TypeVar('T')
 
@@ -173,7 +173,7 @@ def f(value: T) -> Generator[T, None, None]:
     while True:
         yield value
 
-assert_type(f(3), Generator[int, None, None])
+assert_type(f(3), Generator[Literal[3], None, None])
 "#,
 );
 

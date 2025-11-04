@@ -979,11 +979,11 @@ assert_type(g(""), Literal[''])
 testcase!(
     test_return_substituted_callable,
     r#"
-from typing import assert_type, Callable
+from typing import Literal, assert_type, Callable
 def f[T](x: T) -> Callable[[T], T]: ...
 g = f(0)
-assert_type(g(0), int)
-assert_type(g(""), int)  # E: `Literal['']` is not assignable to parameter with type `int`
+assert_type(g(0), Literal[0])
+assert_type(g(""), Literal[0])  # E: `Literal['']` is not assignable to parameter with type `Literal[0]`
     "#,
 );
 
