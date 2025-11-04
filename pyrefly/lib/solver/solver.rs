@@ -1825,10 +1825,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 (t1_p.clone(), None)
             }
         } else if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
-            // If the promoted type fails, try again with the original type, in case the bound itself is literal.
-            // This could be more optimized, but errors are rare, so this code path should not be hot.
+            // Prefer the literal answer when it satisfies the bound, but
+            // fall back to the promoted type when the bound rejects it.
             if self.is_subset_eq(t1, &bound).is_err() {
-                // If the original type is also an error, use the promoted type.
                 let specialization_error = TypeVarSpecializationError {
                     name: q.name().clone(),
                     got: t1_p.clone(),
@@ -1839,8 +1838,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             } else {
                 (t1.clone(), None)
             }
-        } else {
+        } else if self.is_subset_eq(t1, &bound).is_err() {
+            // Fall back to the promoted type if the literal version violates the bound.
             (t1_p.clone(), None)
+        } else {
+            (t1.clone(), None)
         }
     }
 
