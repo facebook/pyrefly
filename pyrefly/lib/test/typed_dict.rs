@@ -811,7 +811,7 @@ class C(TypedDict):
 def f(c: C, k1: str, k2: int):
     assert_type(c.get("x"), int)
     assert_type(c.get(k1), object | None)
-    assert_type(c.get(k1, 0), int | object)
+    assert_type(c.get(k1, 0), Literal[0] | object)
     c.get(k2)  # E: No matching overload
     "#,
 );

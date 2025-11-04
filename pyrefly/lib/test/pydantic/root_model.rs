@@ -106,13 +106,13 @@ pydantic_testcase!(
         "we should not error on the call with a str argument because it could be coercible to int ",
     test_directly_use_root_model,
     r#"
-from typing import Any, assert_type
+from typing import Any, assert_type, Literal
 from pydantic import RootModel
 
 m1 = RootModel()
 assert_type(m1, RootModel[Any])
 m2 = RootModel(5)
-assert_type(m2, RootModel[int])
+assert_type(m2, RootModel[Literal[5]])
 RootModel(5, extra=6)  # E: Unexpected keyword argument `extra`
 
 m3 = RootModel[int](5)

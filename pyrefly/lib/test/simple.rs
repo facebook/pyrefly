@@ -358,10 +358,10 @@ reveal_type(1)  # E: revealed type: Literal[1]
 testcase!(
     test_reveal_type_expand_var,
     r#"
-from typing import reveal_type
+from typing import reveal_type, Literal
 def f[T](x: T) -> T:
     return x
-reveal_type(f(0))  # E: revealed type: int
+reveal_type(f(0))  # E: revealed type: Literal[0]
     "#,
 );
 
@@ -1284,11 +1284,11 @@ def foo(a: list[str] | Sequence[str]) -> None:
 testcase!(
     test_nonint_slice,
     r#"
-from typing import assert_type
+from typing import assert_type, Literal
 class A:
     def __getitem__[T](self, x: T) -> T:
         return x
-assert_type(A()["":"":""], slice[str, str, str])
+assert_type(A()["":"":""], slice[Literal[''], Literal[''], Literal['']])
     "#,
 );
 
