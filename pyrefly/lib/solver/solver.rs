@@ -2007,7 +2007,22 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         let t1 = t1.clone();
                         drop(v1_ref);
                         drop(variables);
-                        self.is_subset_eq(&t1, t2)
+                        match self.is_subset_eq(&t1, t2) {
+                            Ok(()) => Ok(()),
+                            Err(err) => {
+                                let t1_promoted =
+                                    t1.clone().promote_literals(self.type_order.stdlib());
+                                if t1_promoted != t1 {
+                                    self.solver
+                                        .variables
+                                        .lock()
+                                        .update(*v1, Variable::Answer(t1_promoted.clone()));
+                                    self.is_subset_eq(&t1_promoted, t2)
+                                } else {
+                                    Err(err)
+                                }
+                            }
+                        }
                     }
                     Variable::Quantified {
                         quantified: q,
@@ -2138,7 +2153,22 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         let t2 = t2.clone();
                         drop(v2_ref);
                         drop(variables);
-                        self.is_subset_eq(t1, &t2)
+                        match self.is_subset_eq(t1, &t2) {
+                            Ok(()) => Ok(()),
+                            Err(err) => {
+                                let t2_promoted =
+                                    t2.clone().promote_literals(self.type_order.stdlib());
+                                if t2_promoted != t2 {
+                                    self.solver
+                                        .variables
+                                        .lock()
+                                        .update(*v2, Variable::Answer(t2_promoted.clone()));
+                                    self.is_subset_eq(t1, &t2_promoted)
+                                } else {
+                                    Err(err)
+                                }
+                            }
+                        }
                     }
                     Variable::Quantified {
                         quantified: q,
