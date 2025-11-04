@@ -346,7 +346,7 @@ class C:
 testcase!(
     test_decorate_generic_function,
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 
 def decorate[T](f: T) -> T:
     return f
@@ -356,7 +356,7 @@ class C:
     def f[T](self, x: T) -> T:
         return x
 
-assert_type(C().f(0), int)
+assert_type(C().f(0), Literal[0])
     "#,
 );
 
