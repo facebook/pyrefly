@@ -11,7 +11,7 @@ use crate::testcase;
 testcase!(
     test_tyvar_function,
     r#"
-from typing import TypeVar, assert_type
+from typing import TypeVar, assert_type, Literal
 
 T = TypeVar("T")
 
@@ -19,14 +19,14 @@ def foo(x: T) -> T:
     y: T = x
     return y
 
-assert_type(foo(1), int)
+assert_type(foo(1), Literal[1])
 "#,
 );
 
 testcase!(
     test_tyvar_alias,
     r#"
-from typing import assert_type
+from typing import assert_type, Literal
 import typing
 
 T = typing.TypeVar("T")
@@ -34,14 +34,14 @@ T = typing.TypeVar("T")
 def foo(x: T) -> T:
     return x
 
-assert_type(foo(1), int)
+assert_type(foo(1), Literal[1])
 "#,
 );
 
 testcase!(
     test_tyvar_quoted,
     r#"
-from typing import assert_type
+from typing import assert_type, Literal
 import typing
 
 T = typing.TypeVar("T")
@@ -49,7 +49,7 @@ T = typing.TypeVar("T")
 def foo(x: "T") -> "T":
     return x
 
-assert_type(foo(1), int)
+assert_type(foo(1), Literal[1])
 "#,
 );
 
@@ -726,11 +726,11 @@ testcase!(
     test_legacy_typevar_imported_after_use,
     TestEnv::one("foo", "from typing import TypeVar\nT = TypeVar('T')"),
     r#"
-from typing import assert_type
+from typing import assert_type, Literal
 def f(x: "foo.T") -> "foo.T":
     return x
 import foo
-assert_type(f(0), int)
+assert_type(f(0), Literal[0])
     "#,
 );
 

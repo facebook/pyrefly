@@ -68,7 +68,7 @@ class Foo[T]:
     def __init__(self, x: T) -> None: ...
 
 x: Literal[42] = 42
-assert_type(Foo(x), Foo[int])
+assert_type(Foo(x), Foo[Literal[42]])
 "#,
 );
 
@@ -224,10 +224,10 @@ testcase!(
 testcase!(
     test_promote_literal,
     r#"
-from typing import assert_type, Literal
+from typing import assert_type, Literal, LiteralString
 
 x = list("abcdefg")
-assert_type(x, list[str])
+assert_type(x, list[LiteralString])
 "#,
 );
 

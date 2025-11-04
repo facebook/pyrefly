@@ -18,7 +18,7 @@ def yielding():
 f = yielding()
 
 next_f = next(f)
-assert_type(next_f, int)
+assert_type(next_f, Literal[1])
 assert_type(f, Generator[Literal[1], Any, None])
 
 "#,
