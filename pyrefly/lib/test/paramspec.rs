@@ -207,7 +207,7 @@ foo(keyword_only_x, keyword_only_y) # Rejected # E: Argument `(*, y: int) -> int
 testcase!(
     test_paramspec_constructor,
     r#"
-from typing import TypeVar, Generic, Callable, ParamSpec, reveal_type
+from typing import TypeVar, Generic, Callable, ParamSpec, reveal_type, Literal
 
 P = ParamSpec("P")
 U = TypeVar("U")
@@ -222,7 +222,7 @@ class Y(Generic[U, P]):
 
 def a(q: int) -> str: ...
 
-reveal_type(Y(a, 1))   # E: revealed type: Y[int, [q: int]]
+reveal_type(Y(a, 1))   # E: revealed type: Y[Literal[1], [q: int]]
 reveal_type(Y(a, 1).f) # E: revealed type: (q: int) -> str
 "#,
 );

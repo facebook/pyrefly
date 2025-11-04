@@ -323,7 +323,7 @@ def f(td: TD):
 testcase!(
     test_typed_dict_pop_2,
     r#"
-from typing import TypedDict, NotRequired, assert_type, Any
+from typing import TypedDict, NotRequired, assert_type, Any, Literal
 
 class TDRequired(TypedDict):
     a: int
@@ -354,7 +354,7 @@ v4 = td_o.pop("x", -1)
 assert_type(v4, int)
 
 v5 = td_o.pop("x", "fallback")
-assert_type(v5, int | str)
+assert_type(v5, int | Literal['fallback'])
 
 v6 = td_m.pop("a") # E:
 assert_type(v6, Any)
@@ -366,7 +366,7 @@ v8 = td_m.pop("x", 0)
 assert_type(v8, int)
 
 v9 = td_m.pop("x", "fallback")
-assert_type(v9, int | str)
+assert_type(v9, int | Literal['fallback'])
 
 v10 = td_r.pop("abc", 123) # E:
 assert_type(v10, object)
@@ -1707,13 +1707,13 @@ def f(a: A):
 testcase!(
     test_pop_extra_items,
     r#"
-from typing import assert_type, NotRequired, TypedDict
+from typing import assert_type, NotRequired, TypedDict, Literal
 class A(TypedDict, extra_items=int):
     x: NotRequired[str]
 def f(a: A, k: str):
     assert_type(a.pop('x'), str)
     assert_type(a.pop(k), str | int)
-    assert_type(a.pop(k, b'default'), str | int | bytes)
+    assert_type(a.pop(k, b'default'), str | int | Literal[b'default'])
     "#,
 );
 
@@ -1732,12 +1732,12 @@ def f(a: A, k: str):
 testcase!(
     test_get_extra_items,
     r#"
-from typing import assert_type, TypedDict
+from typing import assert_type, TypedDict, Literal
 class A(TypedDict, extra_items=int):
     x: str
 def f(a: A, k: str):
     assert_type(a.get(k), str | int | None)
-    assert_type(a.get(k, b'hello world'), str | int | bytes)
+    assert_type(a.get(k, b'hello world'), str | int | Literal[b'hello world'])
     "#,
 );
 
