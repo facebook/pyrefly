@@ -247,13 +247,13 @@ testcase!(
     bug = "Missing check that self/cls param is a supertype of the defining class",
     test_metaclass_call_cls_param_does_not_instantiate,
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 class Meta(type):
     def __call__(cls: 'type[C[str]]', *args, **kwargs): ... # TODO: error because annot is not supertype of Meta
 class C[T](metaclass=Meta):
     def __init__(self, x: T):
         pass
-assert_type(C(0), C[int]) # Correct, because metaclass call does not instantiate T=str
+assert_type(C(0), C[Literal[0]]) # Correct, preserves the literal passed to C
     "#,
 );
 
@@ -262,14 +262,14 @@ assert_type(C(0), C[int]) # Correct, because metaclass call does not instantiate
 testcase!(
     test_metaclass_call_does_not_instantiate,
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 class Meta(type):
     def __call__(cls, *args, **kwargs) -> 'C[str]':
         ...
 class C[T](metaclass=Meta):
     def __init__(self, x: T):
         pass
-assert_type(C(0), C[int])
+assert_type(C(0), C[Literal[0]])
     "#,
 );
 
@@ -363,12 +363,12 @@ assert_type(x, C)
 testcase!(
     test_new_returns_something_else_generic,
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 class C[T]:
     def __new__(cls, x: T) -> list[T]:
         return []
 x = C(0)
-assert_type(x, list[int])
+assert_type(x, list[Literal[0]])
     "#,
 );
 
@@ -528,10 +528,10 @@ assert_type(C2(), C2[int])
 testcase!(
     test_specialize_in_new,
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 class C[T]:
     def __new__[T2](cls, x: T2) -> C[T2]: ...
-assert_type(C(0), C[int])
+assert_type(C(0), C[Literal[0]])
     "#,
 );
 
@@ -552,26 +552,26 @@ assert_type(A(int), A[int])
 testcase!(
     test_overload_init,
     r#"
-from typing import overload, assert_type
+from typing import Literal, overload, assert_type
 class C[T]:
     @overload
     def __init__(self, x: T, y: int): ... # E: Overloaded function must have an implementation
     @overload
     def __init__(self, x: int, y: T): ...
-assert_type(C(0, "foo"), C[str])
+assert_type(C(0, "foo"), C[Literal['foo']])
 "#,
 );
 
 testcase!(
     test_new_and_init_generic,
     r#"
-from typing import Self,assert_type
+from typing import Literal, Self, assert_type
 
 class Class2[T]:
     def __new__(cls, *args, **kwargs) -> Self: ...
     def __init__(self, x: T) -> None: ...
 
-assert_type(Class2(1), Class2[int])
+assert_type(Class2(1), Class2[Literal[1]])
     "#,
 );
 
@@ -585,7 +585,7 @@ assert_type(Class2(1), Class2[int])
 testcase!(
     test_new_and_init_partial_instantiation,
     r#"
-from typing import Any, Self, assert_type
+from typing import Any, Literal, Self, assert_type
 
 class C[T, U]:
     def __new__(cls, x: T, y: Any) -> Self:
@@ -594,7 +594,7 @@ class C[T, U]:
     def __init__(self, x: Any, y: U):
         pass
 
-assert_type(C(0, ""), C[int, str])
+assert_type(C(0, ""), C[Literal[0], Literal['']])
     "#,
 );
 

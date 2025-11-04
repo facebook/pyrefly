@@ -13,7 +13,7 @@ use crate::testcase;
 testcase!(
     test_def,
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 import dataclasses
 @dataclasses.dataclass
 class Data:
@@ -80,7 +80,7 @@ D(4, 5, 6) # E: Expected 2 positional arguments, got 3 in function `D.__init__`
 testcase!(
     test_fields,
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 import dataclasses
 @dataclasses.dataclass
 class Data:
@@ -95,14 +95,14 @@ def f(d: Data):
 testcase!(
     test_generic,
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 import dataclasses
 @dataclasses.dataclass
 class Data[T]:
     x: T
 def f(d: Data[int]):
     assert_type(d.x, int)
-assert_type(Data(x=0), Data[int])
+assert_type(Data(x=0), Data[Literal[0]])
 Data[int](x=0)  # OK
 Data[int](x="")  # E: Argument `Literal['']` is not assignable to parameter `x` with type `int` in function `Data.__init__`
     "#,
@@ -770,7 +770,7 @@ C2(x=1)  # OK
 
 @dataclass
 class C3:
-    x: int = field(default="oops")  # E: `str` is not assignable to `int`
+    x: int = field(default="oops")  # E: `Literal['oops']` is not assignable to `int`
     y: str = field(default_factory=factory)  # E: `int` is not assignable to `str`
     "#,
 );

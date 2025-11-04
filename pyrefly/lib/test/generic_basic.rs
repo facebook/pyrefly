@@ -45,14 +45,14 @@ def test(cls: type[T]) -> None:
 testcase!(
     test_tyvar_mix,
     r#"
-from typing import TypeVar, assert_type
+from typing import Literal, TypeVar, assert_type
 U = TypeVar("U")
 def foo[T](
       x: U  # E: Type parameter U is not included in the type parameter list
     ) -> U:
     return x
 
-assert_type(foo(1), int)
+assert_type(foo(1), Literal[1])
 "#,
 );
 
