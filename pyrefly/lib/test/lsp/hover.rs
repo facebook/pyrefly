@@ -45,7 +45,7 @@ xyz = [foo.meth]
 7 | foo.meth()
         ^
 ```python
-(attribute) meth: def meth(self: Foo) -> None
+(attribute) meth: def meth(self: Foo) -> None: ...
 ```
 
 9 | xyz = [foo.meth]
@@ -81,7 +81,7 @@ from lib import foo_renamed
 2 | from lib import foo_renamed
                          ^
 ```python
-(function) foo: def foo() -> None
+(function) foo: def foo() -> None: ...
 ```
 
 

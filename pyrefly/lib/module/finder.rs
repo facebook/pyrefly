@@ -372,15 +372,24 @@ where
             let stub_result =
                 find_module_components(&stub_first, rest, include.clone(), style_filter);
 
+            // If we couldn't find it in a `-stubs` module or we want to check for missing stubs, look normally.
+            let normal_result = find_module_components(first, rest, include.clone(), style_filter);
+
             // If we do have a third party typeshed stub and we also do not find a
             // higher priority stub from the site packages, then we should use the
-            // third party typeshed stub.
-            if typeshed_third_party_stub.is_some() && stub_result.is_none() {
-                return typeshed_third_party_stub;
+            // third party typeshed stub. However, if we also don't find the actual
+            // package (normal_result), we should attach a NoSource error.
+            if let Some(ts_stub) = typeshed_third_party_stub
+                && stub_result.is_none()
+            {
+                if normal_result.is_none() {
+                    // We have typeshed third party stubs but no actual package found
+                    return Some(ts_stub.with_error(FindError::NoSourceForStubs(module)));
+                } else {
+                    // We have both typeshed third party stubs and the actual package
+                    return Some(ts_stub);
+                }
             }
-            //
-            // If we couldn't find it in a `-stubs` module or we want to check for missing stubs, look normally.
-            let normal_result = find_module_components(first, rest, include, style_filter);
 
             match (normal_result, stub_result) {
                 (None, Some(stub_result)) => Some(
@@ -638,6 +647,7 @@ mod tests {
     use pyrefly_config::config::ConfigSource;
     use pyrefly_config::environment::environment::PythonEnvironment;
     use pyrefly_config::environment::interpreters::Interpreters;
+    use pyrefly_python::module_path::ModulePathDetails;
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
@@ -2052,5 +2062,62 @@ mod tests {
             "Should find the module in typeshed third party with marker config, got: {:?}",
             result_marker
         );
+    }
+
+    #[test]
+    fn test_typeshed_third_party_no_with_no_package_returns_typeshed_source_error() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+
+        // Set up empty site package directory (no actual 'requests' package)
+        TestPath::setup_test_directory(root, vec![TestPath::dir("site_packages", vec![])]);
+
+        let mut config = get_config(ConfigSource::Synthetic);
+        config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
+        config.configure();
+
+        // 'requests' exists in typeshed third party stubs but not in our site_packages
+        let result = find_import_filtered(&config, ModuleName::from_str("requests"), None, None);
+
+        let FindError::NoSourceForStubs(module) = result.error().unwrap() else {
+            panic!("Expected NoSourceForStubs error");
+        };
+        assert_eq!(module, ModuleName::from_str("requests"));
+    }
+
+    #[test]
+    fn test_typeshed_third_party_with_package_does_not_return_source_error() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+
+        // Set up site package directory with actual 'requests' package
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "site_packages",
+                vec![TestPath::dir(
+                    "requests",
+                    vec![TestPath::file("__init__.py")],
+                )],
+            )],
+        );
+
+        let mut config = get_config(ConfigSource::Synthetic);
+        config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
+        config.configure();
+
+        // 'requests' exists in both typeshed third party stubs AND site_packages
+        let result = find_import_filtered(&config, ModuleName::from_str("requests"), None, None);
+
+        if let FindingOrError::Finding(finding) = result {
+            assert!(matches!(
+                finding.finding.details(),
+                ModulePathDetails::BundledTypeshedThirdParty(_)
+            ));
+            // Should not have a NoSource error since the package exists
+            assert!(finding.error.is_none());
+        } else {
+            panic!("Expected to find typeshed stub, got: {:?}", result);
+        }
     }
 }
