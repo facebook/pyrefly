@@ -16,7 +16,7 @@ from docify import main as docify  # type: ignore
 def main(*, overwrite: bool):
     """
     adds docstrings to the stubs located in `../stubdocs` for any modules that are compiled,
-    because otherwise pyright would have no way to see the docstrings because there's no source
+    because otherwise pyrefly would have no way to see the docstrings because there's no source
     code.
 
     note that it only generates stubs for modules and objects that exist on your current python
