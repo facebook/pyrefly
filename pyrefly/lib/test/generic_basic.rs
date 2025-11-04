@@ -127,6 +127,22 @@ assert_type(f(D), D)
 );
 
 testcase!(
+    bug = "regression test for https://github.com/facebook/pyrefly/issues/1138",
+    test_preserve_literal_through_generic_call,
+    r#"
+from typing import Literal, assert_type
+
+def f[T](t: T) -> T:
+    return t
+
+x = 1
+assert_type(x, Literal[1])
+assert_type(f(x), Literal[1])
+assert_type(f(1), Literal[1])
+"#,
+);
+
+testcase!(
     test_untype_with_missing_targs_annotation,
     TestEnv::new().enable_implicit_any_error(),
     r#"

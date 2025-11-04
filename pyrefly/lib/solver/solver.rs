@@ -1245,17 +1245,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         let name = q.name.clone();
                         let bound = q.restriction().as_type(self.type_order.stdlib());
                         drop(v2_ref);
-                        variables.update(*v2, Variable::Answer(t1_p.clone()));
+                        variables.update(*v2, Variable::Answer(t1.clone()));
                         drop(variables);
-                        if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
-                            // If the promoted type fails, try again with the original type, in case the bound itself is literal.
-                            // This could be more optimized, but errors are rare, so this code path should not be hot.
+                        if self.is_subset_eq(t1, &bound).is_err() {
+                            // Fall back to the promoted type if the literal version violates the bound.
                             self.solver
                                 .variables
                                 .lock()
-                                .update(*v2, Variable::Answer(t1.clone()));
-                            if self.is_subset_eq(t1, &bound).is_err() {
-                                // If the original type is also an error, use the promoted type.
+                                .update(*v2, Variable::Answer(t1_p.clone()));
+                            if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
+                                // If the promoted type also violates the bound, record the error.
                                 self.solver
                                     .variables
                                     .lock()
