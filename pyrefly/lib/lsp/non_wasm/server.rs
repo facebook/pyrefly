@@ -682,7 +682,7 @@ impl Server {
                 let notebook_path = url
                     .to_file_path()
                     .map_err(|_| anyhow::anyhow!("Could not convert uri to filepath: {}", url))?;
-                for cell_url in lsp_notebook.cell_urls.keys() {
+                for cell_url in lsp_notebook.cell_url_to_index.keys() {
                     self.open_notebook_cells
                         .write()
                         .insert(cell_url.clone(), notebook_path.clone());
@@ -1798,7 +1798,7 @@ impl Server {
         self.version_info.lock().remove(&uri);
         let open_files = self.open_files.dupe();
         if let Some(LspFile::Notebook(notebook)) = open_files.write().remove(&uri).as_deref() {
-            for cell in notebook.cell_urls.keys() {
+            for cell in notebook.cell_url_to_index.keys() {
                 self.open_notebook_cells.write().remove(cell);
                 self.connection
                     .publish_diagnostics_for_uri(cell.clone(), Vec::new(), None);

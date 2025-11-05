@@ -187,24 +187,36 @@ pub struct LspNotebook {
     ruff_notebook: Arc<Notebook>,
     notebook_document: NotebookDocument,
     // Notebook cells have Urls of unspecified format
-    pub cell_urls: SmallMap<Url, usize>,
+    pub cell_url_to_index: SmallMap<Url, usize>,
+    pub cell_index_to_url: Vec<Url>,
 }
 
 impl LspNotebook {
     pub fn new(ruff_notebook: Notebook, notebook_document: NotebookDocument) -> Self {
-        let mut cell_urls = SmallMap::new();
+        let mut cell_url_to_index = SmallMap::new();
+        let mut cell_index_to_url = Vec::new();
         for (idx, cell) in notebook_document.cells.iter().enumerate() {
-            cell_urls.insert(cell.document.clone(), idx);
+            cell_url_to_index.insert(cell.document.clone(), idx);
+            cell_index_to_url.push(cell.document.clone());
         }
         Self {
             ruff_notebook: Arc::new(ruff_notebook),
             notebook_document,
-            cell_urls,
+            cell_url_to_index,
+            cell_index_to_url,
         }
     }
 
     pub fn notebook_document(&self) -> &NotebookDocument {
         &self.notebook_document
+    }
+
+    pub fn get_cell_index(&self, cell_url: &Url) -> Option<usize> {
+        self.cell_url_to_index.get(cell_url).copied()
+    }
+
+    pub fn get_cell_url(&self, cell_index: usize) -> Option<&Url> {
+        self.cell_index_to_url.get(cell_index)
     }
 }
 
