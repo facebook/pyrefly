@@ -201,6 +201,7 @@ use crate::lsp::non_wasm::workspace::Workspaces;
 use crate::lsp::wasm::hover::get_hover;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocument;
 use crate::lsp::wasm::notebook::DidCloseNotebookDocument;
+use crate::lsp::wasm::notebook::DidCloseNotebookDocumentParams;
 use crate::lsp::wasm::notebook::DidOpenNotebookDocument;
 use crate::lsp::wasm::notebook::DidSaveNotebookDocument;
 use crate::lsp::wasm::notebook::NotebookCellSelector;
@@ -650,7 +651,7 @@ impl Server {
                 self.did_change(ide_transaction_manager, subsequent_mutation, params)?;
             }
             LspEvent::DidCloseTextDocument(params) => {
-                self.did_close(params);
+                self.did_close(params.text_document.uri);
             }
             LspEvent::DidSaveTextDocument(params) => {
                 self.did_save(params);
@@ -661,8 +662,8 @@ impl Server {
             LspEvent::DidChangeNotebookDocument(_) => {
                 // TODO
             }
-            LspEvent::DidCloseNotebookDocument(_) => {
-                // TODO
+            LspEvent::DidCloseNotebookDocument(params) => {
+                self.did_close(params.notebook_document.uri);
             }
             LspEvent::DidSaveNotebookDocument(_) => {
                 // TODO
@@ -1622,13 +1623,13 @@ impl Server {
         }
     }
 
-    fn did_close(&self, params: DidCloseTextDocumentParams) {
-        let uri = params.text_document.uri.to_file_path().unwrap();
+    fn did_close(&self, url: Url) {
+        let uri = url.to_file_path().unwrap();
         self.version_info.lock().remove(&uri);
         let open_files = self.open_files.dupe();
         open_files.write().remove(&uri);
         self.connection
-            .publish_diagnostics_for_uri(params.text_document.uri, Vec::new(), None);
+            .publish_diagnostics_for_uri(url, Vec::new(), None);
         let state = self.state.dupe();
         let lsp_queue = self.lsp_queue.dupe();
         let open_files = self.open_files.dupe();
