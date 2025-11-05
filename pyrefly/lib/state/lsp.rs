@@ -86,13 +86,6 @@ use crate::types::callable::Params;
 use crate::types::module::ModuleType;
 use crate::types::types::Type;
 
-#[derive(Debug, Clone)]
-enum ActiveArgument {
-    Positional(usize),
-    Keyword(Name),
-    Next(usize),
-}
-
 fn default_true() -> bool {
     true
 }
@@ -479,6 +472,14 @@ pub struct FindDefinitionItem {
     pub metadata: DefinitionMetadata,
     pub definition_range: TextRange,
     pub module: Module,
+}
+
+/// The currently active argument in a function call for signature help.
+#[derive(Debug)]
+enum ActiveArgument {
+    Positional(usize),
+    Keyword(Name),
+    Next(usize),
 }
 
 impl<'a> Transaction<'a> {
@@ -872,7 +873,7 @@ impl<'a> Transaction<'a> {
                 }
             }
             // Check keyword arguments
-            let positional_count = call.arguments.args.len();
+            let kwarg_start_idx = call.arguments.args.len();
             for (j, kw) in call.arguments.keywords.iter().enumerate() {
                 if kw.range.contains_inclusive(find) {
                     Self::visit_finding_signature_range(&kw.value, find, res);
@@ -881,7 +882,7 @@ impl<'a> Transaction<'a> {
                     }
                     let active_argument = match kw.arg.as_ref() {
                         Some(identifier) => ActiveArgument::Keyword(identifier.id.clone()),
-                        None => ActiveArgument::Positional(positional_count + j),
+                        None => ActiveArgument::Positional(kwarg_start_idx + j),
                     };
                     *res = Some((call.func.range(), call.arguments.range, active_argument));
                     return;
