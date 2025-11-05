@@ -168,7 +168,6 @@ use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::watch_pattern::WatchPattern;
-use ruff_notebook::Notebook;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -202,7 +201,6 @@ use crate::lsp::non_wasm::workspace::Workspaces;
 use crate::lsp::wasm::hover::get_hover;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocument;
 use crate::lsp::wasm::notebook::DidCloseNotebookDocument;
-use crate::lsp::wasm::notebook::DidCloseNotebookDocumentParams;
 use crate::lsp::wasm::notebook::DidOpenNotebookDocument;
 use crate::lsp::wasm::notebook::DidSaveNotebookDocument;
 use crate::lsp::wasm::notebook::NotebookCellSelector;
@@ -515,6 +513,8 @@ pub fn capabilities(
             ..Default::default()
         },
         notebook_document_sync: Some(OneOf::Left(NotebookDocumentSyncOptions {
+            // If a selector provides no notebook document filter but only a cell selector,
+            // all notebook documents that contain at least one matching cell will be synced.
             notebook_selector: vec![NotebookDocumentSelector {
                 notebook: None,
                 cells: Some(vec![NotebookCellSelector {
@@ -647,7 +647,14 @@ impl Server {
                 }
             }
             LspEvent::DidOpenTextDocument(params) => {
-                self.did_open(ide_transaction_manager, subsequent_mutation, params)?;
+                let contents = Arc::new(FileContents::from_source(params.text_document.text));
+                self.did_open(
+                    ide_transaction_manager,
+                    subsequent_mutation,
+                    params.text_document.uri,
+                    params.text_document.version,
+                    contents,
+                )?;
             }
             LspEvent::DidChangeTextDocument(params) => {
                 self.did_change(ide_transaction_manager, subsequent_mutation, params)?;
@@ -658,8 +665,18 @@ impl Server {
             LspEvent::DidSaveTextDocument(params) => {
                 self.did_save(params.text_document.uri);
             }
-            LspEvent::DidOpenNotebookDocument(_) => {
-                // TODO
+            LspEvent::DidOpenNotebookDocument(params) => {
+                let url = params.notebook_document.uri.clone();
+                let version = params.notebook_document.version;
+                let notebook = params.to_ruff_notebook()?;
+                let contents = Arc::new(FileContents::Notebook(Arc::new(notebook)));
+                self.did_open(
+                    ide_transaction_manager,
+                    subsequent_mutation,
+                    url,
+                    version,
+                    contents,
+                )?;
             }
             LspEvent::DidChangeNotebookDocument(_) => {
                 // TODO
@@ -1498,14 +1515,13 @@ impl Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         subsequent_mutation: bool,
-        params: DidOpenTextDocumentParams,
+        url: Url,
+        version: i32,
+        contents: Arc<FileContents>,
     ) -> anyhow::Result<()> {
-        let uri = params.text_document.uri.to_file_path().map_err(|_| {
-            anyhow::anyhow!(
-                "Could not convert uri to filepath: {}",
-                params.text_document.uri
-            )
-        })?;
+        let uri = url
+            .to_file_path()
+            .map_err(|_| anyhow::anyhow!("Could not convert uri to filepath: {}", url))?;
         let config_to_populate_files = if self.indexing_mode != IndexingMode::None
             && let Some(directory) = uri.as_path().parent()
         {
@@ -1513,13 +1529,8 @@ impl Server {
         } else {
             None
         };
-        self.version_info
-            .lock()
-            .insert(uri.clone(), params.text_document.version);
-        self.open_files.write().insert(
-            uri.clone(),
-            Arc::new(FileContents::from_source(params.text_document.text)),
-        );
+        self.version_info.lock().insert(uri.clone(), version);
+        self.open_files.write().insert(uri.clone(), contents);
         if !subsequent_mutation {
             // In order to improve perceived startup perf, when a file is opened, we run a
             // non-committing transaction that indexes the file with default require level Exports.
