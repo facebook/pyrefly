@@ -654,7 +654,7 @@ impl Server {
                 self.did_close(params.text_document.uri);
             }
             LspEvent::DidSaveTextDocument(params) => {
-                self.did_save(params);
+                self.did_save(params.text_document.uri);
             }
             LspEvent::DidOpenNotebookDocument(_) => {
                 // TODO
@@ -665,8 +665,8 @@ impl Server {
             LspEvent::DidCloseNotebookDocument(params) => {
                 self.did_close(params.notebook_document.uri);
             }
-            LspEvent::DidSaveNotebookDocument(_) => {
-                // TODO
+            LspEvent::DidSaveNotebookDocument(params) => {
+                self.did_save(params.notebook_document.uri);
             }
             LspEvent::DidChangeWatchedFiles(params) => {
                 self.did_change_watched_files(params);
@@ -1487,8 +1487,8 @@ impl Server {
         }
     }
 
-    fn did_save(&self, params: DidSaveTextDocumentParams) {
-        let file = params.text_document.uri.to_file_path().unwrap();
+    fn did_save(&self, url: Url) {
+        let file = url.to_file_path().unwrap();
         self.invalidate(move |t| t.invalidate_disk(&[file]));
     }
 
