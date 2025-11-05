@@ -27,7 +27,7 @@ use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
-use crate::state::state::FileContents;
+use crate::state::state::LspFile;
 use crate::state::state::State;
 
 pub fn should_requery_build_system(events: &CategorizedEvents) -> bool {
@@ -59,7 +59,7 @@ pub fn queue_source_db_rebuild_and_recheck(
     invalidated_configs: Arc<Mutex<SmallSet<ArcId<ConfigFile>>>>,
     sourcedb_queue: HeavyTaskQueue,
     lsp_queue: LspQueue,
-    open_files: Arc<RwLock<HashMap<PathBuf, Arc<FileContents>>>>,
+    open_files: Arc<RwLock<HashMap<PathBuf, Arc<LspFile>>>>,
 ) {
     sourcedb_queue.queue_task(Box::new(move || {
         let mut configs_to_paths: SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>> =

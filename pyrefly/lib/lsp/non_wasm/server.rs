@@ -45,9 +45,6 @@ use lsp_types::DidChangeWatchedFilesClientCapabilities;
 use lsp_types::DidChangeWatchedFilesParams;
 use lsp_types::DidChangeWatchedFilesRegistrationOptions;
 use lsp_types::DidChangeWorkspaceFoldersParams;
-use lsp_types::DidCloseTextDocumentParams;
-use lsp_types::DidOpenTextDocumentParams;
-use lsp_types::DidSaveTextDocumentParams;
 use lsp_types::DocumentDiagnosticParams;
 use lsp_types::DocumentDiagnosticReport;
 use lsp_types::DocumentHighlight;
@@ -218,7 +215,8 @@ use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::semantic_tokens::disabled_ranges_for_module;
 use crate::state::state::CommittingTransaction;
-use crate::state::state::FileContents;
+use crate::state::state::LspFile;
+use crate::state::state::LspNotebook;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 
@@ -324,7 +322,7 @@ pub struct Server {
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
     state: Arc<State>,
-    open_files: Arc<RwLock<HashMap<PathBuf, Arc<FileContents>>>>,
+    open_files: Arc<RwLock<HashMap<PathBuf, Arc<LspFile>>>>,
     /// A set of configs where we have already indexed all the files within the config.
     indexed_configs: Mutex<HashSet<ArcId<ConfigFile>>>,
     /// A set of workspaces where we have already performed best-effort indexing.
@@ -647,7 +645,7 @@ impl Server {
                 }
             }
             LspEvent::DidOpenTextDocument(params) => {
-                let contents = Arc::new(FileContents::from_source(params.text_document.text));
+                let contents = Arc::new(LspFile::from_source(params.text_document.text));
                 self.did_open(
                     ide_transaction_manager,
                     subsequent_mutation,
@@ -668,8 +666,14 @@ impl Server {
             LspEvent::DidOpenNotebookDocument(params) => {
                 let url = params.notebook_document.uri.clone();
                 let version = params.notebook_document.version;
-                let notebook = params.to_ruff_notebook()?;
-                let contents = Arc::new(FileContents::Notebook(Arc::new(notebook)));
+                let notebook_document = params.notebook_document.clone();
+                let ruff_notebook = params
+                    .notebook_document
+                    .to_ruff_notebook(params.cell_text_documents)?;
+                let contents = Arc::new(LspFile::Notebook(Arc::new(LspNotebook::new(
+                    ruff_notebook,
+                    notebook_document,
+                ))));
                 self.did_open(
                     ide_transaction_manager,
                     subsequent_mutation,
@@ -1134,7 +1138,7 @@ impl Server {
     /// Run the transaction with the in-memory content of open files. Returns the handles of open files when the transaction is done.
     fn validate_in_memory_for_transaction(
         state: &State,
-        open_files: &RwLock<HashMap<PathBuf, Arc<FileContents>>>,
+        open_files: &RwLock<HashMap<PathBuf, Arc<LspFile>>>,
         transaction: &mut Transaction<'_>,
     ) -> Vec<Handle> {
         let handles = open_files
@@ -1146,7 +1150,7 @@ impl Server {
             open_files
                 .read()
                 .iter()
-                .map(|x| (x.0.clone(), Some(x.1.dupe())))
+                .map(|x| (x.0.clone(), Some(Arc::new(x.1.to_file_contents()))))
                 .collect::<Vec<_>>(),
         );
         transaction.run(&handles, Require::Everything);
@@ -1166,7 +1170,7 @@ impl Server {
     fn get_diag_if_shown(
         &self,
         e: &Error,
-        open_files: &HashMap<PathBuf, Arc<FileContents>>,
+        open_files: &HashMap<PathBuf, Arc<LspFile>>,
     ) -> Option<(PathBuf, Diagnostic)> {
         if let Some(path) = to_real_path(e.path()) {
             // When no file covers this, we'll get the default configured config which includes "everything"
@@ -1517,7 +1521,7 @@ impl Server {
         subsequent_mutation: bool,
         url: Url,
         version: i32,
-        contents: Arc<FileContents>,
+        contents: Arc<LspFile>,
     ) -> anyhow::Result<()> {
         let uri = url
             .to_file_path()
@@ -1574,7 +1578,7 @@ impl Server {
         version_info.insert(file_path.clone(), version);
         let mut lock = self.open_files.write();
         let original = lock.get_mut(&file_path).unwrap();
-        *original = Arc::new(FileContents::from_source(apply_change_events(
+        *original = Arc::new(LspFile::from_source(apply_change_events(
             original.get_string(),
             params.content_changes,
         )));

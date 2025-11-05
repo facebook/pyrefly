@@ -35,6 +35,7 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
 use lsp_types::FoldingRangeKind;
+use lsp_types::Url;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::module::Module;
@@ -102,6 +103,7 @@ use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
+use crate::lsp::wasm::notebook::NotebookDocument;
 use crate::module::bundled::BundledStub;
 use crate::module::finder::find_import_prefixes;
 use crate::module::typeshed::BundledTypeshedStdlib;
@@ -172,6 +174,36 @@ pub enum FileContents {
     Notebook(Arc<Notebook>),
 }
 
+/// This is the representation of files in the language server
+/// It can be converted to `FileContents`
+#[derive(Clone, Dupe, Debug, Eq, PartialEq)]
+pub enum LspFile {
+    Source(Arc<String>),
+    Notebook(Arc<LspNotebook>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LspNotebook {
+    ruff_notebook: Arc<Notebook>,
+    notebook_document: NotebookDocument,
+    // Notebook cells have Urls of unspecified format
+    cell_urls: SmallMap<Url, usize>,
+}
+
+impl LspNotebook {
+    pub fn new(ruff_notebook: Notebook, notebook_document: NotebookDocument) -> Self {
+        let mut cell_urls = SmallMap::new();
+        for (idx, cell) in notebook_document.cells.iter().enumerate() {
+            cell_urls.insert(cell.document.clone(), idx);
+        }
+        Self {
+            ruff_notebook: Arc::new(ruff_notebook),
+            notebook_document,
+            cell_urls,
+        }
+    }
+}
+
 impl ModuleDataInner {
     fn new(require: Require, now: Epoch) -> Self {
         Self {
@@ -184,15 +216,28 @@ impl ModuleDataInner {
 }
 
 impl FileContents {
+    pub fn from_source(source: String) -> Self {
+        Self::Source(Arc::new(source))
+    }
+}
+
+impl LspFile {
     pub fn get_string(&self) -> &str {
         match self {
             Self::Source(contents) => contents.as_str(),
-            Self::Notebook(notebook) => notebook.source_code(),
+            Self::Notebook(notebook) => notebook.ruff_notebook.source_code(),
         }
     }
 
     pub fn from_source(source: String) -> Self {
         Self::Source(Arc::new(source))
+    }
+
+    pub fn to_file_contents(&self) -> FileContents {
+        match self {
+            Self::Source(contents) => FileContents::Source(Arc::clone(contents)),
+            Self::Notebook(notebook) => FileContents::Notebook(Arc::clone(&notebook.ruff_notebook)),
+        }
     }
 }
 
