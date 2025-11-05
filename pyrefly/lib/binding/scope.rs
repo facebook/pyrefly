@@ -1298,6 +1298,14 @@ impl Scopes {
         Some(self.current().flow.get_info(name)?.value()?.style.clone())
     }
 
+    /// Return the current binding index and flow style for `name`, if it exists
+    /// in any enclosing scope.
+    pub fn binding_idx_for_name(&self, name: &Name) -> Option<(Idx<Key>, FlowStyle)> {
+        let info = self.get_flow_info(name)?;
+        let value = info.value()?;
+        Some((value.idx, value.style.clone()))
+    }
+
     // This helper handles re-exported symbols during special export lookups
     fn lookup_special_export(
         &self,

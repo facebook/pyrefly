@@ -8,6 +8,7 @@
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
+use std::iter;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -651,10 +652,27 @@ impl<'a> BindingsBuilder<'a> {
     // Only works for things with `Foo`, or `source.Foo`, or `F` where `from module import Foo as F`.
     // Does not work for things with nested modules - but no SpecialExport's have that.
     pub fn as_special_export(&self, e: &Expr) -> Option<SpecialExport> {
+        let mut visited_names: SmallSet<Name> = SmallSet::new();
+        let mut visited_keys: SmallSet<Idx<Key>> = SmallSet::new();
+        self.as_special_export_inner(e, &mut visited_names, &mut visited_keys)
+    }
+
+    fn as_special_export_inner(
+        &self,
+        e: &Expr,
+        visited_names: &mut SmallSet<Name>,
+        visited_keys: &mut SmallSet<Idx<Key>>,
+    ) -> Option<SpecialExport> {
         match e {
             Expr::Name(name) => {
+                if !visited_names.insert(name.id.clone()) {
+                    return None;
+                }
                 self.scopes
                     .as_special_export(&name.id, None, self.module_info.name(), self.lookup)
+                    .or_else(|| {
+                        self.special_export_via_alias(&name.id, visited_names, visited_keys)
+                    })
             }
             Expr::Attribute(ExprAttribute {
                 value, attr: name, ..
@@ -666,6 +684,86 @@ impl<'a> BindingsBuilder<'a> {
             ),
             _ => None,
         }
+    }
+
+    fn special_export_via_alias(
+        &self,
+        name: &Name,
+        visited_names: &mut SmallSet<Name>,
+        visited_keys: &mut SmallSet<Idx<Key>>,
+    ) -> Option<SpecialExport> {
+        let (idx, style) = self.scopes.binding_idx_for_name(name)?;
+        match style {
+            FlowStyle::Other
+            | FlowStyle::ClassField { .. }
+            | FlowStyle::PossiblyUninitialized
+            | FlowStyle::Uninitialized => {
+                self.special_export_from_binding_idx(idx, visited_names, visited_keys)
+            }
+            _ => None,
+        }
+    }
+
+    fn special_export_from_binding_idx(
+        &self,
+        mut idx: Idx<Key>,
+        visited_names: &mut SmallSet<Name>,
+        visited_keys: &mut SmallSet<Idx<Key>>,
+    ) -> Option<SpecialExport> {
+        for _ in 0..16 {
+            if !visited_keys.insert(idx) {
+                return None;
+            }
+            let binding = self.table.types.1.get(idx)?;
+            match binding {
+                Binding::CompletedPartialType(inner_idx, _) => {
+                    idx = *inner_idx;
+                }
+                Binding::PartialTypeWithUpstreamsCompleted(inner_idx, _) => {
+                    idx = *inner_idx;
+                }
+                Binding::Forward(inner_idx) => {
+                    idx = *inner_idx;
+                }
+                Binding::NameAssign(_, _, value, _) => {
+                    return self.as_special_export_inner(value, visited_names, visited_keys);
+                }
+                Binding::Phi(_, options) => {
+                    return self.special_export_from_multiple_indices(
+                        options.iter().copied(),
+                        visited_names,
+                        visited_keys,
+                    );
+                }
+                Binding::LoopPhi(prior, options) => {
+                    return self.special_export_from_multiple_indices(
+                        iter::once(*prior).chain(options.iter().copied()),
+                        visited_names,
+                        visited_keys,
+                    );
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    fn special_export_from_multiple_indices(
+        &self,
+        indices: impl Iterator<Item = Idx<Key>>,
+        visited_names: &mut SmallSet<Name>,
+        visited_keys: &mut SmallSet<Idx<Key>>,
+    ) -> Option<SpecialExport> {
+        let mut result: Option<SpecialExport> = None;
+        for idx in indices {
+            let special = self.special_export_from_binding_idx(idx, visited_names, visited_keys)?;
+            match &mut result {
+                None => result = Some(special),
+                Some(existing) if *existing == special => {}
+                Some(_) => return None,
+            }
+        }
+        result
     }
 
     pub fn error(&self, range: TextRange, info: ErrorInfo, msg: String) {

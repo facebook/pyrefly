@@ -2697,31 +2697,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     None => (None, self.expr(expr, None, errors)),
                 };
-                // Then, handle the possibility that we need to treat the type as a type alias
-                match has_type_alias_qualifier {
-                    Some(true) => self.as_type_alias(
-                        name,
-                        TypeAliasStyle::LegacyExplicit,
-                        ty,
-                        expr,
-                        None,
-                        legacy_tparams,
-                        errors,
-                    ),
-                    None if Self::may_be_implicit_type_alias(&ty)
-                        && self.has_valid_annotation_syntax(expr, &self.error_swallower()) =>
-                    {
-                        self.as_type_alias(
+                let is_bare_annotated = has_type_alias_qualifier != Some(true)
+                    && matches!(expr.as_ref(), Expr::Name(_) | Expr::Attribute(_))
+                    && matches!(
+                        &ty,
+                        Type::Type(inner)
+                            if matches!(inner.as_ref(), Type::SpecialForm(SpecialForm::Annotated))
+                    );
+                if is_bare_annotated {
+                    ty
+                } else {
+                    // Then, handle the possibility that we need to treat the type as a type alias
+                    match has_type_alias_qualifier {
+                        Some(true) => self.as_type_alias(
                             name,
-                            TypeAliasStyle::LegacyImplicit,
+                            TypeAliasStyle::LegacyExplicit,
                             ty,
                             expr,
                             None,
                             legacy_tparams,
                             errors,
-                        )
+                        ),
+                        None if Self::may_be_implicit_type_alias(&ty)
+                            && self.has_valid_annotation_syntax(expr, &self.error_swallower()) =>
+                        {
+                            self.as_type_alias(
+                                name,
+                                TypeAliasStyle::LegacyImplicit,
+                                ty,
+                                expr,
+                                None,
+                                legacy_tparams,
+                                errors,
+                            )
+                        }
+                        _ => ty,
                     }
-                    _ => ty,
                 }
             }
             Binding::TypeVar(ann, name, x) => {

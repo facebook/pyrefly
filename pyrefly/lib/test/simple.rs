@@ -1851,6 +1851,21 @@ Z = Annotated[0, 'not a type']  # E: Expected a type form, got instance of `Lite
 );
 
 testcase!(
+    test_typing_annotated_alias,
+    r#"
+from typing import Annotated, assert_type
+
+Alias = Annotated
+
+def takes_alias(x: Alias[int, "meta"]) -> None:
+    assert_type(x, int)
+
+takes_alias(1)
+takes_alias("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int`
+    "#,
+);
+
+testcase!(
     test_starred_empty_tuple_no_panic,
     r#"
 (),*()
