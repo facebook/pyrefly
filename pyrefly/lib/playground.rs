@@ -772,13 +772,15 @@ mod tests {
         // Create a nested folder file: foo/bar.py
         files.insert(
             "foo/bar.py".to_owned(),
-            "def greet(name: str) -> str:\n    return f\"Hello, {name}!\"\n\nx: int = 42".to_owned(),
+            "def greet(name: str) -> str:\n    return f\"Hello, {name}!\"\n\nx: int = 42"
+                .to_owned(),
         );
 
         // Import from the nested module
         files.insert(
             "sandbox.py".to_owned(),
-            "from foo.bar import greet, x\n\nresult = greet(\"World\")\nprint(result)\nprint(x)".to_owned(),
+            "from foo.bar import greet, x\n\nresult = greet(\"World\")\nprint(result)\nprint(x)"
+                .to_owned(),
         );
 
         state.update_sandbox_files(files, true);
