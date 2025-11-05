@@ -199,6 +199,12 @@ use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
 use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
 use crate::lsp::wasm::hover::get_hover;
+use crate::lsp::wasm::notebook::DidChangeNotebookDocument;
+use crate::lsp::wasm::notebook::DidCloseNotebookDocument;
+use crate::lsp::wasm::notebook::DidOpenNotebookDocument;
+use crate::lsp::wasm::notebook::DidSaveNotebookDocument;
+use crate::lsp::wasm::notebook::NotebookCellSelector;
+use crate::lsp::wasm::notebook::NotebookDocumentSelector;
 use crate::lsp::wasm::notebook::NotebookDocumentSyncOptions;
 use crate::lsp::wasm::notebook::NotebookDocumentSyncRegistrationOptions;
 use crate::lsp::wasm::provide_type::ProvideType;
@@ -377,6 +383,14 @@ pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: LspQueue) {
                     lsp_queue.send(LspEvent::DidCloseTextDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidSaveTextDocument>(&x) {
                     lsp_queue.send(LspEvent::DidSaveTextDocument(params))
+                } else if let Some(Ok(params)) = as_notification::<DidOpenNotebookDocument>(&x) {
+                    lsp_queue.send(LspEvent::DidOpenNotebookDocument(params))
+                } else if let Some(Ok(params)) = as_notification::<DidChangeNotebookDocument>(&x) {
+                    lsp_queue.send(LspEvent::DidChangeNotebookDocument(params))
+                } else if let Some(Ok(params)) = as_notification::<DidCloseNotebookDocument>(&x) {
+                    lsp_queue.send(LspEvent::DidCloseNotebookDocument(params))
+                } else if let Some(Ok(params)) = as_notification::<DidSaveNotebookDocument>(&x) {
+                    lsp_queue.send(LspEvent::DidSaveNotebookDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidChangeWatchedFiles>(&x) {
                     lsp_queue.send(LspEvent::DidChangeWatchedFiles(params))
                 } else if let Some(Ok(params)) = as_notification::<DidChangeWorkspaceFolders>(&x) {
@@ -497,7 +511,15 @@ pub fn capabilities(
             }),
             ..Default::default()
         },
-        ..Default::default()
+        notebook_document_sync: Some(OneOf::Left(NotebookDocumentSyncOptions {
+            notebook_selector: vec![NotebookDocumentSelector {
+                notebook: None,
+                cells: Some(vec![NotebookCellSelector {
+                    language: "python".into(),
+                }]),
+            }],
+            save: None,
+        })),
     }
 }
 
@@ -632,6 +654,18 @@ impl Server {
             }
             LspEvent::DidSaveTextDocument(params) => {
                 self.did_save(params);
+            }
+            LspEvent::DidOpenNotebookDocument(_) => {
+                // TODO
+            }
+            LspEvent::DidChangeNotebookDocument(_) => {
+                // TODO
+            }
+            LspEvent::DidCloseNotebookDocument(_) => {
+                // TODO
+            }
+            LspEvent::DidSaveNotebookDocument(_) => {
+                // TODO
             }
             LspEvent::DidChangeWatchedFiles(params) => {
                 self.did_change_watched_files(params);

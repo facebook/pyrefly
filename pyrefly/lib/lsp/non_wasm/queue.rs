@@ -26,6 +26,11 @@ use lsp_types::DidCloseTextDocumentParams;
 use lsp_types::DidOpenTextDocumentParams;
 use lsp_types::DidSaveTextDocumentParams;
 
+use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
+use crate::lsp::wasm::notebook::DidCloseNotebookDocumentParams;
+use crate::lsp::wasm::notebook::DidOpenNotebookDocumentParams;
+use crate::lsp::wasm::notebook::DidSaveNotebookDocumentParams;
+
 pub enum LspEvent {
     // Part 1: Events that the server should try to handle first.
     /// Notify the server that recheck finishes, so server can revalidate all in-memory content
@@ -46,6 +51,10 @@ pub enum LspEvent {
     DidChangeWatchedFiles(DidChangeWatchedFilesParams),
     DidChangeWorkspaceFolders(DidChangeWorkspaceFoldersParams),
     DidChangeConfiguration(DidChangeConfigurationParams),
+    DidOpenNotebookDocument(DidOpenNotebookDocumentParams),
+    DidCloseNotebookDocument(DidCloseNotebookDocumentParams),
+    DidChangeNotebookDocument(DidChangeNotebookDocumentParams),
+    DidSaveNotebookDocument(DidSaveNotebookDocumentParams),
     LspResponse(Response),
     LspRequest(Request),
     Exit,
@@ -72,6 +81,10 @@ impl LspEvent {
             | Self::DidChangeWorkspaceFolders(_)
             | Self::DidChangeConfiguration(_)
             | Self::LspResponse(_)
+            | Self::DidOpenNotebookDocument(_)
+            | Self::DidCloseNotebookDocument(_)
+            | Self::DidSaveNotebookDocument(_)
+            | Self::DidChangeNotebookDocument(_)
             | Self::Exit => LspEventKind::Mutation,
             Self::LspRequest(_) => LspEventKind::Query,
         }
