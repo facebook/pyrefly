@@ -310,8 +310,13 @@ impl Playground {
             } else {
                 ".py"
             };
-            let module_name =
-                ModuleName::from_str(filename.strip_suffix(suffix).unwrap_or(filename));
+            // Use from_relative_path to properly convert file paths like "folder/file.py"
+            // to module names like "folder.file" (instead of incorrectly creating "folder/file")
+            let module_name = ModuleName::from_relative_path(Path::new(filename.as_str()))
+                .unwrap_or_else(|_| {
+                    // Fallback to old behavior if path parsing fails
+                    ModuleName::from_str(filename.strip_suffix(suffix).unwrap_or(filename))
+                });
             let module_path = PathBuf::from(filename.clone());
             let memory_path = ModulePath::memory(module_path.clone());
 
@@ -756,6 +761,46 @@ mod tests {
         assert!(
             !state.handles.contains_key("pyrefly.toml"),
             "Config file should not be a module"
+        );
+    }
+
+    #[test]
+    fn test_nested_folder_imports() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+
+        // Create a nested folder file: foo/bar.py
+        files.insert(
+            "foo/bar.py".to_owned(),
+            "def greet(name: str) -> str:\n    return f\"Hello, {name}!\"\n\nx: int = 42".to_owned(),
+        );
+
+        // Import from the nested module
+        files.insert(
+            "sandbox.py".to_owned(),
+            "from foo.bar import greet, x\n\nresult = greet(\"World\")\nprint(result)\nprint(x)".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+        state.set_active_file("sandbox.py");
+
+        let errors = state.get_errors();
+
+        // Should have NO missing-import errors
+        let missing_import_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == "missing-import")
+            .collect();
+
+        assert!(
+            missing_import_errors.is_empty(),
+            "Should successfully import from nested folder file (foo/bar.py -> foo.bar module)"
+        );
+
+        // Verify the nested file is registered with correct module name
+        assert!(
+            state.handles.contains_key("foo/bar.py"),
+            "Nested file should be in handles"
         );
     }
 }
