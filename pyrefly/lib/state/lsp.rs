@@ -143,6 +143,121 @@ pub enum DisplayTypeErrors {
 
 const RESOLVE_EXPORT_INITIAL_GAS: Gas = Gas::new(100);
 const MIN_CHARACTERS_TYPED_AUTOIMPORT: usize = 3;
+// Magic method names offered during method definition completions.
+const MAGIC_METHOD_NAMES: &[&str] = &[
+    "__abs__",
+    "__add__",
+    "__aenter__",
+    "__aexit__",
+    "__aiter__",
+    "__anext__",
+    "__and__",
+    "__await__",
+    "__bool__",
+    "__bytes__",
+    "__call__",
+    "__ceil__",
+    "__class_getitem__",
+    "__complex__",
+    "__contains__",
+    "__copy__",
+    "__deepcopy__",
+    "__del__",
+    "__delete__",
+    "__delattr__",
+    "__delitem__",
+    "__dir__",
+    "__divmod__",
+    "__enter__",
+    "__eq__",
+    "__exit__",
+    "__float__",
+    "__floor__",
+    "__floordiv__",
+    "__format__",
+    "__ge__",
+    "__get__",
+    "__getattr__",
+    "__getattribute__",
+    "__getitem__",
+    "__getinitargs__",
+    "__getnewargs__",
+    "__getnewargs_ex__",
+    "__getstate__",
+    "__gt__",
+    "__hash__",
+    "__iadd__",
+    "__iand__",
+    "__ifloordiv__",
+    "__ilshift__",
+    "__imatmul__",
+    "__imod__",
+    "__imul__",
+    "__index__",
+    "__init__",
+    "__init_subclass__",
+    "__instancecheck__",
+    "__int__",
+    "__invert__",
+    "__ior__",
+    "__ipow__",
+    "__irshift__",
+    "__isub__",
+    "__iter__",
+    "__itruediv__",
+    "__ixor__",
+    "__le__",
+    "__len__",
+    "__length_hint__",
+    "__lshift__",
+    "__lt__",
+    "__matmul__",
+    "__missing__",
+    "__mod__",
+    "__mul__",
+    "__ne__",
+    "__neg__",
+    "__new__",
+    "__next__",
+    "__or__",
+    "__pos__",
+    "__pow__",
+    "__prepare__",
+    "__radd__",
+    "__rand__",
+    "__rdivmod__",
+    "__reduce__",
+    "__reduce_ex__",
+    "__repr__",
+    "__reversed__",
+    "__rfloordiv__",
+    "__rlshift__",
+    "__rmatmul__",
+    "__rmod__",
+    "__rmul__",
+    "__ror__",
+    "__round__",
+    "__rpow__",
+    "__rrshift__",
+    "__rshift__",
+    "__rsub__",
+    "__rtruediv__",
+    "__rxor__",
+    "__set__",
+    "__set_name__",
+    "__setattr__",
+    "__setitem__",
+    "__setstate__",
+    "__sizeof__",
+    "__slots__",
+    "__str__",
+    "__sub__",
+    "__subclasscheck__",
+    "__subclasshook__",
+    "__truediv__",
+    "__trunc__",
+    "__xor__",
+];
 
 #[derive(Clone, Debug)]
 pub struct FindPreference {
@@ -1906,6 +2021,26 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn add_magic_method_completions(
+        &self,
+        identifier: &Identifier,
+        completions: &mut Vec<CompletionItem>,
+    ) {
+        let typed = identifier.as_str();
+        if !typed.is_empty() && !typed.starts_with("__") {
+            return;
+        }
+        for name in MAGIC_METHOD_NAMES {
+            if name.starts_with(typed) {
+                completions.push(CompletionItem {
+                    label: (*name).to_owned(),
+                    kind: Some(CompletionItemKind::METHOD),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
     fn add_builtins_autoimport_completions(
         &self,
         handle: &Handle,
@@ -2335,7 +2470,13 @@ impl<'a> Transaction<'a> {
                     });
                 }
             }
-            Some(IdentifierWithContext { identifier, .. }) => {
+            Some(IdentifierWithContext {
+                identifier,
+                context,
+            }) => {
+                if matches!(context, IdentifierContext::MethodDef { .. }) {
+                    self.add_magic_method_completions(&identifier, &mut result);
+                }
                 self.add_kwargs_completions(handle, position, &mut result);
                 self.add_keyword_completions(handle, &mut result);
                 let has_local_completions = self.add_local_variable_completions(
