@@ -655,7 +655,11 @@ impl Server {
                 )?;
             }
             LspEvent::DidChangeTextDocument(params) => {
-                self.did_change(ide_transaction_manager, subsequent_mutation, params)?;
+                self.text_document_did_change(
+                    ide_transaction_manager,
+                    subsequent_mutation,
+                    params,
+                )?;
             }
             LspEvent::DidCloseTextDocument(params) => {
                 self.did_close(params.text_document.uri);
@@ -1559,7 +1563,7 @@ impl Server {
         Ok(())
     }
 
-    fn did_change<'a>(
+    fn text_document_did_change<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         subsequent_mutation: bool,
