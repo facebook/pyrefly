@@ -187,7 +187,7 @@ pub struct LspNotebook {
     ruff_notebook: Arc<Notebook>,
     notebook_document: NotebookDocument,
     // Notebook cells have Urls of unspecified format
-    cell_urls: SmallMap<Url, usize>,
+    pub cell_urls: SmallMap<Url, usize>,
 }
 
 impl LspNotebook {

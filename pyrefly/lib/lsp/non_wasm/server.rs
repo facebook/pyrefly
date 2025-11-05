@@ -325,6 +325,7 @@ pub struct Server {
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
     state: Arc<State>,
+    open_notebook_cells: Arc<RwLock<HashMap<Url, PathBuf>>>,
     open_files: Arc<RwLock<HashMap<PathBuf, Arc<LspFile>>>>,
     /// A set of configs where we have already indexed all the files within the config.
     indexed_configs: Mutex<HashSet<ArcId<ConfigFile>>>,
@@ -677,16 +678,21 @@ impl Server {
                 let ruff_notebook = params
                     .notebook_document
                     .to_ruff_notebook(params.cell_text_documents)?;
-                let contents = Arc::new(LspFile::Notebook(Arc::new(LspNotebook::new(
-                    ruff_notebook,
-                    notebook_document,
-                ))));
+                let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_document);
+                let notebook_path = url
+                    .to_file_path()
+                    .map_err(|_| anyhow::anyhow!("Could not convert uri to filepath: {}", url))?;
+                for cell_url in lsp_notebook.cell_urls.keys() {
+                    self.open_notebook_cells
+                        .write()
+                        .insert(cell_url.clone(), notebook_path.clone());
+                }
                 self.did_open(
                     ide_transaction_manager,
                     subsequent_mutation,
                     url,
                     version,
-                    contents,
+                    Arc::new(LspFile::Notebook(Arc::new(lsp_notebook))),
                 )?;
             }
             LspEvent::DidChangeNotebookDocument(params) => {
@@ -1113,6 +1119,7 @@ impl Server {
             indexing_mode,
             workspace_indexing_limit,
             state: Arc::new(State::new(config_finder)),
+            open_notebook_cells: Arc::new(RwLock::new(HashMap::new())),
             open_files: Arc::new(RwLock::new(HashMap::new())),
             indexed_configs: Mutex::new(HashSet::new()),
             indexed_workspaces: Mutex::new(HashSet::new()),
@@ -1654,6 +1661,8 @@ impl Server {
                 let start = structure.array.start as usize;
                 let delete_count = structure.array.delete_count as usize;
                 // Delete cells
+                // Do not remove the cells from `open_notebook_cells`, since
+                // incoming requests could still reference them.
                 if delete_count > 0 {
                     notebook_document.cells.drain(start..start + delete_count);
                 }
@@ -1667,6 +1676,9 @@ impl Server {
                 if let Some(opened_cells) = &structure.did_open {
                     for opened_cell in opened_cells {
                         cell_content_map.insert(opened_cell.uri.clone(), opened_cell.text.clone());
+                        self.open_notebook_cells
+                            .write()
+                            .insert(opened_cell.uri.clone(), file_path.clone());
                     }
                 }
             }
@@ -1785,7 +1797,13 @@ impl Server {
         let uri = url.to_file_path().unwrap();
         self.version_info.lock().remove(&uri);
         let open_files = self.open_files.dupe();
-        open_files.write().remove(&uri);
+        if let Some(LspFile::Notebook(notebook)) = open_files.write().remove(&uri).as_deref() {
+            for cell in notebook.cell_urls.keys() {
+                self.open_notebook_cells.write().remove(cell);
+                self.connection
+                    .publish_diagnostics_for_uri(cell.clone(), Vec::new(), None);
+            }
+        }
         self.connection
             .publish_diagnostics_for_uri(url, Vec::new(), None);
         let state = self.state.dupe();
