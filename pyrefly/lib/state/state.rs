@@ -202,6 +202,10 @@ impl LspNotebook {
             cell_urls,
         }
     }
+
+    pub fn notebook_document(&self) -> &NotebookDocument {
+        &self.notebook_document
+    }
 }
 
 impl ModuleDataInner {

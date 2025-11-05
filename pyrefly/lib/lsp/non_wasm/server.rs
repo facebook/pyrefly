@@ -96,7 +96,9 @@ use lsp_types::SignatureHelp;
 use lsp_types::SignatureHelpOptions;
 use lsp_types::SignatureHelpParams;
 use lsp_types::SymbolInformation;
+use lsp_types::TextDocumentContentChangeEvent;
 use lsp_types::TextDocumentIdentifier;
+use lsp_types::TextDocumentItem;
 use lsp_types::TextDocumentPositionParams;
 use lsp_types::TextDocumentSyncCapability;
 use lsp_types::TextDocumentSyncKind;
@@ -197,6 +199,7 @@ use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
 use crate::lsp::wasm::hover::get_hover;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocument;
+use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
 use crate::lsp::wasm::notebook::DidCloseNotebookDocument;
 use crate::lsp::wasm::notebook::DidOpenNotebookDocument;
 use crate::lsp::wasm::notebook::DidSaveNotebookDocument;
@@ -686,8 +689,12 @@ impl Server {
                     contents,
                 )?;
             }
-            LspEvent::DidChangeNotebookDocument(_) => {
-                // TODO
+            LspEvent::DidChangeNotebookDocument(params) => {
+                self.notebook_document_did_change(
+                    ide_transaction_manager,
+                    subsequent_mutation,
+                    params,
+                )?;
             }
             LspEvent::DidCloseNotebookDocument(params) => {
                 self.did_close(params.notebook_document.uri);
@@ -1590,6 +1597,135 @@ impl Server {
         if !subsequent_mutation {
             eprintln!(
                 "File {} changed, prepare to validate open files.",
+                file_path.display()
+            );
+            self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
+        }
+        Ok(())
+    }
+
+    fn notebook_document_did_change<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        subsequent_mutation: bool,
+        params: DidChangeNotebookDocumentParams,
+    ) -> anyhow::Result<()> {
+        let uri = params.notebook_document.uri.clone();
+        let version = params.notebook_document.version;
+        let file_path = uri.to_file_path().unwrap();
+
+        let mut version_info = self.version_info.lock();
+        let old_version = version_info.get(&file_path).unwrap_or(&0);
+        if version < *old_version {
+            return Err(anyhow::anyhow!(
+                "new_version < old_version in `notebookDocument/didChange` notification: new_version={version:?} old_version={old_version:?} notebook_document.uri={uri:?}"
+            ));
+        }
+
+        let mut lock = self.open_files.write();
+        let original = lock.get_mut(&file_path).unwrap();
+
+        let original_notebook = match original.as_ref() {
+            LspFile::Notebook(notebook) => notebook.clone(),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Expected notebook file for {}, but got text file",
+                    uri
+                ));
+            }
+        };
+
+        let mut notebook_document = original_notebook.notebook_document().clone();
+        let mut cell_content_map: HashMap<Url, String> = HashMap::new();
+        // Changed metadata
+        if let Some(metadata) = &params.change.metadata {
+            notebook_document.metadata = Some(metadata.clone());
+        }
+        version_info.insert(file_path.clone(), version);
+        notebook_document.version = version;
+        // Changes to cells
+        if let Some(change) = &params.change.cells {
+            // Insert existing cell contents
+            for cell in &notebook_document.cells {
+                cell_content_map.insert(cell.document.clone(), String::new());
+            }
+            // Structural changes
+            if let Some(structure) = &change.structure {
+                let start = structure.array.start as usize;
+                let delete_count = structure.array.delete_count as usize;
+                // Delete cells
+                if delete_count > 0 {
+                    notebook_document.cells.drain(start..start + delete_count);
+                }
+                // Insert new cells
+                if let Some(new_cells) = &structure.array.cells {
+                    for (i, cell) in new_cells.iter().enumerate() {
+                        notebook_document.cells.insert(start + i, cell.clone());
+                    }
+                }
+                // Set contents for new cells
+                if let Some(opened_cells) = &structure.did_open {
+                    for opened_cell in opened_cells {
+                        cell_content_map.insert(opened_cell.uri.clone(), opened_cell.text.clone());
+                    }
+                }
+            }
+            // Cell metadata changes
+            if let Some(cell_data) = &change.data {
+                for updated_cell in cell_data {
+                    if let Some(cell) = notebook_document
+                        .cells
+                        .iter_mut()
+                        .find(|c| c.document == updated_cell.document)
+                    {
+                        cell.kind = updated_cell.kind;
+                        cell.metadata = updated_cell.metadata.clone();
+                        cell.execution_summary = updated_cell.execution_summary.clone();
+                    }
+                }
+            }
+            // Cell content changes
+            if let Some(text_content_changes) = &change.text_content {
+                for text_change in text_content_changes {
+                    let cell_uri = text_change.document.uri.clone();
+                    let original_text = cell_content_map
+                        .get(&cell_uri)
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+                    let content_changes: Vec<TextDocumentContentChangeEvent> = text_change
+                        .changes
+                        .iter()
+                        .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                        .collect();
+                    let new_text = apply_change_events(original_text, content_changes);
+                    cell_content_map.insert(cell_uri, new_text);
+                }
+            }
+        }
+        // Convert cell content into TextDocuments
+        let mut cell_text_documents: Vec<TextDocumentItem> = Vec::new();
+        for cell in &notebook_document.cells {
+            if let Some(text) = cell_content_map.get(&cell.document) {
+                cell_text_documents.push(TextDocumentItem {
+                    uri: cell.document.clone(),
+                    language_id: "python".to_owned(),
+                    version,
+                    text: text.clone(),
+                });
+            }
+        }
+        // Convert new notebook contents into a Ruff Notebook
+        let ruff_notebook = notebook_document
+            .clone()
+            .to_ruff_notebook(cell_text_documents)?;
+
+        let new_notebook = Arc::new(LspNotebook::new(ruff_notebook, notebook_document));
+        *original = Arc::new(LspFile::Notebook(new_notebook));
+        drop(lock);
+
+        if !subsequent_mutation {
+            eprintln!(
+                "Notebook {} changed, prepare to validate open files.",
                 file_path.display()
             );
             self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
