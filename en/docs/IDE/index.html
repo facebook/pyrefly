@@ -34,8 +34,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.409aac25.css">
-<script src="/assets/js/runtime~main.99226bd7.js" defer="defer"></script>
-<script src="/assets/js/main.0c759b22.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.2c6367ad.js" defer="defer"></script>
+<script src="/assets/js/main.fb99c5e4.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -65,7 +65,7 @@
 </li>
 <li>Disable type errors<!-- -->
 <ul>
-<li><code>python.pyrefly.displayTypeErrors</code> [string: &#x27;default&#x27;]: If <code>&#x27;default&#x27;</code>, Pyrefly will only provide type check squiggles in the IDE if your file is covered by a <a href="/en/docs/configuration/">Pyrefly configuration</a>. If <code>&#x27;force-off&#x27;</code>, Pyrefly will never provide type check squiggles in the IDE. If <code>&#x27;force-on&#x27;</code>, Pyrefly will always provide type check squiggles in the IDE.</li>
+<li><code>python.pyrefly.displayTypeErrors</code> [enum: default, force-on, force-off]: If <code>&#x27;default&#x27;</code>, Pyrefly will only provide type check squiggles in the IDE if your file is covered by a <a href="/en/docs/configuration/">Pyrefly configuration</a>. If <code>&#x27;force-off&#x27;</code>, Pyrefly will never provide type check squiggles in the IDE. If <code>&#x27;force-on&#x27;</code>, Pyrefly will always provide type check squiggles in the IDE.</li>
 </ul>
 </li>
 <li>Specify a custom Pyrefly Binary (lspPath)<!-- -->
@@ -88,7 +88,7 @@
 <p>You can use Pyrefly in your favorite AI editor that supports <a href="https://open-vsx.org/extension/meta/pyrefly" target="_blank" rel="noopener noreferrer">OpenVSX</a> extensions. Search for &quot;Pyrefly&quot; in the extension marketplace and install it. Similar to VSCode, Pyrefly will automatically activate when you open a Python file.</p>
 <p>To avoid conflicts, you should disable other Python language servers by either setting &quot;Language Server: None&quot; in the extension settings or by disabling the Pyright or BasedPyright extensions.</p>
 <video src="/videos/openvsx.mp4" width="720" muted="" loop="" autoplay="" playsinline="" preload="metadata"></video>
-<h3 class="anchor anchorWithStickyNavbar_LWe7" id="jetbrains--pycharm">Jetbrains / Pycharm<a href="#jetbrains--pycharm" class="hash-link" aria-label="Direct link to Jetbrains / Pycharm" title="Direct link to Jetbrains / Pycharm">​</a></h3>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="jetbrains--pycharm">Jetbrains / Pycharm<a href="#jetbrains--pycharm" class="hash-link" aria-label="Direct link to Jetbrains / Pycharm" title="Direct link to Jetbrains / Pycharm">  ​</a></h3>
 <p>An unofficial Jetbrains extension has been developed <a href="https://plugins.jetbrains.com/plugin/26829-pyrefly" target="_blank" rel="noopener noreferrer">here</a></p>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="neovim">Neovim<a href="#neovim" class="hash-link" aria-label="Direct link to Neovim" title="Direct link to Neovim">​</a></h3>
 <p>Pyrefly supports native Neovim support through <code>lspconfig</code> on Neovim 0.11+. Install and setup Pyrefly using the settings below.</p>
