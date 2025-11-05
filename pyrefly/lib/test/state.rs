@@ -29,6 +29,7 @@ use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
 use crate::module::finder::find_import;
 use crate::state::require::Require;
+use crate::state::state::FileContents;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
 
@@ -108,11 +109,12 @@ fn test_multiple_path() {
     let state = State::new(ConfigFinder::new_constant(config.clone()));
     let handles = config.source_db.as_ref().unwrap().modules_to_check();
     let mut transaction = state.new_transaction(Require::Exports, None);
-    transaction.set_memory(
-        FILES.map(|(_, path, contents)| {
-            (PathBuf::from(path), Some(Arc::new((*contents).to_owned())))
-        }),
-    );
+    transaction.set_memory(FILES.map(|(_, path, contents)| {
+        (
+            PathBuf::from(path),
+            Some(Arc::new(FileContents::from_source((*contents).to_owned()))),
+        )
+    }));
     transaction.run(&handles, Require::Everything);
     let loads = transaction.get_errors(handles.iter());
     let project_root = PathBuf::new();
@@ -187,7 +189,7 @@ fn test_crash_on_search() {
     let mut t = state.new_committable_transaction(REQUIRE, None);
     t.as_mut().set_memory(vec![(
         PathBuf::from("foo.py"),
-        Some(Arc::new("x = 3".to_owned())),
+        Some(Arc::new(FileContents::from_source("x = 3".to_owned()))),
     )]);
     t.as_mut().run(&[], Require::Everything); // This run breaks reproduction (but is now required)
     state.commit_transaction(t);

@@ -45,6 +45,7 @@ use crate::config::finder::ConfigFinder;
 use crate::lsp::wasm::hover::get_hover;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
+use crate::state::state::FileContents;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 
@@ -319,7 +320,10 @@ impl Playground {
 
             let handle = Handle::new(module_name, memory_path, self.sys_info.dupe());
             self.handles.insert(filename.clone(), handle);
-            file_contents.push((module_path, Some(Arc::new(content.clone()))));
+            file_contents.push((
+                module_path,
+                Some(Arc::new(FileContents::from_source(content.clone()))),
+            ));
         }
 
         let source_db = PlaygroundSourceDatabase::new(module_mappings, self.sys_info.dupe());
@@ -356,7 +360,10 @@ impl Playground {
     pub fn update_single_file(&mut self, filename: String, content: String) {
         if let Some(_handle) = self.handles.get(&filename) {
             let module_path = PathBuf::from(&filename);
-            let file_content = vec![(module_path, Some(Arc::new(content)))];
+            let file_content = vec![(
+                module_path,
+                Some(Arc::new(FileContents::from_source(content))),
+            )];
 
             let mut transaction = self
                 .state

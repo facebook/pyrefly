@@ -168,6 +168,7 @@ use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::watch_pattern::WatchPattern;
+use ruff_notebook::Notebook;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -219,6 +220,7 @@ use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::semantic_tokens::disabled_ranges_for_module;
 use crate::state::state::CommittingTransaction;
+use crate::state::state::FileContents;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 
@@ -324,7 +326,7 @@ pub struct Server {
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
     state: Arc<State>,
-    open_files: Arc<RwLock<HashMap<PathBuf, Arc<String>>>>,
+    open_files: Arc<RwLock<HashMap<PathBuf, Arc<FileContents>>>>,
     /// A set of configs where we have already indexed all the files within the config.
     indexed_configs: Mutex<HashSet<ArcId<ConfigFile>>>,
     /// A set of workspaces where we have already performed best-effort indexing.
@@ -1115,7 +1117,7 @@ impl Server {
     /// Run the transaction with the in-memory content of open files. Returns the handles of open files when the transaction is done.
     fn validate_in_memory_for_transaction(
         state: &State,
-        open_files: &RwLock<HashMap<PathBuf, Arc<String>>>,
+        open_files: &RwLock<HashMap<PathBuf, Arc<FileContents>>>,
         transaction: &mut Transaction<'_>,
     ) -> Vec<Handle> {
         let handles = open_files
@@ -1147,7 +1149,7 @@ impl Server {
     fn get_diag_if_shown(
         &self,
         e: &Error,
-        open_files: &HashMap<PathBuf, Arc<String>>,
+        open_files: &HashMap<PathBuf, Arc<FileContents>>,
     ) -> Option<(PathBuf, Diagnostic)> {
         if let Some(path) = to_real_path(e.path()) {
             // When no file covers this, we'll get the default configured config which includes "everything"
@@ -1514,9 +1516,10 @@ impl Server {
         self.version_info
             .lock()
             .insert(uri.clone(), params.text_document.version);
-        self.open_files
-            .write()
-            .insert(uri.clone(), Arc::new(params.text_document.text));
+        self.open_files.write().insert(
+            uri.clone(),
+            Arc::new(FileContents::from_source(params.text_document.text)),
+        );
         if !subsequent_mutation {
             // In order to improve perceived startup perf, when a file is opened, we run a
             // non-committing transaction that indexes the file with default require level Exports.
@@ -1560,10 +1563,10 @@ impl Server {
         version_info.insert(file_path.clone(), version);
         let mut lock = self.open_files.write();
         let original = lock.get_mut(&file_path).unwrap();
-        *original = Arc::new(apply_change_events(
-            original.as_str(),
+        *original = Arc::new(FileContents::from_source(apply_change_events(
+            original.get_string(),
             params.content_changes,
-        ));
+        )));
         drop(lock);
         if !subsequent_mutation {
             eprintln!(

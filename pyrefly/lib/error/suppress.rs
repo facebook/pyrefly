@@ -273,6 +273,7 @@ mod tests {
     use crate::config::finder::ConfigFinder;
     use crate::error::suppress;
     use crate::state::require::Require;
+    use crate::state::state::FileContents;
     use crate::state::state::State;
 
     fn get_path(tdir: &TempDir) -> PathBuf {
@@ -321,7 +322,7 @@ mod tests {
         let mut transaction = state.new_transaction(Require::Exports, None);
         transaction.set_memory(vec![(
             get_path(&tdir),
-            Some(Arc::new((*contents).to_owned())),
+            Some(Arc::new(FileContents::from_source(contents.to_owned()))),
         )]);
         transaction.run(&[handle.dupe()], Require::Everything);
         (transaction.get_errors([handle.clone()].iter()), tdir)

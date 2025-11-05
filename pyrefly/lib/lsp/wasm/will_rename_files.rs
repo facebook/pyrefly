@@ -29,6 +29,7 @@ use ruff_text_size::Ranged;
 
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
+use crate::state::state::FileContents;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 
@@ -130,7 +131,7 @@ impl<'a> RenameUsageVisitor<'a> {
 pub fn will_rename_files(
     state: &Arc<State>,
     transaction: &Transaction<'_>,
-    _open_files: &Arc<RwLock<HashMap<std::path::PathBuf, Arc<String>>>>,
+    _open_files: &Arc<RwLock<HashMap<std::path::PathBuf, Arc<FileContents>>>>,
     params: RenameFilesParams,
     supports_document_changes: bool,
 ) -> Option<WorkspaceEdit> {

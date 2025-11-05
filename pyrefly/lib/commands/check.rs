@@ -58,6 +58,7 @@ use crate::error::suppress;
 use crate::module::typeshed::stdlib_search_path;
 use crate::report;
 use crate::state::require::Require;
+use crate::state::state::FileContents;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::subscriber::ProgressBarSubscriber;
@@ -598,7 +599,7 @@ impl CheckArgs {
         // Add the snippet source to the transaction's memory
         transaction.as_mut().set_memory(vec![(
             PathBuf::from(module_path.as_path()),
-            Some(Arc::new(code)),
+            Some(Arc::new(FileContents::from_source(code))),
         )]);
 
         self.run_inner(

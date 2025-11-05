@@ -58,6 +58,7 @@ use pyrefly_util::uniques::UniqueFactory;
 use pyrefly_util::upgrade_lock::UpgradeLock;
 use pyrefly_util::upgrade_lock::UpgradeLockExclusiveGuard;
 use pyrefly_util::upgrade_lock::UpgradeLockWriteGuard;
+use ruff_notebook::Notebook;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
@@ -109,7 +110,6 @@ use crate::state::dirty::Dirty;
 use crate::state::epoch::Epoch;
 use crate::state::epoch::Epochs;
 use crate::state::errors::Errors;
-use crate::state::load::CodeOrNotebook;
 use crate::state::load::Load;
 use crate::state::loader::FindingOrError;
 use crate::state::loader::LoaderFindCache;
@@ -166,6 +166,12 @@ struct ModuleDataInner {
     steps: Steps,
 }
 
+#[derive(Clone, Dupe, Debug, Eq, PartialEq)]
+pub enum FileContents {
+    Source(Arc<String>),
+    Notebook(Arc<Notebook>),
+}
+
 impl ModuleDataInner {
     fn new(require: Require, now: Epoch) -> Self {
         Self {
@@ -174,6 +180,19 @@ impl ModuleDataInner {
             dirty: Dirty::default(),
             steps: Steps::default(),
         }
+    }
+}
+
+impl FileContents {
+    pub fn get_string(&self) -> &str {
+        match self {
+            Self::Source(contents) => contents.as_str(),
+            Self::Notebook(notebook) => notebook.source_code(),
+        }
+    }
+
+    pub fn from_source(source: String) -> Self {
+        Self::Source(Arc::new(source))
     }
 }
 
@@ -736,17 +755,17 @@ impl<'a> Transaction<'a> {
         if exclusive.dirty.load
             && let Some(old_load) = exclusive.steps.load.dupe()
         {
-            let (code_or_notebook, self_error) =
+            let (file_contents, self_error) =
                 Load::load_from_path(module_data.handle.path(), &self.memory_lookup());
             if self_error.is_some()
-                || match &code_or_notebook {
-                    CodeOrNotebook::Code(code) => {
+                || match &file_contents {
+                    FileContents::Source(code) => {
                         old_load.module_info.is_notebook()
-                            || code != old_load.module_info.contents()
+                            || code.as_str() != old_load.module_info.contents().as_str()
                     }
-                    CodeOrNotebook::Notebook(notebook) => {
+                    FileContents::Notebook(notebook) => {
                         if let Some(old_notebook) = old_load.module_info.notebook() {
-                            &**notebook != old_notebook
+                            **notebook != *old_notebook
                         } else {
                             false
                         }
@@ -758,7 +777,7 @@ impl<'a> Transaction<'a> {
                     module_data.handle.module(),
                     module_data.handle.path().dupe(),
                     old_load.errors.style(),
-                    code_or_notebook,
+                    file_contents,
                     self_error,
                 )));
                 rebuild(write, true);
@@ -1493,7 +1512,7 @@ impl<'a> Transaction<'a> {
 
     /// Called if the `load_from_memory` portion of loading might have changed.
     /// Specify which in-memory files might have changed, use None to say they don't exist anymore.
-    pub fn set_memory(&mut self, files: Vec<(PathBuf, Option<Arc<String>>)>) {
+    pub fn set_memory(&mut self, files: Vec<(PathBuf, Option<Arc<FileContents>>)>) {
         let mut changed = SmallSet::new();
         for (path, contents) in files {
             if self.memory_lookup().get(&path) != contents.as_ref() {

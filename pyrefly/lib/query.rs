@@ -75,6 +75,7 @@ use crate::module::module_info::ModuleInfo;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
 use crate::state::require::Require;
+use crate::state::state::FileContents;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
@@ -1190,7 +1191,10 @@ impl Query {
 
         // First, make sure that the types are well-formed and importable, return `Err` if not
         let code = format!("{imports}\n{snippet}\n");
-        t.set_memory(vec![(path.clone(), Some(Arc::new(code)))]);
+        t.set_memory(vec![(
+            path.clone(),
+            Some(Arc::new(FileContents::from_source(code))),
+        )]);
         t.run(&[handle.dupe()], Require::Everything);
         let errors = t.get_errors([handle]).collect_errors();
         if !errors.shown.is_empty() {

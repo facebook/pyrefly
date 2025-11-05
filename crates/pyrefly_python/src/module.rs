@@ -34,7 +34,7 @@ struct ModuleInner {
     ignore: Ignore,
     is_generated: bool,
     contents: LinedBuffer,
-    notebook: Option<Box<Notebook>>,
+    notebook: Option<Arc<Notebook>>,
 }
 
 impl Module {
@@ -53,7 +53,7 @@ impl Module {
         }))
     }
 
-    pub fn new_notebook(name: ModuleName, path: ModulePath, notebook: Notebook) -> Self {
+    pub fn new_notebook(name: ModuleName, path: ModulePath, notebook: Arc<Notebook>) -> Self {
         let contents: Arc<String> = Arc::from(notebook.source_code().to_owned());
         let ignore = Ignore::new(&contents);
         let is_generated = contents.contains(GENERATED_TOKEN);
@@ -64,7 +64,7 @@ impl Module {
             ignore,
             is_generated,
             contents,
-            notebook: Some(Box::new(notebook)),
+            notebook: Some(notebook),
         }))
     }
 

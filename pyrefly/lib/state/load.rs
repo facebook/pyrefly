@@ -28,6 +28,7 @@ use crate::module::bundled::BundledStub;
 use crate::module::typeshed::typeshed;
 use crate::module::typeshed_third_party::typeshed_third_party;
 use crate::state::memory::MemoryFilesLookup;
+use crate::state::state::FileContents;
 
 /// The result of loading a module, including its `Module` and `ErrorCollector`.
 #[derive(Debug)]
@@ -36,57 +37,53 @@ pub struct Load {
     pub module_info: Module,
 }
 
-pub enum CodeOrNotebook {
-    Code(Arc<String>),
-    Notebook(Box<Notebook>),
-}
-
 impl Load {
     /// Return the code for this module, optional notebook cell mapping, and whether there was an error while loading (a self-error).
     pub fn load_from_path(
         path: &ModulePath,
         memory_lookup: &MemoryFilesLookup,
-    ) -> (CodeOrNotebook, Option<anyhow::Error>) {
+    ) -> (FileContents, Option<anyhow::Error>) {
         let res = match path.details() {
             ModulePathDetails::FileSystem(path) => Self::load_from_filesystem(path),
-            ModulePathDetails::Namespace(_) => Ok(CodeOrNotebook::Code(Arc::new("".to_owned()))),
+            ModulePathDetails::Namespace(_) => Ok(FileContents::from_source("".to_owned())),
             ModulePathDetails::Memory(path) => memory_lookup
                 .get(path)
                 .duped()
-                .ok_or_else(|| anyhow!("memory path not found"))
-                .map(CodeOrNotebook::Code),
+                .as_deref()
+                .duped()
+                .ok_or_else(|| anyhow!("memory path not found")),
             ModulePathDetails::BundledTypeshed(path) => typeshed().and_then(|x| {
                 x.load(path)
                     .ok_or_else(|| anyhow!("bundled typeshed problem"))
-                    .map(CodeOrNotebook::Code)
+                    .map(FileContents::Source)
             }),
             ModulePathDetails::BundledTypeshedThirdParty(path) => {
                 typeshed_third_party().and_then(|x| {
                     x.load(path)
                         .ok_or_else(|| anyhow!("bundled typeshed third party problem"))
-                        .map(CodeOrNotebook::Code)
+                        .map(FileContents::Source)
                 })
             }
         };
         match res {
-            Err(err) => (CodeOrNotebook::Code(Arc::new(String::new())), Some(err)),
-            Ok(code_or_notebook) => (code_or_notebook, None),
+            Err(err) => (FileContents::from_source(String::new()), Some(err)),
+            Ok(file_contents) => (file_contents, None),
         }
     }
 
     /// Load from filesystem, handling both regular Python files and Jupyter notebooks.
     /// Returns the code and optional notebook.
-    fn load_from_filesystem(path: &Path) -> anyhow::Result<CodeOrNotebook> {
+    fn load_from_filesystem(path: &Path) -> anyhow::Result<FileContents> {
         let content = fs_anyhow::read_to_string(path)?;
 
         // Check if this is a Jupyter notebook by file extension
         if path.extension().and_then(|s| s.to_str()) == Some("ipynb") {
             // Extract Python code from the notebook
             let notebook = Notebook::from_source_code(&content)?;
-            Ok(CodeOrNotebook::Notebook(Box::new(notebook)))
+            Ok(FileContents::Notebook(Arc::new(notebook)))
         } else {
             // Regular Python file
-            Ok(CodeOrNotebook::Code(Arc::new(content)))
+            Ok(FileContents::from_source(content))
         }
     }
 
@@ -94,12 +91,14 @@ impl Load {
         name: ModuleName,
         path: ModulePath,
         error_style: ErrorStyle,
-        code_or_notebook: CodeOrNotebook,
+        file_contents: FileContents,
         self_error: Option<anyhow::Error>,
     ) -> Self {
-        let module_info = match code_or_notebook {
-            CodeOrNotebook::Code(code) => Module::new(name, path, code),
-            CodeOrNotebook::Notebook(notebook) => Module::new_notebook(name, path, *notebook),
+        let module_info = match file_contents {
+            FileContents::Source(code) => Module::new(name, path, code),
+            FileContents::Notebook(notebook) => {
+                Module::new_notebook(name, path, Arc::clone(&notebook))
+            }
         };
         let errors = ErrorCollector::new(module_info.dupe(), error_style);
         if let Some(err) = self_error {
