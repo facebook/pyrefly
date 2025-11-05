@@ -107,6 +107,7 @@ impl Display for Variable {
     }
 }
 
+#[derive(Debug)]
 #[must_use = "Quantified vars must be finalized. Pass to finish_quantified."]
 pub struct QuantifiedHandle(Vec<Var>);
 
@@ -334,24 +335,17 @@ impl Solver {
             // but don't have any good location information to hand.
             *t = Type::any_implicit();
         } else if let Type::Var(x) = t {
-            if *x == Var::ZERO {
-                // This shouldn't happen, but we currently can see this in the LSP
-                // where we do type operations on a type value which has been passed
-                // to `for_display`.
-                *t = Type::any_implicit();
-            } else {
-                let lock = self.variables.lock();
-                if let Some(_guard) = lock.recurse(*x, recurser) {
-                    let variable = lock.get(*x);
-                    if let Variable::Answer(ty) = &*variable {
-                        *t = ty.clone();
-                        drop(variable);
-                        drop(lock);
-                        self.expand_with_limit(t, limit - 1, recurser);
-                    }
-                } else {
-                    *t = Type::any_implicit();
+            let lock = self.variables.lock();
+            if let Some(_guard) = lock.recurse(*x, recurser) {
+                let variable = lock.get(*x);
+                if let Variable::Answer(ty) = &*variable {
+                    *t = ty.clone();
+                    drop(variable);
+                    drop(lock);
+                    self.expand_with_limit(t, limit - 1, recurser);
                 }
+            } else {
+                *t = Type::any_implicit();
             }
         } else {
             t.recurse_mut(&mut |t| self.expand_with_limit(t, limit - 1, recurser));
@@ -717,10 +711,12 @@ impl Solver {
                         }
                     });
                     Some(t)
-                } else {
+                } else if self.infer_with_first_use {
                     let v = Var::new(uniques);
                     self.variables.lock().insert_fresh(v, Variable::Partial);
                     Some(v.to_type())
+                } else {
+                    Some(Type::any_implicit())
                 }
             } else {
                 None
@@ -977,7 +973,7 @@ pub enum TypedDictSubsetError {
 }
 
 impl TypedDictSubsetError {
-    pub fn to_error_msg(self) -> String {
+    fn to_error_msg(self) -> String {
         match self {
             TypedDictSubsetError::MissingField { got, want, field } => {
                 format!("Field `{field}` is present in `{want}` and absent in `{got}`")
@@ -1019,6 +1015,53 @@ impl TypedDictSubsetError {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum OpenTypedDictSubsetError {
+    /// `got` is missing a field in `want`
+    MissingField { got: Name, want: Name, field: Name },
+    /// `got` may contain unknown fields contradicting the `extra_items` type in `want`
+    UnknownFields {
+        got: Name,
+        want: Name,
+        extra_items: Type,
+    },
+}
+
+impl OpenTypedDictSubsetError {
+    fn to_error_msg(self) -> String {
+        let (msg, got) = match self {
+            Self::MissingField { got, want, field } => (
+                format!(
+                    "`{got}` is an open TypedDict with unknown extra items, which may include `{want}` item `{field}` with an incompatible type"
+                ),
+                got,
+            ),
+            Self::UnknownFields {
+                got,
+                want,
+                extra_items: Type::Never(_),
+            } => (
+                format!(
+                    "`{got}` is an open TypedDict with unknown extra items, which cannot be unpacked into closed TypedDict `{want}`",
+                ),
+                got,
+            ),
+            Self::UnknownFields {
+                got,
+                want,
+                extra_items,
+            } => (
+                format!(
+                    "`{got}` is an open TypedDict with unknown extra items, which may not be compatible with `extra_items` type `{}` in `{want}`",
+                    extra_items.deterministic_printing(),
+                ),
+                got,
+            ),
+        };
+        format!("{msg}. Hint: add `closed=True` to the definition of `{got}` to close it.")
+    }
+}
+
 /// If a got <: want check fails, the failure reason
 #[derive(Debug, Clone)]
 pub enum SubsetError {
@@ -1035,6 +1078,8 @@ pub enum SubsetError {
     IncompatibleAttribute(Box<(Name, Type, Name, AttrSubsetError)>),
     /// TypedDict subset check failed
     TypedDict(Box<TypedDictSubsetError>),
+    /// Errors involving arbitrary unknown fields in open TypedDicts
+    OpenTypedDict(Box<OpenTypedDictSubsetError>),
     // TODO(rechen): replace this with specific reasons
     Other,
 }
@@ -1056,6 +1101,7 @@ impl SubsetError {
                 Some(err.to_error_msg(&Name::new(format!("{got}")), &protocol, &attribute))
             }
             SubsetError::TypedDict(err) => Some(err.to_error_msg()),
+            SubsetError::OpenTypedDict(err) => Some(err.to_error_msg()),
             SubsetError::Other => None,
         }
     }

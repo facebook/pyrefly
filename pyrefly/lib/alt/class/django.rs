@@ -121,11 +121,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
     }
 
-    fn resolve_foreign_key_target(
-        &self,
-        to_expr: &ruff_python_ast::Expr,
-        class: &Class,
-    ) -> Option<Type> {
+    fn resolve_foreign_key_target(&self, to_expr: &Expr, class: &Class) -> Option<Type> {
         // Extract the model name from the expression
         let model_name = match to_expr {
             // Direct name reference. Ex: ForeignKey(Reporter, ...)
@@ -175,14 +171,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Type::Tuple(Tuple::Concrete(elements)) = &lit_enum.ty
                     && elements.len() >= 2
                 {
-                    Some(elements[elements.len() - 1].clone())
+                    Some(
+                        elements[elements.len() - 1]
+                            .clone()
+                            .promote_literals(self.stdlib),
+                    )
                 } else {
                     None
                 }
             })
             .collect();
 
-        label_types.push(self.stdlib.str().clone().to_type());
+        if label_types.is_empty() || label_types.len() < enum_members.len() {
+            // Members without a custom label type have default label type str.
+            label_types.push(self.stdlib.str().clone().to_type());
+        }
 
         // Also include the type of __empty__ field if it exists, since it contributes to label types
         let empty_name = Name::new_static("__empty__");
@@ -252,6 +255,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }))
     }
 
+    /// Get the primary key field type for a Django model.
+    /// Returns a tuple of (pk_type, has_custom_pk) where has_custom_pk indicates
+    /// whether the model has a custom primary key field defined.
+    fn get_pk_field_type(&self, model: &Class) -> Option<(Type, bool)> {
+        let metadata = self.get_metadata_for_class(model);
+
+        if let Some(pk_field_name) = metadata
+            .django_model_metadata()
+            .and_then(|dm| dm.custom_primary_key_field.as_ref())
+        {
+            let instance_type = self.as_class_type_unchecked(model).to_type();
+            let pk_type = self.attr_infer_for_type(
+                &instance_type,
+                pk_field_name,
+                TextRange::default(),
+                &self.error_swallower(),
+                None,
+            );
+            Some((pk_type, true))
+        } else {
+            // No custom pk, use default AutoField type
+            let auto_field_export = KeyExport(AUTO_FIELD);
+            let auto_field_type =
+                self.get_from_export(ModuleName::django_models_fields(), None, &auto_field_export);
+            self.get_django_field_type(&auto_field_type, model, None, None)
+                .map(|ty| (ty, false))
+        }
+    }
+
     pub fn get_django_model_synthesized_fields(
         &self,
         cls: &Class,
@@ -263,31 +295,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let mut fields = SmallMap::new();
 
-        let custom_pk_field = metadata
-            .django_model_metadata()
-            .and_then(|dm| dm.custom_primary_key_field.as_ref());
-
-        if let Some(pk_field_name) = custom_pk_field {
-            let instance_type = self.as_class_type_unchecked(cls).to_type();
-            let pk_attr_type = self.attr_infer_for_type(
-                &instance_type,
-                pk_field_name,
-                TextRange::default(),
-                &self.error_swallower(),
-                None,
-            );
-            fields.insert(PK, ClassSynthesizedField::new(pk_attr_type));
-            // When there's a custom pk, don't synthesize an `id` field
-        } else {
-            // No custom pk, use default AutoField for both id and pk
-            let auto_field_export = KeyExport(AUTO_FIELD);
-            let auto_field_type =
-                self.get_from_export(ModuleName::django_models_fields(), None, &auto_field_export);
-
-            if let Some(id_type) = self.get_django_field_type(&auto_field_type, cls, None, None) {
-                fields.insert(ID, ClassSynthesizedField::new(id_type.clone()));
-                fields.insert(PK, ClassSynthesizedField::new(id_type));
+        if let Some((pk_type, has_custom_pk)) = self.get_pk_field_type(cls) {
+            if !has_custom_pk {
+                // No custom pk, so synthesize an id field
+                fields.insert(ID, ClassSynthesizedField::new(pk_type.clone()));
             }
+            fields.insert(PK, ClassSynthesizedField::new(pk_type));
         }
 
         Some(ClassSynthesizedFields::new(fields))

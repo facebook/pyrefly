@@ -10,8 +10,8 @@
 mod code_actions;
 mod completion;
 mod definition;
-mod docstring_folding;
 mod document_symbols;
+mod folding_ranges;
 mod hover;
 mod hover_docstring;
 mod hover_type;

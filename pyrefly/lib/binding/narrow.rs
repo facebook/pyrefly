@@ -44,7 +44,7 @@ use crate::types::facet::FacetKind;
 use crate::types::types::Type;
 
 assert_words!(AtomicNarrowOp, 11);
-assert_words!(NarrowOp, 12);
+assert_words!(NarrowOp, 13);
 
 #[derive(Clone, Debug)]
 pub enum AtomicNarrowOp {
@@ -92,7 +92,7 @@ pub enum AtomicNarrowOp {
 
 #[derive(Clone, Debug)]
 pub enum NarrowOp {
-    Atomic(Option<FacetChain>, AtomicNarrowOp),
+    Atomic(Option<FacetSubject>, AtomicNarrowOp),
     And(Vec<NarrowOp>),
     Or(Vec<NarrowOp>),
 }
@@ -176,7 +176,7 @@ impl DisplayWith<ModuleInfo> for NarrowOp {
         match self {
             Self::Atomic(prop, op) => match prop {
                 None => write!(f, "{}", op.display_with(ctx)),
-                Some(prop) => write!(f, "[{prop}] {}", op.display_with(ctx)),
+                Some(prop) => write!(f, "[{}] {}", prop.chain, op.display_with(ctx)),
             },
             Self::And(ops) => {
                 write!(
@@ -234,19 +234,45 @@ impl AtomicNarrowOp {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FacetOrigin {
+    // This facet is a direct access, like `x.y`, `x[0]`, `x["key"]`
+    Direct,
+    // This facet came from a call to a `get` method, like `x.get("key")`
+    GetMethod,
+}
+
+#[derive(Clone, Debug)]
+pub struct FacetSubject {
+    pub chain: FacetChain,
+    pub origin: FacetOrigin,
+}
+
 #[derive(Clone, Debug)]
 pub enum NarrowingSubject {
     Name(Name),
-    Facets(Name, FacetChain),
+    Facets(Name, FacetSubject),
 }
 
 impl NarrowingSubject {
     pub fn with_facet(&self, prop: FacetKind) -> Self {
         match self {
-            Self::Name(name) => Self::Facets(name.clone(), FacetChain::new(Vec1::new(prop))),
-            Self::Facets(name, props) => {
-                let props = Vec1::from_vec_push(props.facets().to_vec(), prop);
-                Self::Facets(name.clone(), FacetChain::new(props))
+            Self::Name(name) => Self::Facets(
+                name.clone(),
+                FacetSubject {
+                    chain: FacetChain::new(Vec1::new(prop)),
+                    origin: FacetOrigin::Direct,
+                },
+            ),
+            Self::Facets(name, facets) => {
+                let props = Vec1::from_vec_push(facets.chain.facets().to_vec(), prop);
+                Self::Facets(
+                    name.clone(),
+                    FacetSubject {
+                        chain: FacetChain::new(props),
+                        origin: facets.origin,
+                    },
+                )
             }
         }
     }
@@ -372,7 +398,7 @@ impl NarrowOps {
         for subject in expr_to_subjects(left) {
             let (name, prop) = match subject {
                 NarrowingSubject::Name(name) => (name, None),
-                NarrowingSubject::Facets(name, prop) => (name, Some(prop)),
+                NarrowingSubject::Facets(name, facets) => (name, Some(facets)),
             };
             if let Some((existing, _)) = narrow_ops.0.get_mut(&name) {
                 existing.and(NarrowOp::Atomic(prop, op.clone()));
@@ -393,7 +419,7 @@ impl NarrowOps {
         let mut narrow_ops = Self::new();
         let (name, prop) = match subject {
             NarrowingSubject::Name(name) => (name, None),
-            NarrowingSubject::Facets(name, prop) => (name, Some(prop)),
+            NarrowingSubject::Facets(name, facets) => (name, Some(facets)),
         };
         if let Some((existing, _)) = narrow_ops.0.get_mut(&name) {
             existing.and(NarrowOp::Atomic(prop, op.clone()));
@@ -587,6 +613,12 @@ impl NarrowOps {
                     *range,
                 )
             }
+            Some(e @ Expr::Call(call)) if dict_get_subject_for_call_expr(call).is_some() => {
+                // When the guard is something like `x.get("key")`, we narrow it like `x["key"]` if `x` resolves to a dict
+                // in the answers step.
+                // This cannot be a TypeGuard/TypeIs function call, since the first argument is a string literal
+                Self::from_single_narrow_op(e, AtomicNarrowOp::IsTruthy, e.range())
+            }
             Some(Expr::Call(ExprCall {
                 node_index: _,
                 range,
@@ -770,16 +802,63 @@ pub fn identifier_and_chain_prefix_for_expr(expr: &Expr) -> Option<(Identifier, 
     f(expr, Vec::new())
 }
 
-fn subject_for_expr(expr: &Expr) -> Option<NarrowingSubject> {
-    identifier_and_chain_for_expr(expr)
-        .map(|(identifier, attr)| NarrowingSubject::Facets(identifier.id, attr))
+// Handle narrowing on `dict.get("key")`. During solving, if the resolved
+// type of the object is not a subtype of `dict`, we will not perform any narrowing.
+fn dict_get_subject_for_call_expr(call_expr: &ExprCall) -> Option<NarrowingSubject> {
+    let func = &call_expr.func;
+    let arguments = &call_expr.arguments;
+    if arguments.keywords.is_empty()
+        && arguments.args.len() == 1
+        && let Some(first_arg) = arguments.args.first()
+        && let Expr::Attribute(attr) = &**func
+        && attr.attr.id.as_str() == "get"
+        && let Expr::StringLiteral(ExprStringLiteral { value, .. }) = first_arg
+    {
+        let key = value.to_string();
+        if let Some((identifier, facets)) = identifier_and_chain_for_expr(&attr.value) {
+            // x.y.z.get("key")
+            let props = Vec1::from_vec_push(facets.facets().to_vec(), FacetKind::Key(key.clone()));
+            return Some(NarrowingSubject::Facets(
+                identifier.id,
+                FacetSubject {
+                    chain: FacetChain::new(props),
+                    origin: FacetOrigin::GetMethod,
+                },
+            ));
+        } else if let Expr::Name(name) = &*attr.value {
+            // x.get("key")
+            return Some(NarrowingSubject::Facets(
+                name.id.clone(),
+                FacetSubject {
+                    chain: FacetChain::new(Vec1::new(FacetKind::Key(key))),
+                    origin: FacetOrigin::GetMethod,
+                },
+            ));
+        }
+    }
+    None
 }
 
 pub fn expr_to_subjects(expr: &Expr) -> Vec<NarrowingSubject> {
     fn f(expr: &Expr, res: &mut Vec<NarrowingSubject>) {
         match expr {
             Expr::Name(name) => res.push(NarrowingSubject::Name(name.id.clone())),
-            Expr::Attribute(_) | Expr::Subscript(_) => res.extend(subject_for_expr(expr)),
+            Expr::Attribute(_) | Expr::Subscript(_) => {
+                if let Some((identifier, facets)) = identifier_and_chain_for_expr(expr) {
+                    res.push(NarrowingSubject::Facets(
+                        identifier.id,
+                        FacetSubject {
+                            chain: facets,
+                            origin: FacetOrigin::Direct,
+                        },
+                    ));
+                }
+            }
+            Expr::Call(call) => {
+                if let Some(subject) = dict_get_subject_for_call_expr(call) {
+                    res.push(subject);
+                }
+            }
             Expr::Named(ExprNamed { target, value, .. }) => {
                 f(target, res);
                 f(value, res);

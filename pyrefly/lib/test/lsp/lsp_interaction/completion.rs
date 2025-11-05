@@ -219,6 +219,62 @@ fn test_completion_keywords() {
 }
 
 #[test]
+fn test_import_completion_skips_hidden_directories() {
+    let root = get_test_files_root();
+    let workspace = root.path().join("basic");
+    let hidden_dir = workspace.join(".hiddenpkg");
+    std::fs::create_dir_all(&hidden_dir).unwrap();
+    std::fs::write(hidden_dir.join("__init__.py"), "").unwrap();
+
+    let foo_path = workspace.join("foo.py");
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(workspace);
+    interaction.initialize(InitializeSettings::default());
+
+    interaction.server.did_open("foo.py");
+
+    interaction
+        .server
+        .send_message(Message::Notification(Notification {
+            method: "textDocument/didChange".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                    "languageId": "python",
+                    "version": 2
+                },
+                "contentChanges": [{
+                    "text": "import ".to_owned()
+                }],
+            }),
+        }));
+
+    interaction.server.completion("foo.py", 0, 7);
+
+    interaction.client.expect_response_with(
+        |response| {
+            if response.id != RequestId::from(2) {
+                return false;
+            }
+            if let Some(result) = &response.result
+                && let Some(items) = result.get("items")
+                && let Some(items_array) = items.as_array()
+            {
+                let contains_hidden = items_array.iter().any(|item| {
+                    item.get("label").and_then(|label| label.as_str()) == Some(".hiddenpkg")
+                });
+                return !items_array.is_empty() && !contains_hidden;
+            }
+            false
+        },
+        "Expected completion response without suggestions from hidden directories",
+    );
+
+    interaction.shutdown();
+}
+
+#[test]
 fn test_completion_with_autoimport() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");

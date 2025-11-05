@@ -23,7 +23,6 @@ use starlark_map::small_set::SmallSet;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassAttribute;
-use crate::alt::class::class_field::ClassFieldInitialization;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::EnumMetadata;
 use crate::error::collector::ErrorCollector;
@@ -55,7 +54,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         name: &Name,
         ty: &Type,
-        initialization: &ClassFieldInitialization,
+        is_initialized_on_class_body: bool,
     ) -> bool {
         // Names starting but not ending with __ are private
         // Names starting and ending with _ are reserved by the enum
@@ -63,7 +62,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return false;
         }
         // Enum members must be initialized on the class
-        if !matches!(*initialization, ClassFieldInitialization::ClassBody(_)) {
+        if !is_initialized_on_class_body {
             return false;
         }
         match ty {
@@ -225,7 +224,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         direct_annotation: Option<&Annotation>,
         ty: &Type,
-        initialization: &ClassFieldInitialization,
+        is_initialized_on_class_body: bool,
         is_descriptor: bool,
         range: TextRange,
         errors: &ErrorCollector,
@@ -235,7 +234,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let metadata = self.get_metadata_for_class(class);
         if let Some(enum_) = metadata.enum_metadata()
-            && self.is_valid_enum_member(name, ty, initialization)
+            && self.is_valid_enum_member(name, ty, is_initialized_on_class_body)
         {
             if direct_annotation.is_some() {
                 self.error(

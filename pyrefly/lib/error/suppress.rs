@@ -155,8 +155,10 @@ pub fn find_unused_ignores<'a>(
         let errors = suppressed_errors.get(path).unwrap_or(&default_set);
         let mut unused_ignores = SmallSet::new();
         for ignore in ignores {
-            let location = ignore.increment();
-            if !errors.contains(&location) && !errors.contains(&ignore) {
+            // An ignore is unused if there's no error on that line.
+            // This matches the is_ignored() logic which checks if a suppression
+            // exists on any line within an error's range.
+            if !errors.contains(&ignore) {
                 unused_ignores.insert(ignore);
             }
         }
@@ -180,10 +182,17 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) -> usize {
         if e.is_ignored(false)
             && let ModulePathDetails::FileSystem(path) = e.path().details()
         {
-            suppressed_errors
-                .entry(path)
-                .or_default()
-                .insert(e.display_range().start.line_within_file());
+            // Insert all lines in the error's range, not just the start line.
+            // This matches the logic in is_ignored() which checks if a suppression
+            // exists on any line within the error's range.
+            let start = e.display_range().start.line_within_file();
+            let end = e.display_range().end.line_within_file();
+            for line_idx in start.to_zero_indexed()..=end.to_zero_indexed() {
+                suppressed_errors
+                    .entry(path)
+                    .or_default()
+                    .insert(LineNumber::from_zero_indexed(line_idx));
+            }
         }
     }
 
@@ -495,6 +504,26 @@ def f() -> int:
     return 1
 "##;
         assert_remove_ignores(input, output, false, 2);
+    }
+
+    #[test]
+    fn test_do_not_remove_suppression_needed() {
+        // We should not remove this suppression, since it is needed.
+        let input = r#"
+def foo(s: str) -> int:
+    pass
+
+def bar(x: int) -> int:
+    pass
+
+
+foo(
+    bar(
+        12323423423
+    ) # pyrefly: ignore [bad-argument-type]
+)
+"#;
+        assert_remove_ignores(input, input, false, 0);
     }
 
     #[test]

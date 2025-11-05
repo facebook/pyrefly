@@ -57,7 +57,6 @@ use lsp_types::DocumentSymbolParams;
 use lsp_types::DocumentSymbolResponse;
 use lsp_types::FileSystemWatcher;
 use lsp_types::FoldingRange;
-use lsp_types::FoldingRangeKind;
 use lsp_types::FoldingRangeParams;
 use lsp_types::FoldingRangeProviderCapability;
 use lsp_types::FullDocumentDiagnosticReport;
@@ -146,6 +145,7 @@ use lsp_types::request::Rename;
 use lsp_types::request::Request as _;
 use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
+use lsp_types::request::SemanticTokensRefresh;
 use lsp_types::request::SignatureHelpRequest;
 use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WillRenameFiles;
@@ -157,6 +157,7 @@ use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::globs::FilteredGlobs;
@@ -295,7 +296,7 @@ impl ServerConnection {
 
     fn publish_diagnostics(&self, diags: SmallMap<PathBuf, Vec<Diagnostic>>) {
         for (path, diags) in diags {
-            let path = std::fs::canonicalize(&path).unwrap_or(path);
+            let path = path.absolutize();
             match Url::from_file_path(&path) {
                 Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, None),
                 Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
@@ -1098,6 +1099,16 @@ impl Server {
         handles
     }
 
+    #[allow(dead_code)]
+    fn is_python_stdlib_file(&self, path: &Path, stdlib_paths: &[PathBuf]) -> bool {
+        for stdlib_path in stdlib_paths {
+            if path.starts_with(stdlib_path) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn get_diag_if_shown(
         &self,
         e: &Error,
@@ -1129,7 +1140,7 @@ impl Server {
         params: crate::lsp::wasm::provide_type::ProvideTypeParams,
     ) -> Option<ProvideTypeResponse> {
         let uri = &params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri)?;
+        let handle = self.make_handle_if_enabled(uri, None)?;
         provide_type(transaction, &handle, params.positions)
     }
 
@@ -1220,6 +1231,17 @@ impl Server {
                 Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
             }
             self.connection.publish_diagnostics(diags);
+            if self
+                .initialize_params
+                .capabilities
+                .workspace
+                .as_ref()
+                .and_then(|w| w.semantic_tokens.as_ref())
+                .and_then(|st| st.refresh_support)
+                .unwrap_or(false)
+            {
+                self.send_request::<SemanticTokensRefresh>(());
+            }
         };
 
         match possibly_committable_transaction {
@@ -1648,31 +1670,49 @@ impl Server {
 
     /// Create a handle with analysis config that decides language service behavior.
     /// Return None if the workspace has language services disabled (and thus you shouldn't do anything).
+    ///
+    /// `method` should be the LSP request METHOD string from lsp_types::request::* types
+    /// (e.g., GotoDefinition::METHOD, HoverRequest::METHOD, etc.)
     fn make_handle_with_lsp_analysis_config_if_enabled(
         &self,
         uri: &Url,
+        method: Option<&str>,
     ) -> Option<(Handle, Option<LspAnalysisConfig>)> {
         let path = uri.to_file_path().unwrap();
         self.workspaces.get_with(path.clone(), |(_, workspace)| {
+            // Check if all language services are disabled
             if workspace.disable_language_services {
                 eprintln!("Skipping request - language services disabled");
-                None
-            } else {
-                let module_path = if self.open_files.read().contains_key(&path) {
-                    ModulePath::memory(path)
-                } else {
-                    ModulePath::filesystem(path)
-                };
-                Some((
-                    handle_from_module_path(&self.state, module_path),
-                    workspace.lsp_analysis_config,
-                ))
+                return None;
             }
+
+            // Check if the specific service is disabled
+            if let Some(lsp_config) = workspace.lsp_analysis_config
+                && let Some(disabled_services) = lsp_config.disabled_language_services
+                && let Some(method) = method
+                && disabled_services.is_disabled(method)
+            {
+                eprintln!("Skipping request - {} service disabled", method);
+                return None;
+            }
+
+            let module_path = if self.open_files.read().contains_key(&path) {
+                ModulePath::memory(path)
+            } else {
+                ModulePath::filesystem(path)
+            };
+            Some((
+                handle_from_module_path(&self.state, module_path),
+                workspace.lsp_analysis_config,
+            ))
         })
     }
 
-    fn make_handle_if_enabled(&self, uri: &Url) -> Option<Handle> {
-        self.make_handle_with_lsp_analysis_config_if_enabled(uri)
+    /// make handle if enabled
+    /// if method (the lsp method str exactly) is provided, we will check workspace settings
+    /// for whether to enable it
+    fn make_handle_if_enabled(&self, uri: &Url, method: Option<&str>) -> Option<Handle> {
+        self.make_handle_with_lsp_analysis_config_if_enabled(uri, method)
             .map(|(handle, _)| handle)
     }
 
@@ -1682,7 +1722,7 @@ impl Server {
         params: GotoDefinitionParams,
     ) -> Option<GotoDefinitionResponse> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri)?;
+        let handle = self.make_handle_if_enabled(uri, Some(GotoDefinition::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let range = info
             .lined_buffer()
@@ -1707,7 +1747,7 @@ impl Server {
         params: GotoTypeDefinitionParams,
     ) -> Option<GotoTypeDefinitionResponse> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri)?;
+        let handle = self.make_handle_if_enabled(uri, Some(GotoTypeDefinition::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let range = info
             .lined_buffer()
@@ -1733,16 +1773,17 @@ impl Server {
         params: CompletionParams,
     ) -> anyhow::Result<CompletionResponse> {
         let uri = &params.text_document_position.text_document.uri;
-        let (handle, import_format) =
-            match self.make_handle_with_lsp_analysis_config_if_enabled(uri) {
-                None => {
-                    return Ok(CompletionResponse::List(CompletionList {
-                        is_incomplete: false,
-                        items: Vec::new(),
-                    }));
-                }
-                Some((x, config)) => (x, config.and_then(|c| c.import_format).unwrap_or_default()),
-            };
+        let (handle, import_format) = match self
+            .make_handle_with_lsp_analysis_config_if_enabled(uri, Some(Completion::METHOD))
+        {
+            None => {
+                return Ok(CompletionResponse::List(CompletionList {
+                    is_incomplete: false,
+                    items: Vec::new(),
+                }));
+            }
+            Some((x, config)) => (x, config.and_then(|c| c.import_format).unwrap_or_default()),
+        };
         let (items, is_incomplete) = transaction
             .get_module_info(&handle)
             .map(|info| {
@@ -1766,7 +1807,10 @@ impl Server {
         params: CodeActionParams,
     ) -> Option<CodeActionResponse> {
         let uri = &params.text_document.uri;
-        let (handle, lsp_config) = self.make_handle_with_lsp_analysis_config_if_enabled(uri)?;
+        let (handle, lsp_config) = self.make_handle_with_lsp_analysis_config_if_enabled(
+            uri,
+            Some(CodeActionRequest::METHOD),
+        )?;
         let import_format = lsp_config.and_then(|c| c.import_format).unwrap_or_default();
         let module_info = transaction.get_module_info(&handle)?;
         let range = module_info.lined_buffer().from_lsp_range(params.range);
@@ -1798,7 +1842,7 @@ impl Server {
         params: DocumentHighlightParams,
     ) -> Option<Vec<DocumentHighlight>> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri)?;
+        let handle = self.make_handle_if_enabled(uri, Some(DocumentHighlightRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let position = info
             .lined_buffer()
@@ -1824,7 +1868,7 @@ impl Server {
         position: Position,
         map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
     ) {
-        let Some(handle) = self.make_handle_if_enabled(uri) else {
+        let Some(handle) = self.make_handle_if_enabled(uri, Some(References::METHOD)) else {
             return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
         let transaction = ide_transaction_manager.non_committable_transaction(&self.state);
@@ -1962,7 +2006,7 @@ impl Server {
         params: TextDocumentPositionParams,
     ) -> Option<PrepareRenameResponse> {
         let uri = &params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri)?;
+        let handle = self.make_handle_if_enabled(uri, Some(Rename::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let position = info.lined_buffer().from_lsp_position(params.position);
         transaction
@@ -1976,7 +2020,7 @@ impl Server {
         params: SignatureHelpParams,
     ) -> Option<SignatureHelp> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri)?;
+        let handle = self.make_handle_if_enabled(uri, Some(SignatureHelpRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let position = info
             .lined_buffer()
@@ -1986,7 +2030,7 @@ impl Server {
 
     fn hover(&self, transaction: &Transaction<'_>, params: HoverParams) -> Option<Hover> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri)?;
+        let handle = self.make_handle_if_enabled(uri, Some(HoverRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let position = info
             .lined_buffer()
@@ -2002,8 +2046,8 @@ impl Server {
     ) -> Option<Vec<InlayHint>> {
         let uri = &params.text_document.uri;
         let range = &params.range;
-        let (handle, lsp_analysis_config) =
-            self.make_handle_with_lsp_analysis_config_if_enabled(uri)?;
+        let (handle, lsp_analysis_config) = self
+            .make_handle_with_lsp_analysis_config_if_enabled(uri, Some(InlayHintRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let t = transaction.inlay_hints(
             &handle,
@@ -2044,7 +2088,7 @@ impl Server {
         params: SemanticTokensParams,
     ) -> Option<SemanticTokensResult> {
         let uri = &params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri)?;
+        let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensFullRequest::METHOD))?;
         Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
             data: transaction
@@ -2059,7 +2103,7 @@ impl Server {
         params: SemanticTokensRangeParams,
     ) -> Option<SemanticTokensRangeResult> {
         let uri = &params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri)?;
+        let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensRangeRequest::METHOD))?;
         let module_info = transaction.get_module_info(&handle)?;
         let range = module_info.lined_buffer().from_lsp_range(params.range);
         Some(SemanticTokensRangeResult::Tokens(SemanticTokens {
@@ -2092,7 +2136,7 @@ impl Server {
         {
             return None;
         }
-        let handle = self.make_handle_if_enabled(uri)?;
+        let handle = self.make_handle_if_enabled(uri, Some(DocumentSymbolRequest::METHOD))?;
         transaction.symbols(&handle)
     }
 
@@ -2155,7 +2199,7 @@ impl Server {
         transaction: &Transaction<'_>,
         text_document: &TextDocumentIdentifier,
     ) -> Option<Vec<Range>> {
-        let handle = self.make_handle_if_enabled(&text_document.uri)?;
+        let handle = self.make_handle_if_enabled(&text_document.uri, None)?;
         let module = transaction.get_module_info(&handle)?;
         let docstring_ranges = transaction.docstring_ranges(&handle)?;
         Some(
@@ -2171,13 +2215,15 @@ impl Server {
         transaction: &Transaction<'_>,
         params: FoldingRangeParams,
     ) -> Option<Vec<FoldingRange>> {
-        let handle = self.make_handle_if_enabled(&params.text_document.uri)?;
+        let handle = self
+            .make_handle_if_enabled(&params.text_document.uri, Some(FoldingRangeRequest::METHOD))?;
         let module = transaction.get_module_info(&handle)?;
-        let docstring_ranges = transaction.docstring_ranges(&handle)?;
+        let ranges = transaction.folding_ranges(&handle)?;
+
         Some(
-            docstring_ranges
+            ranges
                 .into_iter()
-                .filter_map(|range| {
+                .filter_map(|(range, kind)| {
                     let lsp_range = module.lined_buffer().to_lsp_range(range);
                     if lsp_range.start.line >= lsp_range.end.line {
                         return None;
@@ -2197,7 +2243,7 @@ impl Server {
                         start_character: Some(lsp_range.start.character),
                         end_line,
                         end_character,
-                        kind: Some(FoldingRangeKind::Comment),
+                        kind,
                         collapsed_text: None,
                     })
                 })
@@ -2422,5 +2468,74 @@ impl TspInterface for Server {
             subsequent_mutation,
             event,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_server() -> Server {
+        let (connection, _receiver) = Connection::memory();
+        let lsp_queue = LspQueue::new();
+        let initialize_params = InitializeParams::default();
+        Server::new(
+            Arc::new(connection),
+            lsp_queue,
+            initialize_params,
+            IndexingMode::None,
+            0,
+        )
+    }
+
+    #[test]
+    fn test_stdlib_paths_for_mac_and_windows_paths() {
+        let server = create_test_server();
+
+        let stdlib_paths = vec![
+            PathBuf::from("/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12"),
+            PathBuf::from("/usr/local/Cellar/python@3.12/3.12.0/lib/python3.12"),
+        ];
+
+        assert!(server.is_python_stdlib_file(
+            &PathBuf::from(
+                "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/os.py"
+            ),
+            &stdlib_paths
+        ));
+        assert!(server.is_python_stdlib_file(
+            &PathBuf::from("/usr/local/Cellar/python@3.12/3.12.0/lib/python3.12/sys.py"),
+            &stdlib_paths
+        ));
+        assert!(!server.is_python_stdlib_file(
+            &PathBuf::from("/Users/user/my_project/main.py"),
+            &stdlib_paths
+        ));
+
+        if cfg!(windows) {
+            let stdlib_paths = vec![
+                PathBuf::from(r"C:\Python312\Lib"),
+                PathBuf::from(r"C:\Program Files\Python39\Lib"),
+            ];
+
+            assert!(
+                server.is_python_stdlib_file(
+                    &PathBuf::from(r"C:\Python312\Lib\os.py"),
+                    &stdlib_paths
+                )
+            );
+            assert!(server.is_python_stdlib_file(
+                &PathBuf::from(r"C:\Program Files\Python39\Lib\pathlib.py"),
+                &stdlib_paths
+            ));
+            assert!(!server.is_python_stdlib_file(
+                &PathBuf::from(r"C:\Python312\Scripts\pip.py"),
+                &stdlib_paths
+            ));
+            assert!(!server.is_python_stdlib_file(
+                &PathBuf::from(r"C:\Users\user\my_project\main.py"),
+                &stdlib_paths
+            ));
+        }
     }
 }

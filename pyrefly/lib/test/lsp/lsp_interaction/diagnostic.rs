@@ -211,3 +211,31 @@ fn test_unreachable_branch_diagnostic() {
 
     interaction.shutdown();
 }
+
+#[cfg(unix)]
+#[test]
+fn test_publish_diagnostics_preserves_symlink_uri() {
+    use std::os::unix::fs::symlink;
+
+    let test_files_root = get_test_files_root();
+    let symlink_name = "type_errors_symlink.py";
+    let symlink_target = test_files_root.path().join("type_errors.py");
+    let symlink_path = test_files_root.path().join(symlink_name);
+    symlink(&symlink_target, &symlink_path).unwrap();
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(Some(
+            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+        )),
+        ..Default::default()
+    });
+
+    interaction.server.did_open(symlink_name);
+    interaction
+        .client
+        .expect_publish_diagnostics_exact_uri(symlink_path, 1);
+
+    interaction.shutdown();
+}

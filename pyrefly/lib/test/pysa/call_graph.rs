@@ -1727,11 +1727,12 @@ call_graph_testcase!(
     test_property_returning_callable,
     TEST_MODULE_NAME,
     r#"
+from typing import Callable
 class C:
   @property
   def attribute(self) -> Callable[[], int]:
     return lambda: 0
-def foo(c: C) -> str:
+def foo(c: C) -> int:
   return c.attribute()
 "#,
     &|_context: &ModuleContext| { vec![("test.foo", vec![])] }
@@ -1808,7 +1809,7 @@ call_graph_testcase!(
 class Foo:
   def bar(self) -> None:
     pass
-def baz(self) -> None:
+def baz() -> None:
   pass
 def f(foo: Foo):
   for g in [foo.bar, baz]:
@@ -1887,6 +1888,304 @@ def f():
                     constructor_call_callees(init_targets, new_targets),
                 ),
             ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_decorator_with_paramspec_on_function,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable, TypeVar, ParamSpec
+_T = TypeVar("_T")
+_TParams = ParamSpec("_TParams")
+class Timer:
+  def __call__(self, func: Callable[_TParams, _T]) -> Callable[_TParams, _T]:
+    return func
+def timer(name: str) -> Timer:
+  return Timer()
+@timer("bar")
+def foo(x: int) -> int:
+  return x
+def caller() -> None:
+  foo(1)
+"#,
+    &|_context: &ModuleContext| {
+        let foo = vec![
+            create_call_target("test.foo", TargetType::Function)
+                .with_return_type(Some(ScalarTypeProperties::int())),
+        ];
+        vec![(
+            "test.caller",
+            vec![("14:3-14:9", regular_call_callees(foo))],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_decorator_with_paramspec_on_method,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable, TypeVar, ParamSpec
+_T = TypeVar("_T")
+_TParams = ParamSpec("_TParams")
+class Timer:
+  def __call__(self, func: Callable[_TParams, _T]) -> Callable[_TParams, _T]:
+    return func
+def timer(name: str) -> Timer:
+  return Timer()
+class Foo:
+  @timer("bar")
+  def bar(self, x: int) -> int:
+    return x
+def caller(foo: Foo) -> None:
+  foo.bar(1)
+"#,
+    &|context: &ModuleContext| {
+        let bar = vec![
+            create_call_target("test.Foo.bar", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("test.Foo", context)
+                .with_return_type(Some(ScalarTypeProperties::int())),
+        ];
+        vec![(
+            "test.caller",
+            vec![("15:3-15:13", regular_call_callees(bar))],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_decorator_with_ellipsis_on_function,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable, TypeVar
+_T = TypeVar("_T")
+class Timer:
+  def __call__(self, func: Callable[..., _T]) -> Callable[..., _T]:
+    return func
+def timer(name: str) -> Timer:
+  return Timer()
+@timer("bar")
+def foo(x: int) -> int:
+  return x
+def caller() -> None:
+  foo(1)
+"#,
+    &|_context: &ModuleContext| {
+        let foo = vec![
+            create_call_target("test.foo", TargetType::Function)
+                .with_return_type(Some(ScalarTypeProperties::int())),
+        ];
+        vec![(
+            "test.caller",
+            vec![("13:3-13:9", regular_call_callees(foo))],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_decorator_with_ellipsis_on_method,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable, TypeVar
+_T = TypeVar("_T")
+class Timer:
+  def __call__(self, func: Callable[..., _T]) -> Callable[..., _T]:
+    return func
+def timer(name: str) -> Timer:
+  return Timer()
+class Foo:
+  @timer("bar")
+  def bar(self, x: int) -> int:
+    return x
+def caller(foo: Foo) -> None:
+  foo.bar(1)
+"#,
+    &|context: &ModuleContext| {
+        let bar = vec![
+            create_call_target("test.Foo.bar", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("test.Foo", context)
+                .with_return_type(Some(ScalarTypeProperties::int())),
+        ];
+        vec![(
+            "test.caller",
+            vec![("14:3-14:13", regular_call_callees(bar))],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_simple_decorator_on_function,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable
+def timer(name: str) -> Callable: ...
+@timer("bar")
+def foo(x: int) -> int:
+  return x
+def caller() -> None:
+  foo(1)
+"#,
+    &|_context: &ModuleContext| {
+        let foo = vec![create_call_target("test.foo", TargetType::Function)];
+        vec![("test.caller", vec![("8:3-8:9", regular_call_callees(foo))])]
+    }
+);
+
+call_graph_testcase!(
+    test_simple_decorator_on_method,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable
+def timer(name: str) -> Callable: ...
+class Foo:
+  @timer("bar")
+  def bar(self, x: int) -> int:
+    return x
+def caller(foo: Foo) -> None:
+  foo.bar(1)
+"#,
+    &|context: &ModuleContext| {
+        let bar = vec![
+            create_call_target("test.Foo.bar", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("test.Foo", context),
+        ];
+        vec![("test.caller", vec![("9:3-9:13", regular_call_callees(bar))])]
+    }
+);
+
+call_graph_testcase!(
+    test_decorator_on_classmethod,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable, TypeVar, ParamSpec
+_T = TypeVar("_T")
+_TParams = ParamSpec("_TParams")
+class Timer:
+  def __call__(self, func: Callable[_TParams, _T]) -> Callable[_TParams, _T]:
+    return func
+def timer(name: str) -> Timer:
+  return Timer()
+class Foo:
+  @classmethod
+  @timer("bar")
+  def bar(cls, x: int) -> int:
+    return x
+def caller() -> None:
+  Foo.bar(1)
+"#,
+    &|context: &ModuleContext| {
+        let bar = vec![
+            create_call_target("test.Foo.bar", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithClassReceiver)
+                .with_receiver_class_for_test("test.Foo", context)
+                .with_is_class_method(true)
+                .with_return_type(Some(ScalarTypeProperties::int())),
+        ];
+        vec![(
+            "test.caller",
+            vec![("16:3-16:13", regular_call_callees(bar))],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_decorator_on_staticmethod,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable, TypeVar, ParamSpec
+_T = TypeVar("_T")
+_TParams = ParamSpec("_TParams")
+class Timer:
+  def __call__(self, func: Callable[_TParams, _T]) -> Callable[_TParams, _T]:
+    return func
+def timer(name: str) -> Timer:
+  return Timer()
+class Foo:
+  @staticmethod
+  @timer("bar")
+  def bar(x: int) -> int:
+    return x
+def caller() -> None:
+  Foo.bar(1)
+"#,
+    &|_context: &ModuleContext| {
+        let bar = vec![
+            create_call_target("test.Foo.bar", TargetType::Function)
+                .with_is_static_method(true)
+                .with_return_type(Some(ScalarTypeProperties::int())),
+        ];
+        vec![(
+            "test.caller",
+            vec![("16:3-16:13", regular_call_callees(bar))],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_decorator_on_classmethod_calling_from_classmethod,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable, TypeVar, ParamSpec
+_T = TypeVar("_T")
+_TParams = ParamSpec("_TParams")
+class Timer:
+  def __call__(self, func: Callable[_TParams, _T]) -> Callable[_TParams, _T]:
+    return func
+def timer(name: str) -> Timer:
+  return Timer()
+class Foo:
+  @classmethod
+  @timer("bar")
+  def bar(cls, x: int) -> int:
+    return x
+  @classmethod
+  def caller(cls) -> None:
+    cls.bar(1)
+"#,
+    &|_context: &ModuleContext| {
+        let bar = vec![
+            create_call_target("test.Foo.bar", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_is_class_method(true)
+                .with_return_type(Some(ScalarTypeProperties::int())),
+        ];
+        vec![(
+            "test.Foo.caller",
+            vec![("17:5-17:15", regular_call_callees(bar))],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_decorator_with_type_error_does_not_affect_call_graph,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable, TypeVar, ParamSpec
+_T = TypeVar("_T")
+_TParams = ParamSpec("_TParams")
+class Timer:
+  def __call__(self, func: Callable[_TParams, _T]) -> Callable[_TParams, _T]:
+    return func
+def timer(name: str) -> Timer:
+  return Timer()
+@timer(1) # Intended type error here.
+def foo(x: int) -> int:
+  return x
+def caller() -> None:
+  foo(1)
+"#,
+    &|_context: &ModuleContext| {
+        let foo = vec![
+            create_call_target("test.foo", TargetType::Function)
+                .with_return_type(Some(ScalarTypeProperties::int())),
+        ];
+        vec![(
+            "test.caller",
+            vec![("14:3-14:9", regular_call_callees(foo))],
         )]
     }
 );

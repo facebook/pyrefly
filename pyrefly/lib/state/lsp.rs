@@ -512,6 +512,12 @@ impl<'a> Transaction<'a> {
     fn identifier_at(&self, handle: &Handle, position: TextSize) -> Option<IdentifierWithContext> {
         let mod_module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&mod_module, position);
+        Self::identifier_from_covering_nodes(&covering_nodes)
+    }
+
+    fn identifier_from_covering_nodes(
+        covering_nodes: &[AnyNodeRef],
+    ) -> Option<IdentifierWithContext> {
         match (
             covering_nodes.first(),
             covering_nodes.get(1),
@@ -1227,14 +1233,9 @@ impl<'a> Transaction<'a> {
     fn find_definition_for_operator(
         &self,
         handle: &Handle,
-        position: TextSize,
+        covering_nodes: &[AnyNodeRef],
         preference: &FindPreference,
     ) -> Vec<FindDefinitionItemWithDocstring> {
-        let Some(mod_module) = self.get_ast(handle) else {
-            return vec![];
-        };
-        let covering_nodes = Ast::locate_node(&mod_module, position);
-
         let Some((base_type, dunder_method_name)) =
             covering_nodes.iter().find_map(|node| match node {
                 AnyNodeRef::ExprCompare(compare) => {
@@ -1411,7 +1412,12 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         preference: &FindPreference,
     ) -> Vec<FindDefinitionItemWithDocstring> {
-        match self.identifier_at(handle, position) {
+        let Some(mod_module) = self.get_ast(handle) else {
+            return vec![];
+        };
+        let covering_nodes = Ast::locate_node(&mod_module, position);
+
+        match Self::identifier_from_covering_nodes(&covering_nodes) {
             Some(IdentifierWithContext {
                 identifier: id,
                 context: IdentifierContext::Expr(expr_context),
@@ -1541,7 +1547,7 @@ impl<'a> Transaction<'a> {
                 identifier,
                 context: IdentifierContext::Attribute { base_range, .. },
             }) => self.find_definition_for_attribute(handle, base_range, &identifier, preference),
-            None => self.find_definition_for_operator(handle, position, preference),
+            None => self.find_definition_for_operator(handle, &covering_nodes, preference),
         }
     }
 

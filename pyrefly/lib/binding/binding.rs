@@ -1626,7 +1626,13 @@ impl Binding {
             | Binding::TypeParameter(_)
             | Binding::PossibleLegacyTParam(_, _) => Some(SymbolKind::TypeParameter),
             Binding::Global(_) => Some(SymbolKind::Variable),
-            Binding::Function(_, _, _) => Some(SymbolKind::Function),
+            Binding::Function(_, _, class_metadata) => {
+                if class_metadata.is_some() {
+                    Some(SymbolKind::Method)
+                } else {
+                    Some(SymbolKind::Function)
+                }
+            }
             Binding::Import(_, _, _) => {
                 // TODO: maybe we can resolve it to see its symbol kind
                 Some(SymbolKind::Variable)

@@ -1336,7 +1336,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             name,
             direct_annotation.as_ref(),
             &ty,
-            &initialization,
             initial_value,
             descriptor.is_some(),
             range,
@@ -1430,18 +1429,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         direct_annotation: Option<&Annotation>,
         ty: &Type,
-        initialization: &ClassFieldInitialization,
         initial_value: &RawClassFieldInitialization,
         is_descriptor: bool,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<Type> {
+        let is_initialized_on_class_body =
+            matches!(initial_value, RawClassFieldInitialization::ClassBody(_));
         self.get_enum_class_field_type(
             class,
             name,
             direct_annotation,
             ty,
-            initialization,
+            is_initialized_on_class_body,
             is_descriptor,
             range,
             errors,

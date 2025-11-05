@@ -377,6 +377,116 @@ fn test_disable_language_services_default_workspace() {
 }
 
 #[test]
+fn test_disable_specific_language_services_via_analysis_config() {
+    let test_files_root = get_test_files_root();
+    let this_test_root = test_files_root.path().join("basic");
+    let scope_uri = Url::from_file_path(this_test_root.clone()).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(this_test_root.to_path_buf());
+    interaction.initialize(InitializeSettings {
+        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+        configuration: Some(None),
+        ..Default::default()
+    });
+
+    interaction.server.did_open("foo.py");
+
+    // Test hover works initially
+    interaction.server.hover("foo.py", 6, 17);
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
+        result: Some(serde_json::json!({
+            "contents": {
+                "kind":"markdown",
+                "value":"```python\n(class) Bar: type[Bar]\n```\n\nGo to [Bar](".to_owned()
+                    + Url::from_file_path(this_test_root.join("bar.py")).unwrap().as_str()
+                    + "#L7,7)"
+            }
+        })),
+        error: None,
+    });
+
+    // Test definition works initially
+    interaction.server.definition("foo.py", 6, 16);
+    interaction.client.expect_response(Response {
+        id: RequestId::from(3),
+        result: Some(serde_json::json!({
+            "uri": Url::from_file_path(this_test_root.join("bar.py")).unwrap().to_string(),
+            "range": {
+                "start": {
+                    "line": 6,
+                    "character": 6
+                },
+                "end": {
+                    "line": 6,
+                    "character": 9
+                }
+            }
+        })),
+        error: None,
+    });
+
+    // Change configuration to disable only hover (mimicking pyrefly.analysis.disabledLanguageServices)
+    interaction.server.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(2, Some(vec![&scope_uri]));
+    interaction.server.send_configuration_response(
+        2,
+        serde_json::json!([
+            {
+                "pyrefly": {
+                    "analysis": {
+                        "disabledLanguageServices": {
+                            "hover": true,
+                        }
+                    }
+                }
+            },
+            {
+                "pyrefly": {
+                    "analysis": {
+                        "disabledLanguageServices": {
+                            "hover": true,
+                        }
+                    }
+                }
+            }
+        ]),
+    );
+
+    // Hover should now be disabled
+    interaction.server.hover("foo.py", 6, 17);
+    interaction.client.expect_response(Response {
+        id: RequestId::from(4),
+        result: Some(serde_json::json!({"contents": []})),
+        error: None,
+    });
+
+    // But definition should still work
+    interaction.server.definition("foo.py", 6, 16);
+    interaction.client.expect_response(Response {
+        id: RequestId::from(5),
+        result: Some(serde_json::json!({
+            "uri": Url::from_file_path(this_test_root.join("bar.py")).unwrap().to_string(),
+            "range": {
+                "start": {
+                    "line": 6,
+                    "character": 6
+                },
+                "end": {
+                    "line": 6,
+                    "character": 9
+                }
+            }
+        })),
+        error: None,
+    });
+
+    interaction.shutdown();
+}
+
+#[test]
 fn test_did_change_workspace_folder() {
     let root = get_test_files_root();
     let scope_uri = Url::from_file_path(root.path()).unwrap();

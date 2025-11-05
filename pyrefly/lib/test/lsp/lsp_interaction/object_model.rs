@@ -611,6 +611,36 @@ impl TestClient {
         );
     }
 
+    pub fn expect_publish_diagnostics_exact_uri(&self, path: PathBuf, count: usize) {
+        let expected_uri = Url::from_file_path(&path).unwrap().to_string();
+        self.expect_message_helper(
+            |msg| match msg {
+                Message::Notification(Notification { method, params })
+                    if method == "textDocument/publishDiagnostics" =>
+                {
+                    if params.get("uri").and_then(|v| v.as_str()) == Some(expected_uri.as_str()) {
+                        if let Some(diagnostics) = params.get("diagnostics")
+                            && let Some(diagnostics_array) = diagnostics.as_array()
+                        {
+                            if diagnostics_array.len() == count {
+                                return ValidationResult::Pass;
+                            } else {
+                                return ValidationResult::Skip;
+                            }
+                        } else {
+                            panic!("publishDiagnostics notification malformed: missing or invalid 'diagnostics' field");
+                        }
+                    }
+                    ValidationResult::Skip
+                }
+                _ => ValidationResult::Skip,
+            },
+            &format!(
+                "publishDiagnostics notification with uri {expected_uri} containing {count} errors"
+            ),
+        );
+    }
+
     pub fn expect_definition_response_absolute(
         &self,
         file: String,

@@ -141,6 +141,10 @@ pub enum TypeCheckKind {
     TypedDictKey(Option<Name>),
     /// Check an unpacked dict against a TypedDict, e.g., `x: MyTypedDict = {**unpacked_dict}`.
     TypedDictUnpacking,
+    /// Check unpacking of an open TypedDict into a TypedDict. Used to report instances of
+    /// TypedDictUnpacking that are specifically caused by the open TypedDict potentially
+    /// containing extra keys via inheritance.
+    TypedDictOpenUnpacking,
     /// Check of an attribute assignment against its type.
     Attribute(Name),
     /// A check against a user-declared type annotation on a variable name.
@@ -204,6 +208,7 @@ impl TypeCheckKind {
             Self::FunctionParameterDefault(..) => ErrorKind::BadFunctionDefinition,
             Self::TypedDictKey(..) => ErrorKind::BadTypedDictKey,
             Self::TypedDictUnpacking => ErrorKind::BadUnpacking,
+            Self::TypedDictOpenUnpacking => ErrorKind::OpenUnpacking,
             Self::Attribute(..) => ErrorKind::BadAssignment,
             Self::AnnotatedName(..) => ErrorKind::BadAssignment,
             Self::IterationVariableMismatch(..) => ErrorKind::BadAssignment,

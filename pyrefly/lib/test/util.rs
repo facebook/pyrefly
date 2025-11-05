@@ -106,6 +106,7 @@ pub struct TestEnv {
     implicitly_defined_attribute_error: bool,
     implicit_any_error: bool,
     implicit_abstract_class_error: bool,
+    open_unpacking_error: bool,
     default_require_level: Require,
 }
 
@@ -122,6 +123,7 @@ impl TestEnv {
             implicitly_defined_attribute_error: false,
             implicit_any_error: false,
             implicit_abstract_class_error: false,
+            open_unpacking_error: false,
             default_require_level: Require::Exports,
         }
     }
@@ -162,6 +164,11 @@ impl TestEnv {
 
     pub fn enable_implicit_abstract_class_error(mut self) -> Self {
         self.implicit_abstract_class_error = true;
+        self
+    }
+
+    pub fn enable_open_unpacking_error(mut self) -> Self {
+        self.open_unpacking_error = true;
         self
     }
 
@@ -245,6 +252,9 @@ impl TestEnv {
         }
         if self.implicit_abstract_class_error {
             errors.set_error_severity(ErrorKind::ImplicitAbstractClass, Severity::Error);
+        }
+        if self.open_unpacking_error {
+            errors.set_error_severity(ErrorKind::OpenUnpacking, Severity::Error);
         }
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
         for (name, path, _) in self.modules.iter() {

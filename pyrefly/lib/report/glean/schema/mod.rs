@@ -10,6 +10,8 @@ pub mod builtin;
 #[rustfmt::skip]
 pub mod digest;
 #[rustfmt::skip]
+pub mod gencode;
+#[rustfmt::skip]
 pub mod python;
 #[rustfmt::skip]
 pub mod src;

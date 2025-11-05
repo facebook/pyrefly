@@ -150,7 +150,7 @@ foo.
          ^
 Completion Results:
 - (Field) [DEPRECATED] also_not_ok: int
-- (Method) [DEPRECATED] not_ok: def not_ok(self: Foo) -> None
+- (Method) [DEPRECATED] not_ok: def not_ok(self: Foo) -> None: ...
 - (Field) x: int
 "#
         .trim(),
@@ -204,9 +204,9 @@ foo.
 10 | foo.
          ^
 Completion Results:
-- (Method) class_method: def class_method(cls: type[Foo]) -> None
-- (Method) method: def method(self: Foo) -> None
-- (Function) static_method: def static_method() -> None
+- (Method) class_method: def class_method(cls: type[Foo]) -> None: ...
+- (Method) method: def method(self: Foo) -> None: ...
+- (Function) static_method: def static_method() -> None: ...
 - (Field) x: int
 "#
         .trim(),
@@ -410,7 +410,7 @@ class Foo:
 5 |   x.
         ^
 Completion Results:
-- (Field) magic
+- (Field) magic: Unknown
 
 
 # lib.py
@@ -1393,7 +1393,7 @@ def foo(x: B) -> None:
 9 |     x.
           ^
 Completion Results:
-- (Method) foo: def foo(self: B) -> int
+- (Method) foo: def foo(self: B) -> int: ...
 "#
         .trim(),
         report.trim(),
@@ -2067,7 +2067,7 @@ f.
 8 | f.
       ^
 Completion Results:
-- (Method) method: def method(self: Foo) -> int
+- (Method) method: def method(self: Foo) -> int: ...
 This is a method docstring.
 "#
         .trim(),
@@ -2099,9 +2099,9 @@ f.
 12 | f.
        ^
 Completion Results:
-- (Method) first: def first(self: Foo) -> int
+- (Method) first: def first(self: Foo) -> int: ...
 First method documentation.
-- (Method) second: def second(self: Foo) -> str
+- (Method) second: def second(self: Foo) -> str: ...
 Second method documentation.
 "#
         .trim(),
@@ -2163,9 +2163,9 @@ f.
 13 | f.
        ^
 Completion Results:
-- (Method) documented: def documented(self: Foo) -> str
+- (Method) documented: def documented(self: Foo) -> str: ...
 This has documentation.
-- (Method) undocumented: def undocumented(self: Foo) -> int
+- (Method) undocumented: def undocumented(self: Foo) -> int: ...
 - (Field) x: int
 "#
         .trim(),
@@ -2181,8 +2181,11 @@ This has documentation.
 fn dot_complete_var_crash_regression() {
     let code = r#"
 class C[T]:
-    def m(self):
-        pass
+    def m(self) -> None: ...
+
+    @property
+    def p(self) -> T: ...
+
 def f[T]() -> C[T]: ...
 f().
 #   ^
@@ -2192,10 +2195,11 @@ f().
     assert_eq!(
         r#"
 # main.py
-6 | f().
+9 | f().
         ^
 Completion Results:
-- (Method) m: def m(self: C[Unknown]) -> None
+- (Method) m: def m(self: C[Unknown]) -> None: ...
+- (Field) p: Unknown
 "#
         .trim(),
         report.trim(),

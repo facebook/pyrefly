@@ -48,6 +48,11 @@ impl<'a, 'b> HintRef<'a, 'b> {
         Self(hint, errors)
     }
 
+    /// Construct a "soft" type hint that doesn't report an error when the hint is incompatible.
+    pub fn soft(hint: &'b Type) -> Self {
+        Self(hint, None)
+    }
+
     pub fn ty(&self) -> &Type {
         self.0
     }

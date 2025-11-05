@@ -97,7 +97,6 @@ assert_type(VoidChoices.__empty__, str)
 django_testcase!(
     test_enum_union,
     r#"
-from django.utils.functional import _StrOrPromise
 from typing_extensions import assert_type, Any, Literal
 from django.db.models import Choices
 from django.utils.translation import gettext_lazy as _
@@ -142,7 +141,7 @@ django_testcase!(
 from typing import assert_type
 from django.db.models import IntegerChoices
 from django.utils.translation import gettext_lazy as _
-from django.utils.functional import _StrOrPromise
+from django.utils.functional import _StrPromise
 
 class A(IntegerChoices):
     A = 1
@@ -151,7 +150,7 @@ class B(IntegerChoices):
     B = 1, _("B")
 
 assert_type(A.choices, list[tuple[int, str]])
-assert_type(B.choices, list[tuple[int, _StrOrPromise | str]])
+assert_type(B.choices, list[tuple[int, _StrPromise]])
 
 "#,
 );
@@ -215,7 +214,7 @@ import enum
 
 from django.db.models import TextChoices
 
-from django.utils.functional import _StrPromise
+from django.utils.functional import _StrOrPromise
 from django.utils.translation import gettext_lazy as _
 from typing_extensions import assert_type
 
@@ -224,9 +223,9 @@ class Medal(TextChoices):
     SILVER = enum.auto(), _("B")
     BRONZE = enum.auto()
 
-assert_type(Medal.choices, list[tuple[str, str | _StrPromise]])
-assert_type(Medal.GOLD.label, (str | _StrPromise))
-assert_type(Medal.SILVER.label, (str | _StrPromise))
+assert_type(Medal.choices, list[tuple[str, _StrOrPromise]])
+assert_type(Medal.GOLD.label, _StrOrPromise)
+assert_type(Medal.SILVER.label, _StrOrPromise)
 assert_type(Medal.GOLD.value, str)
 assert_type(Medal.SILVER.value, str)
 "#,
@@ -267,7 +266,6 @@ django_testcase!(
     test_float,
     r#"
 from django.db.models import Choices
-from django.utils.functional import _StrOrPromise
 from typing_extensions import assert_type
 
 class Constants(float, Choices):

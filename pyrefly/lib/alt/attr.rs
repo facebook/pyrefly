@@ -420,6 +420,9 @@ enum AttributeBase1 {
     /// type[Any] is a special case where attribute lookups first check the
     /// builtin `type` class before falling back to `Any`.
     TypeAny(AnyStyle),
+    /// type[Never] is a special case where attribute lookups first check the builtin `type` class
+    /// before falling back to `Never`.
+    TypeNever,
     /// Properties are handled via a special case so that we can understand
     /// setter decorators.
     Property(Type),
@@ -1098,6 +1101,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         attr.clone().as_instance_method().map(|_| attr)
     }
 
+    /// Helper for looking up attributes on `type[T]` wrappers.
+    /// First checks the builtin `type` class, then falls back to the provided fallback.
+    fn lookup_attr_from_type_wrapper(
+        &self,
+        attr_name: &Name,
+        fallback: impl FnOnce() -> Type,
+    ) -> Type {
+        let builtins_type_classtype = self.stdlib.builtins_type();
+        self.get_instance_attribute(builtins_type_classtype, attr_name)
+            .and_then(|attr| attr.as_instance_method())
+            .unwrap_or_else(fallback)
+    }
+
     fn lookup_attr_from_attribute_base1(
         &self,
         base: AttributeBase1,
@@ -1107,11 +1123,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match &base {
             AttributeBase1::Any(style) => acc.found_type(style.propagate(), base),
             AttributeBase1::TypeAny(style) => {
-                let builtins_type_classtype = self.stdlib.builtins_type();
-                let ty = self
-                    .get_instance_attribute(builtins_type_classtype, attr_name)
-                    .and_then(|attr| attr.as_instance_method())
-                    .unwrap_or_else(|| style.propagate());
+                let ty = self.lookup_attr_from_type_wrapper(attr_name, || style.propagate());
+                acc.found_type(ty, base);
+            }
+            AttributeBase1::TypeNever => {
+                let ty = self.lookup_attr_from_type_wrapper(attr_name, Type::never);
                 acc.found_type(ty, base);
             }
             AttributeBase1::Never => acc.found_type(Type::never(), base),
@@ -1228,26 +1244,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // attributes, but for magic dunder methods it needs to supersede normal class attribute lookup.
                         // See `lookup_magic_dunder_attr()`.
                         let metadata = self.get_metadata_for_class(class.class_object());
-                        let instance_attr = self.get_metaclass_attribute(
-                            class,
-                            metadata.metaclass(self.stdlib),
-                            attr_name,
-                        );
-                        match instance_attr {
-                            Some(attr) => acc.found_class_attribute(attr, base),
-                            None if metadata.has_base_any() => {
-                                // We can't immediately fall back to Any in this case -- `type[Any]` is actually a special
-                                // AttributeBase which requires additional lookup on `type` itself before the Any fallback.
-                                self.lookup_attr_from_attribute_base1(
-                                    AttributeBase1::TypeAny(AnyStyle::Implicit),
-                                    attr_name,
-                                    acc,
-                                )
+                        if metadata.is_new_type() {
+                            // NewType values are runtime Python objects (functions). They should behave like ordinary
+                            // objects for attribute access even though they don't expose class-level APIs such as `mro`.
+                            self.lookup_attr_from_attribute_base1(
+                                AttributeBase1::ClassInstance(self.stdlib.object().clone()),
+                                attr_name,
+                                acc,
+                            );
+                        } else {
+                            let instance_attr = self.get_metaclass_attribute(
+                                class,
+                                metadata.metaclass(self.stdlib),
+                                attr_name,
+                            );
+                            match instance_attr {
+                                Some(attr) => acc.found_class_attribute(attr, base),
+                                None if metadata.has_base_any() => {
+                                    // We can't immediately fall back to Any in this case -- `type[Any]` is actually a special
+                                    // AttributeBase which requires additional lookup on `type` itself before the Any fallback.
+                                    self.lookup_attr_from_attribute_base1(
+                                        AttributeBase1::TypeAny(AnyStyle::Implicit),
+                                        attr_name,
+                                        acc,
+                                    )
+                                }
+                                None => acc.not_found(NotFoundOn::ClassObject(
+                                    class.class_object().dupe(),
+                                    base,
+                                )),
                             }
-                            None => acc.not_found(NotFoundOn::ClassObject(
-                                class.class_object().dupe(),
-                                base,
-                            )),
                         }
                     }
                 }
@@ -1612,6 +1638,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )),
             },
             Type::Type(box Type::Any(style)) => acc.push(AttributeBase1::TypeAny(style)),
+            Type::Type(box Type::Never(_)) => acc.push(AttributeBase1::TypeNever),
             // At runtime, these special forms are classes. This has been tested with Python
             // versions 3.11-3.13. Note that other special forms are classes in some versions, but
             // their representations aren't stable across versions.
@@ -2069,21 +2096,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 }
                                 _ => {}
                             }
-                            let result = self
-                                .resolve_get_access(
-                                    attr,
-                                    // Important we do not use the resolved TextRange, as it might be in a different module.
-                                    // Whereas the empty TextRange is valid for all modules.
-                                    TextRange::default(),
-                                    &self.error_swallower(),
-                                    None,
-                                )
-                                .ok();
-                            if matches!(&result, Some(Type::Any(_))) {
-                                None
-                            } else {
-                                result
-                            }
+                            self.resolve_get_access(
+                                attr,
+                                // Important we do not use the resolved TextRange, as it might be in a different module.
+                                // Whereas the empty TextRange is valid for all modules.
+                                TextRange::default(),
+                                &self.error_swallower(),
+                                None,
+                            )
+                            .ok()
                         })
                         .collect();
                     if !found_types.is_empty() {
@@ -2131,7 +2152,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AttributeBase1::TypeQuantified(_, class) => {
                 self.completions_class(class.class_object(), expected_attribute_name, res)
             }
-            AttributeBase1::TypeAny(_) => self.completions_class_type(
+            AttributeBase1::TypeAny(_) | AttributeBase1::TypeNever => self.completions_class_type(
                 self.stdlib.builtins_type(),
                 expected_attribute_name,
                 res,

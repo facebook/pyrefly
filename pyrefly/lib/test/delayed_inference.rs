@@ -140,6 +140,19 @@ assert_type(b, Box[int])
 );
 
 testcase!(
+    test_no_infer_with_first_use_for_user_defined_generic,
+    TestEnv::new_with_infer_with_first_use(false),
+    r#"
+from typing import Any, assert_type
+class Box[T]:
+    x: T | None = None
+b = Box()
+b.x = 1
+assert_type(b, Box[Any])
+    "#,
+);
+
+testcase!(
     test_deferred_type_for_indeterminate_generic_function_output,
     r#"
 from typing import assert_type

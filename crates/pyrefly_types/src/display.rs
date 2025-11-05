@@ -322,7 +322,8 @@ impl<'a> TypeDisplayContext<'a> {
                 if self.hover && is_toplevel {
                     let func_name = metadata.kind.function_name();
                     write!(f, "def {func_name}")?;
-                    signature.fmt_with_type_with_newlines(f, &|t| self.display_internal(t))
+                    signature.fmt_with_type_with_newlines(f, &|t| self.display_internal(t))?;
+                    write!(f, ": ...")
                 } else {
                     signature.fmt_with_type(f, &|t| self.display_internal(t))
                 }
@@ -364,7 +365,9 @@ impl<'a> TypeDisplayContext<'a> {
                         }) => {
                             let func_name = metadata.kind.function_name();
                             write!(f, "def {func_name}")?;
-                            signature.fmt_with_type_with_newlines(f, &|t| self.display_internal(t))
+                            signature
+                                .fmt_with_type_with_newlines(f, &|t| self.display_internal(t))?;
+                            write!(f, ": ...")
                         }
                         BoundMethodType::Forall(Forall {
                             tparams,
@@ -377,7 +380,9 @@ impl<'a> TypeDisplayContext<'a> {
                             let func_name = metadata.kind.function_name();
                             write!(f, "def {func_name}")?;
                             write!(f, "[{}]", commas_iter(|| tparams.iter()))?;
-                            signature.fmt_with_type_with_newlines(f, &|t| self.display_internal(t))
+                            signature
+                                .fmt_with_type_with_newlines(f, &|t| self.display_internal(t))?;
+                            write!(f, ": ...")
                         }
                         BoundMethodType::Overload(_) => {
                             // Use display instead of display_internal to show overloads w/ top-level formatting
@@ -474,7 +479,8 @@ impl<'a> TypeDisplayContext<'a> {
                     let func_name = metadata.kind.function_name();
                     write!(f, "def {func_name}")?;
                     write!(f, "[{}]", commas_iter(|| tparams.iter()))?;
-                    signature.fmt_with_type_with_newlines(f, &|t| self.display_internal(t))
+                    signature.fmt_with_type_with_newlines(f, &|t| self.display_internal(t))?;
+                    write!(f, ": ...")
                 } else {
                     write!(
                         f,
@@ -1248,7 +1254,7 @@ pub mod tests {
     self: Any,
     x: Any,
     y: Any
-) -> None"#
+) -> None: ..."#
         );
     }
 
@@ -1273,7 +1279,7 @@ pub mod tests {
     self: Any,
     x: Any,
     y: Any
-) -> None"#
+) -> None: ..."#
         );
     }
 
@@ -1349,11 +1355,11 @@ pub mod tests {
             hover_ctx.display(&overload).to_string(),
             r#"
 @overload
-def overloaded_func(x: Any) -> None
+def overloaded_func(x: Any) -> None: ...
 def overloaded_func[T](
     x: Any,
     y: Any
-) -> None"#
+) -> None: ..."#
         );
 
         let bound_method_overload = Type::BoundMethod(Box::new(BoundMethod {
@@ -1388,11 +1394,11 @@ def overloaded_func[T](
             hover_ctx.display(&bound_method_overload).to_string(),
             r#"
 @overload
-def overloaded_func(x: Any) -> None
+def overloaded_func(x: Any) -> None: ...
 def overloaded_func[T](
     x: Any,
     y: Any
-) -> None"#
+) -> None: ..."#
         );
     }
 }

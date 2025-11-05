@@ -3058,7 +3058,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     });
                     let iterable = self.expr_infer_with_hint(
                         e,
-                        infer_hint.as_ref().map(|t| HintRef::new(t, None)),
+                        infer_hint.as_ref().map(HintRef::soft),
                         errors,
                     );
                     self.async_iterate(&iterable, e.range(), errors)
@@ -3069,7 +3069,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     });
                     let iterable = self.expr_infer_with_hint(
                         e,
-                        infer_hint.as_ref().map(|t| HintRef::new(t, None)),
+                        infer_hint.as_ref().map(HintRef::soft),
                         errors,
                     );
                     self.iterate(&iterable, e.range(), errors, None)

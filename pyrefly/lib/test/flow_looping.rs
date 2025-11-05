@@ -8,6 +8,19 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+testcase!(
+    bug = "We should not be dropping prior type information when a loop recursive Var passes through a generic call",
+    test_loop_with_generic_pin,
+    r#"
+def condition() -> bool: ...
+def f[T](x: T, y: list[T]) -> T: ...
+x = 5
+y: list[str] = []
+while condition():  # E:  `Literal[5] | str` is not assignable to `str`
+    x = f(x, y)
+"#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/683
 testcase!(
     test_loop_with_sized_in_inner_iteration,

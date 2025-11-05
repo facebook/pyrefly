@@ -86,6 +86,56 @@ fn test_references_for_usage_with_config() {
 }
 
 #[test]
+fn test_finds_references_outside_config_when_workspace_larger_than_config() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("config_with_workspace_larger");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction.initialize(InitializeSettings {
+        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+        configuration: Some(None),
+        ..Default::default()
+    });
+
+    let core = root_path.join("module_dir/core.py");
+    let usage = root_path.join("module_dir/usage.py");
+
+    interaction.server.did_open("module_dir/core.py");
+    interaction.server.did_open("module_dir/usage.py");
+    interaction.server.did_open("outside_usage.py");
+
+    interaction
+        .server
+        .references("module_dir/core.py", 6, 7, true);
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
+        result: Some(serde_json::json!([
+            {
+                "range": {"start":{"line":6,"character":6},"end":{"character":12,"line":6}},
+                "uri": Url::from_file_path(core.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":5,"character":17},"end":{"character":23,"line":5}},
+                "uri": Url::from_file_path(usage.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":7,"character":0},"end":{"character":6,"line":7}},
+                "uri": Url::from_file_path(usage.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":8,"character":0},"end":{"character":6,"line":8}},
+                "uri": Url::from_file_path(usage.clone()).unwrap().to_string()
+            },
+        ])),
+        error: None,
+    });
+
+    interaction.shutdown();
+}
+
+#[test]
 fn test_references_workspace_smaller_than_config() {
     let root = get_test_files_root();
     let root_path = root.path().join("config_with_workspace_smaller");

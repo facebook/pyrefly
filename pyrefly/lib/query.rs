@@ -48,6 +48,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
@@ -66,6 +67,7 @@ use crate::alt::answers::Answers;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassSynthesizedFields;
+use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
 use crate::config::finder::ConfigFinder;
 use crate::module::module_info::ModuleInfo;
@@ -287,6 +289,7 @@ fn type_to_string(ty: &Type) -> String {
 }
 
 struct CalleesWithLocation<'a> {
+    query: &'a Query,
     transaction: Transaction<'a>,
     handle: Handle,
     module_info: Module,
@@ -295,17 +298,66 @@ struct CalleesWithLocation<'a> {
 }
 
 impl<'a> CalleesWithLocation<'a> {
-    pub fn new(transaction: Transaction<'a>, handle: Handle) -> Option<CalleesWithLocation<'a>> {
+    pub fn new(
+        query: &'a Query,
+        transaction: Transaction<'a>,
+        handle: Handle,
+    ) -> Option<CalleesWithLocation<'a>> {
         let module_info = transaction.get_module_info(&handle)?;
         let answers = transaction.get_answers(&handle)?;
         let ast: Arc<ModModule> = transaction.get_ast(&handle)?;
         Some(Self {
+            query,
             transaction,
             handle,
             module_info,
             ast,
             answers,
         })
+    }
+    fn _try_unwrap_lru_cache_wrapper(
+        &self,
+        call: &ExprCall,
+        func_ty: &Type,
+    ) -> Option<Vec<Callee>> {
+        if let Type::ClassType(class) = &func_ty
+            && class.name() == "_lru_cache_wrapper"
+            && let [def] = self
+                .transaction
+                .find_definition(
+                    &self.handle,
+                    call.func
+                        .range()
+                        .end()
+                        .checked_sub(TextSize::from(1))
+                        .unwrap(),
+                    &FindPreference::default(),
+                )
+                .into_iter()
+                .collect_vec()
+                .as_slice()
+        {
+            let h = self
+                .query
+                .make_handle(def.module.name(), def.module.path().clone());
+            let module = self.transaction.get_module_info(&h)?;
+            let bindings = self.transaction.get_bindings(&h)?;
+            let answers = self.transaction.get_answers(&h)?;
+
+            let name = module.code_at(def.definition_range);
+            let id = Identifier::new(name, def.definition_range);
+            let key = bindings.key_to_idx(&KeyDecoratedFunction(ShortIdentifier::new(&id)));
+
+            // Get the undecorated function using ad_hoc_solve
+            let answer = answers.get_idx(bindings.get(key).undecorated_idx)?;
+            Some(vec![self.callee_from_function_metadata(
+                &answer.metadata,
+                None,
+                None,
+            )])
+        } else {
+            None
+        }
     }
     fn process_expr(&self, x: &Expr, res: &mut Vec<(PythonASTRange, Callee)>) {
         let (callees, callee_range) = match x {
@@ -333,12 +385,15 @@ impl<'a> CalleesWithLocation<'a> {
             Expr::Call(call) => {
                 let callees = if let Some(func_ty) = self.answers.get_type_trace(call.func.range())
                 {
-                    self.callee_from_type(
-                        &func_ty,
-                        Some(&*call.func),
-                        call.func.range(),
-                        Some(&call.arguments),
-                    )
+                    self._try_unwrap_lru_cache_wrapper(call, &func_ty)
+                        .unwrap_or_else(|| {
+                            self.callee_from_type(
+                                &func_ty,
+                                Some(&*call.func),
+                                call.func.range(),
+                                Some(&call.arguments),
+                            )
+                        })
                 } else {
                     vec![]
                 };
@@ -507,22 +562,30 @@ impl<'a> CalleesWithLocation<'a> {
         call_target: Option<&Expr>,
         call_arguments: Option<&Arguments>,
     ) -> Callee {
-        if f.metadata.flags.is_staticmethod {
+        self.callee_from_function_metadata(&f.metadata, call_target, call_arguments)
+    }
+    fn callee_from_function_metadata(
+        &self,
+        metadata: &FuncMetadata,
+        call_target: Option<&Expr>,
+        call_arguments: Option<&Arguments>,
+    ) -> Callee {
+        if metadata.flags.is_staticmethod {
             Callee {
                 kind: String::from(CALLEE_KIND_STATICMETHOD),
-                target: Self::target_from_def_kind(&f.metadata.kind, None),
-                class_name: Some(Self::class_name_from_def_kind(&f.metadata.kind)),
+                target: Self::target_from_def_kind(&metadata.kind, None),
+                class_name: Some(Self::class_name_from_def_kind(&metadata.kind)),
             }
-        } else if f.metadata.flags.is_classmethod {
+        } else if metadata.flags.is_classmethod {
             Callee {
                 kind: String::from(CALLEE_KIND_CLASSMETHOD),
-                target: Self::target_from_def_kind(&f.metadata.kind, None),
+                target: Self::target_from_def_kind(&metadata.kind, None),
                 // TODO: use type of receiver
-                class_name: Some(Self::class_name_from_def_kind(&f.metadata.kind)),
+                class_name: Some(Self::class_name_from_def_kind(&metadata.kind)),
             }
         } else {
             // Check if this is a builtins function that needs special casing.
-            if let FunctionKind::Def(def) = &f.metadata.kind
+            if let FunctionKind::Def(def) = &metadata.kind
                 && def.module.name().as_str() == "builtins"
                 && def.name == "repr"
                 && let Some(args) = call_arguments
@@ -540,7 +603,7 @@ impl<'a> CalleesWithLocation<'a> {
 
             Callee {
                 kind,
-                target: Self::target_from_def_kind(&f.metadata.kind, None),
+                target: Self::target_from_def_kind(&metadata.kind, None),
                 class_name,
             }
         }
@@ -959,7 +1022,7 @@ impl Query {
     ) -> Option<Vec<(PythonASTRange, Callee)>> {
         let transaction = self.state.transaction();
         let handle = self.make_handle(name, path);
-        let find_callees = CalleesWithLocation::new(transaction, handle)?;
+        let find_callees = CalleesWithLocation::new(self, transaction, handle)?;
         Some(find_callees.process(location))
     }
 
@@ -1286,7 +1349,7 @@ impl Query {
             }
             None
         }
-        let find_callees = CalleesWithLocation::new(t, h)?;
+        let find_callees = CalleesWithLocation::new(self, t, h)?;
         let mut res = Vec::new();
         if let Some(expr) = find_expr(&ast) {
             find_callees.callee_from_text_range(expr.range(), Some(expr), |c| {
