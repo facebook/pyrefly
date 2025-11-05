@@ -3372,6 +3372,17 @@
     {
       "code": -2,
       "column": 1,
+      "concise_description": "Cannot set field `final_no_default`",
+      "description": "Cannot set field `final_no_default`\n  This field is marked as Final",
+      "line": 35,
+      "name": "read-only",
+      "severity": "error",
+      "stop_column": 19,
+      "stop_line": 35
+    },
+    {
+      "code": -2,
+      "column": 1,
       "concise_description": "Cannot set field `final_with_default`",
       "description": "Cannot set field `final_with_default`\n  This field is marked as Final",
       "line": 36,

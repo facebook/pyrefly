@@ -2741,7 +2741,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // If the attribute has a converter, then `want` should be the type expected by the converter.
                 let attr_ty = match instance_class {
                     Some(cls) => match self.get_dataclass_member(cls.class_object(), attr_name) {
-                        DataclassMember::Field(_, kws) => kws.converter_param.unwrap_or(attr_ty),
+                        DataclassMember::Field(field, kws) => {
+                            // If the field is final, we should raise an error.
+                            let field = field.value;
+                            let has_final_annotation = field.is_final();
+                            if has_final_annotation {
+                                let msg = vec1![
+                                    format!("Cannot set field `{attr_name}`"),
+                                    ReadOnlyReason::Final.error_message()
+                                ];
+                                errors.add(range, ErrorInfo::Kind(ErrorKind::ReadOnly), msg);
+                            }
+                            kws.converter_param.unwrap_or(attr_ty)
+                        }
                         _ => attr_ty,
                     },
                     _ => attr_ty,

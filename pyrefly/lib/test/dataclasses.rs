@@ -1261,3 +1261,19 @@ f2 = fields(p)
 assert_type(f2, tuple[Field[Any], ...])
     "#,
 );
+
+testcase!(
+    test_final_field_no_modification,
+    r#"
+from typing import Final
+from dataclasses import dataclass
+@dataclass
+class C:
+    x: Final[int]
+    y: Final[int] = 42
+
+c = C(x=0)
+c.x = 1  # E: Cannot set field `x`
+c.y = 1  # E: Cannot set field `y`
+"#,
+);
