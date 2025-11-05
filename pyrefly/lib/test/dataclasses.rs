@@ -1275,5 +1275,8 @@ class C:
 c = C(x=0)
 c.x = 1  # E: Cannot set field `x`
 c.y = 1  # E: Cannot set field `y`
+
+C.x = 1  # E: Cannot set field `x`
+C.y = 1  # E: Cannot set field `y`
 "#,
 );

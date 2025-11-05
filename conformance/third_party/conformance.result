@@ -86,9 +86,7 @@
   ],
   "constructors_consistency.py": [],
   "dataclasses_descriptors.py": [],
-  "dataclasses_final.py": [
-    "Line 37: Expected 1 errors"
-  ],
+  "dataclasses_final.py": [],
   "dataclasses_frozen.py": [],
   "dataclasses_hash.py": [],
   "dataclasses_inheritance.py": [],
