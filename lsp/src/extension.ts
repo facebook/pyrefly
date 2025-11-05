@@ -257,7 +257,11 @@ export async function activate(context: ExtensionContext) {
   let clientOptions: LanguageClientOptions = {
     initializationOptions: rawInitialisationOptions,
     // Register the server for Starlark documents
-    documentSelector: [{scheme: 'file', language: 'python'}],
+    documentSelector: [
+      {scheme: 'file', language: 'python'},
+      {scheme: 'untitled', language: 'python'},
+      {scheme: 'vscode-notebook-cell', language: 'python'},
+    ],
     outputChannel: outputChannel,
     middleware: {
       workspace: {

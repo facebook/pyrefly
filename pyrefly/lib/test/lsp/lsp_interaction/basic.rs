@@ -199,6 +199,46 @@ fn test_nonexistent_file() {
 }
 
 #[test]
+fn test_semantic_tokens_for_unsaved_file() {
+    let mut interaction = LspInteraction::new();
+    interaction.initialize(InitializeSettings::default());
+
+    let uri = Url::parse("untitled:Untitled-1").unwrap();
+    let text = r#"def foo():
+    return 1
+
+foo()
+"#;
+    interaction.server.did_open_uri(&uri, "python", text);
+
+    interaction.server.send_message(Message::Request(Request {
+        id: RequestId::from(2),
+        method: "textDocument/semanticTokens/full".to_owned(),
+        params: serde_json::json!({
+            "textDocument": { "uri": uri.to_string() }
+        }),
+    }));
+
+    interaction.client.expect_response_with(
+        |response| {
+            if response.id != RequestId::from(2) {
+                return false;
+            }
+            if let Some(result) = &response.result
+                && let Some(data) = result.get("data")
+                && let Some(data_array) = data.as_array()
+            {
+                return !data_array.is_empty();
+            }
+            false
+        },
+        "Expected semantic tokens data for unsaved file",
+    );
+
+    interaction.shutdown();
+}
+
+#[test]
 fn test_unknown_request() {
     let mut interaction = LspInteraction::new();
     interaction.initialize(InitializeSettings::default());
