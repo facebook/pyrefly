@@ -99,7 +99,6 @@ use lsp_types::SignatureHelpParams;
 use lsp_types::SymbolInformation;
 use lsp_types::TextDocumentContentChangeEvent;
 use lsp_types::TextDocumentIdentifier;
-use lsp_types::TextDocumentItem;
 use lsp_types::TextDocumentPositionParams;
 use lsp_types::TextDocumentSyncCapability;
 use lsp_types::TextDocumentSyncKind;
@@ -678,9 +677,12 @@ impl Server {
                 let url = params.notebook_document.uri.clone();
                 let version = params.notebook_document.version;
                 let notebook_document = params.notebook_document.clone();
-                let ruff_notebook = params
-                    .notebook_document
-                    .to_ruff_notebook(params.cell_text_documents)?;
+                let cell_contents: HashMap<Url, String> = params
+                    .cell_text_documents
+                    .iter()
+                    .map(|doc| (doc.uri.clone(), doc.text.clone()))
+                    .collect();
+                let ruff_notebook = params.notebook_document.to_ruff_notebook(&cell_contents)?;
                 let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_document);
                 let notebook_path = url
                     .to_file_path()
@@ -1690,9 +1692,12 @@ impl Server {
         notebook_document.version = version;
         // Changes to cells
         if let Some(change) = &params.change.cells {
-            // Insert existing cell contents
+            // Track existing cell contents
             for cell in &notebook_document.cells {
-                cell_content_map.insert(cell.document.clone(), String::new());
+                let cell_contents = original_notebook
+                    .get_cell_contents(&cell.document)
+                    .unwrap_or_default();
+                cell_content_map.insert(cell.document.clone(), cell_contents);
             }
             // Structural changes
             if let Some(structure) = &change.structure {
@@ -1752,22 +1757,10 @@ impl Server {
                 }
             }
         }
-        // Convert cell content into TextDocuments
-        let mut cell_text_documents: Vec<TextDocumentItem> = Vec::new();
-        for cell in &notebook_document.cells {
-            if let Some(text) = cell_content_map.get(&cell.document) {
-                cell_text_documents.push(TextDocumentItem {
-                    uri: cell.document.clone(),
-                    language_id: "python".to_owned(),
-                    version,
-                    text: text.clone(),
-                });
-            }
-        }
         // Convert new notebook contents into a Ruff Notebook
         let ruff_notebook = notebook_document
             .clone()
-            .to_ruff_notebook(cell_text_documents)?;
+            .to_ruff_notebook(&cell_content_map)?;
 
         let new_notebook = Arc::new(LspNotebook::new(ruff_notebook, notebook_document));
         *original = Arc::new(LspFile::Notebook(new_notebook));

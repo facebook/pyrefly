@@ -59,6 +59,7 @@ use pyrefly_util::uniques::UniqueFactory;
 use pyrefly_util::upgrade_lock::UpgradeLock;
 use pyrefly_util::upgrade_lock::UpgradeLockExclusiveGuard;
 use pyrefly_util::upgrade_lock::UpgradeLockWriteGuard;
+use ruff_notebook::Cell;
 use ruff_notebook::Notebook;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Stmt;
@@ -221,6 +222,16 @@ impl LspNotebook {
 
     pub fn cell_urls(&self) -> &Vec<Url> {
         &self.cell_index_to_url
+    }
+
+    pub fn get_cell_contents(&self, cell_url: &Url) -> Option<String> {
+        let idx = *self.cell_url_to_index.get(cell_url)?;
+        let cell = self.ruff_notebook.cells().get(idx)?;
+        if let Cell::Code(cell) = cell {
+            Some(cell.source.to_string())
+        } else {
+            None
+        }
     }
 }
 

@@ -59,19 +59,15 @@ pub struct NotebookDocument {
 impl NotebookDocument {
     pub fn to_ruff_notebook(
         self,
-        cell_text_documents: Vec<TextDocumentItem>,
+        cell_content: &HashMap<Url, String>,
     ) -> Result<ruff_notebook::Notebook, ruff_notebook::NotebookError> {
-        let text_content_map: HashMap<&Url, &str> = cell_text_documents
-            .iter()
-            .map(|doc| (&doc.uri, doc.text.as_str()))
-            .collect();
         let cells: Vec<Cell> = self
             .cells
             .into_iter()
             .map(|notebook_cell| {
-                let source = text_content_map
+                let source = cell_content
                     .get(&notebook_cell.document)
-                    .map(|s| SourceValue::String((*s).to_owned()))
+                    .map(|s| SourceValue::String(s.clone()))
                     .unwrap_or(SourceValue::String(String::new()));
                 let cell_id = notebook_cell
                     .metadata
