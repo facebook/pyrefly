@@ -304,12 +304,20 @@ impl ServerConnection {
         ));
     }
 
-    fn publish_diagnostics(&self, diags: SmallMap<PathBuf, Vec<Diagnostic>>) {
+    fn publish_diagnostics(
+        &self,
+        diags: SmallMap<PathBuf, Vec<Diagnostic>>,
+        notebook_cell_urls: SmallMap<PathBuf, Url>,
+    ) {
         for (path, diags) in diags {
-            let path = path.absolutize();
-            match Url::from_file_path(&path) {
-                Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, None),
-                Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
+            if let Some(url) = notebook_cell_urls.get(&path) {
+                self.publish_diagnostics_for_uri(url.clone(), diags, None)
+            } else {
+                let path = path.absolutize();
+                match Url::from_file_path(&path) {
+                    Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, None),
+                    Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
+                }
             }
         }
     }
@@ -1339,8 +1347,16 @@ impl Server {
         let publish = |transaction: &Transaction| {
             let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
             let open_files = self.open_files.read();
-            for x in open_files.keys() {
-                diags.insert(x.as_path().to_owned(), Vec::new());
+            let open_notebook_cells = self.open_notebook_cells.read();
+            let mut notebook_cell_urls = SmallMap::new();
+            for x in open_notebook_cells.keys() {
+                diags.insert(PathBuf::from(x.to_string()), Vec::new());
+                notebook_cell_urls.insert(PathBuf::from(x.to_string()), x.clone());
+            }
+            for (x, file) in open_files.iter() {
+                if !file.is_notebook() {
+                    diags.insert(x.as_path().to_owned(), Vec::new());
+                }
             }
             for e in transaction.get_errors(&handles).collect_errors().shown {
                 if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files, None) {
@@ -1348,10 +1364,14 @@ impl Server {
                 }
             }
             for (path, diagnostics) in diags.iter_mut() {
+                if notebook_cell_urls.contains_key(path) {
+                    continue;
+                }
                 let handle = make_open_handle(&self.state, path);
                 Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
             }
-            self.connection.publish_diagnostics(diags);
+            self.connection
+                .publish_diagnostics(diags, notebook_cell_urls);
             if self
                 .initialize_params
                 .capabilities
@@ -1835,13 +1855,14 @@ impl Server {
         let open_files = self.open_files.dupe();
         if let Some(LspFile::Notebook(notebook)) = open_files.write().remove(&uri).as_deref() {
             for cell in notebook.cell_urls() {
-                self.open_notebook_cells.write().remove(cell);
                 self.connection
                     .publish_diagnostics_for_uri(cell.clone(), Vec::new(), None);
+                self.open_notebook_cells.write().remove(cell);
             }
+        } else {
+            self.connection
+                .publish_diagnostics_for_uri(url, Vec::new(), None);
         }
-        self.connection
-            .publish_diagnostics_for_uri(url, Vec::new(), None);
         let state = self.state.dupe();
         let lsp_queue = self.lsp_queue.dupe();
         let open_files = self.open_files.dupe();

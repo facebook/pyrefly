@@ -13,6 +13,32 @@ use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
+fn test_notebook_publish_diagnostics() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(Some(
+            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+        )),
+        ..Default::default()
+    });
+    interaction.open_notebook("notebook.ipynb", vec!["z: str = ''\nz = 1"]);
+
+    let cell_uri = interaction.cell_uri("notebook.ipynb", "cell1");
+    interaction
+        .client
+        .expect_publish_diagnostics_exact_uri(&cell_uri, 1);
+
+    interaction.close_notebook("notebook.ipynb");
+    interaction
+        .client
+        .expect_publish_diagnostics_exact_uri(&cell_uri, 0);
+
+    interaction.shutdown();
+}
+
+#[test]
 fn test_notebook_did_open() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();

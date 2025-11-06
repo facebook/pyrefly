@@ -218,6 +218,10 @@ impl LspFile {
             }
         }
     }
+
+    pub fn is_notebook(&self) -> bool {
+        matches!(self, Self::Notebook(_))
+    }
 }
 
 impl ModuleData {

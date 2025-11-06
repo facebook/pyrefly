@@ -611,14 +611,13 @@ impl TestClient {
         );
     }
 
-    pub fn expect_publish_diagnostics_exact_uri(&self, path: PathBuf, count: usize) {
-        let expected_uri = Url::from_file_path(&path).unwrap().to_string();
+    pub fn expect_publish_diagnostics_exact_uri(&self, expected_uri: &str, count: usize) {
         self.expect_message_helper(
             |msg| match msg {
                 Message::Notification(Notification { method, params })
                     if method == "textDocument/publishDiagnostics" =>
                 {
-                    if params.get("uri").and_then(|v| v.as_str()) == Some(expected_uri.as_str()) {
+                    if params.get("uri").and_then(|v| v.as_str()) == Some(expected_uri) {
                         if let Some(diagnostics) = params.get("diagnostics")
                             && let Some(diagnostics_array) = diagnostics.as_array()
                         {
@@ -958,6 +957,20 @@ impl LspInteraction {
                         "cells": cells
                     },
                     "cellTextDocuments": cell_text_documents
+                }),
+            }));
+    }
+
+    pub fn close_notebook(&mut self, file_name: &str) {
+        let root = self.server.get_root_or_panic();
+        let notebook_path = root.join(file_name);
+        let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
+        self.server
+            .send_message(Message::Notification(Notification {
+                method: "notebookDocument/didClose".to_owned(),
+                params: serde_json::json!({
+                    "notebookDocument": { "uri": notebook_uri },
+                    "cellTextDocuments": [],
                 }),
             }));
     }

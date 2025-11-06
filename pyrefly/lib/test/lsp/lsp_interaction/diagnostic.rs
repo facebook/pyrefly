@@ -217,6 +217,8 @@ fn test_unreachable_branch_diagnostic() {
 fn test_publish_diagnostics_preserves_symlink_uri() {
     use std::os::unix::fs::symlink;
 
+    use lsp_types::Url;
+
     let test_files_root = get_test_files_root();
     let symlink_name = "type_errors_symlink.py";
     let symlink_target = test_files_root.path().join("type_errors.py");
@@ -233,9 +235,10 @@ fn test_publish_diagnostics_preserves_symlink_uri() {
     });
 
     interaction.server.did_open(symlink_name);
-    interaction
-        .client
-        .expect_publish_diagnostics_exact_uri(symlink_path, 1);
+    interaction.client.expect_publish_diagnostics_exact_uri(
+        Url::from_file_path(&symlink_path).unwrap().as_str(),
+        1,
+    );
 
     interaction.shutdown();
 }
