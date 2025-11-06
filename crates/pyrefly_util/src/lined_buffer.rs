@@ -62,8 +62,10 @@ impl LinedBuffer {
         );
         let LineColumn { line, column } = self.lines.line_column(offset, &self.buffer);
         if let Some(notebook) = notebook
-            && let Some((cell, cell_line)) =
-                map_notebook_line(notebook, LineNumber::from_one_indexed(line))
+            && let Some((cell, cell_line)) = get_cell_and_line_from_concatenated_line(
+                notebook,
+                LineNumber::from_one_indexed(line),
+            )
         {
             DisplayPos::Notebook {
                 cell: NonZeroU32::new(cell.get() as u32).unwrap(),
@@ -144,8 +146,10 @@ impl LinedBuffer {
             .lines
             .source_location(x, &self.buffer, PositionEncoding::Utf16);
         if let Some(notebook) = notebook
-            && let Some((_, cell_line)) =
-                map_notebook_line(notebook, LineNumber::from_one_indexed(loc.line))
+            && let Some((_, cell_line)) = get_cell_and_line_from_concatenated_line(
+                notebook,
+                LineNumber::from_one_indexed(loc.line),
+            )
         {
             lsp_types::Position {
                 line: cell_line.to_zero_indexed(),
@@ -164,8 +168,10 @@ impl LinedBuffer {
             .lines
             .source_location(x, &self.buffer, PositionEncoding::Utf16);
         if let Some(notebook) = notebook
-            && let Some((cell, _)) =
-                map_notebook_line(notebook, LineNumber::from_one_indexed(loc.line))
+            && let Some((cell, _)) = get_cell_and_line_from_concatenated_line(
+                notebook,
+                LineNumber::from_one_indexed(loc.line),
+            )
         {
             Some(cell.to_zero_indexed())
         } else {
@@ -303,7 +309,7 @@ impl LineNumber {
 
 /// Given a one-indexed row in the concatenated source,
 /// return the cell number and the row in the cell.
-pub fn map_notebook_line(
+fn get_cell_and_line_from_concatenated_line(
     notebook: &Notebook,
     line: LineNumber,
 ) -> Option<(OneIndexed, LineNumber)> {
