@@ -149,9 +149,9 @@ foo.
 11 | foo.
          ^
 Completion Results:
+- (Field) x: int
 - (Field) [DEPRECATED] also_not_ok: int
 - (Method) [DEPRECATED] not_ok: def not_ok(self: Foo) -> None: ...
-- (Field) x: int
 "#
         .trim(),
         report.trim(),
@@ -553,7 +553,6 @@ Completion Results:
                         ^
 Completion Results:
 - (Variable) deprecated
-- (Variable) [DEPRECATED] func_not_ok
 - (Variable) func_ok
 - (Variable) __annotations__
 - (Variable) __builtins__
@@ -567,6 +566,7 @@ Completion Results:
 - (Variable) __package__
 - (Variable) __path__
 - (Variable) __spec__
+- (Variable) [DEPRECATED] func_not_ok
 
 
 # foo.py
