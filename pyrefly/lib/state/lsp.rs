@@ -2384,7 +2384,7 @@ impl<'a> Transaction<'a> {
             }
         }
         for item in &mut result {
-            let sort_text = if item.additional_text_edits.is_some() {
+            let mut sort_text = if item.additional_text_edits.is_some() {
                 "4"
             } else if item.label.starts_with("__") {
                 "3"
@@ -2397,6 +2397,13 @@ impl<'a> Transaction<'a> {
                 "0"
             }
             .to_owned();
+            if item
+                .tags
+                .as_ref()
+                .is_some_and(|tags| tags.contains(&CompletionItemTag::DEPRECATED))
+            {
+                sort_text = "9".to_owned();
+            }
             item.sort_text = Some(sort_text);
         }
         (result, is_incomplete)
