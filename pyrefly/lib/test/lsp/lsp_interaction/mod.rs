@@ -17,6 +17,7 @@ mod file_watcher;
 mod hover;
 mod inlay_hint;
 mod io;
+mod notebook;
 mod object_model;
 mod provide_type;
 mod references;

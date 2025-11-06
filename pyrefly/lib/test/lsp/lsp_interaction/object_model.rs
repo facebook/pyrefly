@@ -9,6 +9,7 @@
 use std::io;
 use std::iter::once;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread::JoinHandle;
@@ -235,6 +236,19 @@ impl TestServer {
             params: serde_json::json!({
             "textDocument": {
                 "uri": Url::from_file_path(&path).unwrap().to_string()
+            }}),
+        }));
+    }
+
+    pub fn diagnostic_for_cell(&mut self, file: &'static str) {
+        let path = self.get_root_or_panic().join(file);
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/diagnostic".to_owned(),
+            params: serde_json::json!({
+            "textDocument": {
+                "uri": Url::from_str(&format!("vscode-notebook-cell://{}", path.to_string_lossy())).unwrap().to_string()
             }}),
         }));
     }

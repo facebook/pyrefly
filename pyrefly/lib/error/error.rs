@@ -201,6 +201,10 @@ impl Error {
         }
     }
 
+    pub fn get_notebook_cell(&self) -> Option<usize> {
+        self.module.to_cell_for_lsp(self.range().start())
+    }
+
     pub fn module(&self) -> &Module {
         &self.module
     }

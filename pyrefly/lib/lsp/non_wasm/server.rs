@@ -844,15 +844,13 @@ impl Server {
                 } else if let Some(params) = as_request::<References>(&x) {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<References>(params, &x.id)
-                    {
-                        if !self
+                        && !self
                             .open_notebook_cells
                             .read()
                             .contains_key(&params.text_document_position.text_document.uri)
-                        {
-                            // TODO(yangdanny) handle notebooks
-                            self.references(x.id, ide_transaction_manager, params);
-                        }
+                    {
+                        // TODO(yangdanny) handle notebooks
+                        self.references(x.id, ide_transaction_manager, params);
                     }
                 } else if let Some(params) = as_request::<PrepareRenameRequest>(&x) {
                     if let Some(params) = self
@@ -871,15 +869,13 @@ impl Server {
                 } else if let Some(params) = as_request::<Rename>(&x) {
                     if let Some(params) =
                         self.extract_request_params_or_send_err_response::<Rename>(params, &x.id)
-                    {
-                        if !self
+                        && !self
                             .open_notebook_cells
                             .read()
                             .contains_key(&params.text_document_position.text_document.uri)
-                        {
-                            // TODO(yangdanny) handle notebooks
-                            self.rename(x.id, ide_transaction_manager, params);
-                        }
+                    {
+                        // TODO(yangdanny) handle notebooks
+                        self.rename(x.id, ide_transaction_manager, params);
                     }
                 } else if let Some(params) = as_request::<SignatureHelpRequest>(&x) {
                     if let Some(params) = self
@@ -1209,6 +1205,7 @@ impl Server {
         &self,
         e: &Error,
         open_files: &HashMap<PathBuf, Arc<LspFile>>,
+        cell_uri: Option<&Url>, // If the file is a notebook, only show diagnostics for the matching cell
     ) -> Option<(PathBuf, Diagnostic)> {
         if let Some(path) = to_real_path(e.path()) {
             // When no file covers this, we'll get the default configured config which includes "everything"
@@ -1217,14 +1214,27 @@ impl Server {
                 .state
                 .config_finder()
                 .python_file(ModuleName::unknown(), e.path());
-            if open_files.contains_key(&path)
+            if let Some(lsp_file) = open_files.get(&path)
                 && config.project_includes.covers(&path)
                 && !config.project_excludes.covers(&path)
                 && self
                     .type_error_display_status(e.path().as_path())
                     .is_enabled()
             {
-                return Some((path.to_path_buf(), e.to_diagnostic()));
+                return match &**lsp_file {
+                    LspFile::Notebook(notebook) => {
+                        let error_cell = e.get_notebook_cell()?;
+                        let error_cell_uri = notebook.cell_index_to_url.get(error_cell)?;
+                        if let Some(filter_cell) = cell_uri
+                            && error_cell_uri != filter_cell
+                        {
+                            None
+                        } else {
+                            Some((PathBuf::from(error_cell_uri.to_string()), e.to_diagnostic()))
+                        }
+                    }
+                    LspFile::Source(_) => Some((path.to_path_buf(), e.to_diagnostic())),
+                };
             }
         }
         None
@@ -1322,7 +1332,7 @@ impl Server {
                 diags.insert(x.as_path().to_owned(), Vec::new());
             }
             for e in transaction.get_errors(&handles).collect_errors().shown {
-                if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files) {
+                if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files, None) {
                     diags.entry(path.to_owned()).or_default().push(diag);
                 }
             }
@@ -2558,24 +2568,18 @@ impl Server {
         params: DocumentDiagnosticParams,
     ) -> DocumentDiagnosticReport {
         let uri = &params.text_document.uri;
-        if self.open_notebook_cells.read().contains_key(uri) {
-            // TODO(yangdanny) handle notebooks
-            return DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
-                full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                    items: Vec::new(),
-                    result_id: None,
-                },
-                related_documents: None,
-            });
-        }
-        let handle = make_open_handle(
-            &self.state,
-            &params.text_document.uri.to_file_path().unwrap(),
-        );
+        let mut cell_uri = None;
+        let path = if let Some(notebook_path) = self.open_notebook_cells.read().get(uri) {
+            cell_uri = Some(uri);
+            notebook_path.as_path().to_owned()
+        } else {
+            uri.to_file_path().unwrap()
+        };
+        let handle = make_open_handle(&self.state, &path);
         let mut items = Vec::new();
         let open_files = &self.open_files.read();
         for e in transaction.get_errors(once(&handle)).collect_errors().shown {
-            if let Some((_, diag)) = self.get_diag_if_shown(&e, open_files) {
+            if let Some((_, diag)) = self.get_diag_if_shown(&e, open_files, cell_uri) {
                 items.push(diag);
             }
         }
