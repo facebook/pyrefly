@@ -27,6 +27,8 @@ use ruff_notebook::SourceValue;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use serde_repr::Deserialize_repr;
+use serde_repr::Serialize_repr;
 
 // ===== Core Notebook Types =====
 
@@ -148,7 +150,8 @@ pub struct NotebookCell {
 /// A notebook cell kind.
 ///
 /// @since 3.17.0
-#[derive(Debug, Eq, PartialEq, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Deserialize_repr, Serialize_repr)]
+#[repr(u8)]
 pub enum NotebookCellKind {
     /// A markup-cell is formatted source that is used for display.
     Markup = 1,
