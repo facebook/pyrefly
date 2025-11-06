@@ -77,7 +77,7 @@ impl<'a> RenameUsageVisitor<'a> {
                         };
 
                         self.edits.push(TextEdit {
-                            range: self.lined_buffer.to_lsp_range(alias.name.range()),
+                            range: self.lined_buffer.to_lsp_range(alias.name.range(), None),
                             new_text: new_import_name,
                         });
                     }
@@ -103,7 +103,7 @@ impl<'a> RenameUsageVisitor<'a> {
                         };
 
                         self.edits.push(TextEdit {
-                            range: self.lined_buffer.to_lsp_range(module.range()),
+                            range: self.lined_buffer.to_lsp_range(module.range(), None),
                             new_text: new_import_name,
                         });
                     }

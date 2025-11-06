@@ -1816,7 +1816,7 @@ fn collect_folding_ranges(
             };
 
             if let Some(range) = range {
-                let lsp_range = self.module.lined_buffer().to_lsp_range(range);
+                let lsp_range = self.module.to_lsp_range(range);
                 if lsp_range.start.line != lsp_range.end.line {
                     self.ranges.push((range, None));
                 }

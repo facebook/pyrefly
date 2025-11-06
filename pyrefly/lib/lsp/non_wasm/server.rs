@@ -188,7 +188,6 @@ use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
-use crate::lsp::non_wasm::module_helpers::to_lsp_location;
 use crate::lsp::non_wasm::module_helpers::to_real_path;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
@@ -1941,7 +1940,7 @@ impl Server {
         let targets = transaction.goto_definition(&handle, range);
         let mut lsp_targets = targets
             .iter()
-            .filter_map(to_lsp_location)
+            .filter_map(|x| self.to_lsp_location(x))
             .collect::<Vec<_>>();
         if lsp_targets.is_empty() {
             None
@@ -1966,7 +1965,7 @@ impl Server {
         let targets = transaction.goto_type_definition(&handle, range);
         let mut lsp_targets = targets
             .iter()
-            .filter_map(to_lsp_location)
+            .filter_map(|x| self.to_lsp_location(x))
             .collect::<Vec<_>>();
         if lsp_targets.is_empty() {
             None
@@ -2035,7 +2034,7 @@ impl Server {
                         changes: Some(HashMap::from([(
                             uri.clone(),
                             vec![TextEdit {
-                                range: info.lined_buffer().to_lsp_range(range),
+                                range: info.to_lsp_range(range),
                                 new_text: insert_text,
                             }],
                         )])),
@@ -2062,7 +2061,7 @@ impl Server {
             transaction
                 .find_local_references(&handle, position)
                 .into_map(|range| DocumentHighlight {
-                    range: info.lined_buffer().to_lsp_range(range),
+                    range: info.to_lsp_range(range),
                     kind: None,
                 }),
         )
@@ -2130,10 +2129,8 @@ impl Server {
                     let mut locations = Vec::new();
                     for (info, ranges) in global_references {
                         if let Some(uri) = module_info_to_uri(&info) {
-                            locations.push((
-                                uri,
-                                ranges.into_map(|range| info.lined_buffer().to_lsp_range(range)),
-                            ));
+                            locations
+                                .push((uri, ranges.into_map(|range| info.to_lsp_range(range))));
                         };
                     }
                     cancellation_handles.lock().remove(&request_id);
@@ -2222,7 +2219,7 @@ impl Server {
         let position = info.lined_buffer().from_lsp_position(params.position);
         transaction
             .prepare_rename(&handle, position)
-            .map(|range| PrepareRenameResponse::Range(info.lined_buffer().to_lsp_range(range)))
+            .map(|range| PrepareRenameResponse::Range(info.to_lsp_range(range)))
     }
 
     fn signature_help(
@@ -2269,7 +2266,7 @@ impl Server {
         let res = t
             .into_iter()
             .filter_map(|x| {
-                let position = info.lined_buffer().to_lsp_position(x.0);
+                let position = info.to_lsp_position(x.0);
                 // The range is half-open, so the end position is exclusive according to the spec.
                 if position >= range.start && position < range.end {
                     Some(InlayHint {
@@ -2362,14 +2359,15 @@ impl Server {
             .unwrap_or_default()
             .into_iter()
             .filter_map(|(name, kind, location)| {
-                to_lsp_location(&location).map(|location| SymbolInformation {
-                    name,
-                    kind,
-                    location,
-                    tags: None,
-                    deprecated: None,
-                    container_name: None,
-                })
+                self.to_lsp_location(&location)
+                    .map(|location| SymbolInformation {
+                        name,
+                        kind,
+                        location,
+                        tags: None,
+                        deprecated: None,
+                        container_name: None,
+                    })
             })
             .collect()
     }
@@ -2389,7 +2387,7 @@ impl Server {
                 if range.is_empty() || !seen.insert(range) {
                     continue;
                 }
-                let lsp_range = module_info.lined_buffer().to_lsp_range(range);
+                let lsp_range = module_info.to_lsp_range(range);
                 items.push(Diagnostic {
                     range: lsp_range,
                     severity: Some(DiagnosticSeverity::HINT),
@@ -2416,7 +2414,7 @@ impl Server {
         Some(
             docstring_ranges
                 .into_iter()
-                .map(|range| module.lined_buffer().to_lsp_range(range))
+                .map(|range| module.to_lsp_range(range))
                 .collect(),
         )
     }
@@ -2435,7 +2433,7 @@ impl Server {
             ranges
                 .into_iter()
                 .filter_map(|(range, kind)| {
-                    let lsp_range = module.lined_buffer().to_lsp_range(range);
+                    let lsp_range = module.to_lsp_range(range);
                     if lsp_range.start.line >= lsp_range.end.line {
                         return None;
                     }
@@ -2650,6 +2648,28 @@ impl Server {
             params,
             supports_document_changes,
         )
+    }
+
+    pub fn to_lsp_location(&self, location: &TextRangeWithModule) -> Option<Location> {
+        let TextRangeWithModule {
+            module: definition_module_info,
+            range,
+        } = location;
+        let mut uri = module_info_to_uri(definition_module_info)?;
+        if let Some(cell_idx) = definition_module_info.to_cell_for_lsp(range.start()) {
+            // We only have this information for open notebooks, without being provided the URI from the client
+            // we don't know what URI refers to which cell.
+            let path = to_real_path(definition_module_info.path())?;
+            if let LspFile::Notebook(notebook) = &**self.open_files.read().get(&path)?
+                && let Some(cell_url) = notebook.get_cell_url(cell_idx)
+            {
+                uri = cell_url.clone();
+            }
+        }
+        Some(Location {
+            uri,
+            range: definition_module_info.to_lsp_range(*range),
+        })
     }
 }
 

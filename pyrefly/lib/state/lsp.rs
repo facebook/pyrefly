@@ -1980,9 +1980,7 @@ impl<'a> Transaction<'a> {
                         import_format,
                     );
                     let import_text_edit = TextEdit {
-                        range: module_info
-                            .lined_buffer()
-                            .to_lsp_range(TextRange::at(position, TextSize::new(0))),
+                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
                         new_text: insert_text.clone(),
                     };
                     (Some(insert_text), Some(vec![import_text_edit]))
@@ -2017,7 +2015,6 @@ impl<'a> Transaction<'a> {
                             import_regular_import_edit(&ast, module_handle);
                         let import_text_edit = TextEdit {
                             range: module_info
-                                .lined_buffer()
                                 .to_lsp_range(TextRange::at(position, TextSize::new(0))),
                             new_text: insert_text.clone(),
                         };
@@ -2864,12 +2861,8 @@ impl<'a> Transaction<'a> {
                         kind: lsp_types::SymbolKind::FUNCTION,
                         tags: None,
                         deprecated: None,
-                        range: module_info
-                            .lined_buffer()
-                            .to_lsp_range(stmt_function_def.range),
-                        selection_range: module_info
-                            .lined_buffer()
-                            .to_lsp_range(stmt_function_def.name.range),
+                        range: module_info.to_lsp_range(stmt_function_def.range),
+                        selection_range: module_info.to_lsp_range(stmt_function_def.name.range),
 
                         children: Some(children),
                     });
@@ -2887,12 +2880,8 @@ impl<'a> Transaction<'a> {
                         kind: lsp_types::SymbolKind::CLASS,
                         tags: None,
                         deprecated: None,
-                        range: module_info
-                            .lined_buffer()
-                            .to_lsp_range(stmt_class_def.range),
-                        selection_range: module_info
-                            .lined_buffer()
-                            .to_lsp_range(stmt_class_def.name.range),
+                        range: module_info.to_lsp_range(stmt_class_def.range),
+                        selection_range: module_info.to_lsp_range(stmt_class_def.name.range),
                         children: Some(children),
                     });
                 }
@@ -2906,10 +2895,8 @@ impl<'a> Transaction<'a> {
                                 kind: lsp_types::SymbolKind::VARIABLE,
                                 tags: None,
                                 deprecated: None,
-                                range: module_info.lined_buffer().to_lsp_range(stmt_assign.range),
-                                selection_range: module_info
-                                    .lined_buffer()
-                                    .to_lsp_range(name.range),
+                                range: module_info.to_lsp_range(stmt_assign.range),
+                                selection_range: module_info.to_lsp_range(name.range),
                                 children: None,
                             });
                         }
@@ -2927,10 +2914,8 @@ impl<'a> Transaction<'a> {
                             kind: lsp_types::SymbolKind::VARIABLE,
                             tags: None,
                             deprecated: None,
-                            range: module_info
-                                .lined_buffer()
-                                .to_lsp_range(stmt_ann_assign.range),
-                            selection_range: module_info.lined_buffer().to_lsp_range(name.range),
+                            range: module_info.to_lsp_range(stmt_ann_assign.range),
+                            selection_range: module_info.to_lsp_range(name.range),
                             children: None,
                         });
                     }

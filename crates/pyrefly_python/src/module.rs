@@ -98,6 +98,26 @@ impl Module {
         self.0.contents.display_pos(offset, self.notebook())
     }
 
+    pub fn to_lsp_range(&self, x: TextRange) -> lsp_types::Range {
+        self.lined_buffer().to_lsp_range(x, self.notebook())
+    }
+
+    pub fn to_lsp_position(&self, x: TextSize) -> lsp_types::Position {
+        self.lined_buffer().to_lsp_position(x, self.notebook())
+    }
+
+    pub fn to_cell_for_lsp(&self, x: TextSize) -> Option<usize> {
+        self.lined_buffer().to_cell_for_lsp(x, self.notebook())
+    }
+
+    pub fn from_lsp_position(&self, position: lsp_types::Position) -> TextSize {
+        self.lined_buffer().from_lsp_position(position)
+    }
+
+    pub fn from_lsp_range(&self, position: lsp_types::Range) -> TextRange {
+        self.lined_buffer().from_lsp_range(position)
+    }
+
     pub fn code_at(&self, range: TextRange) -> &str {
         self.0.contents.code_at(range)
     }

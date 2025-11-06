@@ -185,7 +185,7 @@ impl Error {
             .ok()
             .map(|href| CodeDescription { href });
         Diagnostic {
-            range: self.lined_buffer().to_lsp_range(self.range()),
+            range: self.module.to_lsp_range(self.range()),
             severity: Some(match self.severity() {
                 Severity::Error => lsp_types::DiagnosticSeverity::ERROR,
                 Severity::Warn => lsp_types::DiagnosticSeverity::WARNING,

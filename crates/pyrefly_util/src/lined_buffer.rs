@@ -132,20 +132,44 @@ impl LinedBuffer {
         self.lines.line_start(line.to_one_indexed(), &self.buffer)
     }
 
-    pub fn to_lsp_range(&self, x: TextRange) -> lsp_types::Range {
+    pub fn to_lsp_range(&self, x: TextRange, notebook: Option<&Notebook>) -> lsp_types::Range {
         lsp_types::Range::new(
-            self.to_lsp_position(x.start()),
-            self.to_lsp_position(x.end()),
+            self.to_lsp_position(x.start(), notebook),
+            self.to_lsp_position(x.end(), notebook),
         )
     }
 
-    pub fn to_lsp_position(&self, x: TextSize) -> lsp_types::Position {
+    pub fn to_lsp_position(&self, x: TextSize, notebook: Option<&Notebook>) -> lsp_types::Position {
         let loc = self
             .lines
             .source_location(x, &self.buffer, PositionEncoding::Utf16);
-        lsp_types::Position {
-            line: loc.line.to_zero_indexed() as u32,
-            character: loc.character_offset.to_zero_indexed() as u32,
+        if let Some(notebook) = notebook
+            && let Some((_, cell_line)) =
+                map_notebook_line(notebook, LineNumber::from_one_indexed(loc.line))
+        {
+            lsp_types::Position {
+                line: cell_line.to_zero_indexed(),
+                character: loc.character_offset.to_zero_indexed() as u32,
+            }
+        } else {
+            lsp_types::Position {
+                line: loc.line.to_zero_indexed() as u32,
+                character: loc.character_offset.to_zero_indexed() as u32,
+            }
+        }
+    }
+
+    pub fn to_cell_for_lsp(&self, x: TextSize, notebook: Option<&Notebook>) -> Option<usize> {
+        let loc = self
+            .lines
+            .source_location(x, &self.buffer, PositionEncoding::Utf16);
+        if let Some(notebook) = notebook
+            && let Some((cell, _)) =
+                map_notebook_line(notebook, LineNumber::from_one_indexed(loc.line))
+        {
+            Some(cell.to_zero_indexed())
+        } else {
+            None
         }
     }
 
