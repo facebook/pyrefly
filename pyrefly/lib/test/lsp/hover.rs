@@ -95,6 +95,43 @@ from lib import foo_renamed
 }
 
 #[test]
+fn hover_shows_unpacked_kwargs_fields() {
+    let code = r#"
+from typing import TypedDict, Unpack
+
+class Payload(TypedDict):
+    foo: int
+    bar: str
+    baz: bool | None
+
+def takes(**kwargs: Unpack[Payload]) -> None:
+    ...
+
+takes(foo=1, bar="x", baz=None)
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+12 | takes(foo=1, bar="x", baz=None)
+      ^
+```python
+(function) takes: def takes(
+    *,
+    foo: int,
+    bar: str,
+    baz: bool | None,
+    **kwargs: Unpack[TypedDict[Payload]]
+) -> None: ...
+```
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn hover_over_inline_ignore_comment() {
     let code = r#"
 a: int = "test"  # pyrefly: ignore

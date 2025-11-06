@@ -15,15 +15,27 @@ use pyrefly_python::docstring::Docstring;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::symbol_kind::SymbolKind;
+use pyrefly_types::callable::Callable;
+use pyrefly_types::callable::Param;
+use pyrefly_types::callable::ParamList;
+use pyrefly_types::callable::Params;
+use pyrefly_types::callable::Required;
+use pyrefly_types::types::BoundMethodType;
+use pyrefly_types::types::Forallable;
+use pyrefly_types::types::OverloadType;
 use pyrefly_types::types::Type;
 use pyrefly_util::lined_buffer::LineNumber;
+use pyrefly_util::visit::VisitMut;
+use ruff_python_ast::name::Name;
 use ruff_text_size::TextSize;
 use starlark_map::small_set::SmallSet;
 
+use crate::alt::answers_solver::AnswersSolver;
 use crate::error::error::Error;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
+use crate::state::state::TransactionHandle;
 
 /// Gets all suppressed errors that overlap with the given line.
 ///
@@ -95,6 +107,7 @@ pub struct HoverValue {
     pub name: Option<String>,
     pub type_: Type,
     pub docstring: Option<Docstring>,
+    pub display: Option<String>,
 }
 
 impl HoverValue {
@@ -159,6 +172,10 @@ impl HoverValue {
             .map_or("".to_owned(), |s| format!("{s}: "));
         let symbol_def_formatted =
             HoverValue::format_symbol_def_locations(&self.type_).unwrap_or("".to_owned());
+        let type_display = self
+            .display
+            .clone()
+            .unwrap_or_else(|| self.type_.as_hover_string());
 
         Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -167,7 +184,7 @@ impl HoverValue {
                     "```python\n{}{}{}\n```{}{}",
                     kind_formatted,
                     name_formatted,
-                    self.type_.as_hover_string(),
+                    type_display,
                     docstring_formatted,
                     symbol_def_formatted
                 ),
@@ -175,6 +192,126 @@ impl HoverValue {
             range: None,
         }
     }
+}
+
+fn collect_typed_dict_fields_for_hover<'a>(
+    solver: &AnswersSolver<TransactionHandle<'a>>,
+    ty: &Type,
+) -> Option<Vec<(Name, Type, Required)>> {
+    match ty {
+        Type::Unpack(inner) => match inner.as_ref() {
+            Type::TypedDict(typed_dict) => {
+                let fields = solver.type_order().typed_dict_kw_param_info(typed_dict);
+                if fields.is_empty() {
+                    None
+                } else {
+                    Some(fields)
+                }
+            }
+            Type::PartialTypedDict(typed_dict) => {
+                let fields = solver.type_order().typed_dict_kw_param_info(typed_dict);
+                if fields.is_empty() {
+                    None
+                } else {
+                    Some(
+                        fields
+                            .into_iter()
+                            .map(|(name, ty, _)| (name, ty, Required::Optional(None)))
+                            .collect(),
+                    )
+                }
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn expand_callable_kwargs_for_hover<'a>(
+    solver: &AnswersSolver<TransactionHandle<'a>>,
+    callable: &mut Callable,
+) {
+    if let Params::List(param_list) = &mut callable.params {
+        let mut expanded = Vec::with_capacity(param_list.len());
+        let mut changed = false;
+        for param in param_list.items() {
+            if let Param::Kwargs(_, ty) = param {
+                if let Some(fields) = collect_typed_dict_fields_for_hover(solver, ty) {
+                    changed = true;
+                    for (field_name, field_type, required) in fields {
+                        expanded.push(Param::KwOnly(field_name, field_type, required));
+                    }
+                }
+            }
+            expanded.push(param.clone());
+        }
+        if changed {
+            *param_list = ParamList::new(expanded);
+        }
+    }
+}
+
+fn expand_type_for_hover<'a>(solver: &AnswersSolver<TransactionHandle<'a>>, ty: &mut Type) {
+    ty.visit_mut(&mut |t| match t {
+        Type::Callable(callable) => expand_callable_kwargs_for_hover(solver, callable.as_mut()),
+        Type::Function(function) => {
+            expand_callable_kwargs_for_hover(solver, &mut function.signature)
+        }
+        Type::BoundMethod(bound_method) => match &mut bound_method.func {
+            BoundMethodType::Function(function) => {
+                expand_callable_kwargs_for_hover(solver, &mut function.signature)
+            }
+            BoundMethodType::Forall(forall) => {
+                expand_callable_kwargs_for_hover(solver, &mut forall.body.signature)
+            }
+            BoundMethodType::Overload(overload) => {
+                for sig in overload.signatures.iter_mut() {
+                    match sig {
+                        OverloadType::Function(function) => {
+                            expand_callable_kwargs_for_hover(solver, &mut function.signature)
+                        }
+                        OverloadType::Forall(forall) => {
+                            expand_callable_kwargs_for_hover(solver, &mut forall.body.signature)
+                        }
+                    }
+                }
+            }
+        },
+        Type::Forall(forall) => match &mut forall.body {
+            Forallable::Callable(callable) => expand_callable_kwargs_for_hover(solver, callable),
+            Forallable::Function(function) => {
+                expand_callable_kwargs_for_hover(solver, &mut function.signature)
+            }
+            Forallable::TypeAlias(_) => {}
+        },
+        Type::Overload(overload) => {
+            for sig in overload.signatures.iter_mut() {
+                match sig {
+                    OverloadType::Function(function) => {
+                        expand_callable_kwargs_for_hover(solver, &mut function.signature)
+                    }
+                    OverloadType::Forall(forall) => {
+                        expand_callable_kwargs_for_hover(solver, &mut forall.body.signature)
+                    }
+                }
+            }
+        }
+        _ => {}
+    });
+}
+
+fn format_type_with_expanded_kwargs(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    ty: &Type,
+) -> Option<String> {
+    transaction.ad_hoc_solve(handle, {
+        let mut cloned = ty.clone();
+        move |solver| {
+            expand_type_for_hover(&solver, &mut cloned);
+            cloned.as_hover_string()
+        }
+    })
 }
 
 pub fn get_hover(
@@ -214,6 +351,7 @@ pub fn get_hover(
 
     // Otherwise, fall through to the existing type hover logic
     let type_ = transaction.get_type_at(handle, position)?;
+    let type_display = format_type_with_expanded_kwargs(transaction, handle, &type_);
     let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
         metadata,
         definition_range: definition_location,
@@ -254,6 +392,7 @@ pub fn get_hover(
             name,
             type_,
             docstring,
+            display: type_display,
         }
         .format(),
     )
