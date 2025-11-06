@@ -1923,7 +1923,12 @@ impl Server {
         uri: &Url,
         method: Option<&str>,
     ) -> Option<(Handle, Option<LspAnalysisConfig>)> {
-        let path = uri.to_file_path().unwrap();
+        let path = self
+            .open_notebook_cells
+            .read()
+            .get(uri)
+            .cloned()
+            .unwrap_or_else(|| uri.to_file_path().unwrap());
         self.workspaces.get_with(path.clone(), |(_, workspace)| {
             // Check if all language services are disabled
             if workspace.disable_language_services {
@@ -2313,7 +2318,6 @@ impl Server {
         let position = info
             .lined_buffer()
             .from_lsp_position(params.text_document_position_params.position);
-
         get_hover(transaction, &handle, position)
     }
 
