@@ -9,7 +9,6 @@
 use std::io;
 use std::iter::once;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread::JoinHandle;
@@ -236,19 +235,6 @@ impl TestServer {
             params: serde_json::json!({
             "textDocument": {
                 "uri": Url::from_file_path(&path).unwrap().to_string()
-            }}),
-        }));
-    }
-
-    pub fn diagnostic_for_cell(&mut self, file: &'static str) {
-        let path = self.get_root_or_panic().join(file);
-        let id = self.next_request_id();
-        self.send_message(Message::Request(Request {
-            id,
-            method: "textDocument/diagnostic".to_owned(),
-            params: serde_json::json!({
-            "textDocument": {
-                "uri": Url::from_str(&format!("vscode-notebook-cell://{}", path.to_string_lossy())).unwrap().to_string()
             }}),
         }));
     }
@@ -930,5 +916,102 @@ impl LspInteraction {
     pub fn set_root(&mut self, root: PathBuf) {
         self.server.root = Some(root.clone());
         self.client.root = Some(root);
+    }
+
+    /// Opens a notebook document with the given cell contents.
+    /// Each string in `cell_contents` becomes a separate code cell in the notebook.
+    pub fn open_notebook(&mut self, file_name: &str, cell_contents: Vec<&str>) {
+        let root = self.server.get_root_or_panic();
+        let notebook_path = root.join(file_name);
+        let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
+
+        let mut cells = Vec::new();
+        let mut cell_text_documents = Vec::new();
+
+        for (i, text) in cell_contents.iter().enumerate() {
+            let cell_uri = self.cell_uri(file_name, &format!("cell{}", i + 1));
+            cells.push(serde_json::json!({
+                "kind": 2,
+                "document": cell_uri,
+            }));
+            cell_text_documents.push(serde_json::json!({
+                "uri": cell_uri,
+                "languageId": "python",
+                "version": 1,
+                "text": *text
+            }));
+        }
+
+        self.server
+            .send_message(Message::Notification(Notification {
+                method: "notebookDocument/didOpen".to_owned(),
+                params: serde_json::json!({
+                    "notebookDocument": {
+                        "uri": notebook_uri,
+                        "notebookType": "jupyter-notebook",
+                        "version": 1,
+                        "metadata": {
+                            "language_info": {
+                                "name": "python"
+                            }
+                        },
+                        "cells": cells
+                    },
+                    "cellTextDocuments": cell_text_documents
+                }),
+            }));
+    }
+
+    /// Updates a notebook document with the specified changes.
+    /// This sends a notebookDocument/didChange notification with the change event.
+    pub fn change_notebook(
+        &mut self,
+        file_name: &str,
+        version: i32,
+        change_event: serde_json::Value,
+    ) {
+        let root = self.server.get_root_or_panic();
+        let notebook_path = root.join(file_name);
+        let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
+
+        self.server
+            .send_message(Message::Notification(Notification {
+                method: "notebookDocument/didChange".to_owned(),
+                params: serde_json::json!({
+                    "notebookDocument": {
+                        "version": version,
+                        "uri": notebook_uri,
+                    },
+                    "change": change_event
+                }),
+            }));
+    }
+
+    pub fn diagnostic_for_cell(&mut self, file: &str, cell: &str) {
+        let id = self.server.next_request_id();
+        self.server.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/diagnostic".to_owned(),
+            params: serde_json::json!({
+            "textDocument": {
+                "uri": self.cell_uri(file, cell)
+            }}),
+        }));
+    }
+
+    /// Returns the URI for a notebook cell
+    pub fn cell_uri(&self, file_name: &str, cell_name: &str) -> String {
+        let root = self.server.get_root_or_panic();
+        // Parse this as a file to preserve the C: prefix for windows
+        let cell_uri =
+            Url::from_file_path(format!("{}", root.join(file_name).to_string_lossy())).unwrap();
+        // Replace the scheme & add the cell name as a fragment
+        format!(
+            "{}#{}",
+            cell_uri
+                .to_string()
+                .replace("file://", "vscode-notebook-cell://"),
+            cell_name
+        )
     }
 }
