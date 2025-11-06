@@ -106,10 +106,15 @@ impl Module {
         self.lined_buffer().to_lsp_position(x, self.notebook())
     }
 
+    /// If the module is a notebook, take an input position relative to the concatenated contents
+    /// and return the index of the corresponding notebook cell.
     pub fn to_cell_for_lsp(&self, x: TextSize) -> Option<usize> {
         self.lined_buffer().to_cell_for_lsp(x, self.notebook())
     }
 
+    /// Translates an LSP position to a text size.
+    /// For notebooks, the input position is relative to a notebook cell and the output
+    /// position is relative to the concatenated contents of the notebook.
     pub fn from_lsp_position(
         &self,
         position: lsp_types::Position,
@@ -121,6 +126,9 @@ impl Module {
         )
     }
 
+    /// Translates an LSP position to a text range.
+    /// For notebooks, the input range is relative to a notebook cell and the output
+    /// position is range to the concatenated contents of the notebook.
     pub fn from_lsp_range(
         &self,
         position: lsp_types::Range,

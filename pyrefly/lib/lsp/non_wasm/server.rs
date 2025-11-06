@@ -327,6 +327,11 @@ pub struct Server {
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
     state: Arc<State>,
+    /// This is a mapping from open notebook cells to the paths of the notebooks they belong to,
+    /// which can be used to look up the notebook contents in `open_files`.
+    ///
+    /// Notebook cell URIs are entirely arbitrary, and any URI received from the language client
+    /// should be mapped through here in case they correspond to a cell.
     open_notebook_cells: Arc<RwLock<HashMap<Url, PathBuf>>>,
     open_files: Arc<RwLock<HashMap<PathBuf, Arc<LspFile>>>>,
     /// A set of configs where we have already indexed all the files within the config.

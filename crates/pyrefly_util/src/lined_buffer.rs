@@ -135,6 +135,9 @@ impl LinedBuffer {
         self.lines.line_start(line.to_one_indexed(), &self.buffer)
     }
 
+    /// Translates a text range to a LSP range.
+    /// For notebook, the input range is relative to the concatenated contents of the whole notebook
+    /// and the output range is relative to a specific cell.
     pub fn to_lsp_range(&self, x: TextRange, notebook: Option<&Notebook>) -> lsp_types::Range {
         lsp_types::Range::new(
             self.to_lsp_position(x.start(), notebook),
@@ -142,6 +145,9 @@ impl LinedBuffer {
         )
     }
 
+    /// Translates a text size to a LSP position.
+    /// For notebook, the input position is relative to the concatenated contents of the whole notebook
+    /// and the output position is relative to a specific cell.
     pub fn to_lsp_position(&self, x: TextSize, notebook: Option<&Notebook>) -> lsp_types::Position {
         let loc = self
             .lines
@@ -164,6 +170,8 @@ impl LinedBuffer {
         }
     }
 
+    /// If the module is a notebook, take an input position relative to the concatenated contents
+    /// and return the index of the corresponding notebook cell.
     pub fn to_cell_for_lsp(&self, x: TextSize, notebook: Option<&Notebook>) -> Option<usize> {
         let loc = self
             .lines
@@ -180,6 +188,9 @@ impl LinedBuffer {
         }
     }
 
+    /// Translates an LSP position to a text size.
+    /// For notebooks, the input position is relative to a notebook cell and the output
+    /// position is relative to the concatenated contents of the notebook.
     pub fn from_lsp_position(
         &self,
         position: lsp_types::Position,
@@ -205,6 +216,9 @@ impl LinedBuffer {
         )
     }
 
+    /// Translates an LSP position to a text range.
+    /// For notebooks, the input range is relative to a notebook cell and the output
+    /// position is range to the concatenated contents of the notebook.
     pub fn from_lsp_range(
         &self,
         position: lsp_types::Range,
