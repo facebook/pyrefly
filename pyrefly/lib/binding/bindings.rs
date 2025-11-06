@@ -63,6 +63,7 @@ use crate::binding::scope::FlowStyle;
 use crate::binding::scope::NameReadInfo;
 use crate::binding::scope::ScopeTrace;
 use crate::binding::scope::Scopes;
+use crate::binding::scope::UnusedParameter;
 use crate::binding::table::TableKeyed;
 use crate::config::base::UntypedDefBehavior;
 use crate::config::error_kind::ErrorKind;
@@ -150,6 +151,7 @@ struct BindingsInner {
     module_info: ModuleInfo,
     table: BindingTable,
     scope_trace: Option<ScopeTrace>,
+    unused_parameters: Vec<UnusedParameter>,
 }
 
 impl Display for Bindings {
@@ -186,6 +188,7 @@ pub struct BindingsBuilder<'a> {
     pub scopes: Scopes,
     table: BindingTable,
     pub untyped_def_behavior: UntypedDefBehavior,
+    unused_parameters: Vec<UnusedParameter>,
 }
 
 impl Bindings {
@@ -205,6 +208,10 @@ impl Bindings {
 
     pub fn module(&self) -> &ModuleInfo {
         &self.0.module_info
+    }
+
+    pub fn unused_parameters(&self) -> &[UnusedParameter] {
+        &self.0.unused_parameters
     }
 
     pub fn available_definitions(&self, position: TextSize) -> SmallSet<Idx<Key>> {
@@ -359,6 +366,7 @@ impl Bindings {
             scopes: Scopes::module(x.range, enable_trace),
             table: Default::default(),
             untyped_def_behavior,
+            unused_parameters: Vec::new(),
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -396,6 +404,7 @@ impl Bindings {
             } else {
                 None
             },
+            unused_parameters: builder.unused_parameters,
         }))
     }
 }
@@ -537,6 +546,10 @@ impl<'a> BindingsBuilder<'a> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         self.table.insert_idx(idx, value)
+    }
+
+    pub fn record_unused_parameters(&mut self, unused: Vec<UnusedParameter>) {
+        self.unused_parameters.extend(unused);
     }
 
     /// Insert a binding into the bindings table, given a `Usage`. This will panic if the usage

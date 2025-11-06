@@ -300,7 +300,6 @@ mod tests {
             errors: RuleOverrides {
                 report_missing_imports: Some(false),
                 report_missing_module_source: None,
-                report_unused_parameter: None,
             },
         };
 
@@ -309,7 +308,6 @@ mod tests {
             errors: RuleOverrides {
                 report_missing_imports: None,
                 report_missing_module_source: Some(true),
-                report_unused_parameter: None,
             },
         };
 

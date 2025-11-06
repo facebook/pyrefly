@@ -57,8 +57,6 @@ use crate::binding::scope::Scope;
 use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::YieldsAndReturns;
 use crate::config::base::UntypedDefBehavior;
-use crate::config::error_kind::ErrorKind;
-use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::types::types::Type;
@@ -299,16 +297,6 @@ impl<'a> BindingsBuilder<'a> {
         self.scopes.pop_function_scope()
     }
 
-    fn report_unused_parameters(&self, unused_parameters: Vec<UnusedParameter>) {
-        for unused in unused_parameters {
-            self.error(
-                unused.range,
-                ErrorInfo::Kind(ErrorKind::UnusedParameter),
-                format!("Parameter `{}` is unused", unused.name),
-            );
-        }
-    }
-
     fn unchecked_function_body_scope(
         &mut self,
         parameters: &mut Box<Parameters>,
@@ -529,7 +517,7 @@ impl<'a> BindingsBuilder<'a> {
                             is_async,
                         );
                     if should_report_unused_parameters {
-                        self.report_unused_parameters(unused_parameters);
+                        self.record_unused_parameters(unused_parameters);
                     }
                     self.analyze_return_type(
                         func_name,
@@ -557,7 +545,7 @@ impl<'a> BindingsBuilder<'a> {
                             is_async,
                         );
                     if should_report_unused_parameters {
-                        self.report_unused_parameters(unused_parameters);
+                        self.record_unused_parameters(unused_parameters);
                     }
                     self.analyze_return_type(
                         func_name,
@@ -585,7 +573,7 @@ impl<'a> BindingsBuilder<'a> {
                             is_async,
                         );
                     if should_report_unused_parameters {
-                        self.report_unused_parameters(unused_parameters);
+                        self.record_unused_parameters(unused_parameters);
                     }
                     self.analyze_return_type(
                         func_name,

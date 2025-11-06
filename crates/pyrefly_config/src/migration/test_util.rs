@@ -20,7 +20,6 @@ pub fn default_pyright_config() -> PyrightConfig {
         errors: RuleOverrides {
             report_missing_imports: None,
             report_missing_module_source: None,
-            report_unused_parameter: None,
         },
         execution_environments: vec![],
     }

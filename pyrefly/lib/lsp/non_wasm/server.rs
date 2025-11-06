@@ -1229,6 +1229,7 @@ impl Server {
             for (path, diagnostics) in diags.iter_mut() {
                 let handle = make_open_handle(&self.state, path);
                 Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
+                Self::append_unused_parameter_diagnostics(transaction, &handle, diagnostics);
             }
             self.connection.publish_diagnostics(diags);
             if self
@@ -2194,6 +2195,30 @@ impl Server {
         }
     }
 
+    fn append_unused_parameter_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        items: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(bindings) = transaction.get_bindings(handle) {
+            let module_info = bindings.module();
+            for unused in bindings.unused_parameters() {
+                let lsp_range = module_info.lined_buffer().to_lsp_range(unused.range);
+                items.push(Diagnostic {
+                    range: lsp_range,
+                    severity: Some(DiagnosticSeverity::HINT),
+                    source: Some("Pyrefly".to_owned()),
+                    message: format!("Parameter `{}` is unused", unused.name.as_str()),
+                    code: Some(NumberOrString::String("unused-parameter".to_owned())),
+                    code_description: None,
+                    related_information: None,
+                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    data: None,
+                });
+            }
+        }
+    }
+
     fn docstring_ranges(
         &self,
         transaction: &Transaction<'_>,
@@ -2268,6 +2293,7 @@ impl Server {
             }
         }
         Self::append_unreachable_diagnostics(transaction, &handle, &mut items);
+        Self::append_unused_parameter_diagnostics(transaction, &handle, &mut items);
         DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
             full_document_diagnostic_report: FullDocumentDiagnosticReport {
                 items,

@@ -242,15 +242,12 @@ fn test_unused_parameter_diagnostic() {
             "items": [
                 {
                     "code": "unused-parameter",
-                    "codeDescription": {
-                        "href": "https://pyrefly.org/en/docs/error-kinds/#unused-parameter"
-                    },
                     "message": "Parameter `unused_arg` is unused",
                     "range": {
                         "start": {"line": 0, "character": 21},
                         "end": {"line": 0, "character": 31}
                     },
-                    "severity": 2,
+                    "severity": 4,
                     "source": "Pyrefly",
                     "tags": [1]
                 }
