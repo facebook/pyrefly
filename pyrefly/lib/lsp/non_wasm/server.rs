@@ -1978,9 +1978,7 @@ impl Server {
         }
         let handle = self.make_handle_if_enabled(uri, Some(GotoDefinition::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let range = info
-            .lined_buffer()
-            .from_lsp_position(params.text_document_position_params.position);
+        let range = info.from_lsp_position(params.text_document_position_params.position);
         let targets = transaction.goto_definition(&handle, range);
         let mut lsp_targets = targets
             .iter()
@@ -2007,9 +2005,7 @@ impl Server {
         }
         let handle = self.make_handle_if_enabled(uri, Some(GotoTypeDefinition::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let range = info
-            .lined_buffer()
-            .from_lsp_position(params.text_document_position_params.position);
+        let range = info.from_lsp_position(params.text_document_position_params.position);
         let targets = transaction.goto_type_definition(&handle, range);
         let mut lsp_targets = targets
             .iter()
@@ -2054,8 +2050,7 @@ impl Server {
             .map(|info| {
                 transaction.completion_with_incomplete(
                     &handle,
-                    info.lined_buffer()
-                        .from_lsp_position(params.text_document_position.position),
+                    info.from_lsp_position(params.text_document_position.position),
                     import_format,
                 )
             })
@@ -2082,7 +2077,7 @@ impl Server {
         )?;
         let import_format = lsp_config.and_then(|c| c.import_format).unwrap_or_default();
         let module_info = transaction.get_module_info(&handle)?;
-        let range = module_info.lined_buffer().from_lsp_range(params.range);
+        let range = module_info.from_lsp_range(params.range);
         let code_actions = transaction
             .local_quickfix_code_actions(&handle, range, import_format)?
             .into_map(|(title, info, range, insert_text)| {
@@ -2117,9 +2112,7 @@ impl Server {
         }
         let handle = self.make_handle_if_enabled(uri, Some(DocumentHighlightRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let position = info
-            .lined_buffer()
-            .from_lsp_position(params.text_document_position_params.position);
+        let position = info.from_lsp_position(params.text_document_position_params.position);
         Some(
             transaction
                 .find_local_references(&handle, position)
@@ -2149,7 +2142,7 @@ impl Server {
             ide_transaction_manager.save(transaction);
             return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
-        let position = info.lined_buffer().from_lsp_position(position);
+        let position = info.from_lsp_position(position);
         let Some(FindDefinitionItemWithDocstring {
             metadata,
             definition_range,
@@ -2283,7 +2276,7 @@ impl Server {
         }
         let handle = self.make_handle_if_enabled(uri, Some(Rename::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let position = info.lined_buffer().from_lsp_position(params.position);
+        let position = info.from_lsp_position(params.position);
         transaction
             .prepare_rename(&handle, position)
             .map(|range| PrepareRenameResponse::Range(info.to_lsp_range(range)))
@@ -2301,9 +2294,7 @@ impl Server {
         }
         let handle = self.make_handle_if_enabled(uri, Some(SignatureHelpRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let position = info
-            .lined_buffer()
-            .from_lsp_position(params.text_document_position_params.position);
+        let position = info.from_lsp_position(params.text_document_position_params.position);
         transaction.get_signature_help_at(&handle, position)
     }
 
@@ -2315,9 +2306,7 @@ impl Server {
         }
         let handle = self.make_handle_if_enabled(uri, Some(HoverRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let position = info
-            .lined_buffer()
-            .from_lsp_position(params.text_document_position_params.position);
+        let position = info.from_lsp_position(params.text_document_position_params.position);
         get_hover(transaction, &handle, position)
     }
 
@@ -2399,7 +2388,7 @@ impl Server {
         }
         let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensRangeRequest::METHOD))?;
         let module_info = transaction.get_module_info(&handle)?;
-        let range = module_info.lined_buffer().from_lsp_range(params.range);
+        let range = module_info.from_lsp_range(params.range);
         Some(SemanticTokensRangeResult::Tokens(SemanticTokens {
             result_id: None,
             data: transaction
