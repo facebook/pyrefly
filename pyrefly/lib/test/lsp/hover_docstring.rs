@@ -211,6 +211,28 @@ Docstring Result: `Test docstring`
 }
 
 #[test]
+fn nested_class_test() {
+    let code = r#"
+class Foo:
+    class Bar:
+        """Test docstring"""
+print(Foo.Bar)
+#           ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
+    assert_eq!(
+        r#"
+# main.py
+5 | print(Foo.Bar)
+                ^
+Docstring Result: `Test docstring`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn cross_module_function_test() {
     let lib = r#"
 def f():
