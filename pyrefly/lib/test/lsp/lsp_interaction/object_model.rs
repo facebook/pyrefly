@@ -1014,4 +1014,27 @@ impl LspInteraction {
             cell_name
         )
     }
+
+    /// Sends a hover request for a notebook cell at the specified position
+    pub fn hover_cell(&mut self, file_name: &str, cell_name: &str, line: u32, col: u32) {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        let id = {
+            let mut idx = self.server.request_idx.lock().unwrap();
+            *idx += 1;
+            RequestId::from(*idx)
+        };
+        self.server.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/hover".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": cell_uri
+                },
+                "position": {
+                    "line": line,
+                    "character": col
+                }
+            }),
+        }));
+    }
 }
