@@ -38,6 +38,7 @@ use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::Number;
+use ruff_python_ast::StringLiteralValue;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -69,6 +70,7 @@ use crate::types::facet::FacetKind;
 use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::param_spec::ParamSpec;
+use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::special_form::SpecialForm;
 use crate::types::tuple::Tuple;
@@ -542,6 +544,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let callee_ty = self.expr_infer(&x.func, errors);
                 if let Some(d) = self.call_to_dict(&callee_ty, &x.arguments) {
                     self.dict_infer(&d, hint, x.range, errors)
+                } else if let Some((obj_ty, key)) =
+                    self.is_dict_get_with_literal(&x.func, &x.arguments, errors)
+                {
+                    obj_ty
+                        .at_facet(&FacetKind::Key(key.to_string()), || {
+                            self.expr_call_infer(x, callee_ty.clone(), hint, errors)
+                        })
+                        .into_ty()
                 } else {
                     self.expr_call_infer(x, callee_ty, hint, errors)
                 }
@@ -589,12 +599,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect::<Vec<_>>();
                 self.specialize(&self.stdlib.slice_class_object(), elts, x.range(), errors)
             }
-            Expr::IpyEscapeCommand(x) => self.error(
-                errors,
-                x.range,
-                ErrorInfo::Kind(ErrorKind::Unsupported),
-                "IPython escapes are not supported".to_owned(),
-            ),
+            Expr::IpyEscapeCommand(x) => {
+                if self.module().is_notebook() {
+                    Type::any_implicit()
+                } else {
+                    self.error(
+                        errors,
+                        x.range,
+                        ErrorInfo::Kind(ErrorKind::Unsupported),
+                        "IPython escapes are not supported".to_owned(),
+                    )
+                }
+            }
         }
     }
 
@@ -971,6 +987,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }))
     }
 
+    // Is this a call to `dict.get` with a single string literal argument
+    fn is_dict_get_with_literal(
+        &self,
+        func: &Expr,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<(TypeInfo, StringLiteralValue)> {
+        let Expr::Attribute(attr_expr) = func else {
+            return None;
+        };
+        if attr_expr.attr.id.as_str() != "get" {
+            return None;
+        }
+        if args.args.len() != 1 {
+            return None;
+        }
+        let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = &args.args[0] else {
+            return None;
+        };
+        let obj_ty = self.expr_infer_type_info_with_hint(&attr_expr.value, None, errors);
+        if self.is_dict_like(obj_ty.ty()) {
+            Some((obj_ty, key.clone()))
+        } else {
+            None
+        }
+    }
+
+    // Is this type a `TypedDict` or subtype of `dict`, but not `Any`?
+    pub fn is_dict_like(&self, ty: &Type) -> bool {
+        if ty.is_any() {
+            return false;
+        }
+        if ty.is_typed_dict() {
+            return true;
+        }
+        let dict_type = self
+            .stdlib
+            .dict(Type::any_implicit(), Type::any_implicit())
+            .to_type();
+        self.is_subset_eq(ty, &dict_type)
+    }
+
     /// Determine the boolean behavior of a type:
     /// - `Some(true)` or `Some(false)` when it is known to be statically truthy
     ///   or falsey (as determined by some baked in rules for literals
@@ -1011,7 +1069,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for (i, value) in values.iter().enumerate() {
             // If there isn't a hint for the overall expression, use the preceding branches as a "soft" hint
             // for the next one. Most useful for expressions like `optional_list or []`.
-            let hint = hint.or_else(|| Some(HintRef::soft(&t_acc)));
+            let hint = hint.or_else(|| {
+                if t_acc.is_never() {
+                    None
+                } else {
+                    Some(HintRef::soft(&t_acc))
+                }
+            });
             let mut t = self.expr_infer_with_hint(value, hint, errors);
             self.expand_vars_mut(&mut t);
             if i < last_index && should_shortcircuit(&t, value.range()) {
@@ -1772,6 +1836,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn is_enum_class_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassType(cls) | Type::SelfType(cls) => {
+                self.has_superclass(cls.class_object(), self.stdlib.enum_class().class_object())
+            }
+            Type::Union(variants) => variants
+                .iter()
+                .all(|variant| self.is_enum_class_type(variant)),
+            _ => false,
+        }
+    }
+
+    fn is_restricted_to_enum_class_def_type(&self, quantified: &Quantified) -> bool {
+        match quantified.restriction() {
+            Restriction::Unrestricted => false,
+            Restriction::Bound(bound) => self.is_enum_class_type(bound),
+            Restriction::Constraints(constraints) => {
+                !constraints.is_empty()
+                    && constraints
+                        .iter()
+                        .all(|constraint| self.is_enum_class_type(constraint))
+            }
+        }
+    }
+
     pub fn subscript_infer_for_type(
         &self,
         base: &Type,
@@ -1901,6 +1990,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             range,
                             errors,
                         ))
+                    }
+                }
+                Type::Type(box Type::Quantified(quantified)) if quantified.is_type_var() => {
+                    let quantified = *quantified;
+                    let base_display_ty =
+                        Type::Type(Box::new(Type::Quantified(Box::new(quantified.clone()))));
+                    if self.is_restricted_to_enum_class_def_type(&quantified) {
+                        if self.is_subset_eq(
+                            &self.expr(slice, None, errors),
+                            &self.stdlib.str().clone().to_type(),
+                        ) {
+                            quantified.to_type()
+                        } else {
+                            self.error(
+                                errors,
+                                slice.range(),
+                                ErrorInfo::Kind(ErrorKind::BadIndex),
+                                format!(
+                                    "Enum type `{}` can only be indexed by strings",
+                                    self.for_display(base_display_ty)
+                                ),
+                            )
+                        }
+                    } else {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
+                            format!(
+                                "`{}` is not subscriptable",
+                                self.for_display(base_display_ty)
+                            ),
+                        )
                     }
                 }
                 Type::Type(box Type::SpecialForm(special)) => {

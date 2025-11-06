@@ -32,6 +32,14 @@ $ echo -e '{"cells":[{"cell_type":"code","execution_count":null,"metadata":{},"o
 [0]
 ```
 
+## Notebook Directive
+
+```scrut
+$ echo -e '{"cells":[{"cell_type":"code","execution_count":null,"metadata":{},"outputs":[],"source":["%matplotlib inline"]}],"metadata":{"language_info":{"name":"python"}},"nbformat":4,"nbformat_minor":4}' > $TMPDIR/notebook.ipynb && \
+> $PYREFLY check $TMPDIR/notebook.ipynb
+[0]
+```
+
 ## Notebook Error
 
 ```scrut

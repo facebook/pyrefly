@@ -201,9 +201,12 @@ pub fn will_rename_files(
             .python_file(old_module_name, &module_path);
         let new_module_name = ModuleName::from_path(
             &new_path,
-            config
-                .search_path()
-                .chain(config.fallback_search_path.iter()),
+            config.search_path().chain(
+                config
+                    .fallback_search_path
+                    .for_directory(new_path.parent())
+                    .iter(),
+            ),
         );
 
         let new_module_name = match new_module_name {
@@ -246,7 +249,7 @@ pub fn will_rename_files(
             .filter_map(|rdep_handle| {
                 let module_info = transaction.get_module_info(&rdep_handle)?;
 
-                let ast = Ast::parse(module_info.contents()).0;
+                let ast = Ast::parse(module_info.contents(), module_info.source_type()).0;
                 let mut visitor = RenameUsageVisitor::new(
                     &old_module_name,
                     &new_module_name,

@@ -13,4 +13,4 @@
 # * After updating the version, run `arc autocargo -p pyrefly` to regenerate `Cargo.toml`
 #   and put the resulting diff up for review. Once the diff lands, the new version should be
 #   available on PyPI within a few hours.
-VERSION = "0.39.4"
+VERSION = "0.40.0"

@@ -225,6 +225,7 @@ mod tests {
     use pyrefly_python::ast::Ast;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::module_path::ModuleStyle;
+    use ruff_python_ast::PySourceType;
     use starlark_map::small_map::SmallMap;
     use starlark_map::smallmap;
 
@@ -241,7 +242,7 @@ mod tests {
     }
 
     fn mk_exports(contents: &str, style: ModuleStyle) -> Exports {
-        let ast = Ast::parse(contents).0;
+        let ast = Ast::parse(contents, PySourceType::Python).0;
         let path = ModulePath::filesystem(PathBuf::from(if style == ModuleStyle::Interface {
             "foo.pyi"
         } else {

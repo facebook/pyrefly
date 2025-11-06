@@ -164,7 +164,7 @@ tes
             expect(hoverInfo.contents).toHaveLength(1);
 
             const hoverInfoContent = hoverInfo.contents[0];
-            expect(hoverInfoContent.value).toEqual('```python\n(function) test: def test(x: int) -> str\n```');
+            expect(hoverInfoContent.value).toEqual('```python\n(function) test: def test(x: int) -> str: ...\n```');
         });
     });
 

@@ -13,6 +13,7 @@ use pyrefly_util::lined_buffer::DisplayPos;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LinedBuffer;
 use ruff_notebook::Notebook;
+use ruff_python_ast::PySourceType;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
@@ -141,6 +142,14 @@ impl Module {
 
     pub fn notebook(&self) -> Option<&Notebook> {
         self.0.notebook.as_deref()
+    }
+
+    pub fn source_type(&self) -> PySourceType {
+        if self.is_notebook() {
+            PySourceType::Ipynb
+        } else {
+            PySourceType::Python
+        }
     }
 }
 

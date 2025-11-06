@@ -150,6 +150,7 @@ impl Step {
         Arc::new(module_parse(
             load.module_info.contents(),
             ctx.sys_info.version(),
+            load.module_info.source_type(),
             &load.errors,
         ))
     }

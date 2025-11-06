@@ -201,6 +201,22 @@ def func2(a: T2, b: int) -> T2:
 );
 
 testcase!(
+    test_enum_bound_subscript,
+    r#"
+from enum import Enum
+from typing import assert_type
+
+def takes_enum[T: Enum](what: type[T]) -> T:
+    return what["abc"]
+
+class SomeEnum(Enum):
+    abc = 1
+
+assert_type(takes_enum(SomeEnum), SomeEnum)
+"#,
+);
+
+testcase!(
     test_bounded_callable_protocol,
     r#"
 from typing import Protocol, TypeVar, Self, assert_type

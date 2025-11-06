@@ -24,7 +24,7 @@ Default configuration
     */bar/baz.py (glob)
     */bar/qux.py (glob)
   Resolving imports from:
-    Fallback search path (guessed from project_includes): * (glob)
+    Fallback search path (guessed from importing file with heuristics): * (glob)
     Site package path from user: * (glob)
     Site package path queried from interpreter: * (glob)
 Default configuration
@@ -32,7 +32,7 @@ Default configuration
   Covered files:
     */foo.py (glob)
   Resolving imports from:
-    Fallback search path (guessed from project_includes): * (glob)
+    Fallback search path (guessed from importing file with heuristics): * (glob)
     Site package path from user: * (glob)
     Site package path queried from interpreter: * (glob)
 [0]

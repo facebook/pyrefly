@@ -1135,7 +1135,7 @@ impl GleanState<'_> {
                     .push(python::ImportStarLocation::new(
                         import_star,
                         self.facts.file.clone(),
-                        to_span(import.range),
+                        to_span(import_from.range),
                     ));
             } else {
                 let from_name_string = from_module

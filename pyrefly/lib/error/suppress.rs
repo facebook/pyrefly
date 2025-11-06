@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -16,6 +17,7 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::lined_buffer::LineNumber;
 use regex::Regex;
+use ruff_python_ast::PySourceType;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::error;
@@ -27,7 +29,7 @@ use crate::state::errors::Errors;
 /// Combines all errors that affect one line into a single entry.
 // The current format is: `# pyrefly: ignore  # error1, error2, ...`
 fn dedup_errors(errors: &[Error]) -> SmallMap<usize, String> {
-    let mut deduped_errors: SmallMap<usize, Vec<String>> = SmallMap::new();
+    let mut deduped_errors: SmallMap<usize, HashSet<String>> = SmallMap::new();
     for error in errors {
         let line = error
             .display_range()
@@ -35,7 +37,7 @@ fn dedup_errors(errors: &[Error]) -> SmallMap<usize, String> {
             .line_within_file()
             .to_zero_indexed() as usize;
         let error_name = error.error_kind().to_name().to_owned();
-        deduped_errors.entry(line).or_default().push(error_name);
+        deduped_errors.entry(line).or_default().insert(error_name);
     }
     let mut formatted_errors = SmallMap::new();
     for (line, error_set) in deduped_errors {
@@ -50,14 +52,16 @@ fn dedup_errors(errors: &[Error]) -> SmallMap<usize, String> {
 
 // TODO: In future have this return an ast as well as the string for comparison
 fn read_and_validate_file(path: &Path) -> anyhow::Result<String> {
-    if path.extension().and_then(|e| e.to_str()) == Some("ipynb") {
+    let source_type = if path.extension().and_then(|e| e.to_str()) == Some("ipynb") {
         return Err(anyhow!("Cannot suppress errors in notebook file"));
-    }
+    } else {
+        PySourceType::Python
+    };
     let file = fs_anyhow::read_to_string(path);
     match file {
         Ok(file) => {
             // Check for generated + parsable files
-            let (_ast, parse_errors, _unsupported_syntax_errors) = Ast::parse(&file);
+            let (_ast, parse_errors, _unsupported_syntax_errors) = Ast::parse(&file, source_type);
             if !parse_errors.is_empty() {
                 return Err(anyhow!("File is not parsable"));
             }
@@ -155,8 +159,10 @@ pub fn find_unused_ignores<'a>(
         let errors = suppressed_errors.get(path).unwrap_or(&default_set);
         let mut unused_ignores = SmallSet::new();
         for ignore in ignores {
-            let location = ignore.increment();
-            if !errors.contains(&location) && !errors.contains(&ignore) {
+            // An ignore is unused if there's no error on that line.
+            // This matches the is_ignored() logic which checks if a suppression
+            // exists on any line within an error's range.
+            if !errors.contains(&ignore) {
                 unused_ignores.insert(ignore);
             }
         }
@@ -180,10 +186,17 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) -> usize {
         if e.is_ignored(false)
             && let ModulePathDetails::FileSystem(path) = e.path().details()
         {
-            suppressed_errors
-                .entry(path)
-                .or_default()
-                .insert(e.display_range().start.line_within_file());
+            // Insert all lines in the error's range, not just the start line.
+            // This matches the logic in is_ignored() which checks if a suppression
+            // exists on any line within the error's range.
+            let start = e.display_range().start.line_within_file();
+            let end = e.display_range().end.line_within_file();
+            for line_idx in start.to_zero_indexed()..=end.to_zero_indexed() {
+                suppressed_errors
+                    .entry(path)
+                    .or_default()
+                    .insert(LineNumber::from_zero_indexed(line_idx));
+            }
         }
     }
 
@@ -495,6 +508,47 @@ def f() -> int:
     return 1
 "##;
         assert_remove_ignores(input, output, false, 2);
+    }
+
+    #[test]
+    fn test_errors_deduped() {
+        let file_contents = r#"
+# pyrefly: ignore [bad-return]
+def bar(x: int, y: str) -> int:
+    pass
+
+bar("", 1)
+"#;
+
+        let after = r#"
+# pyrefly: ignore [bad-return]
+def bar(x: int, y: str) -> int:
+    pass
+
+# pyrefly: ignore [bad-argument-type]
+bar("", 1)
+"#;
+        assert_suppress_errors(file_contents, after);
+    }
+
+    #[test]
+    fn test_do_not_remove_suppression_needed() {
+        // We should not remove this suppression, since it is needed.
+        let input = r#"
+def foo(s: str) -> int:
+    pass
+
+def bar(x: int) -> int:
+    pass
+
+
+foo(
+    bar(
+        12323423423
+    ) # pyrefly: ignore [bad-argument-type]
+)
+"#;
+        assert_remove_ignores(input, input, false, 0);
     }
 
     #[test]

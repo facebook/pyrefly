@@ -50,6 +50,7 @@ use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::PySourceType;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtFunctionDef;
@@ -1184,7 +1185,7 @@ impl Query {
         path: PathBuf,
         snippet: &str,
     ) -> Result<(), String> {
-        let imported = Query::find_imports(&Ast::parse(snippet).0, t, handle);
+        let imported = Query::find_imports(&Ast::parse(snippet, PySourceType::Python).0, t, handle);
         let imports = imported.map(|x| format!("import {x}\n")).join("");
 
         // First, make sure that the types are well-formed and importable, return `Err` if not

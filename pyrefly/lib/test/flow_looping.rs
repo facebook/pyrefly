@@ -9,15 +9,15 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
-    bug = "We should not be dropping prior type information when a loop recursive Var passes through a generic call",
+    bug = "The results include over-eager pinning of vars in generic solving, see https://github.com/facebook/pyrefly/issues/105",
     test_loop_with_generic_pin,
     r#"
 def condition() -> bool: ...
 def f[T](x: T, y: list[T]) -> T: ...
 x = 5
 y: list[str] = []
-while condition():  # E:  `Literal[5] | str` is not assignable to `str`
-    x = f(x, y)
+while condition():
+    x = f(x, y)  # E: Argument `list[str]` is not assignable to parameter `y` with type `list[int]` in function `f`
 "#,
 );
 
@@ -586,5 +586,32 @@ while True:
     break
 else:
     exit(1)
+"#,
+);
+
+// Test for https://github.com/facebook/pyrefly/issues/726
+testcase!(
+    bug = "Pyrefly currently pins the type too aggressively, resulting in a spurious error",
+    test_reassign_literal_str_to_str_in_loop,
+    r#"
+import os
+
+path = '/'
+for x in ['home', 'other']:  # E: `str` is not assignable to `LiteralString` (caused by inconsistent types when breaking cycles)
+    path = os.path.join(path, x)
+    "#,
+);
+
+// Test for https://github.com/facebook/pyrefly/issues/747
+testcase!(
+    bug = "Pyrefly currently fails to narrow a `Var` that is `LoopRecursive`",
+    test_benign_reassign_and_narrow_in_loop,
+    r#"
+from typing import assert_type
+
+def test(x: int | None, i: int):
+    for _ in []:
+        x = x or i
+        assert_type(x, int)   # E: assert_type(int | None, int)
 "#,
 );

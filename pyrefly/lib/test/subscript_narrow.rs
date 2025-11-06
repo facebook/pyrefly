@@ -163,7 +163,7 @@ from typing import Optional, Dict, Any, assert_type, Literal
 class ErrorContext:
     def __init__(self):
         self.system_context: dict[str, Any] | None = None
-    
+
     def update_context(self, data: dict[str, Any]) -> None:
         # Explicit None check
         if self.system_context is not None:
@@ -183,10 +183,87 @@ class ErrorContext:
             self.system_context = {"status": "active"}
 
         assert_type(self.system_context, dict[str, Any])
-            
+
         self.system_context["timestamp"] = "2024-01-01"
 
         assert_type(self.system_context, dict[str, Any])
         assert_type(self.system_context["timestamp"], Literal["2024-01-01"])
+"#,
+);
+
+testcase!(
+    test_dict_get_literal_key_narrow,
+    r#"
+from typing import assert_type, Literal
+
+def use(mapping: dict[str, int | None]) -> None:
+    if mapping.get("foo") is not None:
+        assert_type(mapping.get("foo"), int)
+        assert_type(mapping["foo"], int)
+    else:
+        assert_type(mapping.get("foo"), None)
+        assert_type(mapping["foo"], None)
+
+def use2(mapping: dict[str, int | None]) -> None:
+    if mapping.get("foo"):
+        assert_type(mapping.get("foo"), int)
+        assert_type(mapping["foo"], int)
+    else:
+        assert_type(mapping.get("foo"), Literal[0] | None)
+        assert_type(mapping["foo"], Literal[0] | None)
+"#,
+);
+
+testcase!(
+    test_typeddict_get_literal_key_narrow,
+    r#"
+from typing import TypedDict, assert_type, Literal
+
+class TD(TypedDict, total=False):
+    foo: int | None
+    bar: str
+
+def use(mapping: TD) -> None:
+    if mapping.get("foo") is not None:
+        assert_type(mapping.get("foo"), int)
+        assert_type(mapping["foo"], int)
+    else:
+        assert_type(mapping.get("foo"), None)
+        assert_type(mapping["foo"], None)
+
+def use2(mapping: TD) -> None:
+    if mapping.get("foo"):
+        assert_type(mapping.get("foo"), int)
+        assert_type(mapping["foo"], int)
+    else:
+        assert_type(mapping.get("foo"), Literal[0] | None)
+        assert_type(mapping["foo"], Literal[0] | None)
+"#,
+);
+
+testcase!(
+    test_non_dict_get_does_not_narrow,
+    r#"
+from typing import assert_type
+
+class NotDict:
+    def get(self, key: str) -> int | None: ...
+    def __getitem__(self, key: str) -> int | None: ...
+
+def use(mapping: NotDict) -> None:
+    if mapping.get("foo") is not None:
+        assert_type(mapping.get("foo"), int | None)
+        assert_type(mapping["foo"], int | None)
+    else:
+        assert_type(mapping.get("foo"), int | None)
+        assert_type(mapping["foo"], int | None)
+
+def use2(mapping: NotDict) -> None:
+    if mapping.get("foo"):
+        assert_type(mapping.get("foo"), int | None)
+        assert_type(mapping["foo"], int | None)
+    else:
+        assert_type(mapping.get("foo"), int | None)
+        assert_type(mapping["foo"], int | None)
 "#,
 );

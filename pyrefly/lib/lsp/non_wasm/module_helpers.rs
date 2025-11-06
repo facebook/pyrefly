@@ -73,8 +73,13 @@ pub(in crate::lsp) fn handle_from_module_path(state: &State, path: ModulePath) -
                 .unwrap_or(unknown);
             Handle::new(module_name, path, config.get_sys_info())
         }
-        _ => config
-            .handle_from_module_path_with_fallback(path.dupe(), config.fallback_search_path.iter()),
+        _ => config.handle_from_module_path_with_fallback(
+            path.dupe(),
+            config
+                .fallback_search_path
+                .for_directory(path.as_path().parent())
+                .iter(),
+        ),
     }
 }
 

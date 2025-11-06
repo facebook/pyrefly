@@ -896,12 +896,9 @@ impl<'a> Transaction<'a> {
                 if changed {
                     self.data.changed.lock().push(module_data.dupe());
                     let mut dirtied = Vec::new();
-                    for x in module_data
-                        .rdeps
-                        .lock()
-                        .iter()
-                        .map(|handle| self.get_module(handle))
-                    {
+                    // We clone so we drop the lock immediately
+                    let rdeps = module_data.rdeps.lock().iter().cloned().collect::<Vec<_>>();
+                    for x in rdeps.iter().map(|handle| self.get_module(handle)) {
                         loop {
                             let reader = x.state.read();
                             if reader.epochs.computed == self.data.now || reader.dirty.deps {

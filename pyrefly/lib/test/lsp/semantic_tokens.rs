@@ -142,7 +142,7 @@ line: 3, column: 6, length: 3, text: Foo
 token-type: class
 
 line: 4, column: 6, length: 3, text: bar
-token-type: function
+token-type: method
 
 line: 4, column: 10, length: 4, text: self
 token-type: parameter
@@ -281,7 +281,7 @@ line: 1, column: 6, length: 4, text: Test
 token-type: class
 
 line: 2, column: 8, length: 3, text: foo
-token-type: function
+token-type: method
 
 line: 2, column: 12, length: 4, text: self
 token-type: parameter
@@ -290,7 +290,7 @@ line: 2, column: 21, length: 3, text: int
 token-type: class, token-modifiers: [defaultLibrary]
 
 line: 3, column: 8, length: 3, text: bar
-token-type: function
+token-type: method
 
 line: 3, column: 12, length: 4, text: self
 token-type: parameter
@@ -584,7 +584,7 @@ line: 1, column: 6, length: 3, text: Foo
 token-type: class
 
 line: 2, column: 8, length: 3, text: foo
-token-type: function
+token-type: method
 
 line: 2, column: 12, length: 4, text: self
 token-type: parameter

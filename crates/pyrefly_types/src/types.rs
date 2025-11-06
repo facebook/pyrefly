@@ -888,6 +888,10 @@ impl Type {
         matches!(self, Type::Any(_))
     }
 
+    pub fn is_typed_dict(&self) -> bool {
+        matches!(self, Type::TypedDict(_) | Type::PartialTypedDict(_))
+    }
+
     pub fn is_error(&self) -> bool {
         matches!(self, Type::Any(AnyStyle::Error))
     }
