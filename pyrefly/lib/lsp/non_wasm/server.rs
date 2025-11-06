@@ -2358,15 +2358,12 @@ impl Server {
         params: SemanticTokensParams,
     ) -> Option<SemanticTokensResult> {
         let uri = &params.text_document.uri;
-        if self.open_notebook_cells.read().contains_key(uri) {
-            // TODO(yangdanny) handle notebooks
-            return None;
-        }
+        let maybe_cell_idx = self.maybe_get_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensFullRequest::METHOD))?;
         Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
             data: transaction
-                .semantic_tokens(&handle, None)
+                .semantic_tokens(&handle, None, maybe_cell_idx)
                 .unwrap_or_default(),
         }))
     }
@@ -2377,17 +2374,14 @@ impl Server {
         params: SemanticTokensRangeParams,
     ) -> Option<SemanticTokensRangeResult> {
         let uri = &params.text_document.uri;
-        if self.open_notebook_cells.read().contains_key(uri) {
-            // TODO(yangdanny) handle notebooks
-            return None;
-        }
+        let maybe_cell_idx = self.maybe_get_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensRangeRequest::METHOD))?;
         let module_info = transaction.get_module_info(&handle)?;
         let range = self.from_lsp_range(uri, &module_info, params.range);
         Some(SemanticTokensRangeResult::Tokens(SemanticTokens {
             result_id: None,
             data: transaction
-                .semantic_tokens(&handle, Some(range))
+                .semantic_tokens(&handle, Some(range), maybe_cell_idx)
                 .unwrap_or_default(),
         }))
     }

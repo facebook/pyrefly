@@ -1097,4 +1097,60 @@ impl LspInteraction {
             }),
         }));
     }
+
+    /// Sends a full semantic tokens request for a notebook cell
+    pub fn semantic_tokens_cell(&mut self, file_name: &str, cell_name: &str) {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        let id = {
+            let mut idx = self.server.request_idx.lock().unwrap();
+            *idx += 1;
+            RequestId::from(*idx)
+        };
+        self.server.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/semanticTokens/full".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": cell_uri
+                }
+            }),
+        }));
+    }
+
+    /// Sends a ranged semantic tokens request for a notebook cell
+    pub fn semantic_tokens_ranged_cell(
+        &mut self,
+        file_name: &str,
+        cell_name: &str,
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+    ) {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        let id = {
+            let mut idx = self.server.request_idx.lock().unwrap();
+            *idx += 1;
+            RequestId::from(*idx)
+        };
+        self.server.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/semanticTokens/range".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": cell_uri
+                },
+                "range": {
+                    "start": {
+                        "line": start_line,
+                        "character": start_char
+                    },
+                    "end": {
+                        "line": end_line,
+                        "character": end_char
+                    }
+                }
+            }),
+        }));
+    }
 }

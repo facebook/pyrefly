@@ -2804,6 +2804,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         limit_range: Option<TextRange>,
+        limit_cell_idx: Option<usize>,
     ) -> Option<Vec<SemanticToken>> {
         let module_info = self.get_module_info(handle)?;
         let bindings = self.get_bindings(handle)?;
@@ -2826,10 +2827,11 @@ impl<'a> Transaction<'a> {
             }
         }
         builder.process_ast(&ast, &|range| self.get_type_trace(handle, range));
-        Some(
-            legends
-                .convert_tokens_into_lsp_semantic_tokens(&builder.all_tokens_sorted(), module_info),
-        )
+        Some(legends.convert_tokens_into_lsp_semantic_tokens(
+            &builder.all_tokens_sorted(),
+            module_info,
+            limit_cell_idx,
+        ))
     }
 
     #[allow(deprecated)] // The `deprecated` field
