@@ -12,9 +12,29 @@ use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
 
 use crate::state::lsp::ImportFormat;
+use crate::state::require::Require;
 use crate::state::state::State;
+use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
+use crate::test::util::mk_multi_file_state;
+
+fn strip_ansi(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            while let Some(next) = chars.next() {
+                if next == 'm' {
+                    break;
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
 
 #[derive(Default)]
 struct ResultsFilter {
@@ -123,6 +143,81 @@ Completion Results:
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn dict_key_completion_from_literal() {
+    let code = r#"
+def use_dict():
+    data = {"foo": 1, "bar": 2}
+    data[""]
+#        ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.trim().contains(
+            r#"
+# main.py
+4 |     data[""]
+             ^
+Completion Results:
+- (Field) bar: Literal[2]
+- (Field) foo: Literal[1]
+"#
+            .trim()
+        )
+    );
+}
+
+#[test]
+fn dict_key_completion_from_nested_literal() {
+    let code = r#"
+def nested():
+    config = {"user": {"name": "Alice"}}
+    config["user"][""]
+#               ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions = state
+        .transaction()
+        .completion(handle, position, ImportFormat::Absolute);
+    let labels: Vec<_> = completions.iter().map(|item| item.label.as_str()).collect();
+    assert!(labels.contains(&"name"));
+}
+
+#[test]
+fn dict_key_completion_from_typed_dict() {
+    let code = r#"
+from typing import TypedDict
+
+class User(TypedDict):
+    name: str
+    age: int
+
+u: User
+u[""]
+#  ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.trim().contains(
+            r#"
+# main.py
+9 | u[""]
+       ^
+Completion Results:
+- (Field) age: int
+- (Field) name: str
+"#
+            .trim()
+        )
     );
 }
 
