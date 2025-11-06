@@ -1149,11 +1149,11 @@ def valid_kwargs(**kwargs: Unpack[Coord]):
 testcase!(
     test_items_as_key,
     r#"
-from typing import assert_type, TypedDict
+from typing import assert_type, TypedDict, Literal
 class TD(TypedDict):
     items: int
 td: TD = {'items': 1}
-assert_type(td['items'], int)
+assert_type(td['items'], Literal[1])
     "#,
 );
 
