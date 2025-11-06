@@ -10,6 +10,7 @@
 use std::fmt;
 use std::fmt::Display;
 use std::num::NonZeroU32;
+use std::ops::Deref;
 use std::ops::Range;
 use std::str::Lines;
 use std::sync::Arc;
@@ -62,7 +63,7 @@ impl LinedBuffer {
         );
         let LineColumn { line, column } = self.lines.line_column(offset, &self.buffer);
         if let Some(notebook) = notebook
-            && let Some((cell, cell_line)) = get_cell_and_line_from_concatenated_line(
+            && let Some((cell, cell_line)) = self.get_cell_and_line_from_concatenated_line(
                 notebook,
                 LineNumber::from_one_indexed(line),
             )
@@ -146,7 +147,7 @@ impl LinedBuffer {
             .lines
             .source_location(x, &self.buffer, PositionEncoding::Utf16);
         if let Some(notebook) = notebook
-            && let Some((_, cell_line)) = get_cell_and_line_from_concatenated_line(
+            && let Some((_, cell_line)) = self.get_cell_and_line_from_concatenated_line(
                 notebook,
                 LineNumber::from_one_indexed(loc.line),
             )
@@ -168,7 +169,7 @@ impl LinedBuffer {
             .lines
             .source_location(x, &self.buffer, PositionEncoding::Utf16);
         if let Some(notebook) = notebook
-            && let Some((cell, _)) = get_cell_and_line_from_concatenated_line(
+            && let Some((cell, _)) = self.get_cell_and_line_from_concatenated_line(
                 notebook,
                 LineNumber::from_one_indexed(loc.line),
             )
@@ -179,10 +180,24 @@ impl LinedBuffer {
         }
     }
 
-    pub fn from_lsp_position(&self, position: lsp_types::Position) -> TextSize {
+    pub fn from_lsp_position(
+        &self,
+        position: lsp_types::Position,
+        notebook_and_cell: Option<(&Notebook, usize)>,
+    ) -> TextSize {
+        let line = if let Some((notebook, cell)) = notebook_and_cell
+            && let Some(concatenated_line) = self.get_concatenated_line_from_cell_and_range(
+                notebook,
+                cell,
+                position.line as usize,
+            ) {
+            concatenated_line.to_one_indexed()
+        } else {
+            OneIndexed::from_zero_indexed(position.line as usize)
+        };
         self.lines.offset(
             SourceLocation {
-                line: OneIndexed::from_zero_indexed(position.line as usize),
+                line,
                 character_offset: OneIndexed::from_zero_indexed(position.character as usize),
             },
             &self.buffer,
@@ -190,15 +205,51 @@ impl LinedBuffer {
         )
     }
 
-    pub fn from_lsp_range(&self, position: lsp_types::Range) -> TextRange {
+    pub fn from_lsp_range(
+        &self,
+        position: lsp_types::Range,
+        notebook_and_cell: Option<(&Notebook, usize)>,
+    ) -> TextRange {
         TextRange::new(
-            self.from_lsp_position(position.start),
-            self.from_lsp_position(position.end),
+            self.from_lsp_position(position.start, notebook_and_cell),
+            self.from_lsp_position(position.end, notebook_and_cell),
         )
     }
 
     pub fn is_ascii(&self) -> bool {
         self.lines.is_ascii()
+    }
+
+    /// Given a one-indexed row in the concatenated source,
+    /// return the cell number and the row in the cell.
+    fn get_cell_and_line_from_concatenated_line(
+        &self,
+        notebook: &Notebook,
+        line: LineNumber,
+    ) -> Option<(OneIndexed, LineNumber)> {
+        let index = notebook.index();
+        let one_indexed = line.to_one_indexed();
+        let cell = index.cell(one_indexed)?;
+        let cell_row = index.cell_row(one_indexed).unwrap_or(OneIndexed::MIN);
+        Some((cell, LineNumber::from_one_indexed(cell_row)))
+    }
+
+    // Given a zero-indexed cell and zero-indexed line within the cell,
+    // return the line number in the concatenated notebook source.
+    fn get_concatenated_line_from_cell_and_range(
+        &self,
+        notebook: &Notebook,
+        cell: usize,
+        cell_line: usize,
+    ) -> Option<LineNumber> {
+        let cell_start_offset = notebook.cell_offsets().deref().get(cell)?;
+        let cell_start_loc =
+            self.lines
+                .source_location(*cell_start_offset, &self.buffer, PositionEncoding::Utf16);
+        let cell_start_line = cell_start_loc.line.to_zero_indexed();
+        Some(LineNumber::from_zero_indexed(
+            (cell_start_line + cell_line) as u32,
+        ))
     }
 }
 
@@ -305,19 +356,6 @@ impl LineNumber {
     pub fn get(self) -> u32 {
         self.0.get()
     }
-}
-
-/// Given a one-indexed row in the concatenated source,
-/// return the cell number and the row in the cell.
-fn get_cell_and_line_from_concatenated_line(
-    notebook: &Notebook,
-    line: LineNumber,
-) -> Option<(OneIndexed, LineNumber)> {
-    let index = notebook.index();
-    let one_indexed = line.to_one_indexed();
-    let cell = index.cell(one_indexed)?;
-    let cell_row = index.cell_row(one_indexed).unwrap_or(OneIndexed::MIN);
-    Some((cell, LineNumber::from_one_indexed(cell_row)))
 }
 
 /// The line and column of an offset in a source file.

@@ -187,8 +187,8 @@ pub struct LspNotebook {
     ruff_notebook: Arc<Notebook>,
     notebook_document: NotebookDocument,
     // Notebook cells have Urls of unspecified format
-    pub cell_url_to_index: SmallMap<Url, usize>,
-    pub cell_index_to_url: Vec<Url>,
+    cell_url_to_index: SmallMap<Url, usize>,
+    cell_index_to_url: Vec<Url>,
 }
 
 impl LspNotebook {
@@ -217,6 +217,10 @@ impl LspNotebook {
 
     pub fn get_cell_url(&self, cell_index: usize) -> Option<&Url> {
         self.cell_index_to_url.get(cell_index)
+    }
+
+    pub fn cell_urls(&self) -> &Vec<Url> {
+        &self.cell_index_to_url
     }
 }
 

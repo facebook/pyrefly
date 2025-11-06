@@ -16,6 +16,7 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
 use dupe::Dupe;
+use dupe::OptionDupedExt;
 use itertools::Itertools;
 use lsp_server::Connection;
 use lsp_server::ErrorCode;
@@ -167,6 +168,8 @@ use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::watch_pattern::WatchPattern;
+use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -174,6 +177,7 @@ use serde_json::Value;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::ModuleInfo;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
 use crate::error::error::Error;
@@ -681,7 +685,7 @@ impl Server {
                 let notebook_path = url
                     .to_file_path()
                     .map_err(|_| anyhow::anyhow!("Could not convert uri to filepath: {}", url))?;
-                for cell_url in lsp_notebook.cell_url_to_index.keys() {
+                for cell_url in lsp_notebook.cell_urls() {
                     self.open_notebook_cells
                         .write()
                         .insert(cell_url.clone(), notebook_path.clone());
@@ -1224,7 +1228,7 @@ impl Server {
                 return match &**lsp_file {
                     LspFile::Notebook(notebook) => {
                         let error_cell = e.get_notebook_cell()?;
-                        let error_cell_uri = notebook.cell_index_to_url.get(error_cell)?;
+                        let error_cell_uri = notebook.get_cell_url(error_cell)?;
                         if let Some(filter_cell) = cell_uri
                             && error_cell_uri != filter_cell
                         {
@@ -1832,7 +1836,7 @@ impl Server {
         self.version_info.lock().remove(&uri);
         let open_files = self.open_files.dupe();
         if let Some(LspFile::Notebook(notebook)) = open_files.write().remove(&uri).as_deref() {
-            for cell in notebook.cell_url_to_index.keys() {
+            for cell in notebook.cell_urls() {
                 self.open_notebook_cells.write().remove(cell);
                 self.connection
                     .publish_diagnostics_for_uri(cell.clone(), Vec::new(), None);
@@ -1978,7 +1982,8 @@ impl Server {
         }
         let handle = self.make_handle_if_enabled(uri, Some(GotoDefinition::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let range = info.from_lsp_position(params.text_document_position_params.position);
+        let range =
+            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
         let targets = transaction.goto_definition(&handle, range);
         let mut lsp_targets = targets
             .iter()
@@ -2005,7 +2010,8 @@ impl Server {
         }
         let handle = self.make_handle_if_enabled(uri, Some(GotoTypeDefinition::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let range = info.from_lsp_position(params.text_document_position_params.position);
+        let range =
+            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
         let targets = transaction.goto_type_definition(&handle, range);
         let mut lsp_targets = targets
             .iter()
@@ -2050,7 +2056,7 @@ impl Server {
             .map(|info| {
                 transaction.completion_with_incomplete(
                     &handle,
-                    info.from_lsp_position(params.text_document_position.position),
+                    self.from_lsp_position(uri, &info, params.text_document_position.position),
                     import_format,
                 )
             })
@@ -2077,7 +2083,7 @@ impl Server {
         )?;
         let import_format = lsp_config.and_then(|c| c.import_format).unwrap_or_default();
         let module_info = transaction.get_module_info(&handle)?;
-        let range = module_info.from_lsp_range(params.range);
+        let range = self.from_lsp_range(uri, &module_info, params.range);
         let code_actions = transaction
             .local_quickfix_code_actions(&handle, range, import_format)?
             .into_map(|(title, info, range, insert_text)| {
@@ -2112,7 +2118,8 @@ impl Server {
         }
         let handle = self.make_handle_if_enabled(uri, Some(DocumentHighlightRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let position = info.from_lsp_position(params.text_document_position_params.position);
+        let position =
+            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
         Some(
             transaction
                 .find_local_references(&handle, position)
@@ -2142,7 +2149,7 @@ impl Server {
             ide_transaction_manager.save(transaction);
             return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
-        let position = info.from_lsp_position(position);
+        let position = self.from_lsp_position(uri, &info, position);
         let Some(FindDefinitionItemWithDocstring {
             metadata,
             definition_range,
@@ -2276,7 +2283,7 @@ impl Server {
         }
         let handle = self.make_handle_if_enabled(uri, Some(Rename::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let position = info.from_lsp_position(params.position);
+        let position = self.from_lsp_position(uri, &info, params.position);
         transaction
             .prepare_rename(&handle, position)
             .map(|range| PrepareRenameResponse::Range(info.to_lsp_range(range)))
@@ -2294,7 +2301,8 @@ impl Server {
         }
         let handle = self.make_handle_if_enabled(uri, Some(SignatureHelpRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let position = info.from_lsp_position(params.text_document_position_params.position);
+        let position =
+            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
         transaction.get_signature_help_at(&handle, position)
     }
 
@@ -2306,7 +2314,8 @@ impl Server {
         }
         let handle = self.make_handle_if_enabled(uri, Some(HoverRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let position = info.from_lsp_position(params.text_document_position_params.position);
+        let position =
+            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
         get_hover(transaction, &handle, position)
     }
 
@@ -2388,7 +2397,7 @@ impl Server {
         }
         let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensRangeRequest::METHOD))?;
         let module_info = transaction.get_module_info(&handle)?;
-        let range = module_info.from_lsp_range(params.range);
+        let range = self.from_lsp_range(uri, &module_info, params.range);
         Some(SemanticTokensRangeResult::Tokens(SemanticTokens {
             result_id: None,
             data: transaction
@@ -2770,6 +2779,34 @@ impl Server {
             uri,
             range: definition_module_info.to_lsp_range(*range),
         })
+    }
+
+    /// If the uri is an open notebook cell, return the index of the cell within the notebook
+    /// otherwise, return None.
+    fn maybe_get_cell_index(&self, cell_uri: &Url) -> Option<usize> {
+        self.open_notebook_cells
+            .read()
+            .get(cell_uri)
+            .and_then(|path| self.open_files.read().get(path).duped())
+            .and_then(|file| match &*file {
+                LspFile::Notebook(notebook) => notebook.get_cell_index(cell_uri),
+                _ => None,
+            })
+    }
+
+    pub fn from_lsp_position(
+        &self,
+        uri: &Url,
+        module: &ModuleInfo,
+        position: Position,
+    ) -> TextSize {
+        let notebook_cell = self.maybe_get_cell_index(uri);
+        module.from_lsp_position(position, notebook_cell)
+    }
+
+    pub fn from_lsp_range(&self, uri: &Url, module: &ModuleInfo, position: Range) -> TextRange {
+        let notebook_cell = self.maybe_get_cell_index(uri);
+        module.from_lsp_range(position, notebook_cell)
     }
 }
 
