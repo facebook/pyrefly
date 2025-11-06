@@ -2310,10 +2310,7 @@ impl Server {
         params: InlayHintParams,
     ) -> Option<Vec<InlayHint>> {
         let uri = &params.text_document.uri;
-        if self.open_notebook_cells.read().contains_key(uri) {
-            // TODO(yangdanny) handle notebooks
-            return None;
-        }
+        let maybe_cell_idx = self.maybe_get_cell_index(uri);
         let range = &params.range;
         let (handle, lsp_analysis_config) = self
             .make_handle_with_lsp_analysis_config_if_enabled(uri, Some(InlayHintRequest::METHOD))?;
@@ -2327,6 +2324,10 @@ impl Server {
         let res = t
             .into_iter()
             .filter_map(|x| {
+                // If the url is a notebook cell, filter out inlay hints for other cells
+                if info.to_cell_for_lsp(x.0) != maybe_cell_idx {
+                    return None;
+                }
                 let position = info.to_lsp_position(x.0);
                 // The range is half-open, so the end position is exclusive according to the spec.
                 if position >= range.start && position < range.end {

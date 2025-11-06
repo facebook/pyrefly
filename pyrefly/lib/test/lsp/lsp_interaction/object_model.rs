@@ -1060,4 +1060,41 @@ impl LspInteraction {
             }),
         }));
     }
+
+    /// Sends an inlay hint request for a notebook cell in the specified range
+    pub fn inlay_hint_cell(
+        &mut self,
+        file_name: &str,
+        cell_name: &str,
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+    ) {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        let id = {
+            let mut idx = self.server.request_idx.lock().unwrap();
+            *idx += 1;
+            RequestId::from(*idx)
+        };
+        self.server.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/inlayHint".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": cell_uri
+                },
+                "range": {
+                    "start": {
+                        "line": start_line,
+                        "character": start_char
+                    },
+                    "end": {
+                        "line": end_line,
+                        "character": end_char
+                    }
+                }
+            }),
+        }));
+    }
 }

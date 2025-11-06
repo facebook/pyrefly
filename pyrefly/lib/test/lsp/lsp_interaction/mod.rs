@@ -19,6 +19,7 @@ mod inlay_hint;
 mod io;
 mod notebook_definition;
 mod notebook_hover;
+mod notebook_inlay_hint;
 mod notebook_sync;
 mod object_model;
 mod provide_type;
