@@ -399,6 +399,22 @@ g(f)
 );
 
 testcase!(
+    test_class_decorator_return_type_applied,
+    r#"
+from typing import reveal_type
+
+def to_int(cls) -> int:
+    return 42
+
+@to_int
+class C:
+    ...
+
+reveal_type(C)  # E: revealed type: int
+    "#,
+);
+
+testcase!(
     bug = "This error message is confusing, I think we need to be clearer when we are printing the *type* of an argument",
     test_decorator_error_message,
     r#"
