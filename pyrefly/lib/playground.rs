@@ -453,7 +453,7 @@ impl Playground {
         Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
             data: transaction
-                .semantic_tokens(handle, range)
+                .semantic_tokens(handle, range, None)
                 .unwrap_or_default(),
         }))
     }

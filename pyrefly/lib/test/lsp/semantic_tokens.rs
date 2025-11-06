@@ -19,7 +19,10 @@ fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
         report.push_str(name);
         report.push_str(".py\n");
         let handle = handles.get(name).unwrap();
-        let tokens = state.transaction().semantic_tokens(handle, None).unwrap();
+        let tokens = state
+            .transaction()
+            .semantic_tokens(handle, None, None)
+            .unwrap();
 
         let mut start_line: usize = 0;
         let mut start_col: usize = 0;
