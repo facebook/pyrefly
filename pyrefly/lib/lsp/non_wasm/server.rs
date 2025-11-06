@@ -845,7 +845,14 @@ impl Server {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<References>(params, &x.id)
                     {
-                        self.references(x.id, ide_transaction_manager, params);
+                        if !self
+                            .open_notebook_cells
+                            .read()
+                            .contains_key(&params.text_document_position.text_document.uri)
+                        {
+                            // TODO(yangdanny) handle notebooks
+                            self.references(x.id, ide_transaction_manager, params);
+                        }
                     }
                 } else if let Some(params) = as_request::<PrepareRenameRequest>(&x) {
                     if let Some(params) = self
@@ -865,7 +872,14 @@ impl Server {
                     if let Some(params) =
                         self.extract_request_params_or_send_err_response::<Rename>(params, &x.id)
                     {
-                        self.rename(x.id, ide_transaction_manager, params);
+                        if !self
+                            .open_notebook_cells
+                            .read()
+                            .contains_key(&params.text_document_position.text_document.uri)
+                        {
+                            // TODO(yangdanny) handle notebooks
+                            self.rename(x.id, ide_transaction_manager, params);
+                        }
                     }
                 } else if let Some(params) = as_request::<SignatureHelpRequest>(&x) {
                     if let Some(params) = self
@@ -1066,12 +1080,19 @@ impl Server {
                     ide_transaction_manager.save(transaction);
                 } else if &x.method == "pyrefly/textDocument/typeErrorDisplayStatus" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
-                    self.send_response(new_response(
-                        x.id,
-                        Ok(self.type_error_display_status(
-                            text_document.uri.to_file_path().unwrap().as_path(),
-                        )),
-                    ));
+                    if self
+                        .open_notebook_cells
+                        .read()
+                        .contains_key(&text_document.uri)
+                    {
+                        // TODO(yangdanny): handle notebooks
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(self.type_error_display_status(
+                                text_document.uri.to_file_path().unwrap().as_path(),
+                            )),
+                        ));
+                    }
                 } else {
                     self.send_response(Response::new_err(
                         x.id.clone(),
@@ -1215,6 +1236,10 @@ impl Server {
         params: crate::lsp::wasm::provide_type::ProvideTypeParams,
     ) -> Option<ProvideTypeResponse> {
         let uri = &params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self.make_handle_if_enabled(uri, None)?;
         provide_type(transaction, &handle, params.positions)
     }
@@ -1932,6 +1957,10 @@ impl Server {
         params: GotoDefinitionParams,
     ) -> Option<GotoDefinitionResponse> {
         let uri = &params.text_document_position_params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self.make_handle_if_enabled(uri, Some(GotoDefinition::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let range = info
@@ -1957,6 +1986,10 @@ impl Server {
         params: GotoTypeDefinitionParams,
     ) -> Option<GotoTypeDefinitionResponse> {
         let uri = &params.text_document_position_params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self.make_handle_if_enabled(uri, Some(GotoTypeDefinition::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let range = info
@@ -1983,6 +2016,13 @@ impl Server {
         params: CompletionParams,
     ) -> anyhow::Result<CompletionResponse> {
         let uri = &params.text_document_position.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return Ok(CompletionResponse::List(CompletionList {
+                is_incomplete: false,
+                items: Vec::new(),
+            }));
+        }
         let (handle, import_format) = match self
             .make_handle_with_lsp_analysis_config_if_enabled(uri, Some(Completion::METHOD))
         {
@@ -2017,6 +2057,10 @@ impl Server {
         params: CodeActionParams,
     ) -> Option<CodeActionResponse> {
         let uri = &params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let (handle, lsp_config) = self.make_handle_with_lsp_analysis_config_if_enabled(
             uri,
             Some(CodeActionRequest::METHOD),
@@ -2052,6 +2096,10 @@ impl Server {
         params: DocumentHighlightParams,
     ) -> Option<Vec<DocumentHighlight>> {
         let uri = &params.text_document_position_params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self.make_handle_if_enabled(uri, Some(DocumentHighlightRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let position = info
@@ -2214,6 +2262,10 @@ impl Server {
         params: TextDocumentPositionParams,
     ) -> Option<PrepareRenameResponse> {
         let uri = &params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self.make_handle_if_enabled(uri, Some(Rename::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let position = info.lined_buffer().from_lsp_position(params.position);
@@ -2228,6 +2280,10 @@ impl Server {
         params: SignatureHelpParams,
     ) -> Option<SignatureHelp> {
         let uri = &params.text_document_position_params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self.make_handle_if_enabled(uri, Some(SignatureHelpRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let position = info
@@ -2238,6 +2294,10 @@ impl Server {
 
     fn hover(&self, transaction: &Transaction<'_>, params: HoverParams) -> Option<Hover> {
         let uri = &params.text_document_position_params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self.make_handle_if_enabled(uri, Some(HoverRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let position = info
@@ -2253,6 +2313,10 @@ impl Server {
         params: InlayHintParams,
     ) -> Option<Vec<InlayHint>> {
         let uri = &params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let range = &params.range;
         let (handle, lsp_analysis_config) = self
             .make_handle_with_lsp_analysis_config_if_enabled(uri, Some(InlayHintRequest::METHOD))?;
@@ -2296,6 +2360,10 @@ impl Server {
         params: SemanticTokensParams,
     ) -> Option<SemanticTokensResult> {
         let uri = &params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensFullRequest::METHOD))?;
         Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
@@ -2311,6 +2379,10 @@ impl Server {
         params: SemanticTokensRangeParams,
     ) -> Option<SemanticTokensRangeResult> {
         let uri = &params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensRangeRequest::METHOD))?;
         let module_info = transaction.get_module_info(&handle)?;
         let range = module_info.lined_buffer().from_lsp_range(params.range);
@@ -2328,6 +2400,10 @@ impl Server {
         params: DocumentSymbolParams,
     ) -> Option<Vec<DocumentSymbol>> {
         let uri = &params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         if self
             .workspaces
             .get_with(uri.to_file_path().unwrap(), |(_, workspace)| {
@@ -2408,6 +2484,14 @@ impl Server {
         transaction: &Transaction<'_>,
         text_document: &TextDocumentIdentifier,
     ) -> Option<Vec<Range>> {
+        if self
+            .open_notebook_cells
+            .read()
+            .contains_key(&text_document.uri)
+        {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self.make_handle_if_enabled(&text_document.uri, None)?;
         let module = transaction.get_module_info(&handle)?;
         let docstring_ranges = transaction.docstring_ranges(&handle)?;
@@ -2424,6 +2508,14 @@ impl Server {
         transaction: &Transaction<'_>,
         params: FoldingRangeParams,
     ) -> Option<Vec<FoldingRange>> {
+        if self
+            .open_notebook_cells
+            .read()
+            .contains_key(&params.text_document.uri)
+        {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self
             .make_handle_if_enabled(&params.text_document.uri, Some(FoldingRangeRequest::METHOD))?;
         let module = transaction.get_module_info(&handle)?;
@@ -2465,6 +2557,17 @@ impl Server {
         transaction: &Transaction<'_>,
         params: DocumentDiagnosticParams,
     ) -> DocumentDiagnosticReport {
+        let uri = &params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
+                full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                    items: Vec::new(),
+                    result_id: None,
+                },
+                related_documents: None,
+            });
+        }
         let handle = make_open_handle(
             &self.state,
             &params.text_document.uri.to_file_path().unwrap(),
