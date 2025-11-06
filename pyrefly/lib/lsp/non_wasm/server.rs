@@ -216,12 +216,12 @@ use crate::lsp::wasm::will_rename_files::will_rename_files;
 use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
+use crate::state::notebook::LspNotebook;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::semantic_tokens::disabled_ranges_for_module;
 use crate::state::state::CommittingTransaction;
 use crate::state::state::LspFile;
-use crate::state::state::LspNotebook;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 

@@ -35,7 +35,6 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
 use lsp_types::FoldingRangeKind;
-use lsp_types::Url;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::module::Module;
@@ -59,7 +58,6 @@ use pyrefly_util::uniques::UniqueFactory;
 use pyrefly_util::upgrade_lock::UpgradeLock;
 use pyrefly_util::upgrade_lock::UpgradeLockExclusiveGuard;
 use pyrefly_util::upgrade_lock::UpgradeLockWriteGuard;
-use ruff_notebook::Cell;
 use ruff_notebook::Notebook;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Stmt;
@@ -104,7 +102,6 @@ use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
-use crate::lsp::wasm::notebook::NotebookDocument;
 use crate::module::bundled::BundledStub;
 use crate::module::finder::find_import_prefixes;
 use crate::module::typeshed::BundledTypeshedStdlib;
@@ -119,6 +116,7 @@ use crate::state::loader::LoaderFindCache;
 use crate::state::memory::MemoryFiles;
 use crate::state::memory::MemoryFilesLookup;
 use crate::state::memory::MemoryFilesOverlay;
+use crate::state::notebook::LspNotebook;
 use crate::state::require::Require;
 use crate::state::steps::Context;
 use crate::state::steps::Step;
@@ -183,58 +181,6 @@ pub enum LspFile {
     Notebook(Arc<LspNotebook>),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LspNotebook {
-    ruff_notebook: Arc<Notebook>,
-    notebook_document: NotebookDocument,
-    // Notebook cells have Urls of unspecified format
-    cell_url_to_index: SmallMap<Url, usize>,
-    cell_index_to_url: Vec<Url>,
-}
-
-impl LspNotebook {
-    pub fn new(ruff_notebook: Notebook, notebook_document: NotebookDocument) -> Self {
-        let mut cell_url_to_index = SmallMap::new();
-        let mut cell_index_to_url = Vec::new();
-        for (idx, cell) in notebook_document.cells.iter().enumerate() {
-            cell_url_to_index.insert(cell.document.clone(), idx);
-            cell_index_to_url.push(cell.document.clone());
-        }
-        Self {
-            ruff_notebook: Arc::new(ruff_notebook),
-            notebook_document,
-            cell_url_to_index,
-            cell_index_to_url,
-        }
-    }
-
-    pub fn notebook_document(&self) -> &NotebookDocument {
-        &self.notebook_document
-    }
-
-    pub fn get_cell_index(&self, cell_url: &Url) -> Option<usize> {
-        self.cell_url_to_index.get(cell_url).copied()
-    }
-
-    pub fn get_cell_url(&self, cell_index: usize) -> Option<&Url> {
-        self.cell_index_to_url.get(cell_index)
-    }
-
-    pub fn cell_urls(&self) -> &Vec<Url> {
-        &self.cell_index_to_url
-    }
-
-    pub fn get_cell_contents(&self, cell_url: &Url) -> Option<String> {
-        let idx = *self.cell_url_to_index.get(cell_url)?;
-        let cell = self.ruff_notebook.cells().get(idx)?;
-        if let Cell::Code(cell) = cell {
-            Some(cell.source.to_string())
-        } else {
-            None
-        }
-    }
-}
-
 impl ModuleDataInner {
     fn new(require: Require, now: Epoch) -> Self {
         Self {
@@ -256,7 +202,7 @@ impl LspFile {
     pub fn get_string(&self) -> &str {
         match self {
             Self::Source(contents) => contents.as_str(),
-            Self::Notebook(notebook) => notebook.ruff_notebook.source_code(),
+            Self::Notebook(notebook) => notebook.ruff_notebook().source_code(),
         }
     }
 
@@ -267,7 +213,9 @@ impl LspFile {
     pub fn to_file_contents(&self) -> FileContents {
         match self {
             Self::Source(contents) => FileContents::Source(Arc::clone(contents)),
-            Self::Notebook(notebook) => FileContents::Notebook(Arc::clone(&notebook.ruff_notebook)),
+            Self::Notebook(notebook) => {
+                FileContents::Notebook(Arc::clone(notebook.ruff_notebook()))
+            }
         }
     }
 }
