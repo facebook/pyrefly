@@ -11,4 +11,5 @@ pub mod module_helpers;
 pub mod queue;
 pub mod server;
 pub mod transaction_manager;
+pub mod will_rename_files;
 pub mod workspace;

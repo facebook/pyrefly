@@ -614,7 +614,8 @@ impl ConfigFile {
     }
 
     pub fn default_project_includes() -> Globs {
-        Globs::new(vec!["**/*.py*".to_owned()]).unwrap_or_else(|_| Globs::empty())
+        Globs::new(vec!["**/*.py*".to_owned(), "**/*.ipynb".to_owned()])
+            .unwrap_or_else(|_| Globs::empty())
     }
 
     /// Project excludes that should always be set, even if a user or config specifies

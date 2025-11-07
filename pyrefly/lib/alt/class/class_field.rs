@@ -2185,6 +2185,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 if let Some(parent_member) = self.get_class_member(class_object, field) {
                     let parent_field = Arc::unwrap_or_clone(parent_member.value.clone());
+                    // Get instance method types for fields that are methods, otherwise use the field type directly.
+                    let ty = self
+                        .as_instance_attribute(
+                            &parent_field,
+                            &Instance::of_protocol(parent_cls, self.instantiate(cls)),
+                        )
+                        .as_instance_method()
+                        .unwrap_or(field_entry.ty());
                     inherited_fields
                         .entry(field)
                         .or_default()
@@ -2192,7 +2200,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             class: class_object.dupe(),
                             metadata: parent_metadata.clone(),
                             field: parent_field,
-                            ty: field_entry.ty(),
+                            ty,
                         });
                 }
             }
@@ -2206,19 +2214,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .iter()
                     .map(|info| info.ty.clone())
                     .collect();
-                if types.iter().any(|ty| {
-                    matches!(
-                        ty,
-                        Type::BoundMethod(..)
-                            | Type::Function(..)
-                            | Type::Forall(_)
-                            | Type::Overload(_)
-                    )
-                }) {
-                    // TODO(fangyizhou): Handle bound methods and functions properly
-                    // This is a leftover from https://github.com/facebook/pyrefly/pull/1196
-                    continue;
-                }
                 let intersect = self.intersects(&types);
                 if matches!(intersect, Type::Never(_)) {
                     let mut error_msg = vec1![
@@ -2239,6 +2234,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ErrorInfo::Kind(ErrorKind::InconsistentInheritance),
                         error_msg,
                     );
+                } else {
+                    for info in inherited_field_infos_by_ancestor {
+                        // Read-write fields should check that parent field's type
+                        // is assignable to the intersection.
+                        // Skip function types for this check for now.
+                        if !info.field.is_read_only()
+                            && !info.ty.is_function_type()
+                            && !self.is_subset_eq(&info.ty, &intersect)
+                        {
+                            self.error(
+                                errors,
+                                cls.range(),
+                                ErrorInfo::Kind(ErrorKind::InconsistentInheritance),
+                                format!(
+                                    "Field `{field_name}` is declared `{}` in ancestor `{}`, which is not assignable to the type `{}` implied by multiple inheritance",
+                                    info.ty,
+                                    info.class,
+                                    intersect,
+                                ),
+                            );
+                        }
+                    }
                 }
 
                 if let Some(child_member) = self.get_class_member(cls, field_name) {

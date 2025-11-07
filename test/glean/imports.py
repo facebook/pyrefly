@@ -6,5 +6,5 @@
 
 import itertools as it
 import os
-from typing import *
+import typing
 from dataclasses import dataclass, field as f

@@ -2318,64 +2318,69 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let base = self.expr_infer(&subscript.value, errors);
         let slice_ty = self.expr_infer(&subscript.slice, errors);
         self.distribute_over_union(&base, |base| {
-            match (base, &slice_ty) {
-                (Type::TypedDict(typed_dict), Type::Literal(Lit::Str(field_name))) => {
-                    let field_name = Name::new(field_name);
-                    self.check_assign_to_typed_dict_literal_subscript(
-                        typed_dict,
-                        &field_name,
-                        value,
-                        subscript.slice.range(),
-                        subscript.range(),
-                        errors,
-                    )
-                }
-                (Type::TypedDict(typed_dict), Type::ClassType(cls))
-                    if cls.is_builtin("str")
-                        && let Some(field_ty) =
-                            self.get_typed_dict_value_type_as_builtins_dict(typed_dict) =>
-                {
-                    self.check_assign_to_typed_dict_field(
-                        typed_dict.name(),
-                        None,
-                        &field_ty,
-                        false,
-                        value,
-                        subscript.slice.range(),
-                        subscript.range(),
-                        errors,
-                    )
-                }
-                (_, _) => {
-                    let call_setitem = |value_arg| {
-                        self.call_method_or_error(
-                            base,
-                            &dunder::SETITEM,
-                            subscript.range,
-                            &[CallArg::ty(&slice_ty, subscript.slice.range()), value_arg],
-                            &[],
+            self.distribute_over_union(&slice_ty, |key| {
+                match (base, key) {
+                    (Type::TypedDict(typed_dict), Type::Literal(Lit::Str(field_name))) => {
+                        let field_name = Name::new(field_name);
+                        self.check_assign_to_typed_dict_literal_subscript(
+                            typed_dict,
+                            &field_name,
+                            value,
+                            subscript.slice.range(),
+                            subscript.range(),
                             errors,
-                            Some(&|| ErrorContext::SetItem(self.for_display(base.clone()))),
                         )
-                    };
-                    match value {
-                        ExprOrBinding::Expr(e) => {
-                            call_setitem(CallArg::expr(e));
-                            // We already emit errors for `e` during `call_method_or_error`
-                            self.expr_infer(
-                                e,
-                                &ErrorCollector::new(errors.module().clone(), ErrorStyle::Never),
+                    }
+                    (Type::TypedDict(typed_dict), Type::ClassType(cls))
+                        if cls.is_builtin("str")
+                            && let Some(field_ty) =
+                                self.get_typed_dict_value_type_as_builtins_dict(typed_dict) =>
+                    {
+                        self.check_assign_to_typed_dict_field(
+                            typed_dict.name(),
+                            None,
+                            &field_ty,
+                            false,
+                            value,
+                            subscript.slice.range(),
+                            subscript.range(),
+                            errors,
+                        )
+                    }
+                    (_, _) => {
+                        let call_setitem = |value_arg| {
+                            self.call_method_or_error(
+                                base,
+                                &dunder::SETITEM,
+                                subscript.range,
+                                &[CallArg::ty(key, subscript.slice.range()), value_arg],
+                                &[],
+                                errors,
+                                Some(&|| ErrorContext::SetItem(self.for_display(base.clone()))),
                             )
-                        }
-                        ExprOrBinding::Binding(b) => {
-                            let binding_ty = self.solve_binding(b, errors).arc_clone_ty();
-                            // Use the subscript's location
-                            call_setitem(CallArg::ty(&binding_ty, subscript.range));
-                            binding_ty
+                        };
+                        match value {
+                            ExprOrBinding::Expr(e) => {
+                                call_setitem(CallArg::expr(e));
+                                // We already emit errors for `e` during `call_method_or_error`
+                                self.expr_infer(
+                                    e,
+                                    &ErrorCollector::new(
+                                        errors.module().clone(),
+                                        ErrorStyle::Never,
+                                    ),
+                                )
+                            }
+                            ExprOrBinding::Binding(b) => {
+                                let binding_ty = self.solve_binding(b, errors).arc_clone_ty();
+                                // Use the subscript's location
+                                call_setitem(CallArg::ty(&binding_ty, subscript.range));
+                                binding_ty
+                            }
                         }
                     }
                 }
-            }
+            })
         })
     }
 
@@ -3343,23 +3348,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::Decorator(expr) => self.expr_infer(expr, errors),
             Binding::LambdaParameter(var) => var.to_type(),
             Binding::FunctionParameter(param) => {
+                let finalize = |target: &AnnotationTarget, ty| match target {
+                    AnnotationTarget::ArgsParam(_) => Type::Tuple(Tuple::unbounded(ty)),
+                    AnnotationTarget::KwargsParam(_) => self
+                        .stdlib
+                        .dict(self.stdlib.str().clone().to_type(), ty)
+                        .to_type(),
+                    _ => ty,
+                };
                 match param {
                     FunctionParameter::Annotated(key) => {
                         let annotation = self.get_idx(*key);
                         annotation.ty(self.stdlib).clone().unwrap_or_else(|| {
                             // This annotation isn't valid. It's something like `: Final` that doesn't
                             // have enough information to create a real type.
-                            Type::any_implicit()
+                            finalize(&annotation.target, Type::any_implicit())
                         })
                     }
-                    FunctionParameter::Unannotated(var, function_idx) => {
+                    FunctionParameter::Unannotated(var, function_idx, target) => {
                         // It's important that we force the undecorated function binding before reading
                         // from this var. Solving the undecorated function binding pins the type of the var,
                         // either to a concrete type or to any. Without this we can have non-determinism
                         // where the reader can observe an unresolved var or a resolved type, depending on
                         // the order of solved bindings.
                         self.get_idx(*function_idx);
-                        self.solver().force_var(*var)
+                        let ty = self.solver().force_var(*var);
+                        finalize(target, ty)
                     }
                 }
             }

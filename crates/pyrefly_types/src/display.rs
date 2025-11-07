@@ -813,10 +813,10 @@ pub mod tests {
                 &tuple_param,
                 TArgs::new(
                     tuple_param_tparams.dupe(),
-                    vec![Type::Tuple(Tuple::Unbounded(Box::new(class_type(
+                    vec![Type::Tuple(Tuple::unbounded(class_type(
                         &foo1,
                         TArgs::default()
-                    ))))]
+                    )))]
                 )
             )
             .to_string(),
@@ -829,10 +829,7 @@ pub mod tests {
                     tuple_param_tparams.dupe(),
                     vec![Type::Tuple(Tuple::Unpacked(Box::new((
                         vec![class_type(&foo1, TArgs::default())],
-                        Type::Tuple(Tuple::Unbounded(Box::new(class_type(
-                            &foo1,
-                            TArgs::default(),
-                        )))),
+                        Type::Tuple(Tuple::unbounded(class_type(&foo1, TArgs::default(),))),
                         vec![class_type(&foo1, TArgs::default())],
                     ))))]
                 )

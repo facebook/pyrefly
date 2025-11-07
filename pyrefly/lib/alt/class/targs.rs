@@ -463,7 +463,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::Unpack(t) => {
                     if !suffix.is_empty() {
-                        middle.push(Type::Tuple(Tuple::Unbounded(Box::new(self.unions(suffix)))));
+                        middle.push(Type::Tuple(Tuple::unbounded(self.unions(suffix))));
                         suffix = Vec::new();
                     } else {
                         middle.push((**t).clone())
@@ -503,7 +503,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect();
                 Type::Tuple(Tuple::unpacked(
                     prefix,
-                    Type::Tuple(Tuple::Unbounded(Box::new(self.unions(middle_types)))),
+                    Type::Tuple(Tuple::unbounded(self.unions(middle_types))),
                     suffix,
                 ))
             }

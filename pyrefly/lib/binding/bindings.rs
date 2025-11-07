@@ -21,11 +21,11 @@ use pyrefly_types::types::Type;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::uniques::UniqueFactory;
-use ruff_python_ast::AnyParameterRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Parameter;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::TypeParam;
 use ruff_python_ast::TypeParams;
@@ -950,7 +950,7 @@ impl<'a> BindingsBuilder<'a> {
     pub fn bind_function_param(
         &mut self,
         target: AnnotationTarget,
-        x: AnyParameterRef,
+        x: &Parameter,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
     ) {
@@ -968,6 +968,7 @@ impl<'a> BindingsBuilder<'a> {
                 None => FunctionParameter::Unannotated(
                     self.solver.fresh_parameter(self.uniques),
                     undecorated_idx,
+                    target,
                 ),
             }),
         );

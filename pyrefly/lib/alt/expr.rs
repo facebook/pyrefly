@@ -110,17 +110,18 @@ impl<'a> TypeOrExpr<'a> {
         }
     }
 
-    pub fn materialize<Ans: LookupAnswer>(
+    pub fn transform<Ans: LookupAnswer>(
         &self,
         solver: &AnswersSolver<Ans>,
         errors: &ErrorCollector,
         owner: &'a Owner<Type>,
+        transformation: impl Fn(&Type) -> Type,
     ) -> (Self, bool) {
         let ty = self.infer(solver, errors);
-        let materialized = ty.materialize();
-        let changed = ty != materialized;
+        let transformed = transformation(&ty);
+        let changed = ty != transformed;
         (
-            TypeOrExpr::Type(owner.push(materialized), self.range()),
+            TypeOrExpr::Type(owner.push(transformed), self.range()),
             changed,
         )
     }
@@ -764,7 +765,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .collect();
                     Type::Tuple(Tuple::unpacked(
                         prefix,
-                        Type::Tuple(Tuple::Unbounded(Box::new(self.unions(middle_types)))),
+                        Type::Tuple(Tuple::unbounded(self.unions(middle_types))),
                         suffix,
                     ))
                 }

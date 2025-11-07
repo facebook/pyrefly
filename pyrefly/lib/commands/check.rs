@@ -57,6 +57,7 @@ use crate::error::summarize::print_error_summary;
 use crate::error::suppress;
 use crate::module::typeshed::stdlib_search_path;
 use crate::report;
+use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
@@ -174,7 +175,6 @@ impl SnippetCheckArgs {
                 expectations: false,
                 remove_unused_ignores: false,
                 all: false,
-                same_line: false,
             },
         };
         match check_args.run_once_with_snippet(self.code, config_finder) {
@@ -286,9 +286,6 @@ struct BehaviorArgs {
     /// If we are removing unused ignores, should we remove all unused ignores or only Pyrefly specific `pyrefly: ignore`s?
     #[arg(long, requires("remove_unused_ignores"))]
     all: bool,
-    /// If we are suppressing errors, should the suppression comment go at the end of the line instead of on the line above?
-    #[arg(long, requires("suppress_errors"))]
-    same_line: bool,
 }
 
 impl OutputFormat {
@@ -598,7 +595,7 @@ impl CheckArgs {
         // Add the snippet source to the transaction's memory
         transaction.as_mut().set_memory(vec![(
             PathBuf::from(module_path.as_path()),
-            Some(Arc::new(code)),
+            Some(Arc::new(FileContents::from_source(code))),
         )]);
 
         self.run_inner(
@@ -826,7 +823,7 @@ impl CheckArgs {
             fs_anyhow::write(path, report::trace::trace(transaction))?;
         }
         if self.behavior.suppress_errors {
-            suppress::suppress_errors(errors.shown.clone(), self.behavior.same_line);
+            suppress::suppress_errors(errors.shown.clone());
         }
         if self.behavior.remove_unused_ignores {
             suppress::remove_unused_ignores(&loads, self.behavior.all);

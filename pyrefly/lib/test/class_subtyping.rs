@@ -312,7 +312,6 @@ class E(C, D): # E: Field `x` has inconsistent types inherited from multiple bas
 );
 
 testcase!(
-    bug = "This is currently not handled",
     test_multiple_inheritance_incompatible_methods,
     r#"
 class Foo:
@@ -320,7 +319,20 @@ class Foo:
 class Bar:
     def foo(self) -> str: ...
 
-class Both(Foo, Bar): # Expect error here
+class Both(Foo, Bar): # E: Field `foo` has inconsistent types inherited from multiple base classes
+    ...
+"#,
+);
+
+testcase!(
+    test_multiple_inheritance_compatible_generic_methods,
+    r#"
+class Foo[T1]:
+    def foo(self) -> T1: ...
+class Bar[T2]:
+    def foo(self) -> T2: ...
+
+class Both[T](Foo[T], Bar[T]): # Should have no error here
     ...
 "#,
 );
@@ -334,6 +346,26 @@ class Bar:
     def __init__(self, x: str) -> None: ...
 
 class Both(Foo, Bar): # No error here, because __init__ is special
+    ...
+"#,
+);
+
+testcase!(
+    test_multiple_inheritance_read_write,
+    r#"
+class Foo:
+    x: int
+    @property
+    def y(self) -> int:
+        return 1
+class Bar:
+    x: float
+    @property
+    def y(self) -> float:
+        return 1
+
+# For read-write fields, the inherited type from each parent should be assignable to the intersection
+class Both(Foo, Bar):  # E: Field `x` is declared `float`
     ...
 "#,
 );

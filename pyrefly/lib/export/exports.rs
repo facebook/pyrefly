@@ -68,6 +68,9 @@ struct ExportsInner {
     /// Names that are available via `from <this_module> import <name>` along with their locations
     exports: Calculation<Arc<SmallMap<Name, ExportLocation>>>,
     /// If this module has a docstring, the range is stored here. Docstrings for exports themselves are stored in exports.
+    /// While putting the module docstring range on exports is a bit weird (it doesn't actually have much to do with exports),
+    /// we can't put it on the Module as that doesn't have the AST, and we can't get it from the AST as we often throw that away,
+    /// so here makes sense.
     docstring_range: Option<TextRange>,
 }
 

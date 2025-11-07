@@ -22,6 +22,7 @@ pub mod ast;
 pub mod display;
 pub mod docstring;
 pub mod dunder;
+pub mod folding;
 pub mod ignore;
 pub mod keywords;
 pub mod module;

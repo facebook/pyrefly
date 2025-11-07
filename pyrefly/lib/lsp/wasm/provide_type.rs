@@ -50,7 +50,7 @@ pub fn provide_type(
     let mut contents = Vec::new();
 
     for position in positions {
-        let text_size = info.lined_buffer().from_lsp_position(position);
+        let text_size = info.from_lsp_position(position, None);
         if let Some(ty) = transaction.get_type_at(handle, text_size) {
             let mut c = TypeDisplayContext::new(&[&ty]);
             c.set_display_mode_to_hover();

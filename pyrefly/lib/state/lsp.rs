@@ -6,6 +6,7 @@
  */
 
 use std::collections::BTreeMap;
+use std::cmp::Reverse;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -16,6 +17,7 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemTag;
 use lsp_types::DocumentSymbol;
+use lsp_types::FoldingRangeKind;
 use lsp_types::ParameterInformation;
 use lsp_types::ParameterLabel;
 use lsp_types::SemanticToken;
@@ -26,6 +28,7 @@ use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
+use pyrefly_python::folding::folding_ranges;
 use pyrefly_python::keywords::get_keywords;
 use pyrefly_python::module::Module;
 use pyrefly_python::module::TextRangeWithModule;
@@ -1580,6 +1583,31 @@ impl<'a> Transaction<'a> {
         definitions.into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
     }
 
+    pub fn folding_ranges(
+        &self,
+        handle: &Handle,
+    ) -> Option<Vec<(TextRange, Option<FoldingRangeKind>)>> {
+        let ast = self.get_ast(handle)?;
+        let module_info = self.get_module_info(handle)?;
+        Some(folding_ranges(&module_info, &ast.body))
+    }
+
+    pub fn docstring_ranges(&self, handle: &Handle) -> Option<Vec<TextRange>> {
+        let ranges = self.folding_ranges(handle)?;
+        Some(
+            ranges
+                .into_iter()
+                .filter_map(|(range, kind)| {
+                    if kind == Some(FoldingRangeKind::Comment) {
+                        Some(range)
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        )
+    }
+
     pub fn goto_type_definition(
         &self,
         handle: &Handle,
@@ -1608,6 +1636,29 @@ impl<'a> Transaction<'a> {
         .into_iter()
         .next()
         .map(|item| TextRangeWithModule::new(item.module, item.definition_range))
+    }
+
+    fn search_modules_fuzzy(&self, pattern: &str) -> Vec<ModuleName> {
+        let matcher = SkimMatcherV2::default().smart_case();
+        let mut results = Vec::new();
+
+        for module_name in self.modules() {
+            let module_name_str = module_name.as_str();
+
+            // Skip builtins module
+            if module_name_str == "builtins" {
+                continue;
+            }
+
+            let components = module_name.components();
+            let last_component = components.last().map(|name| name.as_str()).unwrap_or("");
+            if let Some(score) = matcher.fuzzy_match(last_component, pattern) {
+                results.push((score, module_name));
+            }
+        }
+
+        results.sort_by_key(|(score, _)| Reverse(*score));
+        results.into_map(|(_, module_name)| module_name)
     }
 
     /// Produce code actions that makes edits local to the file.
@@ -1914,6 +1965,26 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn add_magic_method_completions(
+        &self,
+        identifier: &Identifier,
+        completions: &mut Vec<CompletionItem>,
+    ) {
+        let typed = identifier.as_str();
+        if !typed.is_empty() && !typed.starts_with("__") {
+            return;
+        }
+        for name in dunder::MAGIC_METHOD_NAMES {
+            if name.starts_with(typed) {
+                completions.push(CompletionItem {
+                    label: (*name).to_owned(),
+                    kind: Some(CompletionItemKind::METHOD),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
     fn add_builtins_autoimport_completions(
         &self,
         handle: &Handle,
@@ -1986,9 +2057,7 @@ impl<'a> Transaction<'a> {
                         import_format,
                     );
                     let import_text_edit = TextEdit {
-                        range: module_info
-                            .lined_buffer()
-                            .to_lsp_range(TextRange::at(position, TextSize::new(0))),
+                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
                         new_text: insert_text.clone(),
                     };
                     (Some(insert_text), Some(vec![import_text_edit]))
@@ -2023,7 +2092,6 @@ impl<'a> Transaction<'a> {
                             import_regular_import_edit(&ast, module_handle);
                         let import_text_edit = TextEdit {
                             range: module_info
-                                .lined_buffer()
                                 .to_lsp_range(TextRange::at(position, TextSize::new(0))),
                             new_text: insert_text.clone(),
                         };
@@ -2514,7 +2582,13 @@ impl<'a> Transaction<'a> {
                     });
                 }
             }
-            Some(IdentifierWithContext { identifier, .. }) => {
+            Some(IdentifierWithContext {
+                identifier,
+                context,
+            }) => {
+                if matches!(context, IdentifierContext::MethodDef { .. }) {
+                    self.add_magic_method_completions(&identifier, &mut result);
+                }
                 self.add_kwargs_completions(handle, position, &mut result);
                 self.add_keyword_completions(handle, &mut result);
                 let has_local_completions = self.add_local_variable_completions(
@@ -2567,7 +2641,13 @@ impl<'a> Transaction<'a> {
             }
         }
         for item in &mut result {
-            let sort_text = if item.additional_text_edits.is_some() {
+            let sort_text = if item
+                .tags
+                .as_ref()
+                .is_some_and(|tags| tags.contains(&CompletionItemTag::DEPRECATED))
+            {
+                "9"
+            } else if item.additional_text_edits.is_some() {
                 "4"
             } else if item.label.starts_with("__") {
                 "3"
@@ -2645,6 +2725,45 @@ impl<'a> Transaction<'a> {
             }
         }
         Vec::new()
+    }
+
+    pub fn search_exports_exact(&self, name: &str) -> Vec<Handle> {
+        self.search_exports(|handle, exports| {
+            if let Some(export) = exports.get(&Name::new(name)) {
+                match export {
+                    ExportLocation::ThisModule(_) => vec![handle.dupe()],
+                    // Re-exported modules like `foo` in `from from_module import foo`
+                    // should likely be ignored in autoimport suggestions
+                    // because the original export in from_module will show it.
+                    // The current strategy will prevent intended re-exports from showing up in
+                    // result list, but it's better than showing thousands of likely bad results.
+                    ExportLocation::OtherModule(..) => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    fn search_exports_fuzzy(&self, pattern: &str) -> Vec<(Handle, String, Export)> {
+        let mut res = self.search_exports(|handle, exports| {
+            let matcher = SkimMatcherV2::default().smart_case();
+            let mut results = Vec::new();
+            for (name, location) in exports.iter() {
+                let name = name.as_str();
+                if let Some(score) = matcher.fuzzy_match(name, pattern) {
+                    match location {
+                        ExportLocation::OtherModule(..) => {}
+                        ExportLocation::ThisModule(export) => {
+                            results.push((score, handle.dupe(), name.to_owned(), export.clone()));
+                        }
+                    }
+                }
+            }
+            results
+        });
+        res.sort_by_key(|(score, _, _, _)| Reverse(*score));
+        res.into_map(|(_, handle, name, export)| (handle, name, export))
     }
 
     fn filter_parameters(
@@ -2990,6 +3109,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         limit_range: Option<TextRange>,
+        limit_cell_idx: Option<usize>,
     ) -> Option<Vec<SemanticToken>> {
         let module_info = self.get_module_info(handle)?;
         let bindings = self.get_bindings(handle)?;
@@ -3012,10 +3132,11 @@ impl<'a> Transaction<'a> {
             }
         }
         builder.process_ast(&ast, &|range| self.get_type_trace(handle, range));
-        Some(
-            legends
-                .convert_tokens_into_lsp_semantic_tokens(&builder.all_tokens_sorted(), module_info),
-        )
+        Some(legends.convert_tokens_into_lsp_semantic_tokens(
+            &builder.all_tokens_sorted(),
+            module_info,
+            limit_cell_idx,
+        ))
     }
 
     #[allow(deprecated)] // The `deprecated` field
@@ -3047,12 +3168,8 @@ impl<'a> Transaction<'a> {
                         kind: lsp_types::SymbolKind::FUNCTION,
                         tags: None,
                         deprecated: None,
-                        range: module_info
-                            .lined_buffer()
-                            .to_lsp_range(stmt_function_def.range),
-                        selection_range: module_info
-                            .lined_buffer()
-                            .to_lsp_range(stmt_function_def.name.range),
+                        range: module_info.to_lsp_range(stmt_function_def.range),
+                        selection_range: module_info.to_lsp_range(stmt_function_def.name.range),
 
                         children: Some(children),
                     });
@@ -3070,12 +3187,8 @@ impl<'a> Transaction<'a> {
                         kind: lsp_types::SymbolKind::CLASS,
                         tags: None,
                         deprecated: None,
-                        range: module_info
-                            .lined_buffer()
-                            .to_lsp_range(stmt_class_def.range),
-                        selection_range: module_info
-                            .lined_buffer()
-                            .to_lsp_range(stmt_class_def.name.range),
+                        range: module_info.to_lsp_range(stmt_class_def.range),
+                        selection_range: module_info.to_lsp_range(stmt_class_def.name.range),
                         children: Some(children),
                     });
                 }
@@ -3089,10 +3202,8 @@ impl<'a> Transaction<'a> {
                                 kind: lsp_types::SymbolKind::VARIABLE,
                                 tags: None,
                                 deprecated: None,
-                                range: module_info.lined_buffer().to_lsp_range(stmt_assign.range),
-                                selection_range: module_info
-                                    .lined_buffer()
-                                    .to_lsp_range(name.range),
+                                range: module_info.to_lsp_range(stmt_assign.range),
+                                selection_range: module_info.to_lsp_range(name.range),
                                 children: None,
                             });
                         }
@@ -3110,10 +3221,8 @@ impl<'a> Transaction<'a> {
                             kind: lsp_types::SymbolKind::VARIABLE,
                             tags: None,
                             deprecated: None,
-                            range: module_info
-                                .lined_buffer()
-                                .to_lsp_range(stmt_ann_assign.range),
-                            selection_range: module_info.lined_buffer().to_lsp_range(name.range),
+                            range: module_info.to_lsp_range(stmt_ann_assign.range),
+                            selection_range: module_info.to_lsp_range(name.range),
                             children: None,
                         });
                     }

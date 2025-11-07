@@ -153,7 +153,20 @@ impl<'a> CallKeyword<'a> {
         errors: &ErrorCollector,
         owner: &'a Owner<Type>,
     ) -> (Self, bool) {
-        let (materialized, changed) = self.value.materialize(solver, errors, owner);
+        let transformation = |ty: &Type| {
+            if self.arg.is_none() && ty.is_any() {
+                // See test::overload::test_kwargs_materialization - we need to turn this
+                // into Mapping[str, Any] to correctly materialize the `**kwargs` type.
+                solver
+                    .stdlib
+                    .mapping(solver.stdlib.str().clone().to_type(), ty.clone())
+                    .to_type()
+                    .materialize()
+            } else {
+                ty.materialize()
+            }
+        };
+        let (materialized, changed) = self.value.transform(solver, errors, owner, transformation);
         (
             Self {
                 range: self.range,
@@ -208,11 +221,20 @@ impl<'a> CallArg<'a> {
     ) -> (Self, bool) {
         match self {
             Self::Arg(value) => {
-                let (materialized, changed) = value.materialize(solver, errors, owner);
+                let (materialized, changed) =
+                    value.transform(solver, errors, owner, |ty| ty.materialize());
                 (Self::Arg(materialized), changed)
             }
             Self::Star(value, range) => {
-                let (materialized, changed) = value.materialize(solver, errors, owner);
+                let (materialized, changed) = value.transform(solver, errors, owner, |ty| {
+                    if ty.is_any() {
+                        // See test::overload::test_varargs_materialization - we need to turn this
+                        // into Iterable[Any] to correctly materialize the `*args` type.
+                        solver.stdlib.iterable(ty.clone()).to_type().materialize()
+                    } else {
+                        ty.materialize()
+                    }
+                });
                 (Self::Star(materialized, *range), changed)
             }
         }
@@ -616,7 +638,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )),
                 _ => Type::Tuple(Tuple::unpacked(
                     prefix,
-                    Type::Tuple(Tuple::Unbounded(Box::new(self.unions(middle)))),
+                    Type::Tuple(Tuple::unbounded(self.unions(middle))),
                     suffix,
                 )),
             };

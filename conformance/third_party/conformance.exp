@@ -11275,6 +11275,17 @@
     {
       "code": -2,
       "column": 7,
+      "concise_description": "Field `x` is declared `float` in ancestor `class TD_A2: ...\n`, which is not assignable to the type `int` implied by multiple inheritance",
+      "description": "Field `x` is declared `float` in ancestor `class TD_A2: ...\n`, which is not assignable to the type `int` implied by multiple inheritance",
+      "line": 119,
+      "name": "inconsistent-inheritance",
+      "severity": "error",
+      "stop_column": 11,
+      "stop_line": 119
+    },
+    {
+      "code": -2,
+      "column": 7,
       "concise_description": "TypedDict field `x` in `TD_B` cannot be made non-required; parent TypedDict `TD_B2` defines it as required",
       "description": "TypedDict field `x` in `TD_B` cannot be made non-required; parent TypedDict `TD_B2` defines it as required",
       "line": 132,

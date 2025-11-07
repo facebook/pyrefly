@@ -15,7 +15,6 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
-use ruff_python_ast::AnyParameterRef;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
@@ -186,7 +185,7 @@ impl<'a> BindingsBuilder<'a> {
             }
             self.bind_function_param(
                 AnnotationTarget::Param(x.parameter.name.id.clone()),
-                AnyParameterRef::NonVariadic(x),
+                &x.parameter,
                 undecorated_idx,
                 class_key,
             );
@@ -194,7 +193,7 @@ impl<'a> BindingsBuilder<'a> {
         if let Some(args) = &x.vararg {
             self.bind_function_param(
                 AnnotationTarget::ArgsParam(args.name.id.clone()),
-                AnyParameterRef::Variadic(args),
+                args,
                 undecorated_idx,
                 class_key,
             );
@@ -202,7 +201,7 @@ impl<'a> BindingsBuilder<'a> {
         if let Some(kwargs) = &x.kwarg {
             self.bind_function_param(
                 AnnotationTarget::KwargsParam(kwargs.name.id.clone()),
-                AnyParameterRef::Variadic(kwargs),
+                kwargs,
                 undecorated_idx,
                 class_key,
             );

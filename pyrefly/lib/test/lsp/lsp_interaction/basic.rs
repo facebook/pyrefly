@@ -48,6 +48,7 @@ fn test_initialize_basic() {
                 },
                 "hoverProvider": true,
                 "inlayHintProvider": true,
+                "notebookDocumentSync":{"notebookSelector":[{"cells":[{"language":"python"}]}]},
                 "documentSymbolProvider": true,
                 "foldingRangeProvider":true,
                 "workspaceSymbolProvider": true,
