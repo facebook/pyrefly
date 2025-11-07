@@ -5,4 +5,6 @@
 
 from .lib import Foo
 
-Foo.x
+
+def use_attr() -> None:
+    Foo().x()

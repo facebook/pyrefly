@@ -5,5 +5,6 @@
 
 
 class Foo:
-    def x() -> None:
+    def x(self) -> None:
+        """Docstring coming from the .py implementation."""
         pass

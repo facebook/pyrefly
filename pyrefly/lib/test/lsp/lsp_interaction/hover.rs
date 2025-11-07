@@ -147,3 +147,34 @@ fn test_hover_suppressed_error() {
 
     interaction.shutdown();
 }
+
+#[test]
+fn hover_attribute_prefers_py_docstring_over_pyi() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(None),
+        ..Default::default()
+    });
+
+    let file = "attributes_of_py/src.py";
+    interaction.server.did_open(file);
+    interaction.server.hover(file, 9, 10);
+    interaction.client.expect_response_with(
+        |response| {
+            response
+                .result
+                .as_ref()
+                .and_then(|value| value.get("contents"))
+                .and_then(|contents| contents.get("value"))
+                .and_then(|value| value.as_str())
+                .map_or(false, |value| {
+                    value.contains("Docstring coming from the .py implementation.")
+                })
+        },
+        "hover result should surface the implementation docstring for attributes defined in .py files",
+    );
+
+    interaction.shutdown();
+}

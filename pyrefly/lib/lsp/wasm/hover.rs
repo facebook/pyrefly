@@ -21,7 +21,6 @@ use ruff_text_size::TextSize;
 use starlark_map::small_set::SmallSet;
 
 use crate::error::error::Error;
-use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
 
@@ -214,12 +213,7 @@ pub fn get_hover(
 
     // Otherwise, fall through to the existing type hover logic
     let type_ = transaction.get_type_at(handle, position)?;
-    let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
-        metadata,
-        definition_range: definition_location,
-        module,
-        docstring_range,
-    }) = transaction
+    let (kind, name, docstring_info) = if let Some(item) = transaction
         .find_definition(
             handle,
             position,
@@ -232,21 +226,26 @@ pub fn get_hover(
         .into_iter()
         .next()
     {
+        let definition_location = item.definition_range;
+        let definition_source = item.module.code_at(definition_location).to_owned();
+        let docstring_info = item.docstring_range.map(|range| {
+            (
+                item.docstring_module
+                    .clone()
+                    .unwrap_or_else(|| item.module.clone()),
+                range,
+            )
+        });
         (
-            metadata.symbol_kind(),
-            Some(module.code_at(definition_location).to_owned()),
-            docstring_range,
-            Some(module),
+            item.metadata.symbol_kind(),
+            Some(definition_source),
+            docstring_info,
         )
     } else {
-        (None, None, None, None)
+        (None, None, None)
     };
 
-    let docstring = if let (Some(docstring), Some(module)) = (docstring_range, module) {
-        Some(Docstring(docstring, module))
-    } else {
-        None
-    };
+    let docstring = docstring_info.map(|(module, range)| Docstring(range, module));
 
     Some(
         HoverValue {

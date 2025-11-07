@@ -34,6 +34,7 @@ use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
@@ -468,6 +469,7 @@ pub struct FindDefinitionItemWithDocstring {
     pub definition_range: TextRange,
     pub module: Module,
     pub docstring_range: Option<TextRange>,
+    pub docstring_module: Option<Module>,
 }
 
 #[derive(Debug)]
@@ -475,6 +477,19 @@ pub struct FindDefinitionItem {
     pub metadata: DefinitionMetadata,
     pub definition_range: TextRange,
     pub module: Module,
+}
+
+#[derive(Debug, Clone)]
+struct AttributeDocstringContext {
+    parent_classes: Vec<Name>,
+    kind: AttributeDocstringKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttributeDocstringKind {
+    Function,
+    Class,
+    Assignment,
 }
 
 impl<'a> Transaction<'a> {
@@ -1145,6 +1160,7 @@ impl<'a> Transaction<'a> {
             definition_range: location,
             module: module_info,
             docstring_range,
+            docstring_module: None,
         })
     }
 
@@ -1172,6 +1188,7 @@ impl<'a> Transaction<'a> {
             definition_range: location,
             module: self.get_module_info(&handle)?,
             docstring_range,
+            docstring_module: None,
         })
     }
 
@@ -1191,11 +1208,19 @@ impl<'a> Transaction<'a> {
                     x.docstring_range,
                     preference,
                 )?;
+                let (docstring_range, docstring_module) = if docstring_range.is_some() {
+                    (docstring_range, None)
+                } else {
+                    self.get_docstring_from_executable_attribute(handle, &x.name, &definition)
+                        .map(|(module, range)| (Some(range), Some(module)))
+                        .unwrap_or((None, None))
+                };
                 Some(FindDefinitionItemWithDocstring {
                     metadata: DefinitionMetadata::Attribute(x.name),
                     definition_range: definition.range,
                     module: definition.module,
                     docstring_range,
+                    docstring_module,
                 })
             } else {
                 None
@@ -1333,6 +1358,7 @@ impl<'a> Transaction<'a> {
             definition_range: TextRange::default(),
             module: module_info,
             docstring_range: self.get_module_docstring_range(&handle),
+            docstring_module: None,
         })
     }
 
@@ -1470,6 +1496,7 @@ impl<'a> Transaction<'a> {
                     module,
                     definition_range: identifier.range,
                     docstring_range,
+                    docstring_module: None,
                 }]
             }),
             Some(IdentifierWithContext {
@@ -1483,6 +1510,7 @@ impl<'a> Transaction<'a> {
                         definition_range: item.definition_range,
                         module: item.module,
                         docstring_range,
+                        docstring_module: None,
                     }]
                 }),
             Some(IdentifierWithContext {
@@ -1496,6 +1524,7 @@ impl<'a> Transaction<'a> {
                         definition_range: item.definition_range,
                         module: item.module,
                         docstring_range,
+                        docstring_module: None,
                     }]
                 }),
             Some(IdentifierWithContext {
@@ -1509,6 +1538,7 @@ impl<'a> Transaction<'a> {
                         definition_range: item.definition_range,
                         module: item.module,
                         docstring_range: None,
+                        docstring_module: None,
                     }]
                 }),
             Some(IdentifierWithContext {
@@ -1522,6 +1552,7 @@ impl<'a> Transaction<'a> {
                         definition_range: item.definition_range,
                         module: item.module,
                         docstring_range: None,
+                        docstring_module: None,
                     }]
                 }),
             Some(IdentifierWithContext {
@@ -1535,6 +1566,7 @@ impl<'a> Transaction<'a> {
                         definition_range: item.definition_range,
                         module: item.module,
                         docstring_range: None,
+                        docstring_module: None,
                     }]
                 }),
             Some(IdentifierWithContext {
@@ -1547,6 +1579,7 @@ impl<'a> Transaction<'a> {
                     definition_range: item.definition_range,
                     module: item.module.clone(),
                     docstring_range: None,
+                    docstring_module: None,
                 }),
             Some(IdentifierWithContext {
                 identifier,
@@ -1734,6 +1767,7 @@ impl<'a> Transaction<'a> {
                  definition_range,
                  module,
                  docstring_range: _,
+                 docstring_module: _,
              }| {
                 self.local_references_from_definition(handle, metadata, definition_range, module)
             },
@@ -2220,10 +2254,13 @@ impl<'a> Transaction<'a> {
             &FindPreference::default(),
         );
 
-        let (definition, Some(docstring_range)) = attribute_definition? else {
-            return None;
+        let (definition, docstring_range) = attribute_definition?;
+        let (doc_module, docstring_range) = if let Some(range) = docstring_range {
+            (definition.module, range)
+        } else {
+            self.get_docstring_from_executable_attribute(handle, &attr_info.name, &definition)?
         };
-        let docstring = Docstring(docstring_range, definition.module);
+        let docstring = Docstring(docstring_range, doc_module);
 
         Some(lsp_types::Documentation::MarkupContent(
             lsp_types::MarkupContent {
@@ -2231,6 +2268,165 @@ impl<'a> Transaction<'a> {
                 value: docstring.resolve().trim().to_owned(),
             },
         ))
+    }
+
+    fn get_docstring_from_executable_attribute(
+        &self,
+        request_handle: &Handle,
+        attr_name: &Name,
+        definition: &TextRangeWithModule,
+    ) -> Option<(Module, TextRange)> {
+        if !definition.module.path().is_interface() {
+            return None;
+        }
+        let context = Self::attribute_docstring_context(&definition.module, definition.range)?;
+        let executable_handle = self
+            .import_handle_prefer_executable(request_handle, definition.module.name(), None)
+            .finding()?;
+        if executable_handle.path().style() != ModuleStyle::Executable {
+            return None;
+        }
+        let _ = self.get_exports(&executable_handle);
+        let executable_module = self.get_module_info(&executable_handle)?;
+        let ast = self.get_ast(&executable_handle).unwrap_or_else(|| {
+            Ast::parse(
+                executable_module.contents(),
+                executable_module.source_type(),
+            )
+            .0
+            .into()
+        });
+        let docstring_range =
+            Self::docstring_from_executable_ast(ast.as_ref(), &context, attr_name)?;
+        Some((executable_module, docstring_range))
+    }
+
+    fn attribute_docstring_context(
+        module: &Module,
+        target_range: TextRange,
+    ) -> Option<AttributeDocstringContext> {
+        let ast = Ast::parse(module.contents(), module.source_type()).0;
+        let mut parents = Vec::new();
+        Self::attribute_docstring_context_in_body(ast.body.as_slice(), &mut parents, target_range)
+    }
+
+    fn attribute_docstring_context_in_body(
+        body: &[Stmt],
+        parents: &mut Vec<Name>,
+        target_range: TextRange,
+    ) -> Option<AttributeDocstringContext> {
+        for stmt in body {
+            match stmt {
+                Stmt::ClassDef(class_def) => {
+                    parents.push(class_def.name.id.clone());
+                    if let Some(ctx) = Self::attribute_docstring_context_in_body(
+                        &class_def.body,
+                        parents,
+                        target_range,
+                    ) {
+                        return Some(ctx);
+                    }
+                    parents.pop();
+                    if class_def.range().contains_range(target_range) {
+                        return Some(AttributeDocstringContext {
+                            parent_classes: parents.clone(),
+                            kind: AttributeDocstringKind::Class,
+                        });
+                    }
+                }
+                Stmt::FunctionDef(_) if stmt.range().contains_range(target_range) => {
+                    return Some(AttributeDocstringContext {
+                        parent_classes: parents.clone(),
+                        kind: AttributeDocstringKind::Function,
+                    });
+                }
+                Stmt::Assign(_) | Stmt::AnnAssign(_)
+                    if stmt.range().contains_range(target_range) =>
+                {
+                    return Some(AttributeDocstringContext {
+                        parent_classes: parents.clone(),
+                        kind: AttributeDocstringKind::Assignment,
+                    });
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn docstring_from_executable_ast(
+        ast: &ModModule,
+        context: &AttributeDocstringContext,
+        attr_name: &Name,
+    ) -> Option<TextRange> {
+        let mut body = ast.body.as_slice();
+        for class_name in &context.parent_classes {
+            let class_def = body.iter().find_map(|stmt| match stmt {
+                Stmt::ClassDef(class_def) if &class_def.name.id == class_name => Some(class_def),
+                _ => None,
+            })?;
+            body = class_def.body.as_slice();
+        }
+        match context.kind {
+            AttributeDocstringKind::Function => Self::docstring_from_function(body, attr_name),
+            AttributeDocstringKind::Class => Self::docstring_from_class(body, attr_name),
+            AttributeDocstringKind::Assignment => Self::docstring_from_assignment(body, attr_name),
+        }
+    }
+
+    fn docstring_from_function(body: &[Stmt], attr_name: &Name) -> Option<TextRange> {
+        for stmt in body {
+            if let Stmt::FunctionDef(func_def) = stmt
+                && &func_def.name.id == attr_name
+            {
+                if let Some(range) = Docstring::range_from_stmts(&func_def.body) {
+                    return Some(range);
+                }
+            }
+        }
+        None
+    }
+
+    fn docstring_from_class(body: &[Stmt], attr_name: &Name) -> Option<TextRange> {
+        for stmt in body {
+            if let Stmt::ClassDef(class_def) = stmt
+                && &class_def.name.id == attr_name
+            {
+                return Docstring::range_from_stmts(&class_def.body);
+            }
+        }
+        None
+    }
+
+    fn docstring_from_assignment(body: &[Stmt], attr_name: &Name) -> Option<TextRange> {
+        for (idx, stmt) in body.iter().enumerate() {
+            let matches = match stmt {
+                Stmt::Assign(assign) => assign
+                    .targets
+                    .iter()
+                    .any(|target| Self::expr_matches_name(target, attr_name)),
+                Stmt::AnnAssign(assign) => {
+                    Self::expr_matches_name(assign.target.as_ref(), attr_name)
+                }
+                _ => false,
+            };
+            if matches {
+                if let Some(Stmt::Expr(expr_stmt)) = body.get(idx + 1)
+                    && matches!(expr_stmt.value.as_ref(), Expr::StringLiteral(_))
+                {
+                    return Some(expr_stmt.range());
+                }
+                return None;
+            }
+        }
+        None
+    }
+
+    fn expr_matches_name(expr: &Expr, attr_name: &Name) -> bool {
+        match expr {
+            Expr::Name(name) => &name.id == attr_name,
+            _ => false,
+        }
     }
 
     fn add_literal_completions(

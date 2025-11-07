@@ -2170,6 +2170,7 @@ impl Server {
             definition_range,
             module,
             docstring_range: _,
+            docstring_module: _,
         }) = transaction
             .find_definition(
                 &handle,
