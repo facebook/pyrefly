@@ -1533,10 +1533,12 @@ if False:
 # main.py
 4 |     print(x)
               ^
-Definition Result: None
+Definition Result:
+2 | x = 5
+    ^
 
 "#
-        .trim(),
+            .trim(),
         report.trim(),
     );
 }
