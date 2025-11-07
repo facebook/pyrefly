@@ -60,6 +60,7 @@ use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
 use crate::types::types::BoundMethod;
+use crate::types::types::BoundMethodType;
 use crate::types::types::Overload;
 use crate::types::types::SuperObj;
 use crate::types::types::Type;
@@ -1921,7 +1922,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 acc.push(AttributeBase1::ClassInstance(
                     self.stdlib.method_type().clone(),
                 ));
-                acc.push(AttributeBase1::BoundMethodFunction(bound_method.func.clone()));
+                acc.push(AttributeBase1::BoundMethodFunction(
+                    bound_method.func.clone(),
+                ));
             }
             Type::Ellipsis => {
                 if let Some(cls) = self.stdlib.ellipsis_type() {
