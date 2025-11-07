@@ -143,6 +143,7 @@ impl Exports {
             module_info.name(),
             module_info.path().is_init(),
             sys_info,
+            false,
         );
         definitions.inject_implicit_globals();
         let partially_known_dunder_all = Self::get_partially_known_dunder_all(&definitions);
