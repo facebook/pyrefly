@@ -1821,6 +1821,22 @@ impl Scopes {
         self.current_mut().stat.expr_lvalue(x);
     }
 
+    /// Synthesize a static definition entry for `name` in the current scope if it
+    /// is missing. This is used when we deliberately analyze unreachable code for
+    /// IDE metadata; those code paths may not have been included in the up-front
+    /// static scan, so we add a lightweight placeholder on demand.
+    pub fn add_synthetic_definition(&mut self, name: &Name, range: TextRange) {
+        let hashed_ref = Hashed::new(name);
+        if self.current().stat.0.get_hashed(hashed_ref).is_some() {
+            return;
+        }
+        self.current_mut().stat.upsert(
+            Hashed::new(name.clone()),
+            range,
+            StaticStyle::SingleDef(None),
+        );
+    }
+
     /// Add a loop exit point to the current innermost loop with the current flow.
     ///
     /// Return a bool indicating whether we were in a loop (if we weren't, we do nothing).

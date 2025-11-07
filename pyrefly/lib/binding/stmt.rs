@@ -721,7 +721,11 @@ impl<'a> BindingsBuilder<'a> {
                     if this_branch_chosen == Some(false) {
                         // Skip contributing to flow merges, but still bind names so IDE features work.
                         if self.should_bind_unreachable_branches() {
-                            self.bind_narrow_ops(&new_narrow_ops, range, &Usage::Narrowing(None));
+                            self.bind_narrow_ops(
+                                &new_narrow_ops,
+                                NarrowUseLocation::Span(range),
+                                &Usage::Narrowing(None),
+                            );
                             self.with_error_suppression(|builder| {
                                 builder.stmts(body, parent);
                             });

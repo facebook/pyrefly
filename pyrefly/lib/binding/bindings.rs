@@ -1110,19 +1110,29 @@ impl<'a> BindingsBuilder<'a> {
         idx: Idx<Key>,
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
-        let name = Hashed::new(name);
-        let write_info = self
+        let mut hashed_name = Hashed::new(name);
+        let mut write_info = self
             .scopes
-            .define_in_current_flow(name, idx, style)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Name `{name}` not found in static scope of module `{}`.",
-                    self.module_info.name(),
-                )
-            });
+            .define_in_current_flow(hashed_name, idx, style.clone());
+        if write_info.is_none()
+            && self.errors_suppressed()
+            && self.should_bind_unreachable_branches()
+        {
+            let key_range = self.table.types.0.idx_to_key(idx).range();
+            self.scopes.add_synthetic_definition(name, key_range);
+            // Recreate the hash since it borrows `name` by reference and we just mutated state
+            hashed_name = Hashed::new(name);
+            write_info = self.scopes.define_in_current_flow(hashed_name, idx, style);
+        }
+        let write_info = write_info.unwrap_or_else(|| {
+            panic!(
+                "Name `{name}` not found in static scope of module `{}`.",
+                self.module_info.name(),
+            )
+        });
         if let Some(range) = write_info.anywhere_range {
             self.table
-                .record_bind_in_anywhere(name.into_key().clone(), range, idx);
+                .record_bind_in_anywhere(hashed_name.into_key().clone(), range, idx);
         }
         write_info.annotation
     }
