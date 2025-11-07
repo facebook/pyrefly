@@ -416,7 +416,7 @@ def test_and_three_guards() -> None:
 def test_or_basic() -> None:
     # `or` short-circuits when the left side is *true*. False on the left
     # means the right side IS evaluated — the name is unknown.
-    if False or A:  # E: Could not find name `A`
+    if False or D:  # E: Could not find name `D`
         pass
 
 def test_or_always_true_guard() -> None:
@@ -435,8 +435,8 @@ def test_and_body_unreachable() -> None:
         _ = A
 
 def test_no_guard_produces_error() -> None:
-    # Baseline: without any guard, accessing A must produce an error.
-    A  # E: Could not find name `A`
+    # Baseline: without any guard, accessing an unknown name must produce an error.
+    E  # E: Could not find name `E`
 "#,
 );
 
