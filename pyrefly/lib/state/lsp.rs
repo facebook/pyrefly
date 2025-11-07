@@ -5,8 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::collections::BTreeMap;
 use std::cmp::Reverse;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use dupe::Dupe;
