@@ -2926,6 +2926,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors)
                     }
                 } else {
+                    // Bare return (no value) implicitly returns None
+                    // Check if None is compatible with the declared return type
+                    if let Some(ref ret_type) = hint {
+                        // For generators, extract the return type (3rd type parameter)
+                        let expected_type = if x.is_generator {
+                            hint.and_then(|ty| self.decompose_generator(&ty).map(|(_, _, r)| r))
+                        } else if matches!(hint, Some(Type::TypeGuard(_) | Type::TypeIs(_))) {
+                            // TypeGuard functions should return bool
+                            Some(Type::ClassType(self.stdlib.bool().clone()))
+                        } else {
+                            Some(ret_type.clone())
+                        };
+
+                        // Check None against expected return type
+                        if let Some(expected) = expected_type {
+                            let tcc: &dyn Fn() -> TypeCheckContext = &|| {
+                                TypeCheckContext::of_kind(TypeCheckKind::ExplicitFunctionReturn)
+                            };
+                            self.check_type(&Type::None, &expected, x.range, errors, tcc);
+                        }
+                    }
                     Type::None
                 }
             }
