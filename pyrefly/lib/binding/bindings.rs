@@ -19,6 +19,7 @@ use pyrefly_graph::index_map::IndexMap;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
@@ -288,6 +289,7 @@ pub struct BindingsBuilder<'a> {
     /// In CLI batch-check mode this is false to avoid wasted work.
     pub analyze_unannotated_for_ide: bool,
     pub infer_return_types: InferReturnTypes,
+    error_suppression_depth: usize,
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
@@ -633,6 +635,7 @@ impl Bindings {
             check_unannotated_defs,
             analyze_unannotated_for_ide,
             infer_return_types,
+            error_suppression_depth: 0,
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
@@ -1233,6 +1236,29 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    pub fn with_error_suppression<R>(
+        &mut self,
+        f: impl FnOnce(&mut BindingsBuilder<'a>) -> R,
+    ) -> R {
+        self.error_suppression_depth += 1;
+        let result = f(self);
+        self.error_suppression_depth -= 1;
+        result
+    }
+
+    #[inline]
+    fn errors_suppressed(&self) -> bool {
+        self.error_suppression_depth > 0
+    }
+
+    pub(crate) fn should_bind_unreachable_branches(&self) -> bool {
+        matches!(
+            self.module_info.path().details(),
+            ModulePathDetails::FileSystem(_) | ModulePathDetails::Memory(_)
+        ) && self.module_info.name() != ModuleName::builtins()
+            && self.module_info.name() != ModuleName::extra_builtins()
+    }
+
     fn inject_globals(&mut self) {
         for global in ImplicitGlobal::implicit_globals(self.has_docstring) {
             let key = Key::ImplicitGlobal(Box::new(global.name().clone()));
@@ -1423,6 +1449,9 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn error(&self, range: TextRange, kind: ErrorKind, msg: String) {
+        if self.errors_suppressed() {
+            return;
+        }
         self.errors.error_builder(range, kind, msg).emit();
     }
 
@@ -1433,6 +1462,9 @@ impl<'a> BindingsBuilder<'a> {
         header: String,
         detail: String,
     ) {
+        if self.errors_suppressed() {
+            return;
+        }
         self.errors
             .error_builder(range, kind, header)
             .with_detail(detail)
