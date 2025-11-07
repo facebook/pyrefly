@@ -3079,6 +3079,71 @@ impl<'a> Transaction<'a> {
 }
 
 impl<'a> CancellableTransaction<'a> {
+    /// Find all transitive implementors of a method by:
+    /// 1. Looking up the base class that first defined the method in the index
+    /// 2. Finding all transitive implementors of that base class
+    /// 3. Returning the method definition ranges in each implementor
+    fn find_transitive_method_implementors(
+        &mut self,
+        sys_info: &SysInfo,
+        method_name: &Name,
+        definition: &TextRangeWithModule,
+    ) -> Vec<TextRangeWithModule> {
+        let mut implementor_definitions = vec![];
+
+        let definition_handle = Handle::new(
+            definition.module.name(),
+            definition.module.path().dupe(),
+            sys_info.dupe(),
+        );
+
+        if let Some(solutions) = self.as_ref().get_solutions(&definition_handle)
+            && let Some(definition_index) = solutions.get_index()
+            && let Some((base_modulepath, base_range)) = definition_index
+                .lock()
+                .method_to_base_class
+                .iter()
+                .find_map(
+                    |((impl_method_name, impl_range), (impl_base_path, impl_base_range))| {
+                        if impl_method_name == method_name && impl_range == impl_base_range {
+                            Some((impl_base_path.clone(), *impl_base_range))
+                        } else {
+                            None
+                        }
+                    },
+                )
+        {
+            let mut implementors = vec![definition_handle.dupe()];
+            implementors.extend(self.as_ref().get_transitive_rdeps(definition_handle.dupe()));
+
+            for implementor_handle in implementors {
+                let _ = self.run(&[implementor_handle.dupe()], Require::Everything);
+
+                if let Some(solutions) = self.as_ref().get_solutions(&implementor_handle)
+                    && let Some(implementor_index) = solutions.get_index()
+                {
+                    let implementor_index = implementor_index.lock();
+
+                    for ((impl_method_name, impl_range), (impl_base_path, impl_base_range)) in
+                        &implementor_index.method_to_base_class
+                    {
+                        if impl_method_name == method_name
+                            && *impl_base_path == base_modulepath
+                            && *impl_base_range == base_range
+                            && let Some(module_info) =
+                                self.as_ref().get_module_info(&implementor_handle)
+                        {
+                            implementor_definitions
+                                .push(TextRangeWithModule::new(module_info, *impl_range));
+                        }
+                    }
+                }
+            }
+        }
+
+        implementor_definitions
+    }
+
     /// Returns Err if the request is canceled in the middle of a run.
     pub fn find_global_references_from_definition(
         &mut self,
@@ -3089,6 +3154,16 @@ impl<'a> CancellableTransaction<'a> {
         // General strategy:
         // 1: Compute the set of transitive rdeps.
         // 2. Find references in each one of them using the index computed during earlier checking
+
+        // For methods: find the base class that first defined the method, then find all
+        // transitive implementors of that base class
+        let transitive_method_definitions =
+            if let DefinitionMetadata::Attribute(method_name) = &definition_kind {
+                self.find_transitive_method_implementors(sys_info, method_name, &definition)
+            } else {
+                vec![]
+            };
+
         let mut transitive_rdeps = match definition.module.path().details() {
             ModulePathDetails::Memory(path_buf) => {
                 let handle_of_filesystem_counterpart = Handle::new(
@@ -3143,58 +3218,74 @@ impl<'a> CancellableTransaction<'a> {
             .into_iter()
             .sorted_by_key(|h| h.path().dupe())
             .collect::<Vec<_>>();
-        let mut global_references = Vec::new();
-        for handle in candidate_handles_for_references {
-            let definition = match definition.module.path().details() {
-                // Special-case for definition inside in-memory file
-                // Calling `local_references_from_definition` naively
-                // will find no references outside of the in-memory file because
-                // file systems don't contain in-memory files.
-                ModulePathDetails::Memory(path_buf)
-                    // Why do exclude the case of finding references within the same in-memory file?
-                    // If we are finding references within the same in-memory file,
-                    // then there is no problem for us to use the in-memory definition location.
-                    if handle.path() != definition.module.path() =>
+        let mut global_references: Vec<(Module, Vec<TextRange>)> = transitive_method_definitions
+            .map(|definition| (definition.module.dupe(), vec![definition.range]));
+
+        let all_definitions = vec![definition.clone()];
+
+        for definition in all_definitions {
+            for handle in candidate_handles_for_references.iter() {
+                let definition = match definition.module.path().details() {
+                    // Special-case for definition inside in-memory file
+                    // Calling `local_references_from_definition` naively
+                    // will find no references outside of the in-memory file because
+                    // file systems don't contain in-memory files.
+                    ModulePathDetails::Memory(path_buf)
+                        // Why do exclude the case of finding references within the same in-memory file?
+                        // If we are finding references within the same in-memory file,
+                        // then there is no problem for us to use the in-memory definition location.
+                        if handle.path() != definition.module.path() =>
+                    {
+                        // Below, we try to patch the definition location to be at the same offset, but
+                        // making the path to be filesystem path instead. In this way, in the happy case
+                        // where the in-memory content is exactly the same as the filesystem content,
+                        // we can successfully find all the references. However, if the content diverge,
+                        // then we will miss definitions from other files.
+                        //
+                        // In general, other than checking the reverse dependency against the in-memory
+                        // content, there is not much we can do: the in-memory content can diverge from
+                        // the filesystem content in arbitrary ways.
+                        let TextRangeWithModule { module, range } = &definition;
+                        let module = if let Some(info) = self.as_ref().get_module_info(&Handle::new(
+                            module.name(),
+                            ModulePath::filesystem((**path_buf).clone()),
+                            handle.sys_info().dupe(),
+                        )) {
+                            info
+                        } else {
+                            module.dupe()
+                        };
+                        TextRangeWithModule {
+                            module,
+                            range: *range,
+                        }
+                    }
+                    _ => definition.clone(),
+                };
+                let references = self
+                    .as_ref()
+                    .local_references_from_definition(
+                        handle,
+                        definition_kind.clone(),
+                        definition.range,
+                        definition.module.dupe(),
+                    )
+                    .unwrap_or_default();
+                if !references.is_empty()
+                    && let Some(module_info) = self.as_ref().get_module_info(handle)
                 {
-                    // Below, we try to patch the definition location to be at the same offset, but
-                    // making the path to be filesystem path instead. In this way, in the happy case
-                    // where the in-memory content is exactly the same as the filesystem content,
-                    // we can successfully find all the references. However, if the content diverge,
-                    // then we will miss definitions from other files.
-                    //
-                    // In general, other than checking the reverse dependency against the in-memory
-                    // content, there is not much we can do: the in-memory content can diverge from
-                    // the filesystem content in arbitrary ways.
-                    let TextRangeWithModule { module, range } = &definition;
-                    let module = if let Some(info) = self.as_ref().get_module_info(&Handle::new(
-                        module.name(),
-                        ModulePath::filesystem((**path_buf).clone()),
-                        handle.sys_info().dupe(),
-                    )) {
-                        info
+                    // Check if we already have references for this module and append
+                    if let Some((_, existing_refs)) = global_references
+                        .iter_mut()
+                        .find(|(m, _)| m.path() == module_info.path())
+                    {
+                        existing_refs.extend(references);
+                        existing_refs.sort_by_key(|r| r.start());
+                        existing_refs.dedup();
                     } else {
-                        module.dupe()
-                    };
-                    TextRangeWithModule {
-                        module,
-                        range: *range,
+                        global_references.push((module_info, references));
                     }
                 }
-                _ => definition.clone(),
-            };
-            let references = self
-                .as_ref()
-                .local_references_from_definition(
-                    &handle,
-                    definition_kind.clone(),
-                    definition.range,
-                    definition.module,
-                )
-                .unwrap_or_default();
-            if !references.is_empty()
-                && let Some(module_info) = self.as_ref().get_module_info(&handle)
-            {
-                global_references.push((module_info, references));
             }
         }
         Ok(global_references)

@@ -73,6 +73,10 @@ pub struct Index {
     /// A map from (attribute definition module) to a list of pairs of
     /// (range of attribute definition in the definition, range of reference in the current module).
     pub externally_defined_attribute_references: SmallMap<ModulePath, Vec<(TextRange, TextRange)>>,
+    /// A map from (method name, method definition range) to the base class (module path + range)
+    /// that first implemented the method. This is used to find transitive implementors of a method
+    /// for find-references.
+    pub method_to_base_class: SmallMap<(Name, TextRange), (ModulePath, TextRange)>,
 }
 
 #[derive(Debug)]
@@ -490,6 +494,12 @@ impl Answers {
         }
         answers_solver.validate_final_thread_state();
 
+        // Populate method_to_base_class index by traversing all classes
+        if let Some(index) = &self.index {
+            let mut index = index.lock();
+            answers_solver.populate_method_to_base_class_index(&mut index, bindings);
+        }
+
         // Now force all types to be fully resolved.
         fn post_solve<K: Keyed>(items: &mut SolutionsEntry<K>, solver: &Solver) {
             for v in items.values_mut() {
@@ -607,6 +617,42 @@ impl Answers {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    pub fn populate_method_to_base_class_index(&self, index: &mut Index, bindings: &Bindings) {
+        use crate::binding::binding::KeyClass;
+        use crate::binding::binding::NoneIfRecursive;
+
+        // Iterate through all classes in this module
+        for class_idx in bindings.keys::<KeyClass>() {
+            // Get the Class object through the answer
+            let class_answer = self.get_idx(class_idx);
+            if let NoneIfRecursive(Some(cls)) = class_answer.as_ref() {
+                // Get the MRO for this class
+                let mro = self.get_mro_for_class(cls);
+
+                // For each field (method) in this class
+                for field_name in cls.fields() {
+                    if let Some(field_range) = cls.field_decl_range(field_name) {
+                        // Traverse the MRO to find the base class that first defined this method
+                        let base_class_info = std::iter::once(cls)
+                            .chain(mro.ancestors_no_object().iter().map(|x| x.class_object()))
+                            .rev()
+                            .find_map(|c| {
+                                c.field_decl_range(field_name)
+                                    .map(|range| (c.module().path().dupe(), range))
+                            }); // Last element in MRO order (after rev) is the base class that first defined it
+
+                        if let Some((base_module_path, base_range)) = base_class_info {
+                            index.method_to_base_class.insert(
+                                (field_name.clone(), field_range),
+                                (base_module_path, base_range),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn get_calculation<K: Solve<Ans>>(&self, idx: Idx<K>) -> &Calculation<Arc<K::Answer>, Var>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
