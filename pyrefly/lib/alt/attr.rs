@@ -435,6 +435,9 @@ enum AttributeBase1 {
     TypedDict(TypedDict),
     /// Attribute lookup on a base as part of a subset check against a protocol.
     ProtocolSubset(Box<AttributeBase1>),
+    /// Treat methods decorated with descriptors as if their underlying function were directly accessible.
+    /// Missing attributes on this variant are ignored – it only augments lookup results when present.
+    BoundMethodFunction(BoundMethodType),
 }
 
 impl AttributeBase1 {
@@ -1235,6 +1238,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     acc.not_found(NotFoundOn::ClassObject(class.class_object().dupe(), base));
                 }
             }
+            AttributeBase1::BoundMethodFunction(bound_func) => {
+                let mut func_bases = Vec::new();
+                self.as_attribute_base1(bound_func.clone().as_type(), &mut func_bases);
+                for base1 in func_bases {
+                    let not_found_len = acc.not_found.len();
+                    self.lookup_attr_from_attribute_base1(base1, attr_name, acc);
+                    acc.not_found.truncate(not_found_len);
+                }
+            }
 
             AttributeBase1::ClassObject(class) => {
                 match self.get_class_attribute(class, attr_name) {
@@ -1730,8 +1742,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 acc.push(AttributeBase1::ClassInstance(
                     self.stdlib.method_type().clone(),
                 ));
-                let BoundMethod { obj: _, func } = *bound_method;
-                self.as_attribute_base1(func.as_type(), acc);
+                acc.push(AttributeBase1::BoundMethodFunction(bound_method.func.clone()));
             }
             Type::Ellipsis => {
                 if let Some(cls) = self.stdlib.ellipsis_type() {
@@ -2156,6 +2167,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AttributeBase1::TypeQuantified(_, class) => {
                 self.completions_class(class.class_object(), expected_attribute_name, res)
+            }
+            AttributeBase1::BoundMethodFunction(bound_func) => {
+                let mut func_bases = Vec::new();
+                self.as_attribute_base1(bound_func.clone().as_type(), &mut func_bases);
+                for base1 in func_bases {
+                    self.completions_inner1(&base1, expected_attribute_name, res);
+                }
             }
             AttributeBase1::TypeAny(_) | AttributeBase1::TypeNever => self.completions_class_type(
                 self.stdlib.builtins_type(),
