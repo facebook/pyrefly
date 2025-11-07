@@ -894,9 +894,9 @@ impl<'a> BindingsBuilder<'a> {
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
         let mut hashed_name = Hashed::new(name);
-        let mut write_info = self
-            .scopes
-            .define_in_current_flow(hashed_name.clone(), idx, style.clone());
+        let mut write_info =
+            self.scopes
+                .define_in_current_flow(hashed_name.clone(), idx, style.clone());
         if write_info.is_none()
             && self.errors_suppressed()
             && self.should_bind_unreachable_branches()
