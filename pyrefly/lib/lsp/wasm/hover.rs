@@ -208,19 +208,6 @@ fn collect_typed_dict_fields_for_hover<'a>(
                     Some(fields)
                 }
             }
-            Type::PartialTypedDict(typed_dict) => {
-                let fields = solver.type_order().typed_dict_kw_param_info(typed_dict);
-                if fields.is_empty() {
-                    None
-                } else {
-                    Some(
-                        fields
-                            .into_iter()
-                            .map(|(name, ty, _)| (name, ty, Required::Optional(None)))
-                            .collect(),
-                    )
-                }
-            }
             _ => None,
         },
         _ => None,
@@ -251,6 +238,8 @@ fn expand_callable_kwargs_for_hover<'a>(
     }
 }
 
+/// Walks the type and rewrites any callable signatures so they display expanded TypedDict-based
+/// `**kwargs` entries, ensuring hover text shows the actual keyword names users can pass.
 fn expand_type_for_hover<'a>(solver: &AnswersSolver<TransactionHandle<'a>>, ty: &mut Type) {
     ty.visit_mut(&mut |t| match t {
         Type::Callable(callable) => expand_callable_kwargs_for_hover(solver, callable.as_mut()),
@@ -300,20 +289,6 @@ fn expand_type_for_hover<'a>(solver: &AnswersSolver<TransactionHandle<'a>>, ty: 
     });
 }
 
-fn format_type_with_expanded_kwargs(
-    transaction: &Transaction<'_>,
-    handle: &Handle,
-    ty: &Type,
-) -> Option<String> {
-    transaction.ad_hoc_solve(handle, {
-        let mut cloned = ty.clone();
-        move |solver| {
-            expand_type_for_hover(&solver, &mut cloned);
-            cloned.as_hover_string()
-        }
-    })
-}
-
 pub fn get_hover(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -351,7 +326,13 @@ pub fn get_hover(
 
     // Otherwise, fall through to the existing type hover logic
     let type_ = transaction.get_type_at(handle, position)?;
-    let type_display = format_type_with_expanded_kwargs(transaction, handle, &type_);
+    let type_display = transaction.ad_hoc_solve(handle, {
+        let mut cloned = type_.clone();
+        move |solver| {
+            expand_type_for_hover(&solver, &mut cloned);
+            cloned.as_hover_string()
+        }
+    });
     let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
         metadata,
         definition_range: definition_location,
