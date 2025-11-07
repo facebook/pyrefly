@@ -456,6 +456,9 @@ enum AttributeBase1 {
     /// Attribute lookup on a base as part of a subset check against a protocol.
     ProtocolSubset(Box<AttributeBase1>),
     Intersect(Vec<AttributeBase1>, Vec<AttributeBase1>),
+    /// Treat methods decorated with descriptors as if their underlying function were directly accessible.
+    /// Missing attributes on this variant are ignored – it only augments lookup results when present.
+    BoundMethodFunction(BoundMethodType),
 }
 
 impl AttributeBase1 {
@@ -1918,8 +1921,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 acc.push(AttributeBase1::ClassInstance(
                     self.stdlib.method_type().clone(),
                 ));
-                let BoundMethod { obj: _, func } = *bound_method;
-                self.as_attribute_base1(func.as_type(), acc);
+                acc.push(AttributeBase1::BoundMethodFunction(bound_method.func.clone()));
             }
             Type::Ellipsis => {
                 if let Some(cls) = self.stdlib.ellipsis_type() {
