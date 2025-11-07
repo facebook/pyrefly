@@ -477,8 +477,11 @@ pub struct FindDefinitionItem {
 /// The currently active argument in a function call for signature help.
 #[derive(Debug)]
 enum ActiveArgument {
+    /// The cursor is within an existing positional argument at the given index.
     Positional(usize),
+    /// The cursor is within a keyword argument whose name is provided.
     Keyword(Name),
+    /// The cursor is in the argument list but not inside any argument expression yet.
     Next(usize),
 }
 
@@ -857,36 +860,11 @@ impl<'a> Transaction<'a> {
         if let Expr::Call(call) = x
             && call.arguments.range.contains_inclusive(find)
         {
-            // Check positional arguments
-            for (i, arg) in call.arguments.args.as_ref().iter().enumerate() {
-                if arg.range().contains_inclusive(find) {
-                    Self::visit_finding_signature_range(arg, find, res);
-                    if res.is_some() {
-                        return;
-                    }
-                    *res = Some((
-                        call.func.range(),
-                        call.arguments.range,
-                        ActiveArgument::Positional(i),
-                    ));
-                    return;
-                }
+            if Self::visit_positional_signature_args(call, find, res) {
+                return;
             }
-            // Check keyword arguments
-            let kwarg_start_idx = call.arguments.args.len();
-            for (j, kw) in call.arguments.keywords.iter().enumerate() {
-                if kw.range.contains_inclusive(find) {
-                    Self::visit_finding_signature_range(&kw.value, find, res);
-                    if res.is_some() {
-                        return;
-                    }
-                    let active_argument = match kw.arg.as_ref() {
-                        Some(identifier) => ActiveArgument::Keyword(identifier.id.clone()),
-                        None => ActiveArgument::Positional(kwarg_start_idx + j),
-                    };
-                    *res = Some((call.func.range(), call.arguments.range, active_argument));
-                    return;
-                }
+            if Self::visit_keyword_signature_args(call, find, res) {
+                return;
             }
             if res.is_none() {
                 *res = Some((
@@ -900,6 +878,51 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn visit_positional_signature_args(
+        call: &ExprCall,
+        find: TextSize,
+        res: &mut Option<(TextRange, TextRange, ActiveArgument)>,
+    ) -> bool {
+        for (i, arg) in call.arguments.args.as_ref().iter().enumerate() {
+            if arg.range().contains_inclusive(find) {
+                Self::visit_finding_signature_range(arg, find, res);
+                if res.is_some() {
+                    return true;
+                }
+                *res = Some((
+                    call.func.range(),
+                    call.arguments.range,
+                    ActiveArgument::Positional(i),
+                ));
+                return true;
+            }
+        }
+        false
+    }
+
+    fn visit_keyword_signature_args(
+        call: &ExprCall,
+        find: TextSize,
+        res: &mut Option<(TextRange, TextRange, ActiveArgument)>,
+    ) -> bool {
+        let kwarg_start_idx = call.arguments.args.len();
+        for (j, kw) in call.arguments.keywords.iter().enumerate() {
+            if kw.range.contains_inclusive(find) {
+                Self::visit_finding_signature_range(&kw.value, find, res);
+                if res.is_some() {
+                    return true;
+                }
+                let active_argument = match kw.arg.as_ref() {
+                    Some(identifier) => ActiveArgument::Keyword(identifier.id.clone()),
+                    None => ActiveArgument::Positional(kwarg_start_idx + j),
+                };
+                *res = Some((call.func.range(), call.arguments.range, active_argument));
+                return true;
+            }
+        }
+        false
+    }
+
     /// Finds the callable(s) (multiple if overloads exist) at position in document, returning them, chosen overload index, and arg index
     fn get_callables_from_call(
         &self,
@@ -910,6 +933,9 @@ impl<'a> Transaction<'a> {
         let mut res = None;
         mod_module.visit(&mut |x| Self::visit_finding_signature_range(x, position, &mut res));
         let (callee_range, call_args_range, mut active_argument) = res?;
+        // When the cursor is in the argument list but not inside any argument yet,
+        // estimate the would-be positional index by counting commas up to the cursor.
+        // This keeps signature help useful even before the user starts typing the next arg.
         if let ActiveArgument::Next(index) = &mut active_argument
             && let Some(next_index) =
                 self.count_argument_separators_before(handle, call_args_range, position)
@@ -989,20 +1015,9 @@ impl<'a> Transaction<'a> {
             ActiveArgument::Positional(index) | ActiveArgument::Next(index) => {
                 (*index < params.len()).then_some(*index)
             }
-            ActiveArgument::Keyword(name) => params.iter().position(|param| {
-                Self::parameter_name(param).is_some_and(|param_name| param_name == name)
-            }),
-        }
-    }
-
-    fn parameter_name(param: &Param) -> Option<&Name> {
-        match param {
-            Param::PosOnly(Some(name), ..)
-            | Param::Pos(name, ..)
-            | Param::VarArg(Some(name), ..)
-            | Param::KwOnly(name, ..)
-            | Param::Kwargs(Some(name), ..) => Some(name),
-            _ => None,
+            ActiveArgument::Keyword(name) => params
+                .iter()
+                .position(|param| param.name().is_some_and(|param_name| param_name == name)),
         }
     }
 
@@ -1014,14 +1029,14 @@ impl<'a> Transaction<'a> {
     ) -> Option<usize> {
         let module = self.get_module_info(handle)?;
         let contents = module.contents();
-        let start = arguments_range.start().to_usize();
-        let end = arguments_range.end().to_usize().min(contents.len());
-        if start >= end {
-            return Some(0);
-        }
+        let len = contents.len();
+        let start = arguments_range.start().to_usize().min(len);
+        let end = arguments_range.end().to_usize().min(len);
         let pos = position.to_usize().clamp(start, end);
-        let slice = &contents[start..pos];
-        Some(slice.bytes().filter(|&b| b == b',').count())
+        contents
+            .get(start..pos)
+            .map(|slice| slice.bytes().filter(|&b| b == b',').count())
+            .or(Some(0))
     }
 
     fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<Param>> {
