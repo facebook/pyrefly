@@ -5,6 +5,4 @@
 
 from .lib import Foo
 
-
-def use_attr() -> None:
-    Foo().x()
+Foo.x

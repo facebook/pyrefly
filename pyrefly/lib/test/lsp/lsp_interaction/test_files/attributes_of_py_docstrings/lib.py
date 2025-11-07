@@ -3,5 +3,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+
 class Foo:
-    def x() -> None: ...
+    def x(self) -> None:
+        """Docstring coming from the .py implementation."""
+        pass

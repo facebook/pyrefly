@@ -158,7 +158,7 @@ fn hover_attribute_prefers_py_docstring_over_pyi() {
         ..Default::default()
     });
 
-    let file = "attributes_of_py/src.py";
+    let file = "attributes_of_py_docstrings/src.py";
     interaction.server.did_open(file);
     interaction.server.hover(file, 9, 10);
     interaction.client.expect_response_with(
