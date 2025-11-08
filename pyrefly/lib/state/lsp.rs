@@ -2395,21 +2395,37 @@ impl<'a> Transaction<'a> {
         position: TextSize,
     ) -> Option<(ExprSubscript, ExprStringLiteral)> {
         let nodes = Ast::locate_node(module, position);
-        let mut subscript = None;
+        let mut best: Option<(u8, TextSize, ExprSubscript, ExprStringLiteral)> = None;
         for node in nodes {
             if let AnyNodeRef::ExprSubscript(sub) = node {
-                if sub.range().contains(position) {
-                    subscript = Some(sub.clone());
+                if let Expr::StringLiteral(lit) = sub.slice.as_ref() {
+                    let (priority, dist) = Self::string_literal_priority(position, lit.range());
+                    let should_update = match &best {
+                        Some((best_prio, best_dist, _, _)) => {
+                            priority < *best_prio || (priority == *best_prio && dist < *best_dist)
+                        }
+                        None => true,
+                    };
+                    if should_update {
+                        best = Some((priority, dist, sub.clone(), lit.clone()));
+                        if priority == 0 && dist == TextSize::from(0) {
+                            break;
+                        }
+                    }
                 }
             }
         }
-        if let Some(sub) = subscript {
-            if let Expr::StringLiteral(lit) = sub.slice.as_ref() {
-                let string_lit = lit.clone();
-                return Some((sub, string_lit));
-            }
+        best.map(|(_, _, sub, lit)| (sub, lit))
+    }
+
+    fn string_literal_priority(position: TextSize, range: TextRange) -> (u8, TextSize) {
+        if range.contains(position) {
+            (0, TextSize::from(0))
+        } else if position < range.start() {
+            (1, range.start() - position)
+        } else {
+            (2, position - range.end())
         }
-        None
     }
 
     fn expression_facets(expr: &Expr) -> Option<(Identifier, Vec<FacetKind>)> {

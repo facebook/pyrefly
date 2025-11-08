@@ -14,6 +14,7 @@ use ruff_text_size::TextSize;
 use crate::state::lsp::ImportFormat;
 use crate::state::require::Require;
 use crate::state::state::State;
+use crate::state::state::Transaction;
 use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
@@ -134,6 +135,14 @@ fn get_test_report(
     }
 }
 
+fn dict_field_labels(txn: &Transaction<'_>, handle: &Handle, position: TextSize) -> Vec<String> {
+    txn.completion(handle, position, ImportFormat::Absolute)
+        .into_iter()
+        .filter(|item| item.kind == Some(CompletionItemKind::FIELD))
+        .map(|item| item.label)
+        .collect()
+}
+
 #[test]
 fn dot_complete_basic_test() {
     let code = r#"
@@ -201,16 +210,30 @@ fn dict_key_completion_from_nested_literal() {
 def nested():
     config = {"user": {"name": "Alice"}}
     config["user"][""]
-#               ^
+#                  ^
 "#;
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
-    let completions = state
-        .transaction()
-        .completion(handle, position, ImportFormat::Absolute);
-    let labels: Vec<_> = completions.iter().map(|item| item.label.as_str()).collect();
-    assert!(labels.contains(&"name"));
+    let txn = state.transaction();
+    let labels = dict_field_labels(&txn, handle, position);
+    assert_eq!(labels, vec!["name".to_string()]);
+}
+
+#[test]
+fn dict_key_completion_from_outer_literal() {
+    let code = r#"
+def nested():
+    config = {"user": {"name": "Alice"}}
+    config["user"][""]
+#           ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let labels = dict_field_labels(&txn, handle, position);
+    assert_eq!(labels, vec!["user".to_string()]);
 }
 
 #[test]
