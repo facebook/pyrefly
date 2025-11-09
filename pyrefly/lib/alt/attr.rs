@@ -1554,9 +1554,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.bool().clone()))
             }
             Type::Any(style) => acc.push(AttributeBase1::Any(style)),
-            Type::TypeAlias(ta) => {
-                self.as_attribute_base1(ta.body_type(), acc)
-            }
+            Type::TypeAlias(ta) => self.as_attribute_base1(ta.body_type(), acc),
             Type::Type(box Type::Tuple(tuple)) => self
                 .as_attribute_base1(Type::type_form(self.erase_tuple_type(tuple).to_type()), acc),
             Type::Type(box Type::ClassType(class)) => acc.push(AttributeBase1::ClassObject(

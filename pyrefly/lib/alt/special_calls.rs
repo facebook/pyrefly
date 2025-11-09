@@ -501,9 +501,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         f(me, Type::type_form(t), res)
                     }
                 }
-                Type::TypeAlias(ta) => {
-                    f(me, ta.body_type(), res)
-                }
+                Type::TypeAlias(ta) => f(me, ta.body_type(), res),
                 _ => res.push(t),
             }
         }
