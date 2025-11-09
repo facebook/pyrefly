@@ -354,7 +354,7 @@ class Base[T]:
 class Child(Base[A]):  # Note how the Base targ is a union of `Child` and another class
     pass
 
-Child("abc")  # E: not assignable to parameter `value` with type `Child | int`
+Child("abc")  # E: not assignable to parameter `value` with type `A`
 "#,
 );
 
