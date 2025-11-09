@@ -559,6 +559,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::TypeAlias(alias) if alias.style != TypeAliasStyle::Scoped => {
                 self.tuple_allows_literal_relaxation(&alias.body_type())
             }
+            Type::Type(inner) => self.tuple_allows_literal_relaxation(inner),
             _ => false,
         }
     }
@@ -569,6 +570,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::TypeAlias(alias) if alias.style != TypeAliasStyle::Scoped => {
                 self.requires_specific_literal(&alias.body_type())
             }
+            Type::Type(inner) => self.requires_specific_literal(inner),
             _ => false,
         }
     }
