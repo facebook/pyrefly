@@ -502,8 +502,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Type::TypeAlias(ta) => {
-                    let value = ta.as_value(me.stdlib);
-                    f(me, value, res)
+                    let ty = ta.as_value(me.stdlib);
+                    f(me, ty, res)
                 }
                 _ => res.push(t),
             }

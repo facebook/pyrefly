@@ -66,6 +66,7 @@ use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
 use crate::types::types::CalleeKind;
 use crate::types::types::Type;
+use crate::types::types::TypeAliasStyle;
 
 #[derive(Debug, Clone)]
 struct ParsedBaseClass {
@@ -832,9 +833,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn parse_base_class(&self, base: &BaseClass, is_new_type: bool) -> BaseClassParseResult {
-        let range = base.range();
-        let parse_base_class_type = |ty| match ty {
+    fn parse_base_class_type(
+        &self,
+        ty: Type,
+        range: TextRange,
+        is_new_type: bool,
+    ) -> BaseClassParseResult {
+        match ty {
             Type::ClassType(c) => {
                 let base_cls = c.class_object();
                 let base_class_metadata = self.get_metadata_for_class(base_cls);
@@ -872,6 +877,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     })
                 }
             }
+            Type::TypeAlias(alias) => {
+                if alias.style == TypeAliasStyle::Scoped {
+                    BaseClassParseResult::AnyType
+                } else {
+                    self.parse_base_class_type(alias.body_type(), range, is_new_type)
+                }
+            }
             _ => {
                 if is_new_type || !ty.is_any() {
                     BaseClassParseResult::InvalidType(ty, range)
@@ -879,7 +891,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     BaseClassParseResult::AnyType
                 }
             }
-        };
+        }
+    }
+
+    fn parse_base_class(&self, base: &BaseClass, is_new_type: bool) -> BaseClassParseResult {
+        let range = base.range();
 
         match base {
             BaseClass::InvalidExpr(x) => BaseClassParseResult::InvalidExpr(x.clone()),
@@ -889,12 +905,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let ty = self.base_class_expr_infer_for_metadata(x, &errors);
                 match self.untype_opt(ty.clone(), x.range(), &errors) {
                     None => BaseClassParseResult::InvalidType(ty, x.range()),
-                    Some(ty) => parse_base_class_type(ty),
+                    Some(ty) => self.parse_base_class_type(ty, range, is_new_type),
                 }
             }
-            BaseClass::NamedTuple(..) => {
-                parse_base_class_type(self.stdlib.named_tuple_fallback().clone().to_type())
-            }
+            BaseClass::NamedTuple(..) => self.parse_base_class_type(
+                self.stdlib.named_tuple_fallback().clone().to_type(),
+                range,
+                is_new_type,
+            ),
             BaseClass::TypedDict(..) | BaseClass::Generic(..) => {
                 if is_new_type {
                     BaseClassParseResult::InvalidBase(base.range())

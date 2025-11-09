@@ -373,6 +373,14 @@ impl TypeAlias {
         }
     }
 
+    pub fn runtime_value(&self, stdlib: &Stdlib) -> Type {
+        if self.style == TypeAliasStyle::Scoped {
+            self.as_value(stdlib)
+        } else {
+            self.body_type()
+        }
+    }
+
     /// Gets the type contained within the type alias for use in a value
     /// position - for example, for a function call or attribute access.
     pub fn as_value(&self, stdlib: &Stdlib) -> Type {
