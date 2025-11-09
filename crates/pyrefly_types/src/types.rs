@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
+use std::mem;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -1336,6 +1337,15 @@ impl Type {
         self.transform(&mut |ty| {
             if let Type::Type(box Type::Union(members)) = ty {
                 *ty = unions(members.drain(..).map(Type::type_form).collect());
+            }
+        })
+    }
+
+    pub fn flatten_unions(self) -> Self {
+        self.transform(&mut |ty| {
+            if let Type::Union(members) = ty {
+                let members = mem::take(members);
+                *ty = unions(members);
             }
         })
     }

@@ -71,6 +71,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         *ty = alias.body_type();
                     }
                 });
+                ty = ty.flatten_unions();
                 // Make assert_type(Self@SomeClass, typing.Self) work.
                 ty.subst_self_type_mut(&self_form);
                 // Re-sort unions. Make sure to keep this as the final step before comparison.
