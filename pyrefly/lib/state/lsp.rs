@@ -2098,6 +2098,10 @@ impl<'a> Transaction<'a> {
                     Self::add_literal_completions_from_type(union_type, completions);
                 }
             }
+            Type::TypeAlias(alias) => {
+                let ty = alias.body_type();
+                Self::add_literal_completions_from_type(&ty, completions);
+            }
             _ => {}
         }
     }

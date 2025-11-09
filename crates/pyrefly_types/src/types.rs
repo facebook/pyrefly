@@ -360,6 +360,18 @@ impl TypeAlias {
         self.is_type_form = false;
     }
 
+    /// Returns the underlying type that this alias represents (without the outer `type[...]` wrapper).
+    pub fn body_type(&self) -> Type {
+        if let Some(resolved) = self.resolved_type() {
+            resolved.clone()
+        } else {
+            match (*self.ty).clone() {
+                Type::Type(inner) => *inner,
+                other => other,
+            }
+        }
+    }
+
     /// Gets the type contained within the type alias for use in a value
     /// position - for example, for a function call or attribute access.
     pub fn as_value(&self, stdlib: &Stdlib) -> Type {

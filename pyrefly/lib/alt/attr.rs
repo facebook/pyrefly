@@ -1555,11 +1555,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Any(style) => acc.push(AttributeBase1::Any(style)),
             Type::TypeAlias(ta) => {
-                if let Some(resolved) = ta.resolved_type() {
-                    self.as_attribute_base1(resolved.clone(), acc)
-                } else {
-                    self.as_attribute_base1(ta.as_value(self.stdlib), acc)
-                }
+                self.as_attribute_base1(ta.body_type(), acc)
             }
             Type::Type(box Type::Tuple(tuple)) => self
                 .as_attribute_base1(Type::type_form(self.erase_tuple_type(tuple).to_type()), acc),
