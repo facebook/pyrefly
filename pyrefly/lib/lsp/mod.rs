@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+pub mod module_helpers;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub mod non_wasm;
 pub mod wasm;

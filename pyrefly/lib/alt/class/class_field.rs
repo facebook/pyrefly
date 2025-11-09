@@ -2681,10 +2681,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn check_dataclass_field_final(
+        &self,
+        cls: &Class,
+        attr_name: &Name,
+        errors: &ErrorCollector,
+        range: TextRange,
+    ) {
+        if let DataclassMember::Field(field, _) = self.get_dataclass_member(cls, attr_name) {
+            let field = field.value;
+            if field.is_final() {
+                let msg = vec1![
+                    format!("Cannot set field `{attr_name}`"),
+                    ReadOnlyReason::Final.error_message()
+                ];
+                errors.add(range, ErrorInfo::Kind(ErrorKind::ReadOnly), msg);
+            }
+        }
+    }
+
     pub fn check_class_attr_set_and_infer_narrow(
         &self,
         class_attr: ClassAttribute,
-        instance_class: Option<ClassType>,
+        instance_class: Option<&ClassType>,
+        class_base: Option<&ClassBase>,
         attr_name: &Name,
         got: TypeOrExpr,
         range: TextRange,
@@ -2735,6 +2755,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     },
                     _ => attr_ty,
                 };
+                // Obtain a class object for checking whether we're writing to a final field in dataclass
+                let class_object = instance_class
+                    .map(|cls| cls.class_object())
+                    .or(class_base.map(|cb| cb.class_object()));
+                if let Some(class_object) = class_object {
+                    self.check_dataclass_field_final(class_object, attr_name, errors, range);
+                }
                 self.check_set_read_write_and_infer_narrow(
                     attr_ty,
                     attr_name,

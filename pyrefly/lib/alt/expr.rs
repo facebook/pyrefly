@@ -1079,6 +1079,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             });
             let mut t = self.expr_infer_with_hint(value, hint, errors);
             self.expand_vars_mut(&mut t);
+            // If this is not the last entry, we have to make a type-dependent decision and also narrow the
+            // result; both operations require us to force `Var` first or they become unpredictable.
+            if i < last_index {
+                t = self.force_for_narrowing(&t);
+            }
             if i < last_index && should_shortcircuit(&t, value.range()) {
                 t_acc = self.union(t_acc, t);
                 break;

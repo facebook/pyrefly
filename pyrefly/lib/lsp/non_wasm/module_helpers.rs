@@ -6,7 +6,6 @@
  */
 
 use std::path::Path;
-use std::path::PathBuf;
 
 use dupe::Dupe as _;
 use lsp_types::Url;
@@ -15,45 +14,10 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::absolutize::Absolutize as _;
-use tracing::warn;
 
-use crate::module::bundled::BundledStub;
+use crate::lsp::module_helpers::to_real_path;
 use crate::module::module_info::ModuleInfo;
-use crate::module::typeshed::typeshed;
-use crate::module::typeshed_third_party::typeshed_third_party;
 use crate::state::state::State;
-
-/// Convert to a path we can show to the user. The contents may not match the disk, but it has
-/// to be basically right.
-pub fn to_real_path(path: &ModulePath) -> Option<PathBuf> {
-    match path.details() {
-        ModulePathDetails::FileSystem(path)
-        | ModulePathDetails::Memory(path)
-        | ModulePathDetails::Namespace(path) => Some(path.to_path_buf()),
-        ModulePathDetails::BundledTypeshed(path) => {
-            let typeshed = typeshed().ok()?;
-            let typeshed_path = match typeshed.materialized_path_on_disk() {
-                Ok(typeshed_path) => Some(typeshed_path),
-                Err(err) => {
-                    warn!("Builtins unable to be loaded on disk, {}", err);
-                    None
-                }
-            }?;
-            Some(typeshed_path.join(&**path))
-        }
-        ModulePathDetails::BundledTypeshedThirdParty(path) => {
-            let typeshed_third_party = typeshed_third_party().ok()?;
-            let typeshed_path = match typeshed_third_party.materialized_path_on_disk() {
-                Ok(typeshed_path) => Some(typeshed_path),
-                Err(err) => {
-                    warn!("Third Party Stubs unable to be loaded on disk, {}", err);
-                    None
-                }
-            }?;
-            Some(typeshed_path.join(&**path))
-        }
-    }
-}
 
 pub fn module_info_to_uri(module_info: &ModuleInfo) -> Option<Url> {
     let path = to_real_path(module_info.path())?;

@@ -41,7 +41,10 @@ pub enum SpecialExport {
     BuiltinsType,
     TypingType,
     NoTypeCheck,
+    NotImplemented,
+    NotImplementedError,
     Overload,
+    Override,
     AbstractMethod,
     SelfType,
     Generic,
@@ -92,7 +95,10 @@ impl SpecialExport {
             "type" => Some(Self::BuiltinsType),
             "Type" => Some(Self::TypingType),
             "no_type_check" => Some(Self::NoTypeCheck),
+            "NotImplemented" => Some(Self::NotImplemented),
+            "NotImplementedError" => Some(Self::NotImplementedError),
             "overload" => Some(Self::Overload),
+            "override" => Some(Self::Override),
             "abstractmethod" => Some(Self::AbstractMethod),
             "ConfigDict" => Some(Self::PydanticConfigDict),
             "Field" => Some(Self::PydanticField),
@@ -128,6 +134,7 @@ impl SpecialExport {
             | Self::TypeAliasType
             | Self::NoTypeCheck
             | Self::Overload
+            | Self::Override
             | Self::SelfType
             | Self::Cast
             | Self::Generic
@@ -149,6 +156,8 @@ impl SpecialExport {
             | Self::GetAttr
             | Self::BuiltinsDict
             | Self::BuiltinsList
+            | Self::NotImplemented
+            | Self::NotImplementedError
             | Self::BuiltinsTuple => {
                 matches!(m.as_str(), "builtins")
             }

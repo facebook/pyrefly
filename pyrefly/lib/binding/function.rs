@@ -18,11 +18,14 @@ use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprCall;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtExpr;
 use ruff_python_ast::StmtFunctionDef;
+use ruff_python_ast::StmtRaise;
+use ruff_python_ast::StmtReturn;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -53,6 +56,7 @@ use crate::binding::expr::Usage;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
 use crate::binding::scope::Scope;
+use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::YieldsAndReturns;
 use crate::config::base::UntypedDefBehavior;
 use crate::export::special::SpecialExport;
@@ -63,6 +67,7 @@ struct Decorators {
     has_no_type_check: bool,
     is_overload: bool,
     is_abstract_method: bool,
+    is_override: bool,
     decorators: Box<[(Idx<Key>, TextRange)]>,
 }
 
@@ -188,6 +193,7 @@ impl<'a> BindingsBuilder<'a> {
                 &x.parameter,
                 undecorated_idx,
                 class_key,
+                false,
             );
         }
         if let Some(args) = &x.vararg {
@@ -196,6 +202,7 @@ impl<'a> BindingsBuilder<'a> {
                 args,
                 undecorated_idx,
                 class_key,
+                true,
             );
         }
         if let Some(kwargs) = &x.kwarg {
@@ -204,6 +211,7 @@ impl<'a> BindingsBuilder<'a> {
                 kwargs,
                 undecorated_idx,
                 class_key,
+                true,
             );
         }
         self.scopes.set_self_name_if_applicable(self_name);
@@ -279,7 +287,11 @@ impl<'a> BindingsBuilder<'a> {
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
         is_async: bool,
-    ) -> (YieldsAndReturns, Option<SelfAssignments>) {
+    ) -> (
+        YieldsAndReturns,
+        Option<SelfAssignments>,
+        Vec<UnusedParameter>,
+    ) {
         self.scopes
             .push_function_scope(range, func_name, class_key.is_some(), is_async);
         self.parameters(parameters, undecorated_idx, class_key);
@@ -434,11 +446,13 @@ impl<'a> BindingsBuilder<'a> {
 
     fn decorators(&mut self, decorator_list: Vec<Decorator>, usage: &mut Usage) -> Decorators {
         let mut is_overload = false;
+        let mut is_override = false;
         let mut has_no_type_check = false;
         let mut is_abstract_method = false;
         for d in &decorator_list {
             let special_export = self.as_special_export(&d.expression);
             is_overload = is_overload || matches!(special_export, Some(SpecialExport::Overload));
+            is_override = is_override || matches!(special_export, Some(SpecialExport::Override));
             is_abstract_method =
                 is_abstract_method || matches!(special_export, Some(SpecialExport::AbstractMethod));
             has_no_type_check =
@@ -451,6 +465,7 @@ impl<'a> BindingsBuilder<'a> {
             has_no_type_check,
             is_overload,
             is_abstract_method,
+            is_override,
             decorators,
         }
     }
@@ -478,6 +493,31 @@ impl<'a> BindingsBuilder<'a> {
             FunctionStubOrImpl::Impl
         };
 
+        let body_is_trivial = match body.as_slice() {
+            [Stmt::Pass(_)] => true,
+            // raise NotImplementedError(...)
+            [
+                Stmt::Raise(StmtRaise {
+                    exc: Some(box Expr::Call(ExprCall { box func, .. })),
+                    ..
+                }),
+            ] if self.as_special_export(func) == Some(SpecialExport::NotImplementedError) => true,
+            // return NotImplemented
+            [
+                Stmt::Return(StmtReturn {
+                    value: Some(box val),
+                    ..
+                }),
+            ] if self.as_special_export(val) == Some(SpecialExport::NotImplemented) => true,
+            _ => false,
+        };
+        let should_report_unused_parameters = stub_or_impl == FunctionStubOrImpl::Impl
+            && !body_is_trivial
+            && !decorators.is_overload
+            && !decorators.is_override
+            && !decorators.is_abstract_method
+            && !is_ellipse(&body);
+
         let self_assignments = if decorators.has_no_type_check
             || (self.untyped_def_behavior == UntypedDefBehavior::SkipAndInferReturnAny
                 && !is_annotated(&return_ann_with_range, parameters))
@@ -495,16 +535,20 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             match self.untyped_def_behavior {
                 UntypedDefBehavior::SkipAndInferReturnAny => {
-                    let (yields_and_returns, self_assignments) = self.function_body_scope(
-                        parameters,
-                        body,
-                        range,
-                        func_name,
-                        parent,
-                        undecorated_idx,
-                        class_key,
-                        is_async,
-                    );
+                    let (yields_and_returns, self_assignments, unused_parameters) = self
+                        .function_body_scope(
+                            parameters,
+                            body,
+                            range,
+                            func_name,
+                            parent,
+                            undecorated_idx,
+                            class_key,
+                            is_async,
+                        );
+                    if should_report_unused_parameters {
+                        self.record_unused_parameters(unused_parameters);
+                    }
                     self.analyze_return_type(
                         func_name,
                         is_async,
@@ -519,16 +563,20 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 UntypedDefBehavior::CheckAndInferReturnAny => {
                     let implicit_return = self.implicit_return(&body, func_name);
-                    let (yields_and_returns, self_assignments) = self.function_body_scope(
-                        parameters,
-                        body,
-                        range,
-                        func_name,
-                        parent,
-                        undecorated_idx,
-                        class_key,
-                        is_async,
-                    );
+                    let (yields_and_returns, self_assignments, unused_parameters) = self
+                        .function_body_scope(
+                            parameters,
+                            body,
+                            range,
+                            func_name,
+                            parent,
+                            undecorated_idx,
+                            class_key,
+                            is_async,
+                        );
+                    if should_report_unused_parameters {
+                        self.record_unused_parameters(unused_parameters);
+                    }
                     self.analyze_return_type(
                         func_name,
                         is_async,
@@ -543,16 +591,20 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 UntypedDefBehavior::CheckAndInferReturnType => {
                     let implicit_return = self.implicit_return(&body, func_name);
-                    let (yields_and_returns, self_assignments) = self.function_body_scope(
-                        parameters,
-                        body,
-                        range,
-                        func_name,
-                        parent,
-                        undecorated_idx,
-                        class_key,
-                        is_async,
-                    );
+                    let (yields_and_returns, self_assignments, unused_parameters) = self
+                        .function_body_scope(
+                            parameters,
+                            body,
+                            range,
+                            func_name,
+                            parent,
+                            undecorated_idx,
+                            class_key,
+                            is_async,
+                        );
+                    if should_report_unused_parameters {
+                        self.record_unused_parameters(unused_parameters);
+                    }
                     self.analyze_return_type(
                         func_name,
                         is_async,

@@ -180,6 +180,7 @@ use crate::ModuleInfo;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
 use crate::error::error::Error;
+use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::build_system::queue_source_db_rebuild_and_recheck;
 use crate::lsp::non_wasm::build_system::should_requery_build_system;
 use crate::lsp::non_wasm::lsp::apply_change_events;
@@ -191,7 +192,6 @@ use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
-use crate::lsp::non_wasm::module_helpers::to_real_path;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
@@ -868,8 +868,12 @@ impl Server {
                             .read()
                             .contains_key(&params.text_document_position.text_document.uri)
                     {
-                        // TODO(yangdanny) handle notebooks
                         self.references(x.id, ide_transaction_manager, params);
+                    } else {
+                        // TODO(yangdanny) handle notebooks
+                        let locations: Vec<Location> = Vec::new();
+                        self.connection
+                            .send(Message::Response(new_response(x.id, Ok(Some(locations)))));
                     }
                 } else if let Some(params) = as_request::<PrepareRenameRequest>(&x) {
                     if let Some(params) = self
@@ -1146,9 +1150,9 @@ impl Server {
         let s = Self {
             connection: ServerConnection(connection),
             lsp_queue,
-            recheck_queue: HeavyTaskQueue::new(),
-            find_reference_queue: HeavyTaskQueue::new(),
-            sourcedb_queue: HeavyTaskQueue::new(),
+            recheck_queue: HeavyTaskQueue::new("recheck_queue"),
+            find_reference_queue: HeavyTaskQueue::new("find_reference_queue"),
+            sourcedb_queue: HeavyTaskQueue::new("sourcedb_queue"),
             invalidated_configs: Arc::new(Mutex::new(SmallSet::new())),
             initialize_params,
             indexing_mode,
@@ -1369,6 +1373,7 @@ impl Server {
                 }
                 let handle = make_open_handle(&self.state, path);
                 Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
+                Self::append_unused_parameter_diagnostics(transaction, &handle, diagnostics);
             }
             self.connection
                 .publish_diagnostics(diags, notebook_cell_urls);
@@ -2048,13 +2053,6 @@ impl Server {
         params: CompletionParams,
     ) -> anyhow::Result<CompletionResponse> {
         let uri = &params.text_document_position.text_document.uri;
-        if self.open_notebook_cells.read().contains_key(uri) {
-            // TODO(yangdanny) handle notebooks
-            return Ok(CompletionResponse::List(CompletionList {
-                is_incomplete: false,
-                items: Vec::new(),
-            }));
-        }
         let (handle, import_format) = match self
             .make_handle_with_lsp_analysis_config_if_enabled(uri, Some(Completion::METHOD))
         {
@@ -2498,6 +2496,30 @@ impl Server {
         }
     }
 
+    fn append_unused_parameter_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        items: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(bindings) = transaction.get_bindings(handle) {
+            let module_info = bindings.module();
+            for unused in bindings.unused_parameters() {
+                let lsp_range = module_info.to_lsp_range(unused.range);
+                items.push(Diagnostic {
+                    range: lsp_range,
+                    severity: Some(DiagnosticSeverity::HINT),
+                    source: Some("Pyrefly".to_owned()),
+                    message: format!("Parameter `{}` is unused", unused.name.as_str()),
+                    code: Some(NumberOrString::String("unused-parameter".to_owned())),
+                    code_description: None,
+                    related_information: None,
+                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    data: None,
+                });
+            }
+        }
+    }
+
     fn docstring_ranges(
         &self,
         transaction: &Transaction<'_>,
@@ -2593,6 +2615,7 @@ impl Server {
             }
         }
         Self::append_unreachable_diagnostics(transaction, &handle, &mut items);
+        Self::append_unused_parameter_diagnostics(transaction, &handle, &mut items);
         DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
             full_document_diagnostic_report: FullDocumentDiagnosticReport {
                 items,

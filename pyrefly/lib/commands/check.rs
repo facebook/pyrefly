@@ -233,6 +233,11 @@ struct OutputArgs {
     )]
     summarize_errors: Option<usize>,
 
+    /// Filter the error summary to show only a specific error kind (e.g., bad-assignment, missing-return, etc.).
+    /// Must be used in conjunction with --summarize-errors.
+    #[arg(long, value_enum, value_name = "ERROR_KIND")]
+    only: Option<crate::config::error_kind::ErrorKind>,
+
     /// By default show the number of errors. Pass `--summary` to show information about lines checked and time/memory,
     /// or `--summary=none` to hide the summary line entirely.
     #[arg(
@@ -749,8 +754,8 @@ impl CheckArgs {
         if let Some(limit) = self.output.count_errors {
             print_error_counts(&errors.shown, limit);
         }
-        if let Some(path_index) = self.output.summarize_errors {
-            print_error_summary(&errors.shown, path_index);
+        if self.output.summarize_errors.is_some() {
+            print_error_summary(&errors.shown, self.output.only);
         }
         let mut shown_errors_count = config_errors_count;
         for error in &errors.shown {

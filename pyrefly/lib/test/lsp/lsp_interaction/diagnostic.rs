@@ -212,6 +212,92 @@ fn test_unreachable_branch_diagnostic() {
     interaction.shutdown();
 }
 
+#[test]
+fn test_unused_parameter_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(Some(serde_json::json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]))),
+        ..Default::default()
+    });
+
+    interaction.server.did_change_configuration();
+    interaction.client.expect_configuration_request(2, None);
+    interaction.server.send_configuration_response(
+        2,
+        serde_json::json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]),
+    );
+
+    interaction.server.did_open("unused_parameter/example.py");
+    interaction.server.diagnostic("unused_parameter/example.py");
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
+        result: Some(serde_json::json!({
+            "items": [
+                {
+                    "code": "unused-parameter",
+                    "message": "Parameter `unused_arg` is unused",
+                    "range": {
+                        "start": {"line": 6, "character": 21},
+                        "end": {"line": 6, "character": 31}
+                    },
+                    "severity": 4,
+                    "source": "Pyrefly",
+                    "tags": [1]
+                }
+            ],
+            "kind": "full"
+        })),
+        error: None,
+    });
+
+    interaction.shutdown();
+}
+
+#[test]
+fn test_unused_parameter_no_report() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(Some(serde_json::json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]))),
+        ..Default::default()
+    });
+
+    interaction.server.did_change_configuration();
+    interaction.client.expect_configuration_request(2, None);
+    interaction.server.send_configuration_response(
+        2,
+        serde_json::json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]),
+    );
+
+    interaction.server.did_open("unused_parameter/no_report.py");
+    interaction
+        .server
+        .diagnostic("unused_parameter/no_report.py");
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
+        result: Some(serde_json::json!({
+            "items": [],
+            "kind": "full"
+        })),
+        error: None,
+    });
+
+    interaction.shutdown();
+}
+
 #[cfg(unix)]
 #[test]
 fn test_publish_diagnostics_preserves_symlink_uri() {

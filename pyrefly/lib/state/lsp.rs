@@ -75,6 +75,7 @@ use crate::config::error_kind::ErrorKind;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::graph::index::Idx;
+use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
@@ -1640,6 +1641,18 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
     ) -> Vec<TextRangeWithModule> {
+        let type_ = self.get_type_at(handle, position);
+
+        if let Some(t) = type_ {
+            let symbol_def_paths = collect_symbol_def_paths(&t);
+
+            if !symbol_def_paths.is_empty() {
+                return symbol_def_paths.map(|(qname, _)| {
+                    TextRangeWithModule::new(qname.module().clone(), qname.range())
+                });
+            }
+        }
+
         self.find_definition(handle, position, &FindPreference::default())
             .into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
     }

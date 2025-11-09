@@ -591,20 +591,18 @@ else:
 
 // Test for https://github.com/facebook/pyrefly/issues/726
 testcase!(
-    bug = "Pyrefly currently pins the type too aggressively, resulting in a spurious error",
     test_reassign_literal_str_to_str_in_loop,
     r#"
 import os
 
 path = '/'
-for x in ['home', 'other']:  # E: `str` is not assignable to `LiteralString` (caused by inconsistent types when breaking cycles)
+for x in ['home', 'other']:
     path = os.path.join(path, x)
     "#,
 );
 
 // Test for https://github.com/facebook/pyrefly/issues/747
 testcase!(
-    bug = "Pyrefly currently fails to narrow a `Var` that is `LoopRecursive`",
     test_benign_reassign_and_narrow_in_loop,
     r#"
 from typing import assert_type
@@ -612,6 +610,38 @@ from typing import assert_type
 def test(x: int | None, i: int):
     for _ in []:
         x = x or i
-        assert_type(x, int)   # E: assert_type(int | None, int)
+        assert_type(x, int)
 "#,
+);
+
+testcase!(
+    test_expand_loop_recursive_and_match_generic,
+    r#"
+from typing import assert_type
+def f[T](x: list[T]) -> T: ...
+def condition() -> bool: ...
+
+good = [1]
+while condition():
+    good = [f(good)]
+assert_type(good, list[int])
+
+bad = [1]
+while condition():  # E: `list[int] | list[str]` is not assignable to `list[int]` (caused by inconsistent types when breaking cycles)
+    if condition():
+        bad = [f(bad)]  # E:  Argument `list[int] | list[str]` is not assignable to parameter `x` with type `list[int]` in function `f`
+    else:
+        bad = [""]
+"#,
+);
+
+// Test for https://github.com/facebook/pyrefly/issues/1505
+testcase!(
+    test_dict_get_self_assignment,
+    r#"
+d: dict[str, str] = {}
+a: str | None = None
+for i in range(10):
+    a = d.get('x', a)
+    "#,
 );

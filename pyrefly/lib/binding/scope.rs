@@ -775,14 +775,58 @@ struct ScopeMethod {
     name: Identifier,
     self_name: Option<Identifier>,
     instance_attributes: SmallMap<Name, InstanceAttribute>,
+    parameters: SmallMap<Name, ParameterUsage>,
     yields_and_returns: YieldsAndReturns,
     is_async: bool,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 struct ScopeFunction {
+    parameters: SmallMap<Name, ParameterUsage>,
     yields_and_returns: YieldsAndReturns,
     is_async: bool,
+}
+
+#[derive(Clone, Debug)]
+struct ParameterUsage {
+    range: TextRange,
+    used: bool,
+    allow_unused: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct UnusedParameter {
+    pub name: Name,
+    pub range: TextRange,
+}
+
+impl Default for ScopeFunction {
+    fn default() -> Self {
+        Self::new(false)
+    }
+}
+
+impl ScopeFunction {
+    fn new(is_async: bool) -> Self {
+        Self {
+            parameters: SmallMap::new(),
+            yields_and_returns: Default::default(),
+            is_async,
+        }
+    }
+}
+
+impl ScopeMethod {
+    fn new(name: Identifier, is_async: bool) -> Self {
+        Self {
+            name,
+            self_name: None,
+            instance_attributes: SmallMap::new(),
+            parameters: SmallMap::new(),
+            yields_and_returns: Default::default(),
+            is_async,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -900,20 +944,14 @@ impl Scope {
         Self::new(
             range,
             true,
-            ScopeKind::Function(ScopeFunction {
-                yields_and_returns: Default::default(),
-                is_async,
-            }),
+            ScopeKind::Function(ScopeFunction::new(is_async)),
         )
     }
     pub fn lambda(range: TextRange, is_async: bool) -> Self {
         Self::new(
             range,
             false,
-            ScopeKind::Function(ScopeFunction {
-                yields_and_returns: Default::default(),
-                is_async,
-            }),
+            ScopeKind::Function(ScopeFunction::new(is_async)),
         )
     }
 
@@ -921,18 +959,20 @@ impl Scope {
         Self::new(
             range,
             true,
-            ScopeKind::Method(ScopeMethod {
-                name,
-                self_name: None,
-                instance_attributes: SmallMap::new(),
-                yields_and_returns: Default::default(),
-                is_async,
-            }),
+            ScopeKind::Method(ScopeMethod::new(name, is_async)),
         )
     }
 
     fn module(range: TextRange) -> Self {
         Self::new(range, false, ScopeKind::Module)
+    }
+
+    fn parameters_mut(&mut self) -> Option<&mut SmallMap<Name, ParameterUsage>> {
+        match &mut self.kind {
+            ScopeKind::Function(scope) => Some(&mut scope.parameters),
+            ScopeKind::Method(scope) => Some(&mut scope.parameters),
+            _ => None,
+        }
     }
 
     fn class_and_metadata_keys(&self) -> Option<(Idx<KeyClass>, Idx<KeyClassMetadata>)> {
@@ -1168,7 +1208,31 @@ impl Scopes {
         }
     }
 
-    pub fn pop_function_scope(&mut self) -> (YieldsAndReturns, Option<SelfAssignments>) {
+    fn collect_unused_parameters(
+        parameters: SmallMap<Name, ParameterUsage>,
+    ) -> Vec<UnusedParameter> {
+        parameters
+            .into_iter()
+            .filter_map(|(name, usage)| {
+                if usage.used || usage.allow_unused {
+                    None
+                } else {
+                    Some(UnusedParameter {
+                        name,
+                        range: usage.range,
+                    })
+                }
+            })
+            .collect()
+    }
+
+    pub fn pop_function_scope(
+        &mut self,
+    ) -> (
+        YieldsAndReturns,
+        Option<SelfAssignments>,
+        Vec<UnusedParameter>,
+    ) {
         match self.pop().kind {
             ScopeKind::Method(method_scope) => (
                 method_scope.yields_and_returns,
@@ -1176,8 +1240,13 @@ impl Scopes {
                     method_name: method_scope.name.id,
                     instance_attributes: method_scope.instance_attributes,
                 }),
+                Self::collect_unused_parameters(method_scope.parameters),
             ),
-            ScopeKind::Function(function_scope) => (function_scope.yields_and_returns, None),
+            ScopeKind::Function(function_scope) => (
+                function_scope.yields_and_returns,
+                None,
+                Self::collect_unused_parameters(function_scope.parameters),
+            ),
             unexpected => unreachable!("Tried to pop a function scope, but got {unexpected:?}"),
         }
     }
@@ -1391,6 +1460,30 @@ impl Scopes {
             name.range,
             StaticStyle::SingleDef(ann),
         )
+    }
+
+    pub fn register_parameter(&mut self, name: &Identifier, allow_unused: bool) {
+        if let Some(parameters) = self.current_mut().parameters_mut() {
+            parameters.insert(
+                name.id.clone(),
+                ParameterUsage {
+                    range: name.range,
+                    used: false,
+                    allow_unused,
+                },
+            );
+        }
+    }
+
+    pub fn mark_parameter_used(&mut self, name: &Name) {
+        for scope in self.iter_rev_mut() {
+            if let Some(parameters) = scope.parameters_mut()
+                && let Some(info) = parameters.get_mut(name)
+            {
+                info.used = true;
+                break;
+            }
+        }
     }
 
     /// Add an intercepted possible legacy TParam - this is a name that's part

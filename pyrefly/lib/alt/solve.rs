@@ -1490,6 +1490,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Arc::new(type_info)
     }
 
+    /// Force the outermost type, without deep-forcing. Without this, narrowing behavior
+    /// is unpredictable and has undesirable behavior particularly in loop recursion.
+    pub fn force_for_narrowing(&self, ty: &Type) -> Type {
+        match ty {
+            Type::Var(v) => self.force_for_narrowing(&self.solver().force_var(*v)),
+            _ => ty.clone(),
+        }
+    }
+
     pub fn expand_vars_mut(&self, ty: &mut Type) {
         // Replace any solved recursive variables with their answers.
         self.solver().expand_vars_mut(ty);
