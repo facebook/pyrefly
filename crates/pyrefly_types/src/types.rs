@@ -325,6 +325,7 @@ pub struct TypeAlias {
     ty: Box<Type>,
     pub style: TypeAliasStyle,
     annotated_metadata: Box<[Type]>,
+    is_type_form: bool,
 }
 
 impl TypeAlias {
@@ -334,11 +335,29 @@ impl TypeAlias {
             ty: Box::new(ty),
             style,
             annotated_metadata: annotated_metadata.into_boxed_slice(),
+            is_type_form: true,
         }
     }
 
     pub fn annotated_metadata(&self) -> &[Type] {
         &self.annotated_metadata
+    }
+
+    pub fn is_type_form(&self) -> bool {
+        self.is_type_form
+    }
+
+    pub fn resolved_type(&self) -> Option<&Type> {
+        if self.is_type_form {
+            None
+        } else {
+            Some(self.ty.as_ref())
+        }
+    }
+
+    pub fn set_resolved_type(&mut self, ty: Type) {
+        self.ty = Box::new(ty);
+        self.is_type_form = false;
     }
 
     /// Gets the type contained within the type alias for use in a value

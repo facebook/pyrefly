@@ -839,6 +839,19 @@ assert_type(type(x6), type[dict])
 );
 
 testcase!(
+    test_type_alias_preserves_name_in_errors,
+    r#"
+from typing import TypeAlias
+
+OnpFloat: TypeAlias = bool | float
+
+def expects_alias(value: OnpFloat) -> None: ...
+
+expects_alias("oops")  # E: Argument `Literal['oops']` is not assignable to parameter `value` with type `OnpFloat`
+"#,
+);
+
+testcase!(
     test_anywhere_binding,
     r#"
 from typing import assert_type, Literal

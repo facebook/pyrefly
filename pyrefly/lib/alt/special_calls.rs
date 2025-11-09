@@ -495,7 +495,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         f(me, Type::type_form(t), res)
                     }
                 }
-                Type::TypeAlias(ta) => f(me, ta.as_value(me.stdlib), res),
+                Type::TypeAlias(ta) => {
+                    if let Some(resolved) = ta.resolved_type() {
+                        f(me, resolved.clone(), res)
+                    } else {
+                        f(me, ta.as_value(me.stdlib), res)
+                    }
+                }
                 _ => res.push(t),
             }
         }

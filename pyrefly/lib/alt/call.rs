@@ -209,7 +209,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Any(style) => Some(CallTarget::Any(style)),
             Type::TypeAlias(ta) => {
-                self.as_call_target_impl(ta.as_value(self.stdlib), quantified, dunder_call)
+                if let Some(resolved) = ta.resolved_type() {
+                    self.as_call_target_impl(resolved.clone(), quantified, dunder_call)
+                } else {
+                    self.as_call_target_impl(ta.as_value(self.stdlib), quantified, dunder_call)
+                }
             }
             Type::ClassType(cls) => {
                 if let Some(quantified) = quantified {
