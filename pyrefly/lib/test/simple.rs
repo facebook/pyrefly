@@ -839,6 +839,21 @@ assert_type(type(x6), type[dict])
 );
 
 testcase!(
+    test_tuple_literal_default_relaxation,
+    r#"
+from typing import assert_type
+
+def make_zipinfo(
+    date_time: tuple[int, int, int, int, int, int] = (1980, 1, 1, 0, 0, 0)
+) -> tuple[int, int, int, int, int, int]:
+    return date_time
+
+assert_type(make_zipinfo(), tuple[int, int, int, int, int, int])
+assert_type(make_zipinfo((2000, 12, 31, 23, 59, 59)), tuple[int, int, int, int, int, int])
+"#,
+);
+
+testcase!(
     test_type_alias_preserves_name_in_errors,
     r#"
 from typing import TypeAlias

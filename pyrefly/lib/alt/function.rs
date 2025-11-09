@@ -16,10 +16,12 @@ use pyrefly_types::callable::Params;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::BoundMethod;
 use pyrefly_types::types::TParam;
 use pyrefly_types::types::TParams;
 use pyrefly_types::types::TParamsSource;
+use pyrefly_types::types::TypeAliasStyle;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -518,8 +520,56 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 Required::Optional(None)
             }
-            Some(default) => Required::Optional(Some(self.expr(default, check, errors))),
+            Some(default) => {
+                let mut ty = self.expr(default, None, errors);
+                if let Some((want, tcc)) = check {
+                    if let Some(relaxed) = self.relax_tuple_literal_default(&ty, want) {
+                        ty = relaxed;
+                    }
+                    self.check_type(&ty, want, default.range(), errors, tcc);
+                }
+                Required::Optional(Some(ty))
+            }
             None => Required::Required,
+        }
+    }
+
+    fn relax_tuple_literal_default(&self, default_ty: &Type, want: &Type) -> Option<Type> {
+        if self.is_literal_tuple(default_ty) && self.tuple_allows_literal_relaxation(want) {
+            Some(default_ty.clone().promote_literals(self.stdlib))
+        } else {
+            None
+        }
+    }
+
+    fn is_literal_tuple(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Tuple(Tuple::Concrete(elts)) => {
+                elts.iter().all(|elt| matches!(elt, Type::Literal(_)))
+            }
+            _ => false,
+        }
+    }
+
+    fn tuple_allows_literal_relaxation(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Tuple(Tuple::Concrete(elts)) => {
+                elts.iter().all(|elt| !self.requires_specific_literal(elt))
+            }
+            Type::TypeAlias(alias) if alias.style != TypeAliasStyle::Scoped => {
+                self.tuple_allows_literal_relaxation(&alias.body_type())
+            }
+            _ => false,
+        }
+    }
+
+    fn requires_specific_literal(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Literal(_) => true,
+            Type::TypeAlias(alias) if alias.style != TypeAliasStyle::Scoped => {
+                self.requires_specific_literal(&alias.body_type())
+            }
+            _ => false,
         }
     }
 
