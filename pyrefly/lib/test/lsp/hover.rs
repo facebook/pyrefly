@@ -168,6 +168,41 @@ x: int = 5  # pyrefly: ignore[bad-return]
 }
 
 #[test]
+fn hover_over_overloaded_binary_operator_shows_dunder_name() {
+    let code = r#"
+from typing import overload
+
+class Matrix:
+    @overload
+    def __matmul__(self, other: Matrix) -> Matrix: ...
+    @overload
+    def __matmul__(self, other: int) -> Matrix: ...
+    def __matmul__(self, other) -> Matrix: ...
+
+lhs = Matrix()
+rhs = Matrix()
+lhs @ rhs
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+13 | lhs @ rhs
+         ^
+```python
+(attribute) __matmul__: (
+    self: Matrix,
+    other: Matrix
+) -> Matrix
+```
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn hover_over_code_with_ignore_shows_type() {
     let code = r#"
 a: int = "test"  # pyrefly: ignore

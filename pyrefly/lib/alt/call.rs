@@ -471,8 +471,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && !self.is_compatible_constructor_return(&ret, cls.class_object())
         {
             if let Some(metaclass_dunder_call) = self.get_metaclass_dunder_call(&cls) {
-                // Not quite an overload, but close enough
-                self.record_overload_trace_from_type(range, metaclass_dunder_call);
+                self.record_resolved_trace(range, metaclass_dunder_call);
             }
             // Got something other than an instance of the class under construction.
             return ret;
@@ -503,8 +502,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 let has_errors = !dunder_new_errors.is_empty();
                 errors.extend(dunder_new_errors);
-                // Not quite an overload, but close enough
-                self.record_overload_trace_from_type(range, new_method);
+                self.record_resolved_trace(range, new_method);
                 if self.is_compatible_constructor_return(&ret, cls.class_object()) {
                     dunder_new_ret = Some(ret);
                 } else if !matches!(ret, Type::Any(AnyStyle::Error | AnyStyle::Implicit)) {
@@ -546,8 +544,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if !dunder_new_has_errors {
                 errors.extend(dunder_init_errors);
             }
-            // Not quite an overload, but close enough
-            self.record_overload_trace_from_type(range, init_method);
+            self.record_resolved_trace(range, init_method);
         }
         self.solver()
             .finish_class_targs(cls.targs_mut(), self.uniques);
