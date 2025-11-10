@@ -570,7 +570,7 @@ impl ConfigFile {
         excludes.append(
             &self
                 .site_package_path()
-                .filter(|p| self.import_root.as_ref().is_none_or(|r| !r.starts_with(p)))
+                .filter(|p| !self.search_path().any(|r| r.starts_with(p)))
                 .filter_map(|p| Glob::new(p.to_string_lossy().to_string()).ok())
                 .collect::<Vec<_>>(),
         );
@@ -1800,6 +1800,7 @@ mod tests {
         let site_package_path = vec![
             "venv/site_packages".to_owned(),
             "system/site_packages".to_owned(),
+            "my_search_path".to_owned(),
         ];
         config.interpreters.skip_interpreter_query = true;
         config.python_environment.site_package_path = Some(
@@ -1808,9 +1809,15 @@ mod tests {
                 .map(PathBuf::from)
                 .collect::<Vec<_>>(),
         );
+        config.search_path_from_file = vec![PathBuf::from("my_search_path")];
         config.project_excludes = ConfigFile::required_project_excludes();
 
         config.configure();
+
+        let mut expected_site_package_path = site_package_path;
+        // get rid of "my_search_path" in site package path, since it's going to be removed
+        // when we add site package path to project excludes
+        expected_site_package_path.pop();
 
         assert_eq!(
             config.get_filtered_globs(None),
@@ -1830,7 +1837,7 @@ mod tests {
                         "**/venv/**".to_owned(),
                         "**/.[!/.]*/**".to_owned(),
                     ])
-                    .chain(site_package_path.clone())
+                    .chain(expected_site_package_path.clone())
                     .collect::<Vec<_>>()
                 )
                 .unwrap(),
@@ -1852,7 +1859,7 @@ mod tests {
                             "**/venv/**".to_owned(),
                             "**/.[!/.]*/**".to_owned(),
                         ])
-                        .chain(site_package_path)
+                        .chain(expected_site_package_path)
                         .collect::<Vec<_>>()
                 )
                 .unwrap(),
