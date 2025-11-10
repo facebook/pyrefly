@@ -15,7 +15,7 @@ use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 fn builtins_import_goes_to_typeshed() {
     let root = get_test_files_root();
     let pyrefly_typeshed_materialized = env::temp_dir().join("pyrefly_bundled_typeshed");
-    let result_file = pyrefly_typeshed_materialized.join("typing.pyi");
+    let result_file = pyrefly_typeshed_materialized.join("builtins.pyi");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
@@ -27,10 +27,10 @@ fn builtins_import_goes_to_typeshed() {
         .type_definition("imports_builtins_no_config.py", 7, 7);
     interaction.client.expect_definition_response_absolute(
         result_file.to_string_lossy().to_string(),
-        426,
-        0,
-        426,
-        4,
+        1103,
+        6,
+        1103,
+        10,
     );
     assert!(
         pyrefly_typeshed_materialized.join("pyrefly.toml").exists(),

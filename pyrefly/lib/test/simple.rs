@@ -1880,3 +1880,14 @@ from typing import SupportsIndex
 x: SupportsIndex = 3
     "#,
 );
+
+// A request from Apache Airflow: make sure we don't add logic that complains on
+// an unused bitshift expression - some linters dislike this, but Airflow uses it
+// as a side-effecting operation to express DAG dependencies.
+testcase!(
+    test_bitshift_as_side_effect_does_not_error,
+    r#"
+def f(x: int, y: int):
+    x >> y
+    "#,
+);

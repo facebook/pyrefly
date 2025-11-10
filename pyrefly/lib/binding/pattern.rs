@@ -34,6 +34,7 @@ use crate::binding::narrow::expr_to_subjects;
 use crate::binding::scope::FlowStyle;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
+use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::types::facet::FacetKind;
 
@@ -241,6 +242,34 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     NarrowOps::new()
                 };
+
+                // Check if this is a single-positional-slot builtin type
+                // These types (bool, bytearray, bytes, dict, float, frozenset, int, list, set, str, tuple)
+                // bind the entire narrowed value when used with a single positional pattern
+                let is_single_slot_builtin = if let Expr::Name(name) = x.cls.as_ref() {
+                    SpecialExport::new(&name.id)
+                        .map(|se| se.is_single_positional_slot_builtin())
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+
+                // Handle positional patterns
+                if is_single_slot_builtin
+                    && x.arguments.patterns.len() == 1
+                    && x.arguments.keywords.is_empty()
+                {
+                    // For single-positional-slot builtins with exactly one positional pattern,
+                    // bind the pattern directly to the narrowed subject (like MatchAs)
+                    let pattern = x.arguments.patterns.into_iter().next().unwrap();
+                    narrow_ops.and_all(self.bind_pattern(
+                        match_subject.clone(),
+                        pattern,
+                        subject_idx,
+                    ));
+                    return narrow_ops;
+                }
+                // Normal MatchClass handling
                 // TODO: narrow class type vars based on pattern arguments
                 x.arguments
                     .patterns

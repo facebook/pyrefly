@@ -409,7 +409,7 @@ impl<'a> BindingsBuilder<'a> {
         // TODO: We should properly handle `yield` and `yield from`; lambdas can be generators.
         // One example of this is in the standard library, in `_collections_abc.pyi`:
         // https://github.com/python/cpython/blob/965662ee4a986605b60da470d9e7c1e9a6f922b3/Lib/_collections_abc.py#L92
-        let (yields_and_returns, _) = self.scopes.pop_function_scope();
+        let (yields_and_returns, _, _) = self.scopes.pop_function_scope();
         for (idx, y) in yields_and_returns.yields {
             self.insert_binding_idx(idx, BindingYield::Invalid(y));
         }

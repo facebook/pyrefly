@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::Reverse;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -15,6 +16,7 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemTag;
 use lsp_types::DocumentSymbol;
+use lsp_types::FoldingRangeKind;
 use lsp_types::ParameterInformation;
 use lsp_types::ParameterLabel;
 use lsp_types::SemanticToken;
@@ -25,6 +27,7 @@ use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
+use pyrefly_python::folding::folding_ranges;
 use pyrefly_python::keywords::get_keywords;
 use pyrefly_python::module::Module;
 use pyrefly_python::module::TextRangeWithModule;
@@ -71,6 +74,7 @@ use crate::config::error_kind::ErrorKind;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::graph::index::Idx;
+use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
@@ -474,6 +478,17 @@ pub struct FindDefinitionItem {
     pub module: Module,
 }
 
+/// The currently active argument in a function call for signature help.
+#[derive(Debug)]
+enum ActiveArgument {
+    /// The cursor is within an existing positional argument at the given index.
+    Positional(usize),
+    /// The cursor is within a keyword argument whose name is provided.
+    Keyword(Name),
+    /// The cursor is in the argument list but not inside any argument expression yet.
+    Next(usize),
+}
+
 impl<'a> Transaction<'a> {
     fn get_type(&self, handle: &Handle, key: &Key) -> Option<Type> {
         let idx = self.get_bindings(handle)?.key_to_idx(key);
@@ -844,25 +859,22 @@ impl<'a> Transaction<'a> {
     fn visit_finding_signature_range(
         x: &Expr,
         find: TextSize,
-        res: &mut Option<(TextRange, TextRange, usize)>,
+        res: &mut Option<(TextRange, TextRange, ActiveArgument)>,
     ) {
         if let Expr::Call(call) = x
             && call.arguments.range.contains_inclusive(find)
         {
-            for (i, arg) in call.arguments.args.as_ref().iter().enumerate() {
-                if arg.range().contains_inclusive(find) {
-                    Self::visit_finding_signature_range(arg, find, res);
-                    if res.is_some() {
-                        return;
-                    }
-                    *res = Some((call.func.range(), call.arguments.range, i));
-                }
+            if Self::visit_positional_signature_args(call, find, res) {
+                return;
+            }
+            if Self::visit_keyword_signature_args(call, find, res) {
+                return;
             }
             if res.is_none() {
                 *res = Some((
                     call.func.range(),
                     call.arguments.range,
-                    call.arguments.len(),
+                    ActiveArgument::Next(call.arguments.len()),
                 ));
             }
         } else {
@@ -870,16 +882,70 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn visit_positional_signature_args(
+        call: &ExprCall,
+        find: TextSize,
+        res: &mut Option<(TextRange, TextRange, ActiveArgument)>,
+    ) -> bool {
+        for (i, arg) in call.arguments.args.as_ref().iter().enumerate() {
+            if arg.range().contains_inclusive(find) {
+                Self::visit_finding_signature_range(arg, find, res);
+                if res.is_some() {
+                    return true;
+                }
+                *res = Some((
+                    call.func.range(),
+                    call.arguments.range,
+                    ActiveArgument::Positional(i),
+                ));
+                return true;
+            }
+        }
+        false
+    }
+
+    fn visit_keyword_signature_args(
+        call: &ExprCall,
+        find: TextSize,
+        res: &mut Option<(TextRange, TextRange, ActiveArgument)>,
+    ) -> bool {
+        let kwarg_start_idx = call.arguments.args.len();
+        for (j, kw) in call.arguments.keywords.iter().enumerate() {
+            if kw.range.contains_inclusive(find) {
+                Self::visit_finding_signature_range(&kw.value, find, res);
+                if res.is_some() {
+                    return true;
+                }
+                let active_argument = match kw.arg.as_ref() {
+                    Some(identifier) => ActiveArgument::Keyword(identifier.id.clone()),
+                    None => ActiveArgument::Positional(kwarg_start_idx + j),
+                };
+                *res = Some((call.func.range(), call.arguments.range, active_argument));
+                return true;
+            }
+        }
+        false
+    }
+
     /// Finds the callable(s) (multiple if overloads exist) at position in document, returning them, chosen overload index, and arg index
     fn get_callables_from_call(
         &self,
         handle: &Handle,
         position: TextSize,
-    ) -> Option<(Vec<Type>, usize, usize)> {
+    ) -> Option<(Vec<Type>, usize, ActiveArgument)> {
         let mod_module = self.get_ast(handle)?;
         let mut res = None;
         mod_module.visit(&mut |x| Self::visit_finding_signature_range(x, position, &mut res));
-        let (callee_range, call_args_range, arg_index) = res?;
+        let (callee_range, call_args_range, mut active_argument) = res?;
+        // When the cursor is in the argument list but not inside any argument yet,
+        // estimate the would-be positional index by counting commas up to the cursor.
+        // This keeps signature help useful even before the user starts typing the next arg.
+        if let ActiveArgument::Next(index) = &mut active_argument
+            && let Some(next_index) =
+                self.count_argument_separators_before(handle, call_args_range, position)
+        {
+            *index = next_index;
+        }
         let answers = self.get_answers(handle)?;
         if let Some((overloads, chosen_overload_index)) =
             answers.get_all_overload_trace(call_args_range)
@@ -888,12 +954,12 @@ impl<'a> Transaction<'a> {
             Some((
                 callables,
                 chosen_overload_index.unwrap_or_default(),
-                arg_index,
+                active_argument,
             ))
         } else {
             answers
                 .get_type_trace(callee_range)
-                .map(|t| (vec![t], 0, arg_index))
+                .map(|t| (vec![t], 0, active_argument))
         }
     }
 
@@ -903,27 +969,33 @@ impl<'a> Transaction<'a> {
         position: TextSize,
     ) -> Option<SignatureHelp> {
         self.get_callables_from_call(handle, position).map(
-            |(callables, chosen_overload_index, arg_index)| SignatureHelp {
-                signatures: callables
+            |(callables, chosen_overload_index, active_argument)| {
+                let signatures = callables
                     .into_iter()
-                    .map(|t| Self::create_signature_information(t, arg_index))
-                    .collect_vec(),
-                active_signature: Some(chosen_overload_index as u32),
-                active_parameter: Some(arg_index as u32),
+                    .map(|t| Self::create_signature_information(t, &active_argument))
+                    .collect_vec();
+                let active_parameter = signatures
+                    .get(chosen_overload_index)
+                    .and_then(|info| info.active_parameter);
+                SignatureHelp {
+                    signatures,
+                    active_signature: Some(chosen_overload_index as u32),
+                    active_parameter,
+                }
             },
         )
     }
 
-    fn create_signature_information(type_: Type, arg_index: usize) -> SignatureInformation {
+    fn create_signature_information(
+        type_: Type,
+        active_argument: &ActiveArgument,
+    ) -> SignatureInformation {
         let type_ = type_.deterministic_printing();
         let label = type_.as_hover_string();
         let (parameters, active_parameter) =
             if let Some(params) = Self::normalize_singleton_function_type_into_params(type_) {
-                let active_parameter = if arg_index < params.len() {
-                    Some(arg_index as u32)
-                } else {
-                    None
-                };
+                let active_parameter =
+                    Self::active_parameter_index(&params, active_argument).map(|idx| idx as u32);
                 (
                     Some(params.map(|param| ParameterInformation {
                         label: ParameterLabel::Simple(format!("{param}")),
@@ -940,6 +1012,35 @@ impl<'a> Transaction<'a> {
             parameters,
             active_parameter,
         }
+    }
+
+    fn active_parameter_index(params: &[Param], active_argument: &ActiveArgument) -> Option<usize> {
+        match active_argument {
+            ActiveArgument::Positional(index) | ActiveArgument::Next(index) => {
+                (*index < params.len()).then_some(*index)
+            }
+            ActiveArgument::Keyword(name) => params
+                .iter()
+                .position(|param| param.name().is_some_and(|param_name| param_name == name)),
+        }
+    }
+
+    fn count_argument_separators_before(
+        &self,
+        handle: &Handle,
+        arguments_range: TextRange,
+        position: TextSize,
+    ) -> Option<usize> {
+        let module = self.get_module_info(handle)?;
+        let contents = module.contents();
+        let len = contents.len();
+        let start = arguments_range.start().to_usize().min(len);
+        let end = arguments_range.end().to_usize().min(len);
+        let pos = position.to_usize().clamp(start, end);
+        contents
+            .get(start..pos)
+            .map(|slice| slice.bytes().filter(|&b| b == b',').count())
+            .or(Some(0))
     }
 
     fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<Param>> {
@@ -1367,7 +1468,9 @@ impl<'a> Transaction<'a> {
                 self.get_ast(&handle).unwrap_or_else(|| {
                     // We may not have the AST available for the handle if it's not opened -- in that case,
                     // Re-parse the module to get the AST.
-                    Ast::parse(module_info.contents()).0.into()
+                    Ast::parse(module_info.contents(), module_info.source_type())
+                        .0
+                        .into()
                 })
             };
 
@@ -1572,11 +1675,48 @@ impl<'a> Transaction<'a> {
         definitions.into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
     }
 
+    pub fn folding_ranges(
+        &self,
+        handle: &Handle,
+    ) -> Option<Vec<(TextRange, Option<FoldingRangeKind>)>> {
+        let ast = self.get_ast(handle)?;
+        let module_info = self.get_module_info(handle)?;
+        Some(folding_ranges(&module_info, &ast.body))
+    }
+
+    pub fn docstring_ranges(&self, handle: &Handle) -> Option<Vec<TextRange>> {
+        let ranges = self.folding_ranges(handle)?;
+        Some(
+            ranges
+                .into_iter()
+                .filter_map(|(range, kind)| {
+                    if kind == Some(FoldingRangeKind::Comment) {
+                        Some(range)
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        )
+    }
+
     pub fn goto_type_definition(
         &self,
         handle: &Handle,
         position: TextSize,
     ) -> Vec<TextRangeWithModule> {
+        let type_ = self.get_type_at(handle, position);
+
+        if let Some(t) = type_ {
+            let symbol_def_paths = collect_symbol_def_paths(&t);
+
+            if !symbol_def_paths.is_empty() {
+                return symbol_def_paths.map(|(qname, _)| {
+                    TextRangeWithModule::new(qname.module().clone(), qname.range())
+                });
+            }
+        }
+
         self.find_definition(handle, position, &FindPreference::default())
             .into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
     }
@@ -1600,6 +1740,29 @@ impl<'a> Transaction<'a> {
         .into_iter()
         .next()
         .map(|item| TextRangeWithModule::new(item.module, item.definition_range))
+    }
+
+    fn search_modules_fuzzy(&self, pattern: &str) -> Vec<ModuleName> {
+        let matcher = SkimMatcherV2::default().smart_case();
+        let mut results = Vec::new();
+
+        for module_name in self.modules() {
+            let module_name_str = module_name.as_str();
+
+            // Skip builtins module
+            if module_name_str == "builtins" {
+                continue;
+            }
+
+            let components = module_name.components();
+            let last_component = components.last().map(|name| name.as_str()).unwrap_or("");
+            if let Some(score) = matcher.fuzzy_match(last_component, pattern) {
+                results.push((score, module_name));
+            }
+        }
+
+        results.sort_by_key(|(score, _)| Reverse(*score));
+        results.into_map(|(_, module_name)| module_name)
     }
 
     /// Produce code actions that makes edits local to the file.
@@ -1688,6 +1851,77 @@ impl<'a> Transaction<'a> {
         .concat()
     }
 
+    fn local_references_from_external_definition(
+        &self,
+        handle: &Handle,
+        definition_range: TextRange,
+        module: Module,
+    ) -> Option<Vec<TextRange>> {
+        let index = self.get_solutions(handle)?.get_index()?;
+        let index = index.lock();
+        let mut references = Vec::new();
+        for ((imported_module_name, imported_name), ranges) in index
+            .externally_defined_variable_references
+            .iter()
+            .chain(&index.renamed_imports)
+        {
+            if let Some((imported_handle, export)) = self.resolve_named_import(
+                handle,
+                *imported_module_name,
+                imported_name.clone(),
+                &FindPreference::default(),
+            ) && imported_handle.path().as_path() == module.path().as_path()
+                && export.location == definition_range
+            {
+                references.extend(ranges.iter().copied());
+            }
+        }
+        for (attribute_module_path, def_and_ref_ranges) in
+            &index.externally_defined_attribute_references
+        {
+            if attribute_module_path == module.path() {
+                for (def_range, ref_range) in def_and_ref_ranges {
+                    if def_range == &definition_range {
+                        references.push(*ref_range);
+                    }
+                }
+            }
+        }
+        Some(references)
+    }
+
+    fn local_references_from_local_definition(
+        &self,
+        handle: &Handle,
+        definition_metadata: DefinitionMetadata,
+        definition_range: TextRange,
+    ) -> Option<Vec<TextRange>> {
+        let mut references = match definition_metadata {
+            DefinitionMetadata::Attribute(expected_name) => self
+                .local_attribute_references_from_local_definition(
+                    handle,
+                    definition_range,
+                    &expected_name,
+                ),
+            DefinitionMetadata::Module => Vec::new(),
+            DefinitionMetadata::Variable(_) => self
+                .local_variable_references_from_local_definition(handle, definition_range)
+                .unwrap_or_default(),
+            DefinitionMetadata::VariableOrAttribute(expected_name, _) => [
+                self.local_attribute_references_from_local_definition(
+                    handle,
+                    definition_range,
+                    &expected_name,
+                ),
+                self.local_variable_references_from_local_definition(handle, definition_range)
+                    .unwrap_or_default(),
+            ]
+            .concat(),
+        };
+        references.push(definition_range);
+        Some(references)
+    }
+
     fn local_references_from_definition(
         &self,
         handle: &Handle,
@@ -1695,72 +1929,21 @@ impl<'a> Transaction<'a> {
         definition_range: TextRange,
         module: Module,
     ) -> Option<Vec<TextRange>> {
-        if handle.path() != module.path() {
-            let index = self.get_solutions(handle)?.get_index()?;
-            let index = index.lock();
-            let mut references = Vec::new();
-            for ((imported_module_name, imported_name), ranges) in index
-                .externally_defined_variable_references
-                .iter()
-                .chain(&index.renamed_imports)
-            {
-                if let Some((imported_handle, export)) = self.resolve_named_import(
-                    handle,
-                    *imported_module_name,
-                    imported_name.clone(),
-                    &FindPreference::default(),
-                ) && imported_handle.path().as_path() == module.path().as_path()
-                    && export.location == definition_range
-                {
-                    references.extend(ranges.iter().copied());
-                }
-            }
-            for (attribute_module_path, def_and_ref_ranges) in
-                &index.externally_defined_attribute_references
-            {
-                if attribute_module_path == module.path() {
-                    for (def_range, ref_range) in def_and_ref_ranges {
-                        if def_range == &definition_range {
-                            references.push(*ref_range);
-                        }
-                    }
-                }
-            }
-            references.sort_by_key(|range| range.start());
-            references.dedup();
-            return Some(references);
-        }
-        let mut references = match definition_metadata {
-            DefinitionMetadata::Attribute(expected_name) => self
-                .local_attribute_references_from_definition(
-                    handle,
-                    definition_range,
-                    &expected_name,
-                ),
-            DefinitionMetadata::Module => Vec::new(),
-            DefinitionMetadata::Variable(_) => self
-                .local_variable_references_from_definition(handle, definition_range, &module)
-                .unwrap_or_default(),
-            DefinitionMetadata::VariableOrAttribute(expected_name, _) => [
-                self.local_attribute_references_from_definition(
-                    handle,
-                    definition_range,
-                    &expected_name,
-                ),
-                self.local_variable_references_from_definition(handle, definition_range, &module)
-                    .unwrap_or_default(),
-            ]
-            .concat(),
+        let mut references = if handle.path() != module.path() {
+            self.local_references_from_external_definition(handle, definition_range, module)?
+        } else {
+            self.local_references_from_local_definition(
+                handle,
+                definition_metadata,
+                definition_range,
+            )?
         };
-        if module.path() == handle.path() {
-            references.push(definition_range);
-        }
         references.sort_by_key(|range| range.start());
         references.dedup();
         Some(references)
     }
 
-    fn local_attribute_references_from_definition(
+    fn local_attribute_references_from_local_definition(
         &self,
         handle: &Handle,
         definition_range: TextRange,
@@ -1823,23 +2006,20 @@ impl<'a> Transaction<'a> {
         .unwrap_or_default()
     }
 
-    fn local_variable_references_from_definition(
+    fn local_variable_references_from_local_definition(
         &self,
         handle: &Handle,
         definition_range: TextRange,
-        module: &Module,
     ) -> Option<Vec<TextRange>> {
         let bindings = self.get_bindings(handle)?;
         let mut references = Vec::new();
         for NamedBinding {
-            definition_handle,
+            definition_handle: _,
             definition_export,
             key,
         } in self.named_bindings(handle, &bindings)
         {
-            if definition_handle.path() == module.path()
-                && definition_range == definition_export.location
-            {
+            if definition_range == definition_export.location {
                 references.push(key.range());
             }
         }
@@ -1902,6 +2082,26 @@ impl<'a> Transaction<'a> {
                     }
                     Param::VarArg(None, _) | Param::Kwargs(_, _) | Param::PosOnly(None, _, _) => {}
                 }
+            }
+        }
+    }
+
+    fn add_magic_method_completions(
+        &self,
+        identifier: &Identifier,
+        completions: &mut Vec<CompletionItem>,
+    ) {
+        let typed = identifier.as_str();
+        if !typed.is_empty() && !typed.starts_with("__") {
+            return;
+        }
+        for name in dunder::MAGIC_METHOD_NAMES {
+            if name.starts_with(typed) {
+                completions.push(CompletionItem {
+                    label: (*name).to_owned(),
+                    kind: Some(CompletionItemKind::METHOD),
+                    ..Default::default()
+                });
             }
         }
     }
@@ -1978,9 +2178,7 @@ impl<'a> Transaction<'a> {
                         import_format,
                     );
                     let import_text_edit = TextEdit {
-                        range: module_info
-                            .lined_buffer()
-                            .to_lsp_range(TextRange::at(position, TextSize::new(0))),
+                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
                         new_text: insert_text.clone(),
                     };
                     (Some(insert_text), Some(vec![import_text_edit]))
@@ -2015,7 +2213,6 @@ impl<'a> Transaction<'a> {
                             import_regular_import_edit(&ast, module_handle);
                         let import_text_edit = TextEdit {
                             range: module_info
-                                .lined_buffer()
                                 .to_lsp_range(TextRange::at(position, TextSize::new(0))),
                             new_text: insert_text.clone(),
                         };
@@ -2169,11 +2366,12 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
     ) {
-        if let Some((callables, chosen_overload_index, arg_index)) =
+        if let Some((callables, chosen_overload_index, active_argument)) =
             self.get_callables_from_call(handle, position)
             && let Some(callable) = callables.get(chosen_overload_index)
             && let Some(params) =
                 Self::normalize_singleton_function_type_into_params(callable.clone())
+            && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
             && let Some(param) = params.get(arg_index)
         {
             Self::add_literal_completions_from_type(param.as_type(), completions);
@@ -2335,7 +2533,13 @@ impl<'a> Transaction<'a> {
                     });
                 }
             }
-            Some(IdentifierWithContext { identifier, .. }) => {
+            Some(IdentifierWithContext {
+                identifier,
+                context,
+            }) => {
+                if matches!(context, IdentifierContext::MethodDef { .. }) {
+                    self.add_magic_method_completions(&identifier, &mut result);
+                }
                 self.add_kwargs_completions(handle, position, &mut result);
                 self.add_keyword_completions(handle, &mut result);
                 let has_local_completions = self.add_local_variable_completions(
@@ -2382,7 +2586,13 @@ impl<'a> Transaction<'a> {
             }
         }
         for item in &mut result {
-            let sort_text = if item.additional_text_edits.is_some() {
+            let sort_text = if item
+                .tags
+                .as_ref()
+                .is_some_and(|tags| tags.contains(&CompletionItemTag::DEPRECATED))
+            {
+                "9"
+            } else if item.additional_text_edits.is_some() {
                 "4"
             } else if item.label.starts_with("__") {
                 "3"
@@ -2460,6 +2670,45 @@ impl<'a> Transaction<'a> {
             }
         }
         Vec::new()
+    }
+
+    pub fn search_exports_exact(&self, name: &str) -> Vec<Handle> {
+        self.search_exports(|handle, exports| {
+            if let Some(export) = exports.get(&Name::new(name)) {
+                match export {
+                    ExportLocation::ThisModule(_) => vec![handle.dupe()],
+                    // Re-exported modules like `foo` in `from from_module import foo`
+                    // should likely be ignored in autoimport suggestions
+                    // because the original export in from_module will show it.
+                    // The current strategy will prevent intended re-exports from showing up in
+                    // result list, but it's better than showing thousands of likely bad results.
+                    ExportLocation::OtherModule(..) => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    fn search_exports_fuzzy(&self, pattern: &str) -> Vec<(Handle, String, Export)> {
+        let mut res = self.search_exports(|handle, exports| {
+            let matcher = SkimMatcherV2::default().smart_case();
+            let mut results = Vec::new();
+            for (name, location) in exports.iter() {
+                let name = name.as_str();
+                if let Some(score) = matcher.fuzzy_match(name, pattern) {
+                    match location {
+                        ExportLocation::OtherModule(..) => {}
+                        ExportLocation::ThisModule(export) => {
+                            results.push((score, handle.dupe(), name.to_owned(), export.clone()));
+                        }
+                    }
+                }
+            }
+            results
+        });
+        res.sort_by_key(|(score, _, _, _)| Reverse(*score));
+        res.into_map(|(_, handle, name, export)| (handle, name, export))
     }
 
     fn filter_parameters(
@@ -2646,7 +2895,7 @@ impl<'a> Transaction<'a> {
         inlay_hint_config: InlayHintConfig,
     ) -> Option<Vec<(TextSize, String)>> {
         let is_interesting = |e: &Expr, ty: &Type, class_name: Option<&Name>| {
-            !ty.is_error()
+            !ty.is_any()
                 && match e {
                     Expr::Tuple(tuple) => {
                         !tuple.elts.is_empty() && tuple.elts.iter().all(|x| !Ast::is_literal(x))
@@ -2805,6 +3054,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         limit_range: Option<TextRange>,
+        limit_cell_idx: Option<usize>,
     ) -> Option<Vec<SemanticToken>> {
         let module_info = self.get_module_info(handle)?;
         let bindings = self.get_bindings(handle)?;
@@ -2827,10 +3077,11 @@ impl<'a> Transaction<'a> {
             }
         }
         builder.process_ast(&ast, &|range| self.get_type_trace(handle, range));
-        Some(
-            legends
-                .convert_tokens_into_lsp_semantic_tokens(&builder.all_tokens_sorted(), module_info),
-        )
+        Some(legends.convert_tokens_into_lsp_semantic_tokens(
+            &builder.all_tokens_sorted(),
+            module_info,
+            limit_cell_idx,
+        ))
     }
 
     #[allow(deprecated)] // The `deprecated` field
@@ -2862,12 +3113,8 @@ impl<'a> Transaction<'a> {
                         kind: lsp_types::SymbolKind::FUNCTION,
                         tags: None,
                         deprecated: None,
-                        range: module_info
-                            .lined_buffer()
-                            .to_lsp_range(stmt_function_def.range),
-                        selection_range: module_info
-                            .lined_buffer()
-                            .to_lsp_range(stmt_function_def.name.range),
+                        range: module_info.to_lsp_range(stmt_function_def.range),
+                        selection_range: module_info.to_lsp_range(stmt_function_def.name.range),
 
                         children: Some(children),
                     });
@@ -2885,12 +3132,8 @@ impl<'a> Transaction<'a> {
                         kind: lsp_types::SymbolKind::CLASS,
                         tags: None,
                         deprecated: None,
-                        range: module_info
-                            .lined_buffer()
-                            .to_lsp_range(stmt_class_def.range),
-                        selection_range: module_info
-                            .lined_buffer()
-                            .to_lsp_range(stmt_class_def.name.range),
+                        range: module_info.to_lsp_range(stmt_class_def.range),
+                        selection_range: module_info.to_lsp_range(stmt_class_def.name.range),
                         children: Some(children),
                     });
                 }
@@ -2904,10 +3147,8 @@ impl<'a> Transaction<'a> {
                                 kind: lsp_types::SymbolKind::VARIABLE,
                                 tags: None,
                                 deprecated: None,
-                                range: module_info.lined_buffer().to_lsp_range(stmt_assign.range),
-                                selection_range: module_info
-                                    .lined_buffer()
-                                    .to_lsp_range(name.range),
+                                range: module_info.to_lsp_range(stmt_assign.range),
+                                selection_range: module_info.to_lsp_range(name.range),
                                 children: None,
                             });
                         }
@@ -2925,10 +3166,8 @@ impl<'a> Transaction<'a> {
                             kind: lsp_types::SymbolKind::VARIABLE,
                             tags: None,
                             deprecated: None,
-                            range: module_info
-                                .lined_buffer()
-                                .to_lsp_range(stmt_ann_assign.range),
-                            selection_range: module_info.lined_buffer().to_lsp_range(name.range),
+                            range: module_info.to_lsp_range(stmt_ann_assign.range),
+                            selection_range: module_info.to_lsp_range(name.range),
                             children: None,
                         });
                     }

@@ -199,6 +199,8 @@ pub enum ErrorKind {
     MissingModuleAttribute,
     /// The source code for an imported package is missing.
     MissingSource,
+    /// We are using bundled stubs for a package but the source code is missing.
+    MissingSourceForStubs,
     /// The attribute exists but does not support this access pattern.
     NoAccess,
     /// Attempting to call an overloaded function, but none of the signatures match.
@@ -212,6 +214,8 @@ pub enum ErrorKind {
     NotCallable,
     /// Attempting to use a non-iterable value as an iterable.
     NotIterable,
+    /// Unpacking an open TypedDict that may contain a bad key via inheritance.
+    OpenUnpacking,
     /// An error related to parsing or syntax.
     ParseError,
     /// A protocol attribute was first defined inside a method instead of the class body.
@@ -287,6 +291,7 @@ impl ErrorKind {
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,
+            ErrorKind::OpenUnpacking => Severity::Ignore,
             _ => Severity::Error,
         }
     }

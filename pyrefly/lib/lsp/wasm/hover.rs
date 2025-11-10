@@ -18,9 +18,9 @@ use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::types::Type;
 use pyrefly_util::lined_buffer::LineNumber;
 use ruff_text_size::TextSize;
-use starlark_map::small_set::SmallSet;
 
 use crate::error::error::Error;
+use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
@@ -100,12 +100,11 @@ pub struct HoverValue {
 impl HoverValue {
     #[cfg(not(target_arch = "wasm32"))]
     fn format_symbol_def_locations(t: &Type) -> Option<String> {
-        let mut tracked_def_locs = SmallSet::new();
-        t.universe(&mut |t| tracked_def_locs.extend(t.qname()));
-        let linked_names = tracked_def_locs
+        let symbol_paths = collect_symbol_def_paths(t);
+        let linked_names = symbol_paths
             .into_iter()
-            .filter_map(|qname| {
-                if let Ok(mut url) = Url::from_file_path(qname.module_path().as_path()) {
+            .filter_map(|(qname, file_path)| {
+                if let Ok(mut url) = Url::from_file_path(&file_path) {
                     let start_pos = qname.module().display_range(qname.range()).start;
                     if let Some(cell) = start_pos.cell() {
                         url.set_fragment(Some(&format!(

@@ -50,6 +50,7 @@ use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::PySourceType;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtFunctionDef;
@@ -61,16 +62,20 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use serde::Serialize;
+use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::Answers;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
 use crate::config::finder::ConfigFinder;
 use crate::module::module_info::ModuleInfo;
+use crate::state::load::FileContents;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
 use crate::state::require::Require;
@@ -145,6 +150,7 @@ pub struct Attribute {
     pub name: String,
     pub kind: Option<String>,
     pub annotation: String,
+    pub is_final: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -845,7 +851,7 @@ impl<'a> CalleesWithLocation<'a> {
                 .collect_vec(),
 
             Type::Function(f) => {
-                vec![self.callee_from_function(&f, call_target, call_arguments)]
+                vec![self.callee_from_function(f, call_target, call_arguments)]
             }
             Type::Overload(f) => {
                 let class_name = self.class_name_from_call_target(call_target);
@@ -868,7 +874,7 @@ impl<'a> CalleesWithLocation<'a> {
             Type::ClassDef(cls) => self.find_init_or_new(cls),
             Type::Forall(v) => match &v.body {
                 Forallable::Function(func) => {
-                    vec![self.callee_from_function(&func, call_target, call_arguments)]
+                    vec![self.callee_from_function(func, call_target, call_arguments)]
                 }
                 Forallable::Callable(_) => self.for_callable(callee_range),
                 Forallable::TypeAlias(t) => {
@@ -962,6 +968,7 @@ impl Query {
         let transaction = self.state.transaction();
         let handle = self.make_handle(name, path);
         let ast = transaction.get_ast(&handle)?;
+
         // find last declaration of class with specified name in file
         let cls = ast
             .body
@@ -993,17 +1000,37 @@ impl Query {
                 _ => (None, ty),
             }
         }
+        let bindings = transaction.get_bindings(&handle)?;
+        let answers = transaction.get_answers(&handle)?;
+
         if let Some(Type::ClassDef(cd)) = &class_ty {
             let res = cd
                 .fields()
                 .filter_map(|n| {
                     let range = cd.field_decl_range(n)?;
+                    let class_field_index = KeyClassField(cd.index(), n.clone());
+                    let class_field_idx =
+                        bindings.key_to_idx_hashed_opt(Hashed::new(&class_field_index))?;
+                    let class_field = bindings.get(class_field_idx);
+                    let is_final = match &class_field.definition {
+                        ClassFieldDefinition::DeclaredByAnnotation { annotation } => {
+                            Some(*annotation)
+                        }
+                        ClassFieldDefinition::AssignedInBody { annotation, .. } => *annotation,
+                        ClassFieldDefinition::DefinedInMethod { annotation, .. } => *annotation,
+                        _ => None,
+                    }
+                    .and_then(|idx| answers.get_idx(idx))
+                    .map(|f| f.annotation.is_final())
+                    .unwrap_or(false);
+
                     let field_ty = transaction.get_type_at(&handle, range.start())?;
                     let (kind, field_ty) = get_kind_and_field_type(&field_ty);
                     Some(Attribute {
                         name: n.to_string(),
                         kind,
                         annotation: type_to_string(field_ty),
+                        is_final,
                     })
                 })
                 .collect_vec();
@@ -1184,12 +1211,15 @@ impl Query {
         path: PathBuf,
         snippet: &str,
     ) -> Result<(), String> {
-        let imported = Query::find_imports(&Ast::parse(snippet).0, t, handle);
+        let imported = Query::find_imports(&Ast::parse(snippet, PySourceType::Python).0, t, handle);
         let imports = imported.map(|x| format!("import {x}\n")).join("");
 
         // First, make sure that the types are well-formed and importable, return `Err` if not
         let code = format!("{imports}\n{snippet}\n");
-        t.set_memory(vec![(path.clone(), Some(Arc::new(code)))]);
+        t.set_memory(vec![(
+            path.clone(),
+            Some(Arc::new(FileContents::from_source(code))),
+        )]);
         t.run(&[handle.dupe()], Require::Everything);
         let errors = t.get_errors([handle]).collect_errors();
         if !errors.shown.is_empty() {

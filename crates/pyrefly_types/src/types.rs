@@ -881,11 +881,15 @@ impl Type {
     }
 
     pub fn any_tuple() -> Self {
-        Type::Tuple(Tuple::Unbounded(Box::new(Type::Any(AnyStyle::Implicit))))
+        Type::Tuple(Tuple::unbounded(Type::Any(AnyStyle::Implicit)))
     }
 
     pub fn is_any(&self) -> bool {
         matches!(self, Type::Any(_))
+    }
+
+    pub fn is_typed_dict(&self) -> bool {
+        matches!(self, Type::TypedDict(_) | Type::PartialTypedDict(_))
     }
 
     pub fn is_error(&self) -> bool {

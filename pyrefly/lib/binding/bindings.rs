@@ -21,11 +21,11 @@ use pyrefly_types::types::Type;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::uniques::UniqueFactory;
-use ruff_python_ast::AnyParameterRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Parameter;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::TypeParam;
 use ruff_python_ast::TypeParams;
@@ -63,6 +63,7 @@ use crate::binding::scope::FlowStyle;
 use crate::binding::scope::NameReadInfo;
 use crate::binding::scope::ScopeTrace;
 use crate::binding::scope::Scopes;
+use crate::binding::scope::UnusedParameter;
 use crate::binding::table::TableKeyed;
 use crate::config::base::UntypedDefBehavior;
 use crate::config::error_kind::ErrorKind;
@@ -150,6 +151,7 @@ struct BindingsInner {
     module_info: ModuleInfo,
     table: BindingTable,
     scope_trace: Option<ScopeTrace>,
+    unused_parameters: Vec<UnusedParameter>,
 }
 
 impl Display for Bindings {
@@ -186,6 +188,7 @@ pub struct BindingsBuilder<'a> {
     pub scopes: Scopes,
     table: BindingTable,
     pub untyped_def_behavior: UntypedDefBehavior,
+    unused_parameters: Vec<UnusedParameter>,
 }
 
 impl Bindings {
@@ -205,6 +208,10 @@ impl Bindings {
 
     pub fn module(&self) -> &ModuleInfo {
         &self.0.module_info
+    }
+
+    pub fn unused_parameters(&self) -> &[UnusedParameter] {
+        &self.0.unused_parameters
     }
 
     pub fn available_definitions(&self, position: TextSize) -> SmallSet<Idx<Key>> {
@@ -359,6 +366,7 @@ impl Bindings {
             scopes: Scopes::module(x.range, enable_trace),
             table: Default::default(),
             untyped_def_behavior,
+            unused_parameters: Vec::new(),
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -396,6 +404,7 @@ impl Bindings {
             } else {
                 None
             },
+            unused_parameters: builder.unused_parameters,
         }))
     }
 }
@@ -537,6 +546,10 @@ impl<'a> BindingsBuilder<'a> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         self.table.insert_idx(idx, value)
+    }
+
+    pub fn record_unused_parameters(&mut self, unused: Vec<UnusedParameter>) {
+        self.unused_parameters.extend(unused);
     }
 
     /// Insert a binding into the bindings table, given a `Usage`. This will panic if the usage
@@ -708,6 +721,7 @@ impl<'a> BindingsBuilder<'a> {
                 if let Some(used_idx) = first_use {
                     self.record_first_use(used_idx, usage);
                 }
+                self.scopes.mark_parameter_used(name.key());
                 NameLookupResult::Found {
                     idx,
                     uninitialized: is_initialized,
@@ -716,10 +730,13 @@ impl<'a> BindingsBuilder<'a> {
             NameReadInfo::Anywhere {
                 key,
                 uninitialized: is_initialized,
-            } => NameLookupResult::Found {
-                idx: self.table.types.0.insert(key),
-                uninitialized: is_initialized,
-            },
+            } => {
+                self.scopes.mark_parameter_used(name.key());
+                NameLookupResult::Found {
+                    idx: self.table.types.0.insert(key),
+                    uninitialized: is_initialized,
+                }
+            }
             NameReadInfo::NotFound => NameLookupResult::NotFound,
         }
     }
@@ -950,11 +967,15 @@ impl<'a> BindingsBuilder<'a> {
     pub fn bind_function_param(
         &mut self,
         target: AnnotationTarget,
-        x: AnyParameterRef,
+        x: &Parameter,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
+        is_variadic: bool,
     ) {
         let name = x.name();
+        let allow_unused = name.id.as_str().starts_with('_')
+            || matches!(name.id.as_str(), "self" | "cls")
+            || is_variadic;
         let annot = x.annotation().map(|x| {
             self.insert_binding(
                 KeyAnnotation::Annotation(ShortIdentifier::new(name)),
@@ -968,10 +989,12 @@ impl<'a> BindingsBuilder<'a> {
                 None => FunctionParameter::Unannotated(
                     self.solver.fresh_parameter(self.uniques),
                     undecorated_idx,
+                    target,
                 ),
             }),
         );
         self.scopes.add_parameter_to_current_static(name, annot);
+        self.scopes.register_parameter(name, allow_unused);
         self.bind_name(&name.id, key, FlowStyle::Other);
     }
 }

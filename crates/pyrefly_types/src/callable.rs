@@ -662,6 +662,15 @@ impl Param {
         }
     }
 
+    pub fn name(&self) -> Option<&Name> {
+        match self {
+            Param::PosOnly(name, ..) | Param::VarArg(name, ..) | Param::Kwargs(name, ..) => {
+                name.as_ref()
+            }
+            Param::Pos(name, ..) | Param::KwOnly(name, ..) => Some(name),
+        }
+    }
+
     pub fn as_type(&self) -> &Type {
         match self {
             Param::PosOnly(_, ty, _)

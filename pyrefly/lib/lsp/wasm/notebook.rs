@@ -10,14 +10,25 @@
 //! LSP Notebook Document Synchronization support
 //! Based on LSP 3.17.0 specification
 
+use std::collections::HashMap;
+
 use lsp_types::TextDocumentIdentifier;
 use lsp_types::TextDocumentItem;
 use lsp_types::Url;
 use lsp_types::VersionedTextDocumentIdentifier;
 use lsp_types::notification::Notification;
+use ruff_notebook::Cell;
+use ruff_notebook::CellMetadata;
+use ruff_notebook::CodeCell;
+use ruff_notebook::MarkdownCell;
+use ruff_notebook::RawNotebook;
+use ruff_notebook::RawNotebookMetadata;
+use ruff_notebook::SourceValue;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use serde_repr::Deserialize_repr;
+use serde_repr::Serialize_repr;
 
 // ===== Core Notebook Types =====
 
@@ -43,6 +54,68 @@ pub struct NotebookDocument {
 
     /// The cells of a notebook.
     pub cells: Vec<NotebookCell>,
+}
+
+impl NotebookDocument {
+    pub fn to_ruff_notebook(
+        self,
+        cell_content: &HashMap<Url, String>,
+    ) -> Result<ruff_notebook::Notebook, ruff_notebook::NotebookError> {
+        let cells: Vec<Cell> = self
+            .cells
+            .into_iter()
+            .map(|notebook_cell| {
+                let source = cell_content
+                    .get(&notebook_cell.document)
+                    .map(|s| SourceValue::String(s.clone()))
+                    .unwrap_or(SourceValue::String(String::new()));
+                let cell_id = notebook_cell
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("id"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_owned());
+                let metadata: CellMetadata = if let Some(metadata) = notebook_cell.metadata {
+                    serde_json::from_value(metadata).ok().unwrap_or_default()
+                } else {
+                    CellMetadata::default()
+                };
+                match notebook_cell.kind {
+                    NotebookCellKind::Code => {
+                        let execution_count = notebook_cell
+                            .execution_summary
+                            .as_ref()
+                            .map(|summary| summary.execution_order as i64);
+                        Cell::Code(CodeCell {
+                            execution_count,
+                            id: cell_id,
+                            metadata,
+                            outputs: Vec::new(),
+                            source,
+                        })
+                    }
+                    NotebookCellKind::Markup => Cell::Markdown(MarkdownCell {
+                        attachments: None,
+                        id: cell_id,
+                        metadata,
+                        source,
+                    }),
+                }
+            })
+            .collect();
+        let metadata: RawNotebookMetadata = if let Some(metadata) = self.metadata {
+            serde_json::from_value(metadata).ok().unwrap_or_default()
+        } else {
+            RawNotebookMetadata::default()
+        };
+        let raw_notebook = RawNotebook {
+            cells,
+            metadata,
+            nbformat: 4,
+            nbformat_minor: 5,
+        };
+        ruff_notebook::Notebook::from_raw_notebook(raw_notebook, true)
+    }
 }
 
 /// A notebook cell.
@@ -73,7 +146,8 @@ pub struct NotebookCell {
 /// A notebook cell kind.
 ///
 /// @since 3.17.0
-#[derive(Debug, Eq, PartialEq, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Deserialize_repr, Serialize_repr)]
+#[repr(u8)]
 pub enum NotebookCellKind {
     /// A markup-cell is formatted source that is used for display.
     Markup = 1,

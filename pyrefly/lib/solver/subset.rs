@@ -22,6 +22,7 @@ use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
+use crate::solver::solver::OpenTypedDictSubsetError;
 use crate::solver::solver::Subset;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::TypedDictSubsetError;
@@ -797,6 +798,19 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             })
     }
 
+    fn is_subset_partial_typed_dict_field(
+        &mut self,
+        got_ty: &Type,
+        want_field: &TypedDictField,
+    ) -> Result<(), SubsetError> {
+        if want_field.is_read_only() {
+            // ReadOnly can only be updated with Never (i.e., no update)
+            self.is_subset_eq(got_ty, &Type::never())
+        } else {
+            self.is_subset_eq(got_ty, &want_field.ty)
+        }
+    }
+
     /// Check TypedDict[got] <: PartialTypedDict[want]
     fn is_subset_partial_typed_dict(
         &mut self,
@@ -806,11 +820,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         let got_fields = self.type_order.typed_dict_fields(got);
         let want_fields = self.type_order.typed_dict_fields(want);
         let got_extra_items = self.type_order.typed_dict_extra_items(got.class_object());
-        let want_extra_items_type = self
-            .type_order
-            .typed_dict_extra_items(want.class_object())
-            .extra_item(self.type_order.stdlib())
-            .ty;
+        let want_extra_items = self.type_order.typed_dict_extra_items(want.class_object());
         all(want_fields.iter(), |(k, want_v)| {
             let got_field_ty = got_fields.get(k).map(|got_v| &got_v.ty);
             let got_ty = match (got_field_ty, &got_extra_items) {
@@ -822,24 +832,44 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
                 (None, ExtraItems::Default) => {
                     // A subclass of `got` could have this item with an incompatible type.
-                    return Err(SubsetError::PartialTypedDictMissingField(Box::new((
-                        got.name().clone(),
-                        want.name().clone(),
-                        k.clone(),
-                    ))));
+                    return Err(SubsetError::OpenTypedDict(Box::new(
+                        OpenTypedDictSubsetError::MissingField {
+                            got: got.name().clone(),
+                            want: want.name().clone(),
+                            field: k.clone(),
+                        },
+                    )));
                 }
             };
-            if want_v.is_read_only() {
-                // ReadOnly can only be updated with Never (i.e., no update)
-                self.is_subset_eq(got_ty, &Type::never())
+            self.is_subset_partial_typed_dict_field(got_ty, want_v)
+        })?;
+        all(got_fields.iter(), |(k, got_v)| {
+            if want_fields.contains_key(k) {
+                Ok(())
             } else {
-                self.is_subset_eq(got_ty, &want_v.ty)
+                self.is_subset_partial_typed_dict_field(
+                    &got_v.ty,
+                    &self.typed_dict_extra_items_field(want_extra_items.clone()),
+                )
             }
         })?;
-        self.is_subset_eq(
-            &got_extra_items.extra_item(self.type_order.stdlib()).ty,
-            &want_extra_items_type,
-        )
+        match (got_extra_items, want_extra_items) {
+            (_, ExtraItems::Default) => {
+                // When `want` is open, checking extra items is more likely to cause false positives than catch real errors.
+                Ok(())
+            }
+            (ExtraItems::Default, want_extra_items) => Err(SubsetError::OpenTypedDict(Box::new(
+                OpenTypedDictSubsetError::UnknownFields {
+                    got: got.name().clone(),
+                    want: want.name().clone(),
+                    extra_items: want_extra_items.extra_item(self.type_order.stdlib()).ty,
+                },
+            ))),
+            (got_extra_items, want_extra_items) => self.is_subset_eq(
+                &got_extra_items.extra_item(self.type_order.stdlib()).ty,
+                &want_extra_items.extra_item(self.type_order.stdlib()).ty,
+            ),
+        }
     }
 
     /// Implementation of subset equality for Type, other than Var.

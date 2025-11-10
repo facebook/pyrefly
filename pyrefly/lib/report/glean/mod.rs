@@ -116,6 +116,7 @@ sound = dog.speak()"#;
     let imports_code = r#"import os
 from typing import List
 from .simple import hello_world
+from os import *
 
 def process_files(paths: List[str]) -> int:
     """Count files in given paths."""
@@ -179,6 +180,18 @@ __all__ = ["x", "U"]
 __all__ += ["y"]
 "#;
 
+    let generated_file = format!(
+        r#" # {}generated SignedSource<<abcde123456>>
+ # @codegen-command : scripts/foo/bar
+ # @codegen-source FooConfig: this/is/the/Way.php
+ # @codegen-class : BarCodeGen
+
+def helloworld():
+    pass
+"#,
+        "@",
+    );
+
     let files = [
         ("simple", simple_code),
         ("classes", classes_code),
@@ -188,6 +201,7 @@ __all__ += ["y"]
         ("calls", calls),
         ("type_lit_str", type_lit_str),
         ("exports_all", exports_all),
+        ("generated_file", &generated_file),
     ];
     let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Everything);
     let transaction = state.transaction();

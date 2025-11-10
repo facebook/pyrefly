@@ -39,23 +39,17 @@ xyz = [foo.meth]
 #^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
-    assert_eq!(
-        r#"
-# main.py
-7 | foo.meth()
-        ^
-```python
-(attribute) meth: def meth(self: Foo) -> None
-```
-
-9 | xyz = [foo.meth]
-     ^
-```python
-(variable) xyz: list[(self: Foo) -> None]
-```
-"#
-        .trim(),
-        report.trim(),
+    assert!(report.contains("(attribute) meth: def meth(self: Foo) -> None: ..."));
+    assert!(report.contains("(variable) xyz: list[(self: Foo) -> None]"));
+    assert!(
+        report.contains("Go to [list]"),
+        "Expected 'Go to [list]' link, got: {}",
+        report
+    );
+    assert!(
+        report.contains("builtins.pyi"),
+        "Expected link to builtins.pyi, got: {}",
+        report
     );
 }
 
@@ -81,7 +75,7 @@ from lib import foo_renamed
 2 | from lib import foo_renamed
                          ^
 ```python
-(function) foo: def foo() -> None
+(function) foo: def foo() -> None: ...
 ```
 
 
@@ -189,5 +183,39 @@ a: int = "test"  # pyrefly: ignore
     assert!(
         !report.contains("Suppressed"),
         "Should not show suppressed error when hovering over code"
+    );
+}
+
+#[test]
+fn builtin_types_have_definition_links() {
+    let code = r#"
+x: str = "hello"
+#^
+y: int = 42
+#^
+z: list[int] = []
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Go to [str]"),
+        "Expected 'Go to [str]' link for str type, got: {}",
+        report
+    );
+    assert!(
+        report.contains("Go to [int]"),
+        "Expected 'Go to [int]' link for int type, got: {}",
+        report
+    );
+    assert!(
+        report.contains("Go to") && report.contains("[list]"),
+        "Expected 'Go to' link with [list] for list type, got: {}",
+        report
+    );
+
+    assert!(
+        report.contains("builtins.pyi"),
+        "Expected links to builtins.pyi, got: {}",
+        report
     );
 }

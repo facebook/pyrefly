@@ -266,6 +266,8 @@ enum ClassFieldInner {
         is_function_without_return_annotation: bool,
         /// Whether this field is an abstract method
         is_abstract: bool,
+        /// Whether this field is a Django ForeignKey field
+        is_foreign_key: bool,
     },
 }
 
@@ -298,6 +300,7 @@ impl ClassField {
         descriptor: Option<Descriptor>,
         is_function_without_return_annotation: bool,
         is_abstract: bool,
+        is_foreign_key: bool,
         is_inherited: IsInherited,
     ) -> Self {
         Self(
@@ -309,6 +312,7 @@ impl ClassField {
                 descriptor,
                 is_function_without_return_annotation,
                 is_abstract,
+                is_foreign_key,
             },
             is_inherited,
         )
@@ -332,6 +336,7 @@ impl ClassField {
                 descriptor: None,
                 is_function_without_return_annotation: false,
                 is_abstract: false,
+                is_foreign_key: false,
             },
             IsInherited::Maybe,
         )
@@ -347,6 +352,7 @@ impl ClassField {
                 descriptor: None,
                 is_function_without_return_annotation: false,
                 is_abstract: false,
+                is_foreign_key: false,
             },
             IsInherited::Maybe,
         )
@@ -368,6 +374,7 @@ impl ClassField {
                 descriptor,
                 is_function_without_return_annotation,
                 is_abstract,
+                is_foreign_key,
             } => {
                 let mut ty = ty.clone();
                 f(&mut ty);
@@ -386,6 +393,7 @@ impl ClassField {
                         is_function_without_return_annotation:
                             *is_function_without_return_annotation,
                         is_abstract: *is_abstract,
+                        is_foreign_key: *is_foreign_key,
                     },
                     self.1.clone(),
                 )
@@ -574,6 +582,10 @@ impl ClassField {
                 OverloadType::Forall(forall) => forall.body.metadata.flags.lacks_implementation,
             }),
             _ => false,
+ 
+    pub fn is_foreign_key(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Simple { is_foreign_key, .. } => *is_foreign_key,
         }
     }
 
@@ -1351,13 +1363,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             _ => {}
         };
+        // Check if this is a Django ForeignKey field
+        let is_foreign_key = metadata.is_django_model()
+            && matches!(&ty, Type::ClassType(cls) if self.is_foreign_key_field(cls.class_object()));
 
         let ty = if let Some(special_ty) = self.get_special_class_field_type(
             class,
             name,
             direct_annotation.as_ref(),
             &ty,
-            &initialization,
             initial_value,
             descriptor.is_some(),
             range,
@@ -1399,6 +1413,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             descriptor,
             is_function_without_return_annotation,
             is_abstract,
+            is_foreign_key,
             is_inherited,
         );
         if let RawClassFieldInitialization::Method(MethodThatSetsAttr {
@@ -1451,18 +1466,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         direct_annotation: Option<&Annotation>,
         ty: &Type,
-        initialization: &ClassFieldInitialization,
         initial_value: &RawClassFieldInitialization,
         is_descriptor: bool,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<Type> {
+        let is_initialized_on_class_body =
+            matches!(initial_value, RawClassFieldInitialization::ClassBody(_));
         self.get_enum_class_field_type(
             class,
             name,
             direct_annotation,
             ty,
-            initialization,
+            is_initialized_on_class_body,
             is_descriptor,
             range,
             errors,
@@ -2188,6 +2204,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 if let Some(parent_member) = self.get_class_member(class_object, field) {
                     let parent_field = Arc::unwrap_or_clone(parent_member.value.clone());
+                    // Get instance method types for fields that are methods, otherwise use the field type directly.
+                    let ty = self
+                        .as_instance_attribute(
+                            &parent_field,
+                            &Instance::of_protocol(parent_cls, self.instantiate(cls)),
+                        )
+                        .as_instance_method()
+                        .unwrap_or(field_entry.ty());
                     inherited_fields
                         .entry(field)
                         .or_default()
@@ -2195,7 +2219,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             class: class_object.dupe(),
                             metadata: parent_metadata.clone(),
                             field: parent_field,
-                            ty: field_entry.ty(),
+                            ty,
                         });
                 }
             }
@@ -2209,17 +2233,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .iter()
                     .map(|info| info.ty.clone())
                     .collect();
-                if types.iter().any(|ty| {
-                    matches!(
-                        ty,
-                        Type::BoundMethod(..)
-                            | Type::Function(..)
-                            | Type::Forall(_)
-                            | Type::Overload(_)
-                    )
-                }) {
-                    continue;
-                }
                 let intersect = self.intersects(&types);
                 if matches!(intersect, Type::Never(_)) {
                     let mut error_msg = vec1![
@@ -2240,6 +2253,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ErrorInfo::Kind(ErrorKind::InconsistentInheritance),
                         error_msg,
                     );
+                } else {
+                    for info in inherited_field_infos_by_ancestor {
+                        // Read-write fields should check that parent field's type
+                        // is assignable to the intersection.
+                        // Skip function types for this check for now.
+                        if !info.field.is_read_only()
+                            && !info.ty.is_function_type()
+                            && !self.is_subset_eq(&info.ty, &intersect)
+                        {
+                            self.error(
+                                errors,
+                                cls.range(),
+                                ErrorInfo::Kind(ErrorKind::InconsistentInheritance),
+                                format!(
+                                    "Field `{field_name}` is declared `{}` in ancestor `{}`, which is not assignable to the type `{}` implied by multiple inheritance",
+                                    info.ty,
+                                    info.class,
+                                    intersect,
+                                ),
+                            );
+                        }
+                    }
                 }
 
                 if let Some(child_member) = self.get_class_member(cls, field_name) {
@@ -2692,10 +2727,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn check_dataclass_field_final(
+        &self,
+        cls: &Class,
+        attr_name: &Name,
+        errors: &ErrorCollector,
+        range: TextRange,
+    ) {
+        if let DataclassMember::Field(field, _) = self.get_dataclass_member(cls, attr_name) {
+            let field = field.value;
+            if field.is_final() {
+                let msg = vec1![
+                    format!("Cannot set field `{attr_name}`"),
+                    ReadOnlyReason::Final.error_message()
+                ];
+                errors.add(range, ErrorInfo::Kind(ErrorKind::ReadOnly), msg);
+            }
+        }
+    }
+
     pub fn check_class_attr_set_and_infer_narrow(
         &self,
         class_attr: ClassAttribute,
-        instance_class: Option<ClassType>,
+        instance_class: Option<&ClassType>,
+        class_base: Option<&ClassBase>,
         attr_name: &Name,
         got: TypeOrExpr,
         range: TextRange,
@@ -2746,6 +2801,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     },
                     _ => attr_ty,
                 };
+                // Obtain a class object for checking whether we're writing to a final field in dataclass
+                let class_object = instance_class
+                    .map(|cls| cls.class_object())
+                    .or(class_base.map(|cb| cb.class_object()));
+                if let Some(class_object) = class_object {
+                    self.check_dataclass_field_final(class_object, attr_name, errors, range);
+                }
                 self.check_set_read_write_and_infer_narrow(
                     attr_ty,
                     attr_name,

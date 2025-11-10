@@ -19,7 +19,10 @@ fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
         report.push_str(name);
         report.push_str(".py\n");
         let handle = handles.get(name).unwrap();
-        let tokens = state.transaction().semantic_tokens(handle, None).unwrap();
+        let tokens = state
+            .transaction()
+            .semantic_tokens(handle, None, None)
+            .unwrap();
 
         let mut start_line: usize = 0;
         let mut start_col: usize = 0;
@@ -142,7 +145,7 @@ line: 3, column: 6, length: 3, text: Foo
 token-type: class
 
 line: 4, column: 6, length: 3, text: bar
-token-type: function
+token-type: method
 
 line: 4, column: 10, length: 4, text: self
 token-type: parameter
@@ -281,7 +284,7 @@ line: 1, column: 6, length: 4, text: Test
 token-type: class
 
 line: 2, column: 8, length: 3, text: foo
-token-type: function
+token-type: method
 
 line: 2, column: 12, length: 4, text: self
 token-type: parameter
@@ -290,7 +293,7 @@ line: 2, column: 21, length: 3, text: int
 token-type: class, token-modifiers: [defaultLibrary]
 
 line: 3, column: 8, length: 3, text: bar
-token-type: function
+token-type: method
 
 line: 3, column: 12, length: 4, text: self
 token-type: parameter
@@ -584,7 +587,7 @@ line: 1, column: 6, length: 3, text: Foo
 token-type: class
 
 line: 2, column: 8, length: 3, text: foo
-token-type: function
+token-type: method
 
 line: 2, column: 12, length: 4, text: self
 token-type: parameter

@@ -680,6 +680,7 @@ impl<'a> DefinitionsBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use pyrefly_util::prelude::SliceExt;
+    use ruff_python_ast::PySourceType;
 
     use super::*;
 
@@ -731,7 +732,7 @@ mod tests {
         is_init: bool,
     ) -> Definitions {
         let mut res = Definitions::new(
-            &Ast::parse(contents).0.body,
+            &Ast::parse(contents, PySourceType::Python).0.body,
             module_name,
             is_init,
             &SysInfo::default(),

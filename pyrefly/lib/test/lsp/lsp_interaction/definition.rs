@@ -260,3 +260,213 @@ fn prefer_pyi_when_missing_in_py() {
         .client
         .expect_definition_response_from_root("foo.pyi", 5, 4, 5, 7);
 }
+
+#[test]
+fn goto_type_def_on_str_primitive_goes_to_builtins_stub() {
+    let root = get_test_files_root();
+    let pyrefly_typeshed_materialized = temp_dir().join("pyrefly_bundled_typeshed");
+    let result_file = pyrefly_typeshed_materialized.join("builtins.pyi");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        ..Default::default()
+    });
+    interaction.server.did_open("primitive_type_test.py");
+    interaction
+        .server
+        .type_definition("primitive_type_test.py", 5, 0);
+
+    interaction.client.expect_definition_response_absolute(
+        result_file.to_string_lossy().to_string(),
+        477,
+        6,
+        477,
+        9,
+    );
+
+    assert!(
+        result_file.exists(),
+        "Expected builtins.pyi to exist at {result_file:?}",
+    );
+}
+
+#[test]
+fn goto_type_def_on_int_primitive_goes_to_builtins_stub() {
+    let root = get_test_files_root();
+    let pyrefly_typeshed_materialized = temp_dir().join("pyrefly_bundled_typeshed");
+    let result_file = pyrefly_typeshed_materialized.join("builtins.pyi");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        ..Default::default()
+    });
+    interaction.server.did_open("primitive_type_test.py");
+
+    interaction
+        .server
+        .type_definition("primitive_type_test.py", 6, 0);
+
+    // Expect to go to the int class definition in builtins.pyi
+    // Line 252 is 0-indexed (253 - 1), where "class int:" is defined
+    interaction.client.expect_definition_response_absolute(
+        result_file.to_string_lossy().to_string(),
+        252,
+        6,
+        252,
+        9,
+    );
+
+    assert!(
+        result_file.exists(),
+        "Expected builtins.pyi to exist at {result_file:?}",
+    );
+}
+
+#[test]
+fn goto_type_def_on_bool_primitive_goes_to_builtins_stub() {
+    let root = get_test_files_root();
+    let pyrefly_typeshed_materialized = temp_dir().join("pyrefly_bundled_typeshed");
+    let result_file = pyrefly_typeshed_materialized.join("builtins.pyi");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        ..Default::default()
+    });
+    interaction.server.did_open("primitive_type_test.py");
+    interaction
+        .server
+        .type_definition("primitive_type_test.py", 7, 0);
+
+    // Expect to go to the bool class definition in builtins.pyi
+    // Line 953 is 0-indexed (954 - 1), where "class bool:" is defined
+    interaction.client.expect_definition_response_absolute(
+        result_file.to_string_lossy().to_string(),
+        953,
+        6,
+        953,
+        10,
+    );
+
+    assert!(
+        result_file.exists(),
+        "Expected builtins.pyi to exist at {result_file:?}",
+    );
+}
+
+#[test]
+fn goto_type_def_on_bytes_primitive_goes_to_builtins_stub() {
+    let root = get_test_files_root();
+    let pyrefly_typeshed_materialized = temp_dir().join("pyrefly_bundled_typeshed");
+    let result_file = pyrefly_typeshed_materialized.join("builtins.pyi");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        ..Default::default()
+    });
+    interaction.server.did_open("primitive_type_test.py");
+
+    interaction
+        .server
+        .type_definition("primitive_type_test.py", 8, 0);
+
+    // Expect to go to the bytes class definition in builtins.pyi
+    // Line 662 is 0-indexed (663 - 1), where "class bytes:" is defined
+    interaction.client.expect_definition_response_absolute(
+        result_file.to_string_lossy().to_string(),
+        662,
+        6,
+        662,
+        11,
+    );
+
+    assert!(
+        result_file.exists(),
+        "Expected builtins.pyi to exist at {result_file:?}",
+    );
+}
+
+#[test]
+fn goto_type_def_on_custom_class_goes_to_class_definition() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        ..Default::default()
+    });
+    interaction.server.did_open("custom_class_type_test.py");
+
+    interaction
+        .server
+        .type_definition("custom_class_type_test.py", 8, 6);
+
+    // Expect to go to the Foo class definition (line 6, columns 6-9)
+    interaction.client.expect_definition_response_from_root(
+        "custom_class_type_test.py",
+        6,
+        6,
+        6,
+        9,
+    );
+}
+
+#[test]
+fn goto_type_def_on_list_of_primitives_shows_selector() {
+    let root = get_test_files_root();
+    let pyrefly_typeshed_materialized = temp_dir().join("pyrefly_bundled_typeshed");
+    let builtins_file = pyrefly_typeshed_materialized.join("builtins.pyi");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        ..Default::default()
+    });
+    interaction.server.did_open("primitive_type_test.py");
+
+    interaction
+        .server
+        .type_definition("primitive_type_test.py", 9, 0);
+
+    interaction.client.expect_response_with(
+        |response| {
+            if let Some(result) = &response.result
+                && let Some(locations_array) = result.as_array()
+            {
+                if locations_array.len() != 2 {
+                    return false;
+                }
+
+                let has_int = locations_array.iter().any(|loc| {
+                    loc.get("uri")
+                        .and_then(|uri| uri.as_str())
+                        .is_some_and(|u| u.ends_with("builtins.pyi"))
+                        && loc
+                            .get("range")
+                            .and_then(|r| r.get("start"))
+                            .and_then(|s| s.get("line"))
+                            .and_then(|l| l.as_u64())
+                            == Some(252)
+                });
+
+                let has_list = locations_array.iter().any(|loc| {
+                    loc.get("uri")
+                        .and_then(|uri| uri.as_str())
+                        .is_some_and(|u| u.ends_with("builtins.pyi"))
+                        && loc
+                            .get("range")
+                            .and_then(|r| r.get("start"))
+                            .and_then(|s| s.get("line"))
+                            .and_then(|l| l.as_u64())
+                            == Some(1103)
+                });
+
+                return has_int && has_list;
+            }
+            false
+        },
+        "response should contain two locations: one for int (line 252) and one for list (line 1103) in builtins.pyi",
+    );
+
+    assert!(
+        builtins_file.exists(),
+        "Expected builtins.pyi to exist at {builtins_file:?}",
+    );
+}

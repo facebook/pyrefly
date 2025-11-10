@@ -86,10 +86,7 @@
   ],
   "constructors_consistency.py": [],
   "dataclasses_descriptors.py": [],
-  "dataclasses_final.py": [
-    "Line 35: Expected 1 errors",
-    "Line 37: Expected 1 errors"
-  ],
+  "dataclasses_final.py": [],
   "dataclasses_frozen.py": [],
   "dataclasses_hash.py": [],
   "dataclasses_inheritance.py": [],
@@ -329,9 +326,7 @@
   "typeddicts_operations.py": [],
   "typeddicts_readonly.py": [],
   "typeddicts_readonly_consistency.py": [],
-  "typeddicts_readonly_inheritance.py": [
-    "Line 119: Expected 1 errors"
-  ],
+  "typeddicts_readonly_inheritance.py": [],
   "typeddicts_readonly_kwargs.py": [],
   "typeddicts_readonly_update.py": [],
   "typeddicts_required.py": [

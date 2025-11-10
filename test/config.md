@@ -24,7 +24,7 @@ Default configuration
     */bar/baz.py (glob)
     */bar/qux.py (glob)
   Resolving imports from:
-    Fallback search path (guessed from project_includes): * (glob)
+    Fallback search path (guessed from importing file with heuristics): * (glob)
     Site package path from user: * (glob)
     Site package path queried from interpreter: * (glob)
 Default configuration
@@ -32,7 +32,7 @@ Default configuration
   Covered files:
     */foo.py (glob)
   Resolving imports from:
-    Fallback search path (guessed from project_includes): * (glob)
+    Fallback search path (guessed from importing file with heuristics): * (glob)
     Site package path from user: * (glob)
     Site package path queried from interpreter: * (glob)
 [0]
@@ -250,7 +250,7 @@ Configuration at `*/config_finder/project/pyrefly.toml` (glob)
 ```scrut {output_stream: stdout}
 $ mkdir $TMPDIR/typing_extensions_project && \
 > echo "x: int = 42" > $TMPDIR/typing_extensions_project/typing_extensions.py && \
-> echo "from typing import assert_type; from typing_extensions import x; assert_type(x, int)" > $TMPDIR/typing_extensions_project/foo.py && \
+> echo "from typing_extensions import x; y: int = x" > $TMPDIR/typing_extensions_project/foo.py && \
 > $PYREFLY check $TMPDIR/typing_extensions_project/foo.py --search-path $TMPDIR/typing_extensions_project
 [0]
 ```
@@ -319,6 +319,10 @@ $ mkdir $TMPDIR/error_missing_source && \
 
 ## Regression test: we should still be able to find submodules when stubs are missing
 
+<!-- The missing-module-attribute ignore is for compatibility with Python versions that do not have
+     `typing.reveal_type` available and can be removed once we drop support for Python version < 3.11
+-->
+
 ```scrut {output_stream.stdout}
 $ mkdir $TMPDIR/site_package_missing_stubs && \
 > mkdir $TMPDIR/site_package_missing_stubs/django && \
@@ -326,7 +330,7 @@ $ mkdir $TMPDIR/site_package_missing_stubs && \
 > mkdir $TMPDIR/site_package_missing_stubs/django/forms && \
 > touch $TMPDIR/site_package_missing_stubs/django/forms/__init__.py && \
 > echo "from django import forms; from typing import reveal_type; reveal_type(forms)" > $TMPDIR/foo.py && \
-> $PYREFLY check $TMPDIR/foo.py --error untyped-import --site-package-path $TMPDIR/site_package_missing_stubs --output-format=min-text
+> $PYREFLY check $TMPDIR/foo.py --error untyped-import --ignore missing-module-attribute --site-package-path $TMPDIR/site_package_missing_stubs --output-format=min-text
 ERROR * Missing type stubs for `django` * (glob)
  INFO * revealed type: Module[django.forms] * (glob)
 [1]

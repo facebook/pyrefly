@@ -1,7 +1,7 @@
 [
   {
     "facts": [],
-    "predicate": "python.ImportStarLocation.4"
+    "predicate": "gencode.GenCode.1"
   },
   {
     "facts": [
@@ -20,7 +20,7 @@
           "call_args": [],
           "callee_span": {
             "length": 13,
-            "start": 293
+            "start": 310
           },
           "file": {
             "id": 0,
@@ -35,13 +35,13 @@
             {
               "span": {
                 "length": 17,
-                "start": 330
+                "start": 347
               }
             }
           ],
           "callee_span": {
             "length": 32,
-            "start": 316
+            "start": 333
           },
           "file": {
             "id": 0,
@@ -56,13 +56,13 @@
             {
               "span": {
                 "length": 4,
-                "start": 212
+                "start": 229
               }
             }
           ],
           "callee_span": {
             "length": 20,
-            "start": 197
+            "start": 214
           },
           "file": {
             "id": 0,
@@ -427,7 +427,7 @@
           },
           "span": {
             "length": 191,
-            "start": 67
+            "start": 84
           }
         }
       },
@@ -534,7 +534,7 @@
             "key": "imports.py"
           },
           "span": {
-            "length": 348,
+            "length": 365,
             "start": 0
           }
         }
@@ -559,7 +559,7 @@
           },
           "span": {
             "length": 24,
-            "start": 282
+            "start": 299
           }
         }
       },
@@ -583,7 +583,7 @@
           },
           "span": {
             "length": 10,
-            "start": 231
+            "start": 248
           }
         }
       },
@@ -607,7 +607,7 @@
           },
           "span": {
             "length": 9,
-            "start": 153
+            "start": 170
           }
         }
       },
@@ -631,7 +631,7 @@
           },
           "span": {
             "length": 4,
-            "start": 171
+            "start": 188
           }
         }
       },
@@ -655,7 +655,7 @@
           },
           "span": {
             "length": 5,
-            "start": 85
+            "start": 102
           }
         }
       },
@@ -679,7 +679,7 @@
           },
           "span": {
             "length": 41,
-            "start": 307
+            "start": 324
           }
         }
       }
@@ -704,7 +704,7 @@
           },
           "location": {
             "length": 33,
-            "start": 115
+            "start": 132
           },
           "pretty_text": "Count files in given paths."
         }
@@ -807,7 +807,7 @@
           },
           "span": {
             "length": 191,
-            "start": 67
+            "start": 84
           }
         }
       },
@@ -835,7 +835,7 @@
             "key": "imports.py"
           },
           "span": {
-            "length": 348,
+            "length": 365,
             "start": 0
           }
         }
@@ -876,7 +876,7 @@
           },
           "span": {
             "length": 10,
-            "start": 231
+            "start": 248
           }
         }
       },
@@ -916,7 +916,7 @@
           },
           "span": {
             "length": 9,
-            "start": 153
+            "start": 170
           }
         }
       },
@@ -956,7 +956,7 @@
           },
           "span": {
             "length": 4,
-            "start": 171
+            "start": 188
           }
         }
       },
@@ -1024,7 +1024,7 @@
           },
           "span": {
             "length": 5,
-            "start": 85
+            "start": 102
           }
         }
       },
@@ -1064,7 +1064,7 @@
           },
           "span": {
             "length": 24,
-            "start": 282
+            "start": 299
           }
         }
       },
@@ -1104,7 +1104,7 @@
           },
           "span": {
             "length": 41,
-            "start": 307
+            "start": 324
           }
         }
       }
@@ -1117,8 +1117,8 @@
         "id": 0,
         "key": {
           "digest": {
-            "hash": "30539fa848ed71b333aa23697bb05b736a792e3b3516e38974ea800eafceca24",
-            "size": 348
+            "hash": "c2800b51f02d8c0c80fb194ed70a6f527b97bd7cc247ad7229888d7ea22c55fe",
+            "size": 365
           },
           "file": {
             "id": 0,
@@ -1146,6 +1146,7 @@
             10,
             14,
             17,
+            17,
             22,
             23,
             23,
@@ -1161,6 +1162,42 @@
       }
     ],
     "predicate": "src.FileLines.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "imports.py"
+          },
+          "import_star": {
+            "id": 0,
+            "key": {
+              "from_name": {
+                "id": 0,
+                "key": "os"
+              },
+              "into_module": {
+                "id": 0,
+                "key": {
+                  "name": {
+                    "id": 0,
+                    "key": "imports"
+                  }
+                }
+              }
+            }
+          },
+          "span": {
+            "length": 16,
+            "start": 66
+          }
+        }
+      }
+    ],
+    "predicate": "python.ImportStarLocation.4"
   },
   {
     "facts": [
@@ -1189,7 +1226,7 @@
           "spans": [
             {
               "length": 11,
-              "start": 293
+              "start": 310
             },
             {
               "length": 11,
@@ -1212,7 +1249,7 @@
           "spans": [
             {
               "length": 13,
-              "start": 316
+              "start": 333
             }
           ],
           "target": {
@@ -1231,7 +1268,11 @@
           "spans": [
             {
               "length": 2,
-              "start": 197
+              "start": 214
+            },
+            {
+              "length": 2,
+              "start": 71
             },
             {
               "length": 2,
@@ -1254,26 +1295,7 @@
           "spans": [
             {
               "length": 3,
-              "start": 106
-            }
-          ],
-          "target": {
-            "id": 0,
-            "key": "int"
-          }
-        }
-      },
-      {
-        "id": 0,
-        "key": {
-          "file": {
-            "id": 0,
-            "key": "imports.py"
-          },
-          "spans": [
-            {
-              "length": 3,
-              "start": 97
+              "start": 114
             }
           ],
           "target": {
@@ -1291,8 +1313,50 @@
           },
           "spans": [
             {
+              "length": 3,
+              "start": 123
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "int"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "imports.py"
+          },
+          "spans": [
+            {
               "length": 4,
-              "start": 200
+              "start": 109
+            },
+            {
+              "length": 4,
+              "start": 29
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "typing.List"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "imports.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 217
             }
           ],
           "target": {
@@ -1311,7 +1375,7 @@
           "spans": [
             {
               "length": 4,
-              "start": 212
+              "start": 229
             }
           ],
           "target": {
@@ -1329,31 +1393,8 @@
           },
           "spans": [
             {
-              "length": 4,
-              "start": 29
-            },
-            {
-              "length": 4,
-              "start": 92
-            }
-          ],
-          "target": {
-            "id": 0,
-            "key": "typing.List"
-          }
-        }
-      },
-      {
-        "id": 0,
-        "key": {
-          "file": {
-            "id": 0,
-            "key": "imports.py"
-          },
-          "spans": [
-            {
               "length": 5,
-              "start": 179
+              "start": 196
             }
           ],
           "target": {
@@ -1372,7 +1413,7 @@
           "spans": [
             {
               "length": 5,
-              "start": 253
+              "start": 270
             }
           ],
           "target": {
@@ -1410,7 +1451,7 @@
           "spans": [
             {
               "length": 6,
-              "start": 205
+              "start": 222
             }
           ],
           "target": {
@@ -1454,7 +1495,7 @@
             {
               "source": {
                 "length": 11,
-                "start": 293
+                "start": 310
               },
               "target": {
                 "id": 0,
@@ -1474,7 +1515,7 @@
             {
               "source": {
                 "length": 13,
-                "start": 316
+                "start": 333
               },
               "target": {
                 "id": 0,
@@ -1484,7 +1525,17 @@
             {
               "source": {
                 "length": 2,
-                "start": 197
+                "start": 214
+              },
+              "target": {
+                "id": 0,
+                "key": "os"
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 71
               },
               "target": {
                 "id": 0,
@@ -1504,17 +1555,7 @@
             {
               "source": {
                 "length": 3,
-                "start": 106
-              },
-              "target": {
-                "id": 0,
-                "key": "int"
-              }
-            },
-            {
-              "source": {
-                "length": 3,
-                "start": 97
+                "start": 114
               },
               "target": {
                 "id": 0,
@@ -1523,8 +1564,28 @@
             },
             {
               "source": {
+                "length": 3,
+                "start": 123
+              },
+              "target": {
+                "id": 0,
+                "key": "int"
+              }
+            },
+            {
+              "source": {
                 "length": 4,
-                "start": 200
+                "start": 109
+              },
+              "target": {
+                "id": 0,
+                "key": "typing.List"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 217
               },
               "target": {
                 "id": 0,
@@ -1534,7 +1595,7 @@
             {
               "source": {
                 "length": 4,
-                "start": 212
+                "start": 229
               },
               "target": {
                 "id": 0,
@@ -1553,18 +1614,8 @@
             },
             {
               "source": {
-                "length": 4,
-                "start": 92
-              },
-              "target": {
-                "id": 0,
-                "key": "typing.List"
-              }
-            },
-            {
-              "source": {
                 "length": 5,
-                "start": 179
+                "start": 196
               },
               "target": {
                 "id": 0,
@@ -1574,7 +1625,7 @@
             {
               "source": {
                 "length": 5,
-                "start": 253
+                "start": 270
               },
               "target": {
                 "id": 0,
@@ -1594,7 +1645,7 @@
             {
               "source": {
                 "length": 6,
-                "start": 205
+                "start": 222
               },
               "target": {
                 "id": 0,
@@ -2048,6 +2099,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "e58db6a216a862a9e127d2986d1c377f"
+    "schema_id": "b53ee776cd31801ec9f22ea9787a58ad"
   }
 ]
