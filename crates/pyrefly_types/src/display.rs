@@ -7,9 +7,11 @@
 
 //! Display a type. The complexity comes from if we have two classes with the same name,
 //! we want to display disambiguating information (e.g. module name or location).
+use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Display;
 
+use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::qname::QName;
 use pyrefly_util::display::Fmt;
@@ -87,6 +89,7 @@ pub struct TypeDisplayContext<'a> {
     /// Should we display for IDE Hover? This makes type names more readable but less precise.
     hover: bool,
     always_display_module_name: bool,
+    display_modules: RefCell<SmallSet<ModuleName>>,
 }
 
 impl<'a> TypeDisplayContext<'a> {
@@ -232,11 +235,24 @@ impl<'a> TypeDisplayContext<'a> {
         name: &str,
         f: &mut fmt::Formatter<'_>,
     ) -> fmt::Result {
+        self.display_modules
+            .borrow_mut()
+            .insert(ModuleName::from_str(module));
         if self.always_display_module_name {
             write!(f, "{module}.{name}")
         } else {
             write!(f, "{name}")
         }
+    }
+
+    pub fn referenced_modules(&self) -> SmallSet<ModuleName> {
+        let mut modules = self.display_modules.borrow().clone();
+        for info in self.qnames.values() {
+            for module in info.info.keys() {
+                modules.insert(module.dupe());
+            }
+        }
+        modules
     }
 
     fn fmt_helper<'b>(

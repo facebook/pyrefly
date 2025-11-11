@@ -27,9 +27,9 @@ fn generate_inlay_hint_report(code: &str, hint_config: InlayHintConfig) -> Strin
             .inlay_hints(handle, hint_config)
             .unwrap()
         {
-            report.push_str(&code_frame_of_source_at_position(code, pos));
+            report.push_str(&code_frame_of_source_at_position(code, hint.position));
             report.push_str(" inlay-hint: `");
-            report.push_str(&hint);
+            report.push_str(&hint.label);
             report.push_str("`\n\n");
         }
         report.push('\n');

@@ -33,11 +33,14 @@ fn test_inlay_hints() {
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
         result: Some(serde_json::json!([{
-            "label": " -> tuple[Literal[1], Literal[2]]",
+            "label": " -> tuple[typing.Literal[1], typing.Literal[2]]",
             "position": {"character": 21, "line": 0},
             "textEdits": [{
-                "newText": " -> tuple[Literal[1], Literal[2]]",
+                "newText": " -> tuple[typing.Literal[1], typing.Literal[2]]",
                 "range": {"end": {"character": 21, "line": 0}, "start": {"character": 21, "line": 0}}
+            }, {
+                "newText": "import typing\n",
+                "range": {"end": {"character": 0, "line": 0}, "start": {"character": 0, "line": 0}}
             }]
         }])),
         error: None,
@@ -47,11 +50,14 @@ fn test_inlay_hints() {
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
         result: Some(serde_json::json!([{
-            "label": ": tuple[Literal[1], Literal[2]]",
+            "label": ": tuple[typing.Literal[1], typing.Literal[2]]",
             "position": {"character": 6, "line": 0},
             "textEdits": [{
-                "newText": ": tuple[Literal[1], Literal[2]]",
+                "newText": ": tuple[typing.Literal[1], typing.Literal[2]]",
                 "range": {"end": {"character": 6, "line": 0}, "start": {"character": 6, "line": 0}}
+            }, {
+                "newText": "import typing\n",
+                "range": {"end": {"character": 0, "line": 0}, "start": {"character": 0, "line": 0}}
             }]
         }])),
         error: None,
@@ -61,11 +67,14 @@ fn test_inlay_hints() {
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
         result: Some(serde_json::json!([{
-            "label": " -> Literal[0]",
+            "label": " -> typing.Literal[0]",
             "position": {"character": 15, "line": 0},
             "textEdits": [{
-                "newText": " -> Literal[0]",
+                "newText": " -> typing.Literal[0]",
                 "range": {"end": {"character": 15, "line": 0}, "start": {"character": 15, "line": 0}}
+            }, {
+                "newText": "import typing\n",
+                "range": {"end": {"character": 0, "line": 0}, "start": {"character": 0, "line": 0}}
             }]
         }])),
         error: None,
