@@ -2031,6 +2031,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         )
                     }
                 }
+                Type::Type(inner) if self.is_enum_class_type(inner.as_ref()) => {
+                    let base_display_ty = Type::Type(inner.clone());
+                    let enum_value_ty = *inner;
+                    if self.is_subset_eq(
+                        &self.expr(slice, None, errors),
+                        &self.stdlib.str().clone().to_type(),
+                    ) {
+                        enum_value_ty
+                    } else {
+                        self.error(
+                            errors,
+                            slice.range(),
+                            ErrorInfo::Kind(ErrorKind::BadIndex),
+                            format!(
+                                "Enum type `{}` can only be indexed by strings",
+                                self.for_display(base_display_ty)
+                            ),
+                        )
+                    }
+                }
                 Type::Type(box Type::SpecialForm(special)) => {
                     self.apply_special_form(special, slice, range, errors)
                 }

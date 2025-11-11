@@ -587,6 +587,32 @@ def get_labels(enum_cls: type[T_Enum]) -> list[str]:
 );
 
 testcase!(
+    test_enum_type_getitem,
+    r#"
+from enum import Enum
+from typing import TypeVar, assert_type
+
+class Color(Enum):
+    RED = "red"
+    BLUE = "blue"
+
+def accepts_base(cls: type[Enum], key: str) -> None:
+    assert_type(cls[key], Enum)
+
+def accepts_specific(cls: type[Color], key: str) -> None:
+    assert_type(cls[key], Color)
+
+T_Enum = TypeVar("T_Enum", bound=Enum)
+
+def accepts_generic(cls: type[T_Enum], key: str) -> None:
+    assert_type(cls[key], T_Enum)
+
+def bad_key(cls: type[Enum]) -> None:
+    cls[0]  # E: Enum type `type[Enum]` can only be indexed by strings
+"#,
+);
+
+testcase!(
     test_mixin_datatype,
     r#"
 from enum import Enum
