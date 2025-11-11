@@ -8,7 +8,6 @@
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
-use std::iter;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -700,7 +699,11 @@ impl<'a> BindingsBuilder<'a> {
             | FlowStyle::Uninitialized => {
                 self.special_export_from_binding_idx(idx, visited_names, visited_keys)
             }
-            _ => None,
+            FlowStyle::MergeableImport(_)
+            | FlowStyle::Import(..)
+            | FlowStyle::ImportAs(_)
+            | FlowStyle::FunctionDef(..)
+            | FlowStyle::LoopRecursion => None,
         }
     }
 
@@ -728,42 +731,10 @@ impl<'a> BindingsBuilder<'a> {
                 Binding::NameAssign(_, _, value, _) => {
                     return self.as_special_export_inner(value, visited_names, visited_keys);
                 }
-                Binding::Phi(_, options) => {
-                    return self.special_export_from_multiple_indices(
-                        options.iter().copied(),
-                        visited_names,
-                        visited_keys,
-                    );
-                }
-                Binding::LoopPhi(prior, options) => {
-                    return self.special_export_from_multiple_indices(
-                        iter::once(*prior).chain(options.iter().copied()),
-                        visited_names,
-                        visited_keys,
-                    );
-                }
                 _ => return None,
             }
         }
         None
-    }
-
-    fn special_export_from_multiple_indices(
-        &self,
-        indices: impl Iterator<Item = Idx<Key>>,
-        visited_names: &mut SmallSet<Name>,
-        visited_keys: &mut SmallSet<Idx<Key>>,
-    ) -> Option<SpecialExport> {
-        let mut result: Option<SpecialExport> = None;
-        for idx in indices {
-            let special = self.special_export_from_binding_idx(idx, visited_names, visited_keys)?;
-            match &mut result {
-                None => result = Some(special),
-                Some(existing) if *existing == special => {}
-                Some(_) => return None,
-            }
-        }
-        result
     }
 
     pub fn error(&self, range: TextRange, info: ErrorInfo, msg: String) {
