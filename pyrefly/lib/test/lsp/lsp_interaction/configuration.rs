@@ -426,7 +426,7 @@ fn test_disable_specific_language_services_via_analysis_config() {
         error: None,
     });
 
-    // Change configuration to disable only hover (mimicking pyrefly.analysis.disabledLanguageServices)
+    // Change configuration to disable only hover (using pyrefly.disabledLanguageServices)
     interaction.server.did_change_configuration();
     interaction
         .client
@@ -436,19 +436,15 @@ fn test_disable_specific_language_services_via_analysis_config() {
         serde_json::json!([
             {
                 "pyrefly": {
-                    "analysis": {
-                        "disabledLanguageServices": {
-                            "hover": true,
-                        }
+                    "disabledLanguageServices": {
+                        "hover": true,
                     }
                 }
             },
             {
                 "pyrefly": {
-                    "analysis": {
-                        "disabledLanguageServices": {
-                            "hover": true,
-                        }
+                    "disabledLanguageServices": {
+                        "hover": true,
                     }
                 }
             }
