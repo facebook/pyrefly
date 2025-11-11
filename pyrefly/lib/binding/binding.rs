@@ -15,6 +15,7 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
@@ -975,7 +976,7 @@ impl IsAsync {
 #[derive(Clone, Debug)]
 pub enum FunctionParameter {
     Annotated(Idx<KeyAnnotation>),
-    Unannotated(Var, Idx<KeyUndecoratedFunction>),
+    Unannotated(Var, Idx<KeyUndecoratedFunction>, AnnotationTarget),
 }
 
 /// Is the body of this function stubbed out (contains nothing but `...`)?
@@ -1009,6 +1010,7 @@ pub struct BindingUndecoratedFunction {
     pub class_key: Option<Idx<KeyClass>>,
     pub legacy_tparams: Box<[Idx<KeyLegacyTypeParam>]>,
     pub decorators: Box<[(Idx<Key>, TextRange)]>,
+    pub module_style: ModuleStyle,
 }
 
 impl DisplayWith<Bindings> for BindingUndecoratedFunction {
@@ -1046,6 +1048,7 @@ pub struct ReturnExplicit {
     pub expr: Option<Box<Expr>>,
     pub is_generator: bool,
     pub is_async: bool,
+    pub range: TextRange,
 }
 
 #[derive(Clone, Debug)]
@@ -1543,7 +1546,7 @@ impl DisplayWith<Bindings> for Binding {
                 "FunctionParameter({})",
                 match x {
                     FunctionParameter::Annotated(k) => ctx.display(*k).to_string(),
-                    FunctionParameter::Unannotated(x, k) => format!("{x}, {}", ctx.display(*k)),
+                    FunctionParameter::Unannotated(x, k, _) => format!("{x}, {}", ctx.display(*k)),
                 }
             ),
             Self::SuperInstance(SuperStyle::ExplicitArgs(cls, obj), _range) => {
@@ -1626,7 +1629,13 @@ impl Binding {
             | Binding::TypeParameter(_)
             | Binding::PossibleLegacyTParam(_, _) => Some(SymbolKind::TypeParameter),
             Binding::Global(_) => Some(SymbolKind::Variable),
-            Binding::Function(_, _, _) => Some(SymbolKind::Function),
+            Binding::Function(_, _, class_metadata) => {
+                if class_metadata.is_some() {
+                    Some(SymbolKind::Method)
+                } else {
+                    Some(SymbolKind::Function)
+                }
+            }
             Binding::Import(_, _, _) => {
                 // TODO: maybe we can resolve it to see its symbol kind
                 Some(SymbolKind::Variable)
@@ -1719,9 +1728,7 @@ impl AnnotationWithTarget {
                 } else if matches!(annotation_ty, Type::Args(_)) {
                     Some(annotation_ty.clone())
                 } else {
-                    Some(Type::Tuple(Tuple::Unbounded(Box::new(
-                        annotation_ty.clone(),
-                    ))))
+                    Some(Type::Tuple(Tuple::unbounded(annotation_ty.clone())))
                 }
             }
             AnnotationTarget::KwargsParam(_) => {

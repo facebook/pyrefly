@@ -22,6 +22,29 @@ struct ResultsFilter {
     include_builtins: bool,
 }
 
+#[test]
+fn completion_magic_methods_in_class() {
+    let code = r#"
+class Foo:
+    def __
+#       ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let trimmed = report.trim();
+    for expected in [
+        "- (Method) __eq__",
+        "- (Method) __len__",
+        "- (Method) __str__",
+        "- (Method) __hash__",
+    ] {
+        assert!(
+            trimmed.contains(expected),
+            "missing {expected} in completions:\n{trimmed}"
+        );
+    }
+}
+
 fn get_default_test_report() -> impl Fn(&State, &Handle, TextSize) -> String {
     get_test_report(ResultsFilter::default(), ImportFormat::Absolute)
 }
@@ -149,9 +172,42 @@ foo.
 11 | foo.
          ^
 Completion Results:
-- (Field) [DEPRECATED] also_not_ok: int
-- (Method) [DEPRECATED] not_ok: def not_ok(self: Foo) -> None
 - (Field) x: int
+- (Field) [DEPRECATED] also_not_ok: int
+- (Method) [DEPRECATED] not_ok: def not_ok(self: Foo) -> None: ...
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_deprecated_top_level_function() {
+    let code = r#"
+from typing import *
+from warnings import deprecated
+
+@deprecated("this is deprecated")
+def test1() -> None:
+    ...
+
+def test2() -> None:
+    ...
+
+te
+# ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+12 | te
+       ^
+Completion Results:
+- (Class) deprecated: type[deprecated]
+- (Function) test2: () -> None
+- (Function) [DEPRECATED] test1: () -> None
 "#
         .trim(),
         report.trim(),
@@ -204,9 +260,9 @@ foo.
 10 | foo.
          ^
 Completion Results:
-- (Method) class_method: def class_method(cls: type[Foo]) -> None
-- (Method) method: def method(self: Foo) -> None
-- (Function) static_method: def static_method() -> None
+- (Method) class_method: def class_method(cls: type[Foo]) -> None: ...
+- (Method) method: def method(self: Foo) -> None: ...
+- (Function) static_method: def static_method() -> None: ...
 - (Field) x: int
 "#
         .trim(),
@@ -520,7 +576,6 @@ Completion Results:
                         ^
 Completion Results:
 - (Variable) deprecated
-- (Variable) [DEPRECATED] func_not_ok
 - (Variable) func_ok
 - (Variable) __annotations__
 - (Variable) __builtins__
@@ -534,6 +589,7 @@ Completion Results:
 - (Variable) __package__
 - (Variable) __path__
 - (Variable) __spec__
+- (Variable) [DEPRECATED] func_not_ok
 
 
 # foo.py
@@ -1393,7 +1449,7 @@ def foo(x: B) -> None:
 9 |     x.
           ^
 Completion Results:
-- (Method) foo: def foo(self: B) -> int
+- (Method) foo: def foo(self: B) -> int: ...
 "#
         .trim(),
         report.trim(),
@@ -2067,7 +2123,7 @@ f.
 8 | f.
       ^
 Completion Results:
-- (Method) method: def method(self: Foo) -> int
+- (Method) method: def method(self: Foo) -> int: ...
 This is a method docstring.
 "#
         .trim(),
@@ -2099,9 +2155,9 @@ f.
 12 | f.
        ^
 Completion Results:
-- (Method) first: def first(self: Foo) -> int
+- (Method) first: def first(self: Foo) -> int: ...
 First method documentation.
-- (Method) second: def second(self: Foo) -> str
+- (Method) second: def second(self: Foo) -> str: ...
 Second method documentation.
 "#
         .trim(),
@@ -2163,9 +2219,9 @@ f.
 13 | f.
        ^
 Completion Results:
-- (Method) documented: def documented(self: Foo) -> str
+- (Method) documented: def documented(self: Foo) -> str: ...
 This has documentation.
-- (Method) undocumented: def undocumented(self: Foo) -> int
+- (Method) undocumented: def undocumented(self: Foo) -> int: ...
 - (Field) x: int
 "#
         .trim(),
@@ -2198,7 +2254,7 @@ f().
 9 | f().
         ^
 Completion Results:
-- (Method) m: def m(self: C[Unknown]) -> None
+- (Method) m: def m(self: C[Unknown]) -> None: ...
 - (Field) p: Unknown
 "#
         .trim(),

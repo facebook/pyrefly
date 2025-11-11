@@ -8,7 +8,6 @@
 use crate::django_testcase;
 
 django_testcase!(
-    bug = "support _id suffix",
     test_foreign_key_basic,
     r#"
 from typing import assert_type
@@ -24,8 +23,7 @@ class Article(models.Model):
 article = Article()
 assert_type(article.reporter, Reporter)
 assert_type(article.reporter.full_name, str) 
-assert_type(article.reporter_id, int) # E: assert_type(Any, int) failed # E: Object of class `Article` has no attribute `reporter_id`
-
+assert_type(article.reporter_id, int)
 
 class B(Article):
     pass
@@ -34,13 +32,11 @@ b = B()
 
 assert_type(b.reporter, Reporter) 
 assert_type(b.reporter.full_name, str) 
-assert_type(b.reporter_id, int) # E: assert_type(Any, int) failed # E: Object of class `B` has no attribute `reporter_id`
-
+assert_type(b.reporter_id, int)
 "#,
 );
 
 django_testcase!(
-    bug = "We should take into account the nullability of the foreign key",
     test_foreign_key_nullable,
     r#"
 from typing import assert_type
@@ -53,8 +49,8 @@ class Article(models.Model):
     reporter = models.ForeignKey(Reporter, null=True, on_delete=models.CASCADE)
 
 article = Article()
-assert_type(article.reporter,  Reporter | None) # E: assert_type(Reporter, Reporter | None) failed 
-
+assert_type(article.reporter, Reporter | None)
+assert_type(article.reporter_id, int | None)
 "#,
 );
 
@@ -79,7 +75,7 @@ assert_type(article.reporter_id, int) # E: assert_type(Any, int) failed # E:  Ob
 );
 
 django_testcase!(
-    bug = "id suffix needs to be generated; support self references",
+    bug = "support self references; nullability of FK should be taken into account",
     test_foreign_key_self_reference,
     r#"
 from typing import assert_type
@@ -95,5 +91,50 @@ assert_type(person.parent, Person | None) # E: assert_type(Any, Person | None) f
 if person.parent:
     assert_type(person.parent.name, str) # E: assert_type(Any, str) failed
 
+"#,
+);
+
+django_testcase!(
+    test_foreign_key_custom_pk,
+    r#"
+from typing import assert_type
+from uuid import UUID
+
+from django.db import models
+
+class Reporter(models.Model):
+    uuid = models.UUIDField(primary_key=True)
+    full_name = models.CharField(max_length=70)
+
+class Reporter2(models.Model):
+    pass
+
+class Article(models.Model):
+    reporter = models.ForeignKey(Reporter, on_delete=models.CASCADE)
+
+class B(Article):
+    pass
+
+article = Article()
+assert_type(article.reporter, Reporter)
+assert_type(article.reporter_id, UUID)
+
+b = B()
+assert_type(b.reporter, Reporter)
+assert_type(b.reporter_id, UUID)
+"#,
+);
+
+django_testcase!(
+    test_foreign_key_in_function,
+    r#"
+from django.db import models
+
+def test_through_db_table_mutually_exclusive(self):
+    class Child(models.Model):
+        pass
+
+    class Through(models.Model):
+        referred = models.ForeignKey(Child, on_delete=models.CASCADE)
 "#,
 );

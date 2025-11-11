@@ -116,6 +116,7 @@ sound = dog.speak()"#;
     let imports_code = r#"import os
 from typing import List
 from .simple import hello_world
+from os import *
 
 def process_files(paths: List[str]) -> int:
     """Count files in given paths."""

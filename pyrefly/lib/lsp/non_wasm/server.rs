@@ -16,6 +16,7 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
 use dupe::Dupe;
+use dupe::OptionDupedExt;
 use itertools::Itertools;
 use lsp_server::Connection;
 use lsp_server::ErrorCode;
@@ -45,9 +46,6 @@ use lsp_types::DidChangeWatchedFilesClientCapabilities;
 use lsp_types::DidChangeWatchedFilesParams;
 use lsp_types::DidChangeWatchedFilesRegistrationOptions;
 use lsp_types::DidChangeWorkspaceFoldersParams;
-use lsp_types::DidCloseTextDocumentParams;
-use lsp_types::DidOpenTextDocumentParams;
-use lsp_types::DidSaveTextDocumentParams;
 use lsp_types::DocumentDiagnosticParams;
 use lsp_types::DocumentDiagnosticReport;
 use lsp_types::DocumentHighlight;
@@ -99,6 +97,7 @@ use lsp_types::SignatureHelp;
 use lsp_types::SignatureHelpOptions;
 use lsp_types::SignatureHelpParams;
 use lsp_types::SymbolInformation;
+use lsp_types::TextDocumentContentChangeEvent;
 use lsp_types::TextDocumentIdentifier;
 use lsp_types::TextDocumentPositionParams;
 use lsp_types::TextDocumentSyncCapability;
@@ -168,16 +167,21 @@ use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::watch_pattern::WatchPattern;
+use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use tracing::info;
 
+use crate::ModuleInfo;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
 use crate::error::error::Error;
+use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::build_system::queue_source_db_rebuild_and_recheck;
 use crate::lsp::non_wasm::build_system::should_requery_build_system;
 use crate::lsp::non_wasm::lsp::apply_change_events;
@@ -189,26 +193,35 @@ use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
-use crate::lsp::non_wasm::module_helpers::to_lsp_location;
-use crate::lsp::non_wasm::module_helpers::to_real_path;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
+use crate::lsp::non_wasm::stdlib::is_python_stdlib_file;
+use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::lsp::non_wasm::will_rename_files::will_rename_files;
 use crate::lsp::non_wasm::workspace::DiagnosticMode;
 use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
 use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
 use crate::lsp::wasm::hover::get_hover;
+use crate::lsp::wasm::notebook::DidChangeNotebookDocument;
+use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
+use crate::lsp::wasm::notebook::DidCloseNotebookDocument;
+use crate::lsp::wasm::notebook::DidOpenNotebookDocument;
+use crate::lsp::wasm::notebook::DidSaveNotebookDocument;
+use crate::lsp::wasm::notebook::NotebookCellSelector;
+use crate::lsp::wasm::notebook::NotebookDocumentSelector;
 use crate::lsp::wasm::notebook::NotebookDocumentSyncOptions;
 use crate::lsp::wasm::notebook::NotebookDocumentSyncRegistrationOptions;
 use crate::lsp::wasm::provide_type::ProvideType;
 use crate::lsp::wasm::provide_type::ProvideTypeResponse;
 use crate::lsp::wasm::provide_type::provide_type;
-use crate::lsp::wasm::will_rename_files::will_rename_files;
+use crate::state::load::LspFile;
 use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
+use crate::state::notebook::LspNotebook;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::semantic_tokens::disabled_ranges_for_module;
@@ -218,7 +231,7 @@ use crate::state::state::Transaction;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum TypeErrorDisplayStatus {
+pub enum TypeErrorDisplayStatus {
     DisabledInIdeConfig,
     EnabledInIdeConfig,
     DisabledInConfigFile,
@@ -283,7 +296,7 @@ impl ServerConnection {
         if self.0.sender.send(msg).is_err() {
             // On error, we know the channel is closed.
             // https://docs.rs/crossbeam/latest/crossbeam/channel/struct.Sender.html#method.send
-            eprintln!("Connection closed.");
+            info!("Connection closed.");
         };
     }
 
@@ -295,12 +308,20 @@ impl ServerConnection {
         ));
     }
 
-    fn publish_diagnostics(&self, diags: SmallMap<PathBuf, Vec<Diagnostic>>) {
+    fn publish_diagnostics(
+        &self,
+        diags: SmallMap<PathBuf, Vec<Diagnostic>>,
+        notebook_cell_urls: SmallMap<PathBuf, Url>,
+    ) {
         for (path, diags) in diags {
-            let path = path.absolutize();
-            match Url::from_file_path(&path) {
-                Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, None),
-                Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
+            if let Some(url) = notebook_cell_urls.get(&path) {
+                self.publish_diagnostics_for_uri(url.clone(), diags, None)
+            } else {
+                let path = path.absolutize();
+                match Url::from_file_path(&path) {
+                    Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, None),
+                    Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
+                }
             }
         }
     }
@@ -318,7 +339,13 @@ pub struct Server {
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
     state: Arc<State>,
-    open_files: Arc<RwLock<HashMap<PathBuf, Arc<String>>>>,
+    /// This is a mapping from open notebook cells to the paths of the notebooks they belong to,
+    /// which can be used to look up the notebook contents in `open_files`.
+    ///
+    /// Notebook cell URIs are entirely arbitrary, and any URI received from the language client
+    /// should be mapped through here in case they correspond to a cell.
+    open_notebook_cells: Arc<RwLock<HashMap<Url, PathBuf>>>,
+    open_files: Arc<RwLock<HashMap<PathBuf, Arc<LspFile>>>>,
     /// A set of configs where we have already indexed all the files within the config.
     indexed_configs: Mutex<HashSet<ArcId<ConfigFile>>>,
     /// A set of workspaces where we have already performed best-effort indexing.
@@ -378,6 +405,14 @@ pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: LspQueue) {
                     lsp_queue.send(LspEvent::DidCloseTextDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidSaveTextDocument>(&x) {
                     lsp_queue.send(LspEvent::DidSaveTextDocument(params))
+                } else if let Some(Ok(params)) = as_notification::<DidOpenNotebookDocument>(&x) {
+                    lsp_queue.send(LspEvent::DidOpenNotebookDocument(params))
+                } else if let Some(Ok(params)) = as_notification::<DidChangeNotebookDocument>(&x) {
+                    lsp_queue.send(LspEvent::DidChangeNotebookDocument(params))
+                } else if let Some(Ok(params)) = as_notification::<DidCloseNotebookDocument>(&x) {
+                    lsp_queue.send(LspEvent::DidCloseNotebookDocument(params))
+                } else if let Some(Ok(params)) = as_notification::<DidSaveNotebookDocument>(&x) {
+                    lsp_queue.send(LspEvent::DidSaveNotebookDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidChangeWatchedFiles>(&x) {
                     lsp_queue.send(LspEvent::DidChangeWatchedFiles(params))
                 } else if let Some(Ok(params)) = as_notification::<DidChangeWorkspaceFolders>(&x) {
@@ -393,7 +428,7 @@ pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: LspQueue) {
                 } else if as_notification::<Exit>(&x).is_some() {
                     lsp_queue.send(LspEvent::Exit)
                 } else {
-                    eprintln!("Unhandled notification: {x:?}");
+                    info!("Unhandled notification: {x:?}");
                     Ok(())
                 };
                 if send_result.is_err() {
@@ -498,7 +533,17 @@ pub fn capabilities(
             }),
             ..Default::default()
         },
-        ..Default::default()
+        notebook_document_sync: Some(OneOf::Left(NotebookDocumentSyncOptions {
+            // If a selector provides no notebook document filter but only a cell selector,
+            // all notebook documents that contain at least one matching cell will be synced.
+            notebook_selector: vec![NotebookDocumentSelector {
+                notebook: None,
+                cells: Some(vec![NotebookCellSelector {
+                    language: "python".into(),
+                }]),
+            }],
+            save: None,
+        })),
     }
 }
 
@@ -515,7 +560,7 @@ pub fn lsp_loop(
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
 ) -> anyhow::Result<()> {
-    eprintln!("Reading messages");
+    info!("Reading messages");
     let connection_for_dispatcher = connection.dupe();
     let lsp_queue = LspQueue::new();
     let server = Server::new(
@@ -554,7 +599,7 @@ pub fn lsp_loop(
             ProcessEvent::Exit => break,
         }
     }
-    eprintln!("waiting for connection to close");
+    info!("waiting for connection to close");
     server.recheck_queue.stop();
     server.find_reference_queue.stop();
     server.sourcedb_queue.stop();
@@ -605,7 +650,7 @@ impl Server {
                 self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
             }
             LspEvent::CancelRequest(id) => {
-                eprintln!("We should cancel request {id:?}");
+                info!("We should cancel request {id:?}");
                 if let Some(cancellation_handle) = self.cancellation_handles.lock().remove(&id) {
                     cancellation_handle.cancel();
                 }
@@ -623,16 +668,67 @@ impl Server {
                 }
             }
             LspEvent::DidOpenTextDocument(params) => {
-                self.did_open(ide_transaction_manager, subsequent_mutation, params)?;
+                let contents = Arc::new(LspFile::from_source(params.text_document.text));
+                self.did_open(
+                    ide_transaction_manager,
+                    subsequent_mutation,
+                    params.text_document.uri,
+                    params.text_document.version,
+                    contents,
+                )?;
             }
             LspEvent::DidChangeTextDocument(params) => {
-                self.did_change(ide_transaction_manager, subsequent_mutation, params)?;
+                self.text_document_did_change(
+                    ide_transaction_manager,
+                    subsequent_mutation,
+                    params,
+                )?;
             }
             LspEvent::DidCloseTextDocument(params) => {
-                self.did_close(params);
+                self.did_close(params.text_document.uri);
             }
             LspEvent::DidSaveTextDocument(params) => {
-                self.did_save(params);
+                self.did_save(params.text_document.uri);
+            }
+            LspEvent::DidOpenNotebookDocument(params) => {
+                let url = params.notebook_document.uri.clone();
+                let version = params.notebook_document.version;
+                let notebook_document = params.notebook_document.clone();
+                let cell_contents: HashMap<Url, String> = params
+                    .cell_text_documents
+                    .iter()
+                    .map(|doc| (doc.uri.clone(), doc.text.clone()))
+                    .collect();
+                let ruff_notebook = params.notebook_document.to_ruff_notebook(&cell_contents)?;
+                let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_document);
+                let notebook_path = url
+                    .to_file_path()
+                    .map_err(|_| anyhow::anyhow!("Could not convert uri to filepath: {}", url))?;
+                for cell_url in lsp_notebook.cell_urls() {
+                    self.open_notebook_cells
+                        .write()
+                        .insert(cell_url.clone(), notebook_path.clone());
+                }
+                self.did_open(
+                    ide_transaction_manager,
+                    subsequent_mutation,
+                    url,
+                    version,
+                    Arc::new(LspFile::Notebook(Arc::new(lsp_notebook))),
+                )?;
+            }
+            LspEvent::DidChangeNotebookDocument(params) => {
+                self.notebook_document_did_change(
+                    ide_transaction_manager,
+                    subsequent_mutation,
+                    params,
+                )?;
+            }
+            LspEvent::DidCloseNotebookDocument(params) => {
+                self.did_close(params.notebook_document.uri);
+            }
+            LspEvent::DidSaveNotebookDocument(params) => {
+                self.did_save(params.notebook_document.uri);
             }
             LspEvent::DidChangeWatchedFiles(params) => {
                 self.did_change_watched_files(params);
@@ -651,7 +747,7 @@ impl Server {
                         self.workspace_configuration_response(&request, &response);
                     }
                 } else {
-                    eprintln!("Response for unknown request: {x:?}");
+                    info!("Response for unknown request: {x:?}");
                 }
             }
             LspEvent::LspRequest(x) => {
@@ -673,7 +769,7 @@ impl Server {
                             "subsequent mutation"
                         }
                     );
-                    eprintln!("{message}");
+                    info!("{message}");
                     self.send_response(Response::new_err(
                         x.id,
                         ErrorCode::RequestCanceled as i32,
@@ -686,14 +782,14 @@ impl Server {
                     // We probably didn't bother completing a previous check, but we are now answering a query that
                     // really needs a previous check to be correct.
                     // Validating sends out notifications, which isn't required, but this is the safest way.
-                    eprintln!(
+                    info!(
                         "Request {} ({}) has subsequent mutation, prepare to validate open files.",
                         x.method, x.id,
                     );
                     self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
                 }
 
-                eprintln!("Handling non-canceled request {} ({})", x.method, &x.id);
+                info!("Handling non-canceled request {} ({})", x.method, &x.id);
                 if let Some(params) = as_request::<GotoDefinition>(&x) {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<GotoDefinition>(
@@ -771,8 +867,17 @@ impl Server {
                 } else if let Some(params) = as_request::<References>(&x) {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<References>(params, &x.id)
+                        && !self
+                            .open_notebook_cells
+                            .read()
+                            .contains_key(&params.text_document_position.text_document.uri)
                     {
                         self.references(x.id, ide_transaction_manager, params);
+                    } else {
+                        // TODO(yangdanny) handle notebooks
+                        let locations: Vec<Location> = Vec::new();
+                        self.connection
+                            .send(Message::Response(new_response(x.id, Ok(Some(locations)))));
                     }
                 } else if let Some(params) = as_request::<PrepareRenameRequest>(&x) {
                     if let Some(params) = self
@@ -791,7 +896,12 @@ impl Server {
                 } else if let Some(params) = as_request::<Rename>(&x) {
                     if let Some(params) =
                         self.extract_request_params_or_send_err_response::<Rename>(params, &x.id)
+                        && !self
+                            .open_notebook_cells
+                            .read()
+                            .contains_key(&params.text_document_position.text_document.uri)
                     {
+                        // TODO(yangdanny) handle notebooks
                         self.rename(x.id, ide_transaction_manager, params);
                     }
                 } else if let Some(params) = as_request::<SignatureHelpRequest>(&x) {
@@ -917,7 +1027,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        eprintln!(
+                        info!(
                             "Received document diagnostic request {} ({}), prepare to validate open files.",
                             x.method, x.id,
                         );
@@ -994,19 +1104,31 @@ impl Server {
                     ide_transaction_manager.save(transaction);
                 } else if &x.method == "pyrefly/textDocument/typeErrorDisplayStatus" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
-                    self.send_response(new_response(
-                        x.id,
-                        Ok(self.type_error_display_status(
-                            text_document.uri.to_file_path().unwrap().as_path(),
-                        )),
-                    ));
+                    if !self
+                        .open_notebook_cells
+                        .read()
+                        .contains_key(&text_document.uri)
+                    {
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(self.type_error_display_status(
+                                text_document.uri.to_file_path().unwrap().as_path(),
+                            )),
+                        ));
+                    } else {
+                        // TODO(yangdanny): handle notebooks
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(TypeErrorDisplayStatus::DisabledDueToMissingConfigFile),
+                        ));
+                    }
                 } else {
                     self.send_response(Response::new_err(
                         x.id.clone(),
                         ErrorCode::MethodNotFound as i32,
                         format!("Unknown request: {}", x.method),
                     ));
-                    eprintln!("Unhandled request: {x:?}");
+                    info!("Unhandled request: {x:?}");
                 }
             }
         }
@@ -1038,14 +1160,15 @@ impl Server {
         let s = Self {
             connection: ServerConnection(connection),
             lsp_queue,
-            recheck_queue: HeavyTaskQueue::new(),
-            find_reference_queue: HeavyTaskQueue::new(),
-            sourcedb_queue: HeavyTaskQueue::new(),
+            recheck_queue: HeavyTaskQueue::new("recheck_queue"),
+            find_reference_queue: HeavyTaskQueue::new("find_reference_queue"),
+            sourcedb_queue: HeavyTaskQueue::new("sourcedb_queue"),
             invalidated_configs: Arc::new(Mutex::new(SmallSet::new())),
             initialize_params,
             indexing_mode,
             workspace_indexing_limit,
             state: Arc::new(State::new(config_finder)),
+            open_notebook_cells: Arc::new(RwLock::new(HashMap::new())),
             open_files: Arc::new(RwLock::new(HashMap::new())),
             indexed_configs: Mutex::new(HashSet::new()),
             indexed_workspaces: Mutex::new(HashSet::new()),
@@ -1082,7 +1205,7 @@ impl Server {
     /// Run the transaction with the in-memory content of open files. Returns the handles of open files when the transaction is done.
     fn validate_in_memory_for_transaction(
         state: &State,
-        open_files: &RwLock<HashMap<PathBuf, Arc<String>>>,
+        open_files: &RwLock<HashMap<PathBuf, Arc<LspFile>>>,
         transaction: &mut Transaction<'_>,
     ) -> Vec<Handle> {
         let handles = open_files
@@ -1094,27 +1217,18 @@ impl Server {
             open_files
                 .read()
                 .iter()
-                .map(|x| (x.0.clone(), Some(x.1.dupe())))
+                .map(|x| (x.0.clone(), Some(Arc::new(x.1.to_file_contents()))))
                 .collect::<Vec<_>>(),
         );
         transaction.run(&handles, Require::Everything);
         handles
     }
 
-    #[allow(dead_code)]
-    fn is_python_stdlib_file(&self, path: &Path, stdlib_paths: &[PathBuf]) -> bool {
-        for stdlib_path in stdlib_paths {
-            if path.starts_with(stdlib_path) {
-                return true;
-            }
-        }
-        false
-    }
-
     fn get_diag_if_shown(
         &self,
         e: &Error,
-        open_files: &HashMap<PathBuf, Arc<String>>,
+        open_files: &HashMap<PathBuf, Arc<LspFile>>,
+        cell_uri: Option<&Url>, // If the file is a notebook, only show diagnostics for the matching cell
     ) -> Option<(PathBuf, Diagnostic)> {
         if let Some(path) = to_real_path(e.path()) {
             // When no file covers this, we'll get the default configured config which includes "everything"
@@ -1124,6 +1238,15 @@ impl Server {
                 .config_finder()
                 .python_file(ModuleName::unknown(), e.path());
 
+            let type_error_status = self.type_error_display_status(e.path().as_path());
+
+            // Check stdlib filtering first
+            let should_show_stdlib_error =
+                should_show_stdlib_error(&config, type_error_status, &path);
+            if is_python_stdlib_file(&path) && !should_show_stdlib_error {
+                return None;
+            }
+
             // Get diagnostic mode for this file's workspace
             let diagnostic_mode = self.workspaces.get_diagnostic_mode(&path);
 
@@ -1131,21 +1254,33 @@ impl Server {
             let is_in_project =
                 config.project_includes.covers(&path) && !config.project_excludes.covers(&path);
 
-            // Then check based on diagnostic mode
+            // Check based on diagnostic mode
             let is_open = open_files.contains_key(&path);
             let should_show = match diagnostic_mode {
-                // Workspace mode: show if in project (open or closed files)
                 DiagnosticMode::Workspace => is_in_project,
-                // OpenFilesOnly mode: show if open AND in project
                 DiagnosticMode::OpenFilesOnly => is_open && is_in_project,
             };
 
-            if should_show
-                && self
-                    .type_error_display_status(e.path().as_path())
-                    .is_enabled()
-            {
-                return Some((path.to_path_buf(), e.to_diagnostic()));
+            if should_show && type_error_status.is_enabled() {
+                return if let Some(lsp_file) = open_files.get(&path) {
+                    match &**lsp_file {
+                        LspFile::Notebook(notebook) => {
+                            let error_cell = e.get_notebook_cell()?;
+                            let error_cell_uri = notebook.get_cell_url(error_cell)?;
+                            if let Some(filter_cell) = cell_uri
+                                && error_cell_uri != filter_cell
+                            {
+                                None
+                            } else {
+                                Some((PathBuf::from(error_cell_uri.to_string()), e.to_diagnostic()))
+                            }
+                        }
+                        LspFile::Source(_) => Some((path.to_path_buf(), e.to_diagnostic())),
+                    }
+                } else {
+                    // File not open but in workspace mode - still show diagnostic
+                    Some((path.to_path_buf(), e.to_diagnostic()))
+                };
             }
         }
         None
@@ -1157,6 +1292,10 @@ impl Server {
         params: crate::lsp::wasm::provide_type::ProvideTypeParams,
     ) -> Option<ProvideTypeResponse> {
         let uri = &params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self.make_handle_if_enabled(uri, None)?;
         provide_type(transaction, &handle, params.positions)
     }
@@ -1280,11 +1419,20 @@ impl Server {
         let publish = |transaction: &Transaction| {
             let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
             let open_files = self.open_files.read();
+            let open_notebook_cells = self.open_notebook_cells.read();
+            let mut notebook_cell_urls = SmallMap::new();
 
-            // Pre-populate with empty arrays for all open files to ensure we send
-            // publishDiagnostics notifications even when errors are cleared
-            for x in open_files.keys() {
-                diags.insert(x.as_path().to_owned(), Vec::new());
+            // Pre-populate notebook cells
+            for x in open_notebook_cells.keys() {
+                diags.insert(PathBuf::from(x.to_string()), Vec::new());
+                notebook_cell_urls.insert(PathBuf::from(x.to_string()), x.clone());
+            }
+
+            // Pre-populate regular files (non-notebooks)
+            for (x, file) in open_files.iter() {
+                if !file.is_notebook() {
+                    diags.insert(x.as_path().to_owned(), Vec::new());
+                }
             }
 
             // In workspace mode, use get_all_errors() to get errors from all project files.
@@ -1297,12 +1445,17 @@ impl Server {
             };
 
             for e in errors.collect_errors().shown {
-                if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files) {
+                if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files, None) {
                     diags.entry(path.to_owned()).or_default().push(diag);
                 }
             }
 
             for (path, diagnostics) in diags.iter_mut() {
+                // Skip notebook cells - they're handled separately
+                if notebook_cell_urls.contains_key(path) {
+                    continue;
+                }
+
                 // Use appropriate handle type: memory handle for open files, filesystem for others
                 let is_open = open_files.contains_key(path);
                 let handle = if is_open {
@@ -1311,8 +1464,10 @@ impl Server {
                     handle_from_module_path(&self.state, ModulePath::filesystem(path.clone()))
                 };
                 Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
+                Self::append_unused_parameter_diagnostics(transaction, &handle, diagnostics);
             }
-            self.connection.publish_diagnostics(diags);
+            self.connection
+                .publish_diagnostics(diags, notebook_cell_urls);
             if self
                 .initialize_params
                 .capabilities
@@ -1333,7 +1488,7 @@ impl Server {
                 // Therefore, we can compute errors from transactions freshly created from `State``.
                 let transaction = self.state.transaction();
                 publish(&transaction);
-                eprintln!("Validated open files and committed transaction.");
+                info!("Validated open files and committed transaction.");
             }
             Err(transaction) => {
                 // In the case where transaction cannot be committed because there is an ongoing
@@ -1343,7 +1498,7 @@ impl Server {
                 // Note: if this changes, update this function's docstring.
                 publish(&transaction);
                 ide_transaction_manager.save(transaction);
-                eprintln!("Validated open files and saved non-committable transaction.");
+                info!("Validated open files and saved non-committable transaction.");
             }
         }
         queue_source_db_rebuild_and_recheck(
@@ -1456,7 +1611,7 @@ impl Server {
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
-            eprintln!("Invalidated state, prepare to recheck open files.");
+            info!("Invalidated state, prepare to recheck open files.");
             let _ = lsp_queue.send(LspEvent::RecheckFinished);
         }));
     }
@@ -1472,7 +1627,7 @@ impl Server {
     ) {
         let unknown = ModuleName::unknown();
 
-        eprintln!("Populating all files in the config ({:?}).", config.source);
+        info!("Populating all files in the config ({:?}).", config.source);
         let mut transaction = state.new_committable_transaction(Require::indexing(), None);
 
         let project_path_blobs = config.get_filtered_globs(None);
@@ -1487,13 +1642,13 @@ impl Server {
             handles.push(handle_from_module_path(&state, module_path));
         }
 
-        eprintln!("Prepare to check {} files.", handles.len());
+        info!("Prepare to check {} files.", handles.len());
         transaction.as_mut().run(&handles, Require::indexing());
         state.commit_transaction(transaction);
         // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
         // the main event loop of the server. As a result, the server can do a revalidation of
         // all the in-memory files based on the fresh main State as soon as possible.
-        eprintln!("Populated all files in the project path, prepare to recheck open files.");
+        info!("Populated all files in the project path, prepare to recheck open files.");
         let _ = lsp_queue.send(LspEvent::RecheckFinished);
     }
 
@@ -1504,7 +1659,7 @@ impl Server {
         lsp_queue: LspQueue,
     ) {
         for workspace_root in workspace_roots {
-            eprintln!(
+            info!(
                 "Populating up to {workspace_indexing_limit} files in the workspace ({workspace_root:?}).",
             );
             let mut transaction = state.new_committable_transaction(Require::indexing(), None);
@@ -1523,19 +1678,19 @@ impl Server {
                 ));
             }
 
-            eprintln!("Prepare to check {} files.", handles.len());
+            info!("Prepare to check {} files.", handles.len());
             transaction.as_mut().run(&handles, Require::indexing());
             state.commit_transaction(transaction);
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
-            eprintln!("Populated all files in the workspace, prepare to recheck open files.");
+            info!("Populated all files in the workspace, prepare to recheck open files.");
             let _ = lsp_queue.send(LspEvent::RecheckFinished);
         }
     }
 
-    fn did_save(&self, params: DidSaveTextDocumentParams) {
-        let file = params.text_document.uri.to_file_path().unwrap();
+    fn did_save(&self, url: Url) {
+        let file = url.to_file_path().unwrap();
         self.invalidate(move |t| t.invalidate_disk(&[file]));
     }
 
@@ -1543,14 +1698,13 @@ impl Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         subsequent_mutation: bool,
-        params: DidOpenTextDocumentParams,
+        url: Url,
+        version: i32,
+        contents: Arc<LspFile>,
     ) -> anyhow::Result<()> {
-        let uri = params.text_document.uri.to_file_path().map_err(|_| {
-            anyhow::anyhow!(
-                "Could not convert uri to filepath: {}",
-                params.text_document.uri
-            )
-        })?;
+        let uri = url
+            .to_file_path()
+            .map_err(|_| anyhow::anyhow!("Could not convert uri to filepath: {}", url))?;
         let config_to_populate_files = if self.indexing_mode != IndexingMode::None
             && let Some(directory) = uri.as_path().parent()
         {
@@ -1558,12 +1712,8 @@ impl Server {
         } else {
             None
         };
-        self.version_info
-            .lock()
-            .insert(uri.clone(), params.text_document.version);
-        self.open_files
-            .write()
-            .insert(uri.clone(), Arc::new(params.text_document.text));
+        self.version_info.lock().insert(uri.clone(), version);
+        self.open_files.write().insert(uri.clone(), contents);
         if !subsequent_mutation {
             // In order to improve perceived startup perf, when a file is opened, we run a
             // non-committing transaction that indexes the file with default require level Exports.
@@ -1575,7 +1725,7 @@ impl Server {
             //
             // Note that this trick works only when a pyrefly config file is present. In the absence
             // of a config file, all features become available when background indexing completes.
-            eprintln!(
+            info!(
                 "File {} opened, prepare to validate open files.",
                 uri.display()
             );
@@ -1588,7 +1738,7 @@ impl Server {
         Ok(())
     }
 
-    fn did_change<'a>(
+    fn text_document_did_change<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         subsequent_mutation: bool,
@@ -1607,14 +1757,139 @@ impl Server {
         version_info.insert(file_path.clone(), version);
         let mut lock = self.open_files.write();
         let original = lock.get_mut(&file_path).unwrap();
-        *original = Arc::new(apply_change_events(
-            original.as_str(),
+        *original = Arc::new(LspFile::from_source(apply_change_events(
+            original.get_string(),
             params.content_changes,
-        ));
+        )));
         drop(lock);
         if !subsequent_mutation {
-            eprintln!(
+            info!(
                 "File {} changed, prepare to validate open files.",
+                file_path.display()
+            );
+            self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
+        }
+        Ok(())
+    }
+
+    fn notebook_document_did_change<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        subsequent_mutation: bool,
+        params: DidChangeNotebookDocumentParams,
+    ) -> anyhow::Result<()> {
+        let uri = params.notebook_document.uri.clone();
+        let version = params.notebook_document.version;
+        let file_path = uri.to_file_path().unwrap();
+
+        let mut version_info = self.version_info.lock();
+        let old_version = version_info.get(&file_path).unwrap_or(&0);
+        if version < *old_version {
+            return Err(anyhow::anyhow!(
+                "new_version < old_version in `notebookDocument/didChange` notification: new_version={version:?} old_version={old_version:?} notebook_document.uri={uri:?}"
+            ));
+        }
+
+        let mut lock = self.open_files.write();
+        let original = lock.get_mut(&file_path).unwrap();
+
+        let original_notebook = match original.as_ref() {
+            LspFile::Notebook(notebook) => notebook.clone(),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Expected notebook file for {}, but got text file",
+                    uri
+                ));
+            }
+        };
+
+        let mut notebook_document = original_notebook.notebook_document().clone();
+        let mut cell_content_map: HashMap<Url, String> = HashMap::new();
+        // Changed metadata
+        if let Some(metadata) = &params.change.metadata {
+            notebook_document.metadata = Some(metadata.clone());
+        }
+        version_info.insert(file_path.clone(), version);
+        notebook_document.version = version;
+        // Changes to cells
+        if let Some(change) = &params.change.cells {
+            // Track existing cell contents
+            for cell in &notebook_document.cells {
+                let cell_contents = original_notebook
+                    .get_cell_contents(&cell.document)
+                    .unwrap_or_default();
+                cell_content_map.insert(cell.document.clone(), cell_contents);
+            }
+            // Structural changes
+            if let Some(structure) = &change.structure {
+                let start = structure.array.start as usize;
+                let delete_count = structure.array.delete_count as usize;
+                // Delete cells
+                // Do not remove the cells from `open_notebook_cells`, since
+                // incoming requests could still reference them.
+                if delete_count > 0 {
+                    notebook_document.cells.drain(start..start + delete_count);
+                }
+                // Insert new cells
+                if let Some(new_cells) = &structure.array.cells {
+                    for (i, cell) in new_cells.iter().enumerate() {
+                        notebook_document.cells.insert(start + i, cell.clone());
+                    }
+                }
+                // Set contents for new cells
+                if let Some(opened_cells) = &structure.did_open {
+                    for opened_cell in opened_cells {
+                        cell_content_map.insert(opened_cell.uri.clone(), opened_cell.text.clone());
+                        self.open_notebook_cells
+                            .write()
+                            .insert(opened_cell.uri.clone(), file_path.clone());
+                    }
+                }
+            }
+            // Cell metadata changes
+            if let Some(cell_data) = &change.data {
+                for updated_cell in cell_data {
+                    if let Some(cell) = notebook_document
+                        .cells
+                        .iter_mut()
+                        .find(|c| c.document == updated_cell.document)
+                    {
+                        cell.kind = updated_cell.kind;
+                        cell.metadata = updated_cell.metadata.clone();
+                        cell.execution_summary = updated_cell.execution_summary.clone();
+                    }
+                }
+            }
+            // Cell content changes
+            if let Some(text_content_changes) = &change.text_content {
+                for text_change in text_content_changes {
+                    let cell_uri = text_change.document.uri.clone();
+                    let original_text = cell_content_map
+                        .get(&cell_uri)
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+                    let content_changes: Vec<TextDocumentContentChangeEvent> = text_change
+                        .changes
+                        .iter()
+                        .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                        .collect();
+                    let new_text = apply_change_events(original_text, content_changes);
+                    cell_content_map.insert(cell_uri, new_text);
+                }
+            }
+        }
+        // Convert new notebook contents into a Ruff Notebook
+        let ruff_notebook = notebook_document
+            .clone()
+            .to_ruff_notebook(&cell_content_map)?;
+
+        let new_notebook = Arc::new(LspNotebook::new(ruff_notebook, notebook_document));
+        *original = Arc::new(LspFile::Notebook(new_notebook));
+        drop(lock);
+
+        if !subsequent_mutation {
+            info!(
+                "Notebook {} changed, prepare to validate open files.",
                 file_path.display()
             );
             self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
@@ -1650,7 +1925,7 @@ impl Server {
 
         // Rewatch files if necessary (config changed, files added/removed, etc.)
         if Self::should_rewatch(&events) {
-            eprintln!("[Pyrefly] Re-registering file watchers");
+            info!("[Pyrefly] Re-registering file watchers");
             self.setup_file_watcher_if_necessary();
         }
 
@@ -1670,13 +1945,20 @@ impl Server {
         }
     }
 
-    fn did_close(&self, params: DidCloseTextDocumentParams) {
-        let uri = params.text_document.uri.to_file_path().unwrap();
+    fn did_close(&self, url: Url) {
+        let uri = url.to_file_path().unwrap();
         self.version_info.lock().remove(&uri);
         let open_files = self.open_files.dupe();
-        open_files.write().remove(&uri);
-        self.connection
-            .publish_diagnostics_for_uri(params.text_document.uri, Vec::new(), None);
+        if let Some(LspFile::Notebook(notebook)) = open_files.write().remove(&uri).as_deref() {
+            for cell in notebook.cell_urls() {
+                self.connection
+                    .publish_diagnostics_for_uri(cell.clone(), Vec::new(), None);
+                self.open_notebook_cells.write().remove(cell);
+            }
+        } else {
+            self.connection
+                .publish_diagnostics_for_uri(url, Vec::new(), None);
+        }
         let state = self.state.dupe();
         let lsp_queue = self.lsp_queue.dupe();
         let open_files = self.open_files.dupe();
@@ -1739,7 +2021,7 @@ impl Server {
                     &id.scope_uri,
                     value.clone(),
                 );
-                eprintln!(
+                info!(
                     "Client configuration applied to workspace: {:?}",
                     id.scope_uri
                 );
@@ -1760,11 +2042,16 @@ impl Server {
         uri: &Url,
         method: Option<&str>,
     ) -> Option<(Handle, Option<LspAnalysisConfig>)> {
-        let path = uri.to_file_path().unwrap();
+        let path = self
+            .open_notebook_cells
+            .read()
+            .get(uri)
+            .cloned()
+            .unwrap_or_else(|| uri.to_file_path().unwrap());
         self.workspaces.get_with(path.clone(), |(_, workspace)| {
             // Check if all language services are disabled
             if workspace.disable_language_services {
-                eprintln!("Skipping request - language services disabled");
+                info!("Skipping request - language services disabled");
                 return None;
             }
 
@@ -1774,7 +2061,7 @@ impl Server {
                 && let Some(method) = method
                 && disabled_services.is_disabled(method)
             {
-                eprintln!("Skipping request - {} service disabled", method);
+                info!("Skipping request - {} service disabled", method);
                 return None;
             }
 
@@ -1806,13 +2093,12 @@ impl Server {
         let uri = &params.text_document_position_params.text_document.uri;
         let handle = self.make_handle_if_enabled(uri, Some(GotoDefinition::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let range = info
-            .lined_buffer()
-            .from_lsp_position(params.text_document_position_params.position);
+        let range =
+            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
         let targets = transaction.goto_definition(&handle, range);
         let mut lsp_targets = targets
             .iter()
-            .filter_map(to_lsp_location)
+            .filter_map(|x| self.to_lsp_location(x))
             .collect::<Vec<_>>();
         if lsp_targets.is_empty() {
             None
@@ -1829,15 +2115,18 @@ impl Server {
         params: GotoTypeDefinitionParams,
     ) -> Option<GotoTypeDefinitionResponse> {
         let uri = &params.text_document_position_params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self.make_handle_if_enabled(uri, Some(GotoTypeDefinition::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let range = info
-            .lined_buffer()
-            .from_lsp_position(params.text_document_position_params.position);
+        let range =
+            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
         let targets = transaction.goto_type_definition(&handle, range);
         let mut lsp_targets = targets
             .iter()
-            .filter_map(to_lsp_location)
+            .filter_map(|x| self.to_lsp_location(x))
             .collect::<Vec<_>>();
         if lsp_targets.is_empty() {
             None
@@ -1871,8 +2160,7 @@ impl Server {
             .map(|info| {
                 transaction.completion_with_incomplete(
                     &handle,
-                    info.lined_buffer()
-                        .from_lsp_position(params.text_document_position.position),
+                    self.from_lsp_position(uri, &info, params.text_document_position.position),
                     import_format,
                 )
             })
@@ -1889,13 +2177,17 @@ impl Server {
         params: CodeActionParams,
     ) -> Option<CodeActionResponse> {
         let uri = &params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let (handle, lsp_config) = self.make_handle_with_lsp_analysis_config_if_enabled(
             uri,
             Some(CodeActionRequest::METHOD),
         )?;
         let import_format = lsp_config.and_then(|c| c.import_format).unwrap_or_default();
         let module_info = transaction.get_module_info(&handle)?;
-        let range = module_info.lined_buffer().from_lsp_range(params.range);
+        let range = self.from_lsp_range(uri, &module_info, params.range);
         let code_actions = transaction
             .local_quickfix_code_actions(&handle, range, import_format)?
             .into_map(|(title, info, range, insert_text)| {
@@ -1906,7 +2198,7 @@ impl Server {
                         changes: Some(HashMap::from([(
                             uri.clone(),
                             vec![TextEdit {
-                                range: info.lined_buffer().to_lsp_range(range),
+                                range: info.to_lsp_range(range),
                                 new_text: insert_text,
                             }],
                         )])),
@@ -1924,16 +2216,19 @@ impl Server {
         params: DocumentHighlightParams,
     ) -> Option<Vec<DocumentHighlight>> {
         let uri = &params.text_document_position_params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self.make_handle_if_enabled(uri, Some(DocumentHighlightRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let position = info
-            .lined_buffer()
-            .from_lsp_position(params.text_document_position_params.position);
+        let position =
+            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
         Some(
             transaction
                 .find_local_references(&handle, position)
                 .into_map(|range| DocumentHighlight {
-                    range: info.lined_buffer().to_lsp_range(range),
+                    range: info.to_lsp_range(range),
                     kind: None,
                 }),
         )
@@ -1958,7 +2253,7 @@ impl Server {
             ide_transaction_manager.save(transaction);
             return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
-        let position = info.lined_buffer().from_lsp_position(position);
+        let position = self.from_lsp_position(uri, &info, position);
         let Some(FindDefinitionItemWithDocstring {
             metadata,
             definition_range,
@@ -2001,10 +2296,8 @@ impl Server {
                     let mut locations = Vec::new();
                     for (info, ranges) in global_references {
                         if let Some(uri) = module_info_to_uri(&info) {
-                            locations.push((
-                                uri,
-                                ranges.into_map(|range| info.lined_buffer().to_lsp_range(range)),
-                            ));
+                            locations
+                                .push((uri, ranges.into_map(|range| info.to_lsp_range(range))));
                         };
                     }
                     cancellation_handles.lock().remove(&request_id);
@@ -2015,7 +2308,7 @@ impl Server {
                 }
                 Err(Cancelled) => {
                     let message = format!("Find reference request {request_id} is canceled");
-                    eprintln!("{message}");
+                    info!("{message}");
                     connection.send(Message::Response(Response::new_err(
                         request_id,
                         ErrorCode::RequestCanceled as i32,
@@ -2088,12 +2381,16 @@ impl Server {
         params: TextDocumentPositionParams,
     ) -> Option<PrepareRenameResponse> {
         let uri = &params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self.make_handle_if_enabled(uri, Some(Rename::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let position = info.lined_buffer().from_lsp_position(params.position);
+        let position = self.from_lsp_position(uri, &info, params.position);
         transaction
             .prepare_rename(&handle, position)
-            .map(|range| PrepareRenameResponse::Range(info.lined_buffer().to_lsp_range(range)))
+            .map(|range| PrepareRenameResponse::Range(info.to_lsp_range(range)))
     }
 
     fn signature_help(
@@ -2104,9 +2401,8 @@ impl Server {
         let uri = &params.text_document_position_params.text_document.uri;
         let handle = self.make_handle_if_enabled(uri, Some(SignatureHelpRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let position = info
-            .lined_buffer()
-            .from_lsp_position(params.text_document_position_params.position);
+        let position =
+            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
         transaction.get_signature_help_at(&handle, position)
     }
 
@@ -2114,10 +2410,8 @@ impl Server {
         let uri = &params.text_document_position_params.text_document.uri;
         let handle = self.make_handle_if_enabled(uri, Some(HoverRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
-        let position = info
-            .lined_buffer()
-            .from_lsp_position(params.text_document_position_params.position);
-
+        let position =
+            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
         get_hover(transaction, &handle, position)
     }
 
@@ -2127,6 +2421,7 @@ impl Server {
         params: InlayHintParams,
     ) -> Option<Vec<InlayHint>> {
         let uri = &params.text_document.uri;
+        let maybe_cell_idx = self.maybe_get_cell_index(uri);
         let range = &params.range;
         let (handle, lsp_analysis_config) = self
             .make_handle_with_lsp_analysis_config_if_enabled(uri, Some(InlayHintRequest::METHOD))?;
@@ -2140,7 +2435,11 @@ impl Server {
         let res = t
             .into_iter()
             .filter_map(|x| {
-                let position = info.lined_buffer().to_lsp_position(x.0);
+                // If the url is a notebook cell, filter out inlay hints for other cells
+                if info.to_cell_for_lsp(x.0) != maybe_cell_idx {
+                    return None;
+                }
+                let position = info.to_lsp_position(x.0);
                 // The range is half-open, so the end position is exclusive according to the spec.
                 if position >= range.start && position < range.end {
                     Some(InlayHint {
@@ -2170,11 +2469,12 @@ impl Server {
         params: SemanticTokensParams,
     ) -> Option<SemanticTokensResult> {
         let uri = &params.text_document.uri;
+        let maybe_cell_idx = self.maybe_get_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensFullRequest::METHOD))?;
         Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
             data: transaction
-                .semantic_tokens(&handle, None)
+                .semantic_tokens(&handle, None, maybe_cell_idx)
                 .unwrap_or_default(),
         }))
     }
@@ -2185,13 +2485,14 @@ impl Server {
         params: SemanticTokensRangeParams,
     ) -> Option<SemanticTokensRangeResult> {
         let uri = &params.text_document.uri;
+        let maybe_cell_idx = self.maybe_get_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensRangeRequest::METHOD))?;
         let module_info = transaction.get_module_info(&handle)?;
-        let range = module_info.lined_buffer().from_lsp_range(params.range);
+        let range = self.from_lsp_range(uri, &module_info, params.range);
         Some(SemanticTokensRangeResult::Tokens(SemanticTokens {
             result_id: None,
             data: transaction
-                .semantic_tokens(&handle, Some(range))
+                .semantic_tokens(&handle, Some(range), maybe_cell_idx)
                 .unwrap_or_default(),
         }))
     }
@@ -2202,6 +2503,10 @@ impl Server {
         params: DocumentSymbolParams,
     ) -> Option<Vec<DocumentSymbol>> {
         let uri = &params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         if self
             .workspaces
             .get_with(uri.to_file_path().unwrap(), |(_, workspace)| {
@@ -2233,14 +2538,15 @@ impl Server {
             .unwrap_or_default()
             .into_iter()
             .filter_map(|(name, kind, location)| {
-                to_lsp_location(&location).map(|location| SymbolInformation {
-                    name,
-                    kind,
-                    location,
-                    tags: None,
-                    deprecated: None,
-                    container_name: None,
-                })
+                self.to_lsp_location(&location)
+                    .map(|location| SymbolInformation {
+                        name,
+                        kind,
+                        location,
+                        tags: None,
+                        deprecated: None,
+                        container_name: None,
+                    })
             })
             .collect()
     }
@@ -2260,7 +2566,7 @@ impl Server {
                 if range.is_empty() || !seen.insert(range) {
                     continue;
                 }
-                let lsp_range = module_info.lined_buffer().to_lsp_range(range);
+                let lsp_range = module_info.to_lsp_range(range);
                 items.push(Diagnostic {
                     range: lsp_range,
                     severity: Some(DiagnosticSeverity::HINT),
@@ -2276,18 +2582,50 @@ impl Server {
         }
     }
 
+    fn append_unused_parameter_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        items: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(bindings) = transaction.get_bindings(handle) {
+            let module_info = bindings.module();
+            for unused in bindings.unused_parameters() {
+                let lsp_range = module_info.to_lsp_range(unused.range);
+                items.push(Diagnostic {
+                    range: lsp_range,
+                    severity: Some(DiagnosticSeverity::HINT),
+                    source: Some("Pyrefly".to_owned()),
+                    message: format!("Parameter `{}` is unused", unused.name.as_str()),
+                    code: Some(NumberOrString::String("unused-parameter".to_owned())),
+                    code_description: None,
+                    related_information: None,
+                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    data: None,
+                });
+            }
+        }
+    }
+
     fn docstring_ranges(
         &self,
         transaction: &Transaction<'_>,
         text_document: &TextDocumentIdentifier,
     ) -> Option<Vec<Range>> {
+        if self
+            .open_notebook_cells
+            .read()
+            .contains_key(&text_document.uri)
+        {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self.make_handle_if_enabled(&text_document.uri, None)?;
         let module = transaction.get_module_info(&handle)?;
         let docstring_ranges = transaction.docstring_ranges(&handle)?;
         Some(
             docstring_ranges
                 .into_iter()
-                .map(|range| module.lined_buffer().to_lsp_range(range))
+                .map(|range| module.to_lsp_range(range))
                 .collect(),
         )
     }
@@ -2297,6 +2635,14 @@ impl Server {
         transaction: &Transaction<'_>,
         params: FoldingRangeParams,
     ) -> Option<Vec<FoldingRange>> {
+        if self
+            .open_notebook_cells
+            .read()
+            .contains_key(&params.text_document.uri)
+        {
+            // TODO(yangdanny) handle notebooks
+            return None;
+        }
         let handle = self
             .make_handle_if_enabled(&params.text_document.uri, Some(FoldingRangeRequest::METHOD))?;
         let module = transaction.get_module_info(&handle)?;
@@ -2306,7 +2652,7 @@ impl Server {
             ranges
                 .into_iter()
                 .filter_map(|(range, kind)| {
-                    let lsp_range = module.lined_buffer().to_lsp_range(range);
+                    let lsp_range = module.to_lsp_range(range);
                     if lsp_range.start.line >= lsp_range.end.line {
                         return None;
                     }
@@ -2338,26 +2684,33 @@ impl Server {
         transaction: &Transaction<'_>,
         params: DocumentDiagnosticParams,
     ) -> DocumentDiagnosticReport {
-        let file_path = params.text_document.uri.to_file_path().unwrap();
-        let is_file_open = self.open_files.read().contains_key(&file_path);
-
-        // When diagnostics are explicitly requested, always return them regardless of mode
-        let handle = if is_file_open {
-            make_open_handle(&self.state, &file_path)
+        let uri = &params.text_document.uri;
+        let mut cell_uri = None;
+        let path = if let Some(notebook_path) = self.open_notebook_cells.read().get(uri) {
+            cell_uri = Some(uri);
+            notebook_path.as_path().to_owned()
         } else {
-            let module_path = ModulePath::filesystem(file_path.clone());
+            uri.to_file_path().unwrap()
+        };
+
+        // Check if file is open to determine handle type
+        let is_file_open = self.open_files.read().contains_key(&path);
+        let handle = if is_file_open {
+            make_open_handle(&self.state, &path)
+        } else {
+            let module_path = ModulePath::filesystem(path.clone());
             handle_from_module_path(&self.state, module_path)
         };
 
         let mut items = Vec::new();
         let open_files = &self.open_files.read();
         for e in transaction.get_errors(once(&handle)).collect_errors().shown {
-            if let Some((_, diag)) = self.get_diag_if_shown(&e, open_files) {
+            if let Some((_, diag)) = self.get_diag_if_shown(&e, open_files, cell_uri) {
                 items.push(diag);
             }
         }
         Self::append_unreachable_diagnostics(transaction, &handle, &mut items);
-
+        Self::append_unused_parameter_diagnostics(transaction, &handle, &mut items);
         DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
             full_document_diagnostic_report: FullDocumentDiagnosticReport {
                 items,
@@ -2511,7 +2864,7 @@ impl Server {
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
-            eprintln!("Invalidated config, prepare to recheck open files.");
+            info!("Invalidated config, prepare to recheck open files.");
             let _ = lsp_queue.send(LspEvent::RecheckFinished);
         }));
     }
@@ -2529,6 +2882,56 @@ impl Server {
             params,
             supports_document_changes,
         )
+    }
+
+    pub fn to_lsp_location(&self, location: &TextRangeWithModule) -> Option<Location> {
+        let TextRangeWithModule {
+            module: definition_module_info,
+            range,
+        } = location;
+        let mut uri = module_info_to_uri(definition_module_info)?;
+        if let Some(cell_idx) = definition_module_info.to_cell_for_lsp(range.start()) {
+            // We only have this information for open notebooks, without being provided the URI from the client
+            // we don't know what URI refers to which cell.
+            let path = to_real_path(definition_module_info.path())?;
+            if let LspFile::Notebook(notebook) = &**self.open_files.read().get(&path)?
+                && let Some(cell_url) = notebook.get_cell_url(cell_idx)
+            {
+                uri = cell_url.clone();
+            }
+        }
+        Some(Location {
+            uri,
+            range: definition_module_info.to_lsp_range(*range),
+        })
+    }
+
+    /// If the uri is an open notebook cell, return the index of the cell within the notebook
+    /// otherwise, return None.
+    fn maybe_get_cell_index(&self, cell_uri: &Url) -> Option<usize> {
+        self.open_notebook_cells
+            .read()
+            .get(cell_uri)
+            .and_then(|path| self.open_files.read().get(path).duped())
+            .and_then(|file| match &*file {
+                LspFile::Notebook(notebook) => notebook.get_cell_index(cell_uri),
+                _ => None,
+            })
+    }
+
+    pub fn from_lsp_position(
+        &self,
+        uri: &Url,
+        module: &ModuleInfo,
+        position: Position,
+    ) -> TextSize {
+        let notebook_cell = self.maybe_get_cell_index(uri);
+        module.from_lsp_position(position, notebook_cell)
+    }
+
+    pub fn from_lsp_range(&self, uri: &Url, module: &ModuleInfo, position: Range) -> TextRange {
+        let notebook_cell = self.maybe_get_cell_index(uri);
+        module.from_lsp_range(position, notebook_cell)
     }
 }
 
@@ -2558,74 +2961,5 @@ impl TspInterface for Server {
             subsequent_mutation,
             event,
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn create_test_server() -> Server {
-        let (connection, _receiver) = Connection::memory();
-        let lsp_queue = LspQueue::new();
-        let initialize_params = InitializeParams::default();
-        Server::new(
-            Arc::new(connection),
-            lsp_queue,
-            initialize_params,
-            IndexingMode::None,
-            0,
-        )
-    }
-
-    #[test]
-    fn test_stdlib_paths_for_mac_and_windows_paths() {
-        let server = create_test_server();
-
-        let stdlib_paths = vec![
-            PathBuf::from("/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12"),
-            PathBuf::from("/usr/local/Cellar/python@3.12/3.12.0/lib/python3.12"),
-        ];
-
-        assert!(server.is_python_stdlib_file(
-            &PathBuf::from(
-                "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/os.py"
-            ),
-            &stdlib_paths
-        ));
-        assert!(server.is_python_stdlib_file(
-            &PathBuf::from("/usr/local/Cellar/python@3.12/3.12.0/lib/python3.12/sys.py"),
-            &stdlib_paths
-        ));
-        assert!(!server.is_python_stdlib_file(
-            &PathBuf::from("/Users/user/my_project/main.py"),
-            &stdlib_paths
-        ));
-
-        if cfg!(windows) {
-            let stdlib_paths = vec![
-                PathBuf::from(r"C:\Python312\Lib"),
-                PathBuf::from(r"C:\Program Files\Python39\Lib"),
-            ];
-
-            assert!(
-                server.is_python_stdlib_file(
-                    &PathBuf::from(r"C:\Python312\Lib\os.py"),
-                    &stdlib_paths
-                )
-            );
-            assert!(server.is_python_stdlib_file(
-                &PathBuf::from(r"C:\Program Files\Python39\Lib\pathlib.py"),
-                &stdlib_paths
-            ));
-            assert!(!server.is_python_stdlib_file(
-                &PathBuf::from(r"C:\Python312\Scripts\pip.py"),
-                &stdlib_paths
-            ));
-            assert!(!server.is_python_stdlib_file(
-                &PathBuf::from(r"C:\Users\user\my_project\main.py"),
-                &stdlib_paths
-            ));
-        }
     }
 }

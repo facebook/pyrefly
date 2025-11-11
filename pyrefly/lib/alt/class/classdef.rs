@@ -137,7 +137,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn unwrap_class_object_silently(&self, ty: &Type) -> Option<Type> {
         match ty {
-            Type::ClassDef(c) if c.is_builtin("tuple") => Some(Type::any_tuple()),
+            Type::ClassDef(c) if c.is_builtin("tuple") => Some(self.instantiate_fresh_tuple()),
             Type::ClassDef(c) => Some(self.instantiate_fresh_class(c)),
             Type::TypeAlias(ta) => self.unwrap_class_object_silently(&ta.as_value(self.stdlib)),
             // Note that for the purposes of type narrowing, we always unwrap Type::Type(Type::ClassType),
@@ -146,7 +146,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Type(box ty @ (Type::ClassType(_) | Type::Quantified(_) | Type::SelfType(_))) => {
                 Some(ty.clone())
             }
-            Type::Type(box Type::Tuple(_)) => Some(Type::any_tuple()),
+            Type::Type(box Type::Tuple(_)) => Some(self.instantiate_fresh_tuple()),
             Type::Type(box Type::Any(a)) => Some(a.propagate()),
             Type::None | Type::Type(box Type::None) => Some(Type::None),
             Type::ClassType(cls) if cls.is_builtin("type") => Some(Type::any_implicit()),

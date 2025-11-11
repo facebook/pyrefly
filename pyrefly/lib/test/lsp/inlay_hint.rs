@@ -51,6 +51,8 @@ def g() -> int:
 
 def h(*args):
     return args[0]
+
+i = h()
 "#;
     assert_eq!(
         r#"

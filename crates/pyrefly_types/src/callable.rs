@@ -344,6 +344,10 @@ pub struct FuncFlags {
     pub has_final_decoration: bool,
     /// A function decorated with `@abc.abstractmethod`
     pub is_abstract_method: bool,
+    /// Function body is treated as a stub (e.g. body is `...` or absent in a stub file)
+    pub lacks_implementation: bool,
+    /// Is the function definition in a `.pyi` file
+    pub defined_in_stub_file: bool,
     /// A function decorated with `typing.dataclass_transform(...)`, turning it into a
     /// `dataclasses.dataclass`-like decorator. Stores the keyword values passed to the
     /// `dataclass_transform` call. See
@@ -657,6 +661,15 @@ impl Param {
             Param::VarArg(None, ty) => write!(f, "*{}", wrap(ty)),
             Param::Kwargs(Some(name), ty) => write!(f, "**{}: {}", name, wrap(ty)),
             Param::Kwargs(None, ty) => write!(f, "**{}", wrap(ty)),
+        }
+    }
+
+    pub fn name(&self) -> Option<&Name> {
+        match self {
+            Param::PosOnly(name, ..) | Param::VarArg(name, ..) | Param::Kwargs(name, ..) => {
+                name.as_ref()
+            }
+            Param::Pos(name, ..) | Param::KwOnly(name, ..) => Some(name),
         }
     }
 

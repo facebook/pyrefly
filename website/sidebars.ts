@@ -92,7 +92,7 @@ let docsSidebar = [
     },
 ];
 
-if (process.env.INTERNAL_STATIC_DOCS) {
+if (process.env.INTERNAL_STATIC_DOCS === '1') {
     docsSidebar.push({
         type: 'category' as const,
         label: 'Internal Docs',

@@ -95,7 +95,7 @@ mod tests {
             ModulePath::filesystem(Path::new("foo.py").to_owned()),
             Arc::new("hello_world = Baz123.attribute".to_owned()),
         );
-        let ast = Ast::parse(module.contents()).0;
+        let ast = Ast::parse(module.contents(), module.source_type()).0;
         let show = |x: &ShortIdentifier| module.display(x).to_string();
 
         let assign = &ast.body[0].as_assign_stmt().unwrap();

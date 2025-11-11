@@ -16,6 +16,7 @@ use pyrefly_types::literal::Lit;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprCall;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
@@ -31,7 +32,6 @@ use crate::types::simplify::unions;
 
 /// Django stubs use this attribute to specify the Python type that a field should infer to
 const DJANGO_PRIVATE_GET_TYPE: Name = Name::new_static("_pyi_private_get_type");
-
 const CHOICES: Name = Name::new_static("choices");
 const LABEL: Name = Name::new_static("label");
 const LABELS: Name = Name::new_static("labels");
@@ -40,6 +40,7 @@ const ID: Name = Name::new_static("id");
 const PK: Name = Name::new_static("pk");
 const AUTO_FIELD: Name = Name::new_static("AutoField");
 const FOREIGN_KEY: Name = Name::new_static("ForeignKey");
+const NULL: Name = Name::new_static("null");
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_django_field_type(
@@ -100,11 +101,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if self.is_foreign_key_field(field)
             && field_name.is_some()
             && let Some(e) = initial_value_expr
-            && let Some(to_expr) = e.as_call_expr()?.arguments.args.first()
+            && let Some(call_expr) = e.as_call_expr()
+            && let Some(to_expr) = call_expr.arguments.args.first()
+            && let Some(related_model_type) = self.resolve_foreign_key_target(to_expr)
         {
-            // Resolve the expression to a type and convert to instance type
-            let related_model_type = self.resolve_foreign_key_target(to_expr, class)?;
-            return Some(related_model_type);
+            // If nullable, union with None
+            if self.is_django_field_nullable(call_expr) {
+                return Some(self.union(related_model_type, Type::None));
+            } else {
+                return Some(related_model_type);
+            }
         }
 
         // Default: use _pyi_private_get_type from the field class
@@ -121,24 +127,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
     }
 
-    fn resolve_foreign_key_target(
-        &self,
-        to_expr: &ruff_python_ast::Expr,
-        class: &Class,
-    ) -> Option<Type> {
-        // Extract the model name from the expression
-        let model_name = match to_expr {
+    fn resolve_foreign_key_target(&self, to_expr: &Expr) -> Option<Type> {
+        match to_expr {
             // Direct name reference. Ex: ForeignKey(Reporter, ...)
-            Expr::Name(name_expr) => name_expr.id.clone(),
-            // TODO: handle self references and forward references
-            _ => return None,
-        };
-
-        // Look up the model in the current module and convert to instance type
-        let export_key = KeyExport(model_name);
-        let related_model_type =
-            self.get_from_export(class.module_name(), Some(class.module_path()), &export_key);
-        Some(self.class_def_to_instance_type(&related_model_type))
+            // Use expr_infer to resolve the name in the current scope
+            Expr::Name(_) => {
+                let related_model_type = self.expr_infer(to_expr, &self.error_swallower());
+                Some(self.class_def_to_instance_type(&related_model_type))
+            }
+            // TODO: handle self references and forward references (string literals case)
+            _ => None,
+        }
     }
 
     fn class_def_to_instance_type(&self, ty: &Type) -> Type {
@@ -149,7 +148,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn is_foreign_key_field(&self, field: &Class) -> bool {
+    pub fn is_foreign_key_field(&self, field: &Class) -> bool {
         field.has_toplevel_qname(
             ModuleName::django_models_fields_related().as_str(),
             FOREIGN_KEY.as_str(),
@@ -259,6 +258,82 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }))
     }
 
+    /// Get the primary key field type for a Django model.
+    /// Returns a tuple of (pk_type, has_custom_pk) where has_custom_pk indicates
+    /// whether the model has a custom primary key field defined.
+    fn get_pk_field_type(&self, model: &Class) -> Option<(Type, bool)> {
+        let metadata = self.get_metadata_for_class(model);
+
+        if let Some(pk_field_name) = metadata
+            .django_model_metadata()
+            .and_then(|dm| dm.custom_primary_key_field.as_ref())
+        {
+            let instance_type = self.as_class_type_unchecked(model).to_type();
+            let pk_type = self.attr_infer_for_type(
+                &instance_type,
+                pk_field_name,
+                TextRange::default(),
+                &self.error_swallower(),
+                None,
+            );
+            Some((pk_type, true))
+        } else {
+            // No custom pk, use default AutoField type
+            let auto_field_export = KeyExport(AUTO_FIELD);
+            let auto_field_type =
+                self.get_from_export(ModuleName::django_models_fields(), None, &auto_field_export);
+            self.get_django_field_type(&auto_field_type, model, None, None)
+                .map(|ty| (ty, false))
+        }
+    }
+
+    fn is_django_field_nullable(&self, call_expr: &ExprCall) -> bool {
+        call_expr.arguments.keywords.iter().any(|keyword| {
+            keyword
+                .arg
+                .as_ref()
+                .is_some_and(|name| name.as_str() == NULL.as_str())
+                && matches!(
+                    &keyword.value,
+                    Expr::BooleanLiteral(bool_lit) if bool_lit.value
+                )
+        })
+    }
+
+    /// Returns the primary key type of the related model.
+    fn get_foreign_key_id_type(&self, cls: &Class, field_name: &Name) -> Option<Type> {
+        // Get the class field
+        let class_field = self.get_field_from_current_class_only(cls, field_name)?;
+
+        // Check if this is a ForeignKey field using the cached metadata
+        if !class_field.is_foreign_key() {
+            return None;
+        }
+
+        // Get the related model type from the field
+        let ty = class_field.ty();
+        let (related_cls, is_foreign_key_nullable) = match ty {
+            Type::Union(union) => {
+                // Nullable foreign key: extract the class type from the union
+                let cls = union.iter().find_map(|variant| match variant {
+                    Type::ClassType(cls) => Some(cls.clone()),
+                    _ => None,
+                })?;
+                (cls, true)
+            }
+            Type::ClassType(cls) => (cls, false),
+            _ => return None,
+        };
+
+        // Get the pk type from the related model and make it nullable if needed
+        let (pk_type, _) = self.get_pk_field_type(related_cls.class_object())?;
+        if is_foreign_key_nullable {
+            Some(self.union(pk_type, Type::None))
+        } else {
+            Some(pk_type)
+        }
+    }
+
     pub fn get_django_model_synthesized_fields(
         &self,
         cls: &Class,
@@ -270,30 +345,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let mut fields = SmallMap::new();
 
-        let custom_pk_field = metadata
-            .django_model_metadata()
-            .and_then(|dm| dm.custom_primary_key_field.as_ref());
+        if let Some((pk_type, has_custom_pk)) = self.get_pk_field_type(cls) {
+            if !has_custom_pk {
+                // No custom pk, so synthesize an id field
+                fields.insert(ID, ClassSynthesizedField::new(pk_type.clone()));
+            }
+            fields.insert(PK, ClassSynthesizedField::new(pk_type));
+        }
 
-        if let Some(pk_field_name) = custom_pk_field {
-            let instance_type = self.as_class_type_unchecked(cls).to_type();
-            let pk_attr_type = self.attr_infer_for_type(
-                &instance_type,
-                pk_field_name,
-                TextRange::default(),
-                &self.error_swallower(),
-                None,
-            );
-            fields.insert(PK, ClassSynthesizedField::new(pk_attr_type));
-            // When there's a custom pk, don't synthesize an `id` field
-        } else {
-            // No custom pk, use default AutoField for both id and pk
-            let auto_field_export = KeyExport(AUTO_FIELD);
-            let auto_field_type =
-                self.get_from_export(ModuleName::django_models_fields(), None, &auto_field_export);
-
-            if let Some(id_type) = self.get_django_field_type(&auto_field_type, cls, None, None) {
-                fields.insert(ID, ClassSynthesizedField::new(id_type.clone()));
-                fields.insert(PK, ClassSynthesizedField::new(id_type));
+        // Synthesize `<field_name>_id` fields for ForeignKey fields
+        for field_name in cls.fields() {
+            if let Some(fk_id_type) = self.get_foreign_key_id_type(cls, field_name) {
+                let id_field_name = Name::new(format!("{}_id", field_name));
+                fields.insert(id_field_name, ClassSynthesizedField::new(fk_id_type));
             }
         }
 

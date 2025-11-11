@@ -30,7 +30,7 @@ fn get_folding_ranges_report(state: &State, handle: &Handle) -> String {
     let mut folding_ranges: Vec<FoldingRangeInfo> = ranges
         .into_iter()
         .map(|(text_range, kind)| {
-            let range = module.lined_buffer().to_lsp_range(text_range);
+            let range = module.to_lsp_range(text_range);
             FoldingRangeInfo {
                 start_line: range.start.line,
                 end_line: range.end.line,
@@ -56,7 +56,7 @@ fn get_docstring_ranges_report(state: &State, handle: &Handle) -> String {
     let lines: Vec<(u32, u32)> = ranges
         .into_iter()
         .map(|text_range| {
-            let range = module.lined_buffer().to_lsp_range(text_range);
+            let range = module.to_lsp_range(text_range);
             (range.start.line, range.end.line)
         })
         .collect();
@@ -344,7 +344,7 @@ fn folding_ranges_nested_structures() {
     let code = r#"
 class MyClass:
     """Class docstring"""
-    
+
     def method(self):
         """Method docstring"""
         for i in range(10):
@@ -497,11 +497,11 @@ def decorator1(cls):
 @decorator1
 class MyClass:
     """Class docstring"""
-    
+
     @staticmethod
     def static_method():
         pass
-    
+
     @classmethod
     def class_method(cls):
         pass

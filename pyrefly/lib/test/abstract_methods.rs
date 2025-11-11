@@ -190,6 +190,52 @@ c = Concrete()
 "#,
 );
 
+fn env_super_protocol() -> TestEnv {
+    let mut env = TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+from typing import Protocol
+class P1(Protocol):
+  def method(self) -> str: ...
+"#,
+    );
+    env.add(
+        "bar",
+        r#"
+from typing import Protocol
+class P2(Protocol):
+  def method(self) -> str: ...
+"#,
+    );
+    env
+}
+
+testcase!(
+    test_super_protocol_call,
+    env_super_protocol(),
+    r#"
+from foo import P1
+from bar import P2
+from typing import Protocol
+
+class P3(Protocol):
+  def method(self) -> str: ...
+
+class Child1(P1):
+    def method(self) -> str:
+        return super().method()  # OK, since P1 comes from a stub file
+
+class Child2(P2):
+    def method(self) -> str:
+        return super().method()  # E: Method `method` inherited from class `P2` has no implementation and cannot be accessed via `super()`
+
+class Child3(P3):
+    def method(self) -> str:
+        return super().method()  # E: Method `method` inherited from class `P3` has no implementation and cannot be accessed via `super()`
+"#,
+);
+
 testcase!(
     test_super_abstract_call,
     r#"
@@ -202,9 +248,7 @@ class Base(ABC):
 
 class Child(Base):
     def method(self) -> str:
-        # Calling abstract method via super() should be allowed (no error)
-        # Even though it would fail at runtime, type checkers don't error here
-        super().method()
+        super().method()  # E: Method `method` inherited from class `Base` has no implementation and cannot be accessed via `super()`
         return "child"
 
 # Child is concrete, so this works

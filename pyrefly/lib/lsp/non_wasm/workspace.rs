@@ -12,6 +12,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use lsp_types::Url;
 use lsp_types::WorkspaceFoldersChangeEvent;
+use pyrefly_config::config::FallbackSearchPath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::arc_id::WeakArcId;
 use pyrefly_util::lock::Mutex;
@@ -21,6 +22,7 @@ use serde_json::Value;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::error;
+use tracing::info;
 
 use crate::commands::config_finder::ConfigConfigurer;
 use crate::commands::config_finder::standard_config_finder;
@@ -84,16 +86,18 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
                 if let Some(search_path) = w.search_path.clone() {
                     config.search_path_from_args = search_path;
                 }
-                // If we already have a fallback search path (meaning no config was found
+                // If we already have a static fallback search path (meaning no config was found
                 // and we're already using heuristics), insert workspace root as first
                 // fallback_search_path so our handles (which are created from first fallback)
                 // are created correctly for workspaces
-                if !config.fallback_search_path.is_empty()
+                if let FallbackSearchPath::Explicit(fallback_search_path) =
+                    &config.fallback_search_path
                     && let Some(workspace_root) = workspace_root
                 {
-                    config
-                        .fallback_search_path
-                        .insert(0, workspace_root.to_path_buf());
+                    let mut new_fallback_search_path = (**fallback_search_path).clone();
+                    new_fallback_search_path.insert(0, workspace_root.to_path_buf());
+                    config.fallback_search_path =
+                        FallbackSearchPath::Explicit(Arc::new(new_fallback_search_path));
                 }
                 if let Some(PythonInfo {
                     interpreter,
@@ -146,7 +150,7 @@ impl WeakConfigCache {
         let mut configs = self.0.lock();
         let purged_config_count = configs.extract_if(|c| c.vacant()).count();
         if purged_config_count != 0 {
-            eprintln!("Cleared {purged_config_count} dropped configs from config cache");
+            info!("Cleared {purged_config_count} dropped configs from config cache");
         }
         SmallSet::from_iter(configs.iter().filter_map(|c| c.upgrade()))
     }
@@ -243,7 +247,7 @@ where
     match Option::<LspAnalysisConfig>::deserialize(deserializer) {
         Ok(value) => Ok(value),
         Err(e) => {
-            eprintln!("Could not decode analysis config: {e}");
+            info!("Could not decode analysis config: {e}");
             Ok(None)
         }
     }
@@ -327,7 +331,7 @@ impl Workspaces {
     ) {
         let config = match serde_json::from_value::<LspConfig>(config.clone()) {
             Err(e) => {
-                eprintln!(
+                info!(
                     "Could not decode `LspConfig` from {config:?}, skipping client configuration request: {e}."
                 );
                 return;

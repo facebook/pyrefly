@@ -1739,3 +1739,13 @@ def f(g: Callable[P, T], ts: tuple[*Ts], *args: P.args, **kwargs: P.kwargs):
     ty(Ts).__name__
 "#,
 );
+
+testcase!(
+    test_type_never,
+    r#"
+from typing import Never, assert_type, reveal_type
+def f() -> type[Never]: ...
+reveal_type(f().mro) # E: BoundMethod[type, (self: type) -> list[type]]
+assert_type(f().wut, Never)
+    "#,
+);

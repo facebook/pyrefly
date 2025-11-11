@@ -9,6 +9,7 @@ pub mod ast_visitor;
 pub mod call_graph;
 pub mod captured_variable;
 pub mod class;
+pub mod collect;
 pub mod context;
 pub mod function;
 pub mod global_variable;
@@ -50,6 +51,7 @@ use crate::report::pysa::captured_variable::export_captured_variables;
 use crate::report::pysa::class::ClassDefinition;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::export_all_classes;
+use crate::report::pysa::collect::CollectNoDuplicateKeys;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionBaseDefinition;
 use crate::report::pysa::function::FunctionDefinition;
@@ -170,7 +172,8 @@ pub fn export_module_call_graphs(
     let call_graphs = export_call_graphs(context, function_base_definitions, override_graph)
         .into_iter()
         .map(|(function_ref, call_graph)| (function_ref.function_id, call_graph))
-        .collect();
+        .collect_no_duplicate_keys()
+        .expect("Found multiple call graphs for the same function");
     PysaModuleCallGraphs {
         format_version: 1,
         module_id: context.module_id,
@@ -248,7 +251,7 @@ fn make_module_work_list(
                 .as_ref()
                 .map(|info_filename| (module.handle.clone(), *module_id, info_filename.clone()))
         })
-        .collect()
+        .collect::<Vec<_>>()
 }
 
 fn write_module_definitions_files(

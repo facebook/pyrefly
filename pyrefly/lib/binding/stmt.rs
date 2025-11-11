@@ -951,11 +951,17 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Continue(x) => {
                 self.add_loop_exitpoint(LoopExit::Continue, x.range);
             }
-            Stmt::IpyEscapeCommand(x) => self.error(
-                x.range,
-                ErrorInfo::Kind(ErrorKind::Unsupported),
-                "IPython escapes are not supported".to_owned(),
-            ),
+            Stmt::IpyEscapeCommand(x) => {
+                if self.module_info.is_notebook() {
+                    // No-op
+                } else {
+                    self.error(
+                        x.range,
+                        ErrorInfo::Kind(ErrorKind::Unsupported),
+                        "IPython escapes are not supported".to_owned(),
+                    )
+                }
+            }
         }
     }
 

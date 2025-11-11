@@ -218,6 +218,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class_key: Option<&Idx<KeyClass>>,
         decorators: &[(Idx<Key>, TextRange)],
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
+        module_style: ModuleStyle,
         errors: &ErrorCollector,
     ) -> Arc<UndecoratedFunction> {
         let defining_cls = class_key.and_then(|k| self.get_idx(*k).0.dupe());
@@ -262,6 +263,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
                 .map(|(idx, range)| (self.get_idx(*idx).arc_clone_ty(), *range)),
         );
+
+        if stub_or_impl == FunctionStubOrImpl::Stub {
+            flags.lacks_implementation = true;
+        }
+        if module_style == ModuleStyle::Interface {
+            flags.defined_in_stub_file = true;
+        }
 
         // Look for a @classmethod or @staticmethod decorator and change the "self" type
         // accordingly. This is not totally correct, since it doesn't account for chaining
@@ -550,7 +558,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 (param_ty, required)
             }
-            FunctionParameter::Unannotated(var, _) => {
+            FunctionParameter::Unannotated(var, _, _) => {
                 let required = self.get_requiredness(default, None, stub_or_impl, errors);
                 // If this is the first parameter and there is a self type, solve to `Self`.
                 // We only try to solve the first param for now. Other unannotated params
@@ -670,13 +678,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Param::KwOnly(x.parameter.name.id.clone(), ty, required)
         }));
         if let Some(x) = &def.parameters.kwarg {
-            let ty = match self.bindings().get_function_param(&x.name) {
-                FunctionParameter::Annotated(idx) => {
-                    let annot = self.get_idx(*idx);
-                    annot.annotation.get_type().clone()
-                }
-                FunctionParameter::Unannotated(var, _) => self.solver().force_var(*var),
-            };
+            let (ty, _) = self.get_param_type_and_requiredness(
+                &x.name,
+                None,
+                stub_or_impl,
+                self_type,
+                errors,
+            );
             if let Type::Kwargs(q) = &ty {
                 paramspec_kwargs = Some(q.clone());
             }

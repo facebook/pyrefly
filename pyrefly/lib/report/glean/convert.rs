@@ -75,7 +75,29 @@ fn hash(x: &[u8]) -> String {
 }
 
 fn join_names(base_name: &str, name: &str) -> String {
-    base_name.to_owned() + "." + name
+    if base_name.is_empty() {
+        name.to_owned()
+    } else {
+        base_name.to_owned() + "." + name
+    }
+}
+
+fn all_modules(module_name: ModuleName) -> impl Iterator<Item = String> {
+    module_name
+        .components()
+        .into_iter()
+        .scan("".to_owned(), |module, component| {
+            *module = join_names(module, component.as_str());
+            Some(module.to_owned())
+        })
+}
+
+fn all_modules_with_range(module_id: &Identifier) -> impl Iterator<Item = (String, TextRange)> {
+    let offset = module_id.range().start();
+    all_modules(ModuleName::from_parts(module_id.id().split("."))).map(move |name| {
+        let range = TextRange::at(offset, TextSize::try_from(name.len()).unwrap());
+        (name, range)
+    })
 }
 
 fn range_without_decorators(range: TextRange, decorators: &[Decorator]) -> TextRange {
@@ -251,22 +273,6 @@ impl GleanState<'_> {
         digest::FileDigest::new(self.file_fact(), digest)
     }
 
-    fn all_modules(&mut self, module_name: ModuleName) -> Vec<ModuleName> {
-        let mut module_names = vec![];
-        let components = module_name.components();
-        let mut module = None;
-        for component in components.into_iter() {
-            let name = module.map_or(ModuleName::from_name(&component), |x: ModuleName| {
-                x.append(&component)
-            });
-            self.record_name(name.to_string());
-            module = Some(name);
-            module_names.push(name);
-        }
-
-        module_names
-    }
-
     fn gencode_fact(&mut self) -> Option<gencode::GenCode> {
         let generated_pattern = RegexBuilder::new(
             r"^.*@(?P<tag>(partially-)?generated)( SignedSource<<(?P<sign>[0-9a-f]+)>>)?$",
@@ -333,18 +339,12 @@ impl GleanState<'_> {
 
     fn module_facts(&mut self, range: TextRange) {
         let module_docstring_range = self.transaction.get_module_docstring_range(self.handle);
-        let components = self.module_name.components();
-        let mut module = None;
 
-        for component in components.into_iter() {
-            let name = module.map_or(ModuleName::from_name(&component), |x: ModuleName| {
-                x.append(&component)
-            });
-            self.record_name(name.to_string());
+        for name in all_modules(self.module_name) {
+            self.record_name(name.clone());
             self.facts
                 .modules
-                .push(python::Module::new(python::Name::new(name.to_string())));
-            module = Some(name);
+                .push(python::Module::new(python::Name::new(name)));
         }
 
         let mod_decl_info = DeclarationInfo {
@@ -1021,31 +1021,6 @@ impl GleanState<'_> {
         }
     }
 
-    fn make_import_facts_for_module(
-        &mut self,
-        import_module: &Identifier,
-        top_level_declaration: &python::Declaration,
-    ) -> Vec<DeclarationInfo> {
-        let parts = import_module.id().split(".");
-
-        self.all_modules(ModuleName::from_parts(parts))
-            .into_iter()
-            .map(|module| {
-                let range = TextRange::empty(import_module.range().start())
-                    .add_end(TextSize::from(module.as_str().len().to_u32().unwrap()));
-
-                self.make_import_fact(
-                    module.as_str(),
-                    range,
-                    module.as_str(),
-                    range,
-                    top_level_declaration,
-                    false,
-                )
-            })
-            .collect()
-    }
-
     fn import_facts(
         &mut self,
         import: &StmtImport,
@@ -1057,6 +1032,16 @@ impl GleanState<'_> {
             .flat_map(|import| {
                 let from_name = &import.name;
                 if let Some(as_name) = &import.asname {
+                    let mut it = all_modules_with_range(from_name).peekable();
+                    while let Some((module, range)) = it.next() {
+                        if it.peek().is_some() {
+                            self.record_name(module.clone());
+                            self.add_xref(python::XRefViaName {
+                                target: python::Name::new(module),
+                                source: to_span(range),
+                            });
+                        }
+                    }
                     vec![self.make_import_fact(
                         from_name.as_str(),
                         from_name.range(),
@@ -1066,7 +1051,18 @@ impl GleanState<'_> {
                         true,
                     )]
                 } else {
-                    self.make_import_facts_for_module(&import.name, top_level_declaration)
+                    all_modules_with_range(from_name)
+                        .map(|(module, range)| {
+                            self.make_import_fact(
+                                &module,
+                                range,
+                                &module,
+                                range,
+                                top_level_declaration,
+                                false,
+                            )
+                        })
+                        .collect()
                 }
             })
             .collect()
@@ -1135,7 +1131,7 @@ impl GleanState<'_> {
                     .push(python::ImportStarLocation::new(
                         import_star,
                         self.facts.file.clone(),
-                        to_span(import.range),
+                        to_span(import_from.range),
                     ));
             } else {
                 let from_name_string = from_module

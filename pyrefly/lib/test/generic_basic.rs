@@ -392,3 +392,45 @@ class A[T]:  # E: Cannot use type parameter lists on Python 3.8 (syntax was adde
     x: T
     "#,
 );
+
+testcase!(
+    test_typevar_or_none,
+    r#"
+from typing import assert_type
+def f[T1, T2](x: T1, y: T2 | None = None) -> T1 | T2: ...
+assert_type(f(1), int)
+assert_type(f(1, "2"), int | str)
+assert_type(f(1, None), int)
+    "#,
+);
+
+testcase!(
+    test_typevar_solved_in_one_path,
+    r#"
+from typing import assert_type
+def f[T1, T2](x: T1, y: T2 | None, z: T2) -> T1 | T2: ...
+assert_type(f(1, None, ""), int | str)
+    "#,
+);
+
+testcase!(
+    test_return_only_unsolved_typevars,
+    r#"
+from typing import Any, assert_type
+
+def f1[T](x: T | None = None) -> T: ...
+assert_type(f1(), Any)
+
+def f2[T1, T2](x: T1 | None = None, y: T2 | None = None) -> T1 | T2: ...
+assert_type(f2(), Any)
+    "#,
+);
+
+testcase!(
+    test_unsolved_typevar_multiple_occurrences,
+    r#"
+from typing import Any, assert_type
+def f[T](x: T | None = None) -> tuple[T, T | int]: ...
+assert_type(f(), tuple[Any, int])
+    "#,
+);

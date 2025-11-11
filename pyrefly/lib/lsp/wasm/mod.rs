@@ -8,5 +8,3 @@
 pub mod hover;
 pub mod notebook;
 pub mod provide_type;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod will_rename_files;

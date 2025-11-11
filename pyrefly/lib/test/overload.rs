@@ -1170,3 +1170,76 @@ g(1, "hello")  # E: No matching overload found for function `g` called with argu
 g(x=1, y="hello")  # E: No matching overload found for function `g` called with arguments: (x=Literal[1], y=Literal['hello'])
     "#,
 );
+
+testcase!(
+    test_varargs_materialization,
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f1(*args: int) -> int: ...
+@overload
+def f1(*args: str) -> str: ...
+def f1(*args) -> int | str: ...
+
+@overload
+def f2(*args: Any) -> int: ...
+@overload
+def f2(*args: str) -> str: ...
+def f2(*args) -> int | str: ...
+
+def g(*args):
+    # ambiguous whether this matches `f1`'s first or second overload, so fall back to return type Any
+    assert_type(f1(*args), Any)
+    # this matches `f2`'s first overload via https://typing.python.org/en/latest/spec/overload.html#step-5
+    assert_type(f2(*args), int)
+
+def h(args: Any):
+    # make sure the entire iterable being `Any` works
+    assert_type(f1(*args), Any)
+    assert_type(f2(*args), int)
+    "#,
+);
+
+testcase!(
+    test_kwargs_materialization,
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f1(**kwargs: int) -> int: ...
+@overload
+def f1(**kwargs: str) -> str: ...
+def f1(**kwargs) -> int | str: ...
+
+@overload
+def f2(**kwargs: Any) -> int: ...
+@overload
+def f2(**kwargs: str) -> str: ...
+def f2(**kwargs) -> int | str: ...
+
+def g(**kwargs):
+    # ambiguous whether this matches `f1`'s first or second overload, so fall back to return type Any
+    assert_type(f1(**kwargs), Any)
+    # this matches `f2`'s first overload via https://typing.python.org/en/latest/spec/overload.html#step-5
+    assert_type(f2(**kwargs), int)
+
+def h(kwargs: Any):
+    # make sure the entire mapping being `Any` works
+    assert_type(f1(**kwargs), Any)
+    assert_type(f2(**kwargs), int)
+    "#,
+);
+
+testcase!(
+    test_unsolved_typevar,
+    r#"
+from typing import overload
+class Foo[T]:
+    @overload
+    def test(self, obj: None, cls: type[T]) -> str: ...
+    @overload
+    def test(self, obj: T, cls: type[T]) -> int: ...
+    def test(self, obj: T | None, cls: type[T]) -> str | int: ...
+    "#,
+);

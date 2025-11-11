@@ -199,6 +199,8 @@ pub enum ErrorKind {
     MissingModuleAttribute,
     /// The source code for an imported package is missing.
     MissingSource,
+    /// We are using bundled stubs for a package but the source code is missing.
+    MissingSourceForStubs,
     /// The attribute exists but does not support this access pattern.
     NoAccess,
     /// Attempting to call an overloaded function, but none of the signatures match.

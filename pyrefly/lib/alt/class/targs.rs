@@ -30,8 +30,10 @@ use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::tuple::Tuple;
+use crate::types::type_var::PreInferenceVariance;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::Forall;
 use crate::types::types::Forallable;
@@ -239,6 +241,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.instantiate(cls),
                 self.uniques,
             )
+            .1
+    }
+
+    pub fn instantiate_fresh_tuple(&self) -> Type {
+        let quantified = Quantified::type_var_tuple(Name::new_static("Ts"), self.uniques, None);
+        let tparams = TParams::new(vec![TParam {
+            quantified: quantified.clone(),
+            variance: PreInferenceVariance::PCovariant,
+        }]);
+        let tuple_ty = Type::Tuple(Tuple::Unpacked(Box::new((
+            Vec::new(),
+            Type::Quantified(Box::new(quantified)),
+            Vec::new(),
+        ))));
+        self.solver()
+            .fresh_quantified(&tparams, tuple_ty, self.uniques)
             .1
     }
 
@@ -463,7 +481,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::Unpack(t) => {
                     if !suffix.is_empty() {
-                        middle.push(Type::Tuple(Tuple::Unbounded(Box::new(self.unions(suffix)))));
+                        middle.push(Type::Tuple(Tuple::unbounded(self.unions(suffix))));
                         suffix = Vec::new();
                     } else {
                         middle.push((**t).clone())
@@ -503,7 +521,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect();
                 Type::Tuple(Tuple::unpacked(
                     prefix,
-                    Type::Tuple(Tuple::Unbounded(Box::new(self.unions(middle_types)))),
+                    Type::Tuple(Tuple::unbounded(self.unions(middle_types))),
                     suffix,
                 ))
             }
