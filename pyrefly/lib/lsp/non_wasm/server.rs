@@ -1102,17 +1102,22 @@ impl Server {
                     ide_transaction_manager.save(transaction);
                 } else if &x.method == "pyrefly/textDocument/typeErrorDisplayStatus" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
-                    if self
+                    if !self
                         .open_notebook_cells
                         .read()
                         .contains_key(&text_document.uri)
                     {
-                        // TODO(yangdanny): handle notebooks
                         self.send_response(new_response(
                             x.id,
                             Ok(self.type_error_display_status(
                                 text_document.uri.to_file_path().unwrap().as_path(),
                             )),
+                        ));
+                    } else {
+                        // TODO(yangdanny): handle notebooks
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(TypeErrorDisplayStatus::DisabledDueToMissingConfigFile),
                         ));
                     }
                 } else {
