@@ -200,6 +200,7 @@ use crate::lsp::non_wasm::stdlib::is_python_stdlib_file;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
 use crate::lsp::non_wasm::will_rename_files::will_rename_files;
+use crate::lsp::non_wasm::workspace::DiagnosticMode;
 use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
 use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
@@ -1033,6 +1034,7 @@ impl Server {
                         self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
                         let transaction =
                             ide_transaction_manager.non_committable_transaction(&self.state);
+
                         self.send_response(new_response(
                             x.id,
                             Ok(self.document_diagnostics(&transaction, params)),
@@ -1238,31 +1240,46 @@ impl Server {
 
             let type_error_status = self.type_error_display_status(e.path().as_path());
 
+            // Check stdlib filtering first
             let should_show_stdlib_error =
                 should_show_stdlib_error(&config, type_error_status, &path);
-
             if is_python_stdlib_file(&path) && !should_show_stdlib_error {
                 return None;
             }
 
-            if let Some(lsp_file) = open_files.get(&path)
-                && config.project_includes.covers(&path)
-                && !config.project_excludes.covers(&path)
-                && type_error_status.is_enabled()
-            {
-                return match &**lsp_file {
-                    LspFile::Notebook(notebook) => {
-                        let error_cell = e.get_notebook_cell()?;
-                        let error_cell_uri = notebook.get_cell_url(error_cell)?;
-                        if let Some(filter_cell) = cell_uri
-                            && error_cell_uri != filter_cell
-                        {
-                            None
-                        } else {
-                            Some((PathBuf::from(error_cell_uri.to_string()), e.to_diagnostic()))
+            // Get diagnostic mode for this file's workspace
+            let diagnostic_mode = self.workspaces.get_diagnostic_mode(&path);
+
+            // File must be in project (not excluded) to show diagnostics
+            let is_in_project =
+                config.project_includes.covers(&path) && !config.project_excludes.covers(&path);
+
+            // Check based on diagnostic mode
+            let is_open = open_files.contains_key(&path);
+            let should_show = match diagnostic_mode {
+                DiagnosticMode::Workspace => is_in_project,
+                DiagnosticMode::OpenFilesOnly => is_open && is_in_project,
+            };
+
+            if should_show && type_error_status.is_enabled() {
+                return if let Some(lsp_file) = open_files.get(&path) {
+                    match &**lsp_file {
+                        LspFile::Notebook(notebook) => {
+                            let error_cell = e.get_notebook_cell()?;
+                            let error_cell_uri = notebook.get_cell_url(error_cell)?;
+                            if let Some(filter_cell) = cell_uri
+                                && error_cell_uri != filter_cell
+                            {
+                                None
+                            } else {
+                                Some((PathBuf::from(error_cell_uri.to_string()), e.to_diagnostic()))
+                            }
                         }
+                        LspFile::Source(_) => Some((path.to_path_buf(), e.to_diagnostic())),
                     }
-                    LspFile::Source(_) => Some((path.to_path_buf(), e.to_diagnostic())),
+                } else {
+                    // File not open but in workspace mode - still show diagnostic
+                    Some((path.to_path_buf(), e.to_diagnostic()))
                 };
             }
         }
@@ -1354,30 +1371,98 @@ impl Server {
         let handles =
             Self::validate_in_memory_for_transaction(&self.state, &self.open_files, transaction);
 
+        // Check if any workspace is in workspace diagnostic mode
+        let has_workspace_mode = self.workspaces.roots().iter().any(|root| {
+            matches!(
+                self.workspaces.get_diagnostic_mode(root),
+                DiagnosticMode::Workspace
+            )
+        });
+
+        // In workspace mode, analyze all project files so get_all_errors() includes unopened files
+        if has_workspace_mode {
+            let open_file_paths: std::collections::HashSet<_> =
+                self.open_files.read().keys().cloned().collect();
+            if let Some(first_open_file) = open_file_paths.iter().next() {
+                let module_path = ModulePath::filesystem(first_open_file.clone());
+                let config = self
+                    .state
+                    .config_finder()
+                    .python_file(ModuleName::unknown(), &module_path);
+                let project_path_blobs = config.get_filtered_globs(None);
+                if let Ok(paths) = project_path_blobs.files() {
+                    let project_handles: Vec<_> = paths
+                        .into_iter()
+                        .filter_map(|path| {
+                            // Skip files that are already open (already in handles)
+                            if open_file_paths.contains(&path) {
+                                return None;
+                            }
+                            let module_path = ModulePath::filesystem(path.clone());
+                            let path_config = self
+                                .state
+                                .config_finder()
+                                .python_file(ModuleName::unknown(), &module_path);
+                            if config == path_config {
+                                Some(handle_from_module_path(&self.state, module_path))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    // Analyze only for errors, not full indexing
+                    transaction.run(&project_handles, Require::Errors);
+                }
+            }
+        }
+
         let publish = |transaction: &Transaction| {
             let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
             let open_files = self.open_files.read();
             let open_notebook_cells = self.open_notebook_cells.read();
             let mut notebook_cell_urls = SmallMap::new();
+
+            // Pre-populate notebook cells
             for x in open_notebook_cells.keys() {
                 diags.insert(PathBuf::from(x.to_string()), Vec::new());
                 notebook_cell_urls.insert(PathBuf::from(x.to_string()), x.clone());
             }
+
+            // Pre-populate regular files (non-notebooks)
             for (x, file) in open_files.iter() {
                 if !file.is_notebook() {
                     diags.insert(x.as_path().to_owned(), Vec::new());
                 }
             }
-            for e in transaction.get_errors(&handles).collect_errors().shown {
+
+            // In workspace mode, use get_all_errors() to get errors from all project files.
+            // In open-files-only mode, use get_errors(&handles) to only get errors from open files.
+            // The filtering by diagnostic mode and project includes/excludes is handled in get_diag_if_shown.
+            let errors = if has_workspace_mode {
+                transaction.get_all_errors()
+            } else {
+                transaction.get_errors(&handles)
+            };
+
+            for e in errors.collect_errors().shown {
                 if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files, None) {
                     diags.entry(path.to_owned()).or_default().push(diag);
                 }
             }
+
             for (path, diagnostics) in diags.iter_mut() {
+                // Skip notebook cells - they're handled separately
                 if notebook_cell_urls.contains_key(path) {
                     continue;
                 }
-                let handle = make_open_handle(&self.state, path);
+
+                // Use appropriate handle type: memory handle for open files, filesystem for others
+                let is_open = open_files.contains_key(path);
+                let handle = if is_open {
+                    make_open_handle(&self.state, path)
+                } else {
+                    handle_from_module_path(&self.state, ModulePath::filesystem(path.clone()))
+                };
                 Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
                 Self::append_unused_parameter_diagnostics(transaction, &handle, diagnostics);
             }
@@ -2607,7 +2692,16 @@ impl Server {
         } else {
             uri.to_file_path().unwrap()
         };
-        let handle = make_open_handle(&self.state, &path);
+
+        // Check if file is open to determine handle type
+        let is_file_open = self.open_files.read().contains_key(&path);
+        let handle = if is_file_open {
+            make_open_handle(&self.state, &path)
+        } else {
+            let module_path = ModulePath::filesystem(path.clone());
+            handle_from_module_path(&self.state, module_path)
+        };
+
         let mut items = Vec::new();
         let open_files = &self.open_files.read();
         for e in transaction.get_errors(once(&handle)).collect_errors().shown {

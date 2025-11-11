@@ -233,7 +233,6 @@ impl DisabledLanguageServices {
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LspAnalysisConfig {
-    #[allow(dead_code)]
     pub diagnostic_mode: Option<DiagnosticMode>,
     pub import_format: Option<ImportFormat>,
     pub inlay_hints: Option<InlayHintConfig>,
@@ -467,6 +466,17 @@ impl Workspaces {
                 self.default.write().search_path = Some(search_paths);
             }
         }
+    }
+
+    /// Get the diagnostic mode for a given path.
+    /// Returns the configured diagnostic mode for the workspace containing the path,
+    /// or `OpenFilesOnly` as the default if not configured.
+    pub fn get_diagnostic_mode(&self, path: &std::path::Path) -> DiagnosticMode {
+        self.get_with(path.to_path_buf(), |(_, w)| {
+            w.lsp_analysis_config
+                .and_then(|config| config.diagnostic_mode)
+                .unwrap_or(DiagnosticMode::OpenFilesOnly)
+        })
     }
 }
 

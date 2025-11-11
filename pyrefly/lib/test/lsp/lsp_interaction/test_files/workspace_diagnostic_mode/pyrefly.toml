@@ -1,0 +1,2 @@
+# Pyrefly config for workspace diagnostic mode tests
+project-includes = ["**/*.py"]
