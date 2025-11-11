@@ -11,4 +11,5 @@ pub mod module_helpers;
 pub mod queue;
 pub mod server;
 pub mod transaction_manager;
+pub mod unopened_file_tracker;
 pub mod workspace;

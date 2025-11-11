@@ -13,7 +13,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
-use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 
 use dupe::Dupe;
@@ -196,6 +195,7 @@ use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::lsp::non_wasm::unopened_file_tracker::UnopenedFileTracker;
 use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
 use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
@@ -306,8 +306,6 @@ impl ServerConnection {
     }
 }
 
-const VIRTUAL_DOCUMENT_ROOT: &str = "__pyrefly_virtual__";
-
 pub struct Server {
     connection: ServerConnection,
     lsp_queue: LspQueue,
@@ -321,9 +319,7 @@ pub struct Server {
     workspace_indexing_limit: usize,
     state: Arc<State>,
     open_files: Arc<RwLock<HashMap<PathBuf, Arc<String>>>>,
-    open_file_uris: Arc<RwLock<HashMap<PathBuf, Url>>>,
-    uri_to_path: Arc<RwLock<HashMap<Url, PathBuf>>>,
-    virtual_document_counter: AtomicU32,
+    unopened_file_tracker: UnopenedFileTracker,
     /// A set of configs where we have already indexed all the files within the config.
     indexed_configs: Mutex<HashSet<ArcId<ConfigFile>>>,
     /// A set of workspaces where we have already performed best-effort indexing.
@@ -999,6 +995,7 @@ impl Server {
                 } else if &x.method == "pyrefly/textDocument/typeErrorDisplayStatus" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
                     let status = self
+                        .unopened_file_tracker
                         .path_for_uri(&text_document.uri)
                         .map(|path| self.type_error_display_status(path.as_path()))
                         .unwrap_or(TypeErrorDisplayStatus::DisabledDueToMissingConfigFile);
@@ -1050,9 +1047,7 @@ impl Server {
             workspace_indexing_limit,
             state: Arc::new(State::new(config_finder)),
             open_files: Arc::new(RwLock::new(HashMap::new())),
-            open_file_uris: Arc::new(RwLock::new(HashMap::new())),
-            uri_to_path: Arc::new(RwLock::new(HashMap::new())),
-            virtual_document_counter: AtomicU32::new(0),
+            unopened_file_tracker: UnopenedFileTracker::new(),
             indexed_configs: Mutex::new(HashSet::new()),
             indexed_workspaces: Mutex::new(HashSet::new()),
             cancellation_handles: Arc::new(Mutex::new(HashMap::new())),
@@ -1085,102 +1080,12 @@ impl Server {
         self.outgoing_requests.lock().insert(id, request);
     }
 
-    fn sanitize_virtual_component(component: &str) -> String {
-        let mut sanitized = component
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>();
-        if sanitized.is_empty() {
-            sanitized = "untitled".to_owned();
-        }
-        sanitized
-    }
-
-    fn remember_uri_path(&self, uri: &Url, path: &Path) {
-        let path_buf = path.to_path_buf();
-        self.open_file_uris
-            .write()
-            .insert(path_buf.clone(), uri.clone());
-        self.uri_to_path.write().insert(uri.clone(), path_buf);
-    }
-
-    fn forget_uri_path(&self, uri: &Url) -> Option<PathBuf> {
-        let removed = self.uri_to_path.write().remove(uri);
-        if let Some(path) = &removed {
-            self.open_file_uris.write().remove(path);
-        }
-        removed
-    }
-
-    fn ensure_path_for_open(&self, uri: &Url, language_id: &str) -> PathBuf {
-        if let Ok(path) = uri.to_file_path() {
-            self.remember_uri_path(uri, &path);
-            return path;
-        }
-        if let Some(existing) = self.uri_to_path.read().get(uri).cloned() {
-            return existing;
-        }
-
-        let counter = self.virtual_document_counter.fetch_add(1, Ordering::SeqCst);
-        let mut path = PathBuf::from("/");
-        path.push(VIRTUAL_DOCUMENT_ROOT);
-        path.push(Self::sanitize_virtual_component(uri.scheme()));
-
-        let raw_candidate = uri.path().trim_matches('/');
-        let candidate = if raw_candidate.is_empty() {
-            uri.host_str().unwrap_or("")
-        } else {
-            raw_candidate
-        };
-        let candidate_path = Path::new(candidate);
-        let stem = candidate_path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or(candidate);
-        let sanitized_stem = Self::sanitize_virtual_component(stem);
-        let mut file_name = if sanitized_stem.is_empty() {
-            format!("document-{counter}")
-        } else {
-            format!("{sanitized_stem}-{counter}")
-        };
-        if let Some(ext) = candidate_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(Self::sanitize_virtual_component)
-        {
-            if !ext.is_empty() {
-                file_name.push('.');
-                file_name.push_str(&ext);
-            }
-        } else if matches!(language_id, "python" | "python-notebook") {
-            file_name.push_str(".py");
-        }
-        path.push(file_name);
-        self.remember_uri_path(uri, &path);
-        path
-    }
-
-    fn path_for_uri(&self, uri: &Url) -> Option<PathBuf> {
-        if let Ok(path) = uri.to_file_path() {
-            Some(path)
-        } else {
-            self.uri_to_path.read().get(uri).cloned()
-        }
-    }
-
     fn publish_diagnostics_for_paths(&self, diags: SmallMap<PathBuf, Vec<Diagnostic>>) {
-        let uri_map = self.open_file_uris.read();
         let mut entries: Vec<(PathBuf, Url, Vec<Diagnostic>)> = Vec::with_capacity(diags.len());
         for (path, diagnostics) in diags {
-            if let Some(uri) = uri_map
-                .get(&path)
-                .cloned()
+            if let Some(uri) = self
+                .unopened_file_tracker
+                .uri_for_path(&path)
                 .or_else(|| Url::from_file_path(&path).ok())
             {
                 entries.push((path, uri, diagnostics));
@@ -1188,7 +1093,6 @@ impl Server {
                 eprintln!("Unable to convert path to uri: {path:?}");
             }
         }
-        drop(uri_map);
 
         for (path, uri, diagnostics) in entries {
             let version = self.version_info.lock().get(&path).copied();
@@ -1590,7 +1494,9 @@ impl Server {
         params: DidOpenTextDocumentParams,
     ) -> anyhow::Result<()> {
         let text_document = params.text_document;
-        let path = self.ensure_path_for_open(&text_document.uri, &text_document.language_id);
+        let path = self
+            .unopened_file_tracker
+            .ensure_path_for_open(&text_document.uri, &text_document.language_id);
         let config_to_populate_files = if text_document.uri.scheme() == "file"
             && self.indexing_mode != IndexingMode::None
             && let Some(directory) = path.parent()
@@ -1636,7 +1542,7 @@ impl Server {
         params: DidChangeTextDocumentParams,
     ) -> anyhow::Result<()> {
         let VersionedTextDocumentIdentifier { uri, version } = params.text_document;
-        let Some(file_path) = self.path_for_uri(&uri) else {
+        let Some(file_path) = self.unopened_file_tracker.path_for_uri(&uri) else {
             return Err(anyhow::anyhow!(
                 "Received textDocument/didChange for unknown uri: {uri}"
             ));
@@ -1721,18 +1627,22 @@ impl Server {
 
     fn did_close(&self, params: DidCloseTextDocumentParams) {
         let url = params.text_document.uri;
-        let Some(path) = self.path_for_uri(&url) else {
+        let Some(path) = self.unopened_file_tracker.path_for_uri(&url) else {
             eprintln!(
                 "Received textDocument/didClose for unknown uri: {url}. Ignoring the notification."
             );
             return;
         };
-        self.forget_uri_path(&url);
+        let tracked_uri = self
+            .unopened_file_tracker
+            .uri_for_path(&path)
+            .unwrap_or_else(|| url.clone());
+        self.unopened_file_tracker.forget_uri_path(&url);
         self.version_info.lock().remove(&path);
         let open_files = self.open_files.dupe();
         open_files.write().remove(&path);
         self.connection
-            .publish_diagnostics_for_uri(url.clone(), Vec::new(), None);
+            .publish_diagnostics_for_uri(tracked_uri, Vec::new(), None);
         let state = self.state.dupe();
         let lsp_queue = self.lsp_queue.dupe();
         let open_files = self.open_files.dupe();
@@ -1819,7 +1729,7 @@ impl Server {
         uri: &Url,
         method: Option<&str>,
     ) -> Option<(Handle, Option<LspAnalysisConfig>)> {
-        let path = self.path_for_uri(uri)?;
+        let path = self.unopened_file_tracker.path_for_uri(uri)?;
         let path_for_handle = path.clone();
         self.workspaces.get_with(path.clone(), |(_, workspace)| {
             // Check if all language services are disabled
@@ -2262,7 +2172,7 @@ impl Server {
         params: DocumentSymbolParams,
     ) -> Option<Vec<DocumentSymbol>> {
         let uri = &params.text_document.uri;
-        let Some(path) = self.path_for_uri(uri) else {
+        let Some(path) = self.unopened_file_tracker.path_for_uri(uri) else {
             return None;
         };
         if self
@@ -2399,7 +2309,10 @@ impl Server {
         transaction: &Transaction<'_>,
         params: DocumentDiagnosticParams,
     ) -> DocumentDiagnosticReport {
-        let Some(path) = self.path_for_uri(&params.text_document.uri) else {
+        let Some(path) = self
+            .unopened_file_tracker
+            .path_for_uri(&params.text_document.uri)
+        else {
             return DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
                 full_document_diagnostic_report: FullDocumentDiagnosticReport {
                     items: Vec::new(),
