@@ -60,6 +60,66 @@ fn test_inlay_hint_default_config() {
     interaction.shutdown();
 }
 
+// todo(kylei): we should honor the inlay hints analysis being disabled
+#[test]
+fn test_inlay_hint_default_and_pyrefly_analysis() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(Some(serde_json::json!([{
+            "pyrefly":{"analysis": {}},
+            "analysis": {
+                "inlayHints": {
+                    "callArgumentNames": "off",
+                    "functionReturnTypes": false,
+                    "pytestParameters": false,
+                    "variableTypes": false
+                },
+            }
+        }]))),
+        ..Default::default()
+    });
+
+    interaction.server.did_open("inlay_hint_test.py");
+    interaction
+        .server
+        .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0);
+
+    interaction.client.expect_response(Response {
+        id: interaction.server.current_request_id(),
+        result: Some(serde_json::json!([
+            {
+                "label":" -> tuple[Literal[1], Literal[2]]",
+                "position":{"character":21,"line":6},
+                "textEdits":[{
+                    "newText":" -> tuple[Literal[1], Literal[2]]",
+                    "range":{"end":{"character":21,"line":6},"start":{"character":21,"line":6}}
+                }]
+            },
+            {
+                "label":": tuple[Literal[1], Literal[2]]",
+                "position":{"character":6,"line":11},
+                "textEdits":[{
+                    "newText":": tuple[Literal[1], Literal[2]]",
+                    "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
+                }]
+            },
+            {
+                "label":" -> Literal[0]",
+                "position":{"character":15,"line":14},
+                "textEdits":[{
+                    "newText":" -> Literal[0]",
+                    "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
+                }]
+            }
+        ])),
+        error: None,
+    });
+
+    interaction.shutdown();
+}
+
 #[test]
 fn test_inlay_hint_disable_all() {
     let root = get_test_files_root();
