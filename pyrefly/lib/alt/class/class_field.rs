@@ -14,6 +14,8 @@ use dupe::Dupe;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
+use pyrefly_types::callable::FuncFlags;
+use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Params;
 use pyrefly_types::simplify::unions;
@@ -1667,7 +1669,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ty.subst(&gradual_fallbacks)
     }
 
-    fn as_instance_attribute(&self, field: &ClassField, instance: &Instance) -> ClassAttribute {
+    fn as_instance_attribute(
+        &self,
+        field_name: &Name,
+        field: &ClassField,
+        instance: &Instance,
+    ) -> ClassAttribute {
         match field.instantiate_for(instance).0 {
             // TODO(stroxler): Clean up this match by making `ClassFieldInner` an
             // enum; the match is messy
@@ -1686,7 +1693,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let is_class_var = annotation.is_some_and(|ann| ann.is_class_var());
                 match field.initialization() {
                     ClassFieldInitialization::ClassBody(_) => {
-                        self.expand_vars_mut(&mut ty); // bind_instance matches on the type, so resolve it if we can
+                        // bind_instance matches on the type, so resolve it if we can
+                        self.expand_vars_mut(&mut ty);
+                        // If the field is a dunder & the type is a callable, we replace it with a named function
+                        // so that it gets treated as a bound method
+                        let field_name_str = field_name.as_str();
+                        if field_name_str.starts_with("__")
+                            && field_name_str.ends_with("__")
+                            && let Type::Callable(box callable) = ty
+                        {
+                            let module = self.module();
+                            let func_id = FuncId {
+                                module: module.clone(),
+                                cls: None,
+                                name: field_name.clone(),
+                            };
+                            ty = Type::Function(Box::new(Function {
+                                signature: callable,
+                                metadata: FuncMetadata {
+                                    kind: FunctionKind::Def(Box::new(func_id)),
+                                    flags: FuncFlags::default(),
+                                },
+                            }))
+                        }
                         bind_instance_attribute(instance, ty, is_class_var, read_only_reason)
                     }
                     ClassFieldInitialization::Method
@@ -1767,7 +1796,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if let Some(converter_param) = converter_param {
             converter_param
         } else if let Some(x) = descriptor
-            && let Some(setter) = self.resolve_descriptor_setter(x, errors)
+            && let Some(setter) = self.resolve_descriptor_setter(name, x, errors)
         {
             ClassField::get_descriptor_setter_value(&setter)
         } else {
@@ -2082,12 +2111,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             // Substitute `Self` with derived class to support contravariant occurrences of `Self`
             let want_attribute = self.as_instance_attribute(
+                field_name,
                 &want_class_field,
                 &Instance::of_protocol(parent, self.instantiate(cls)),
             );
             if got_attribute.is_none() {
                 // Optimisation: Only compute the `got_attr` once, and only if we actually need it.
                 got_attribute = Some(self.as_instance_attribute(
+                    field_name,
                     class_field,
                     &Instance::of_class(&self.as_class_type_unchecked(cls)),
                 ));
@@ -2182,6 +2213,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // Get instance method types for fields that are methods, otherwise use the field type directly.
                     let ty = self
                         .as_instance_attribute(
+                            field,
                             &parent_field,
                             &Instance::of_protocol(parent_cls, self.instantiate(cls)),
                         )
@@ -2435,12 +2467,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn get_instance_attribute(&self, cls: &ClassType, name: &Name) -> Option<ClassAttribute> {
         self.get_class_member(cls.class_object(), name)
-            .map(|member| self.as_instance_attribute(&member.value, &Instance::of_class(cls)))
+            .map(|member| self.as_instance_attribute(name, &member.value, &Instance::of_class(cls)))
     }
 
     pub fn get_self_attribute(&self, cls: &ClassType, name: &Name) -> Option<ClassAttribute> {
         self.get_class_member(cls.class_object(), name)
-            .map(|member| self.as_instance_attribute(&member.value, &Instance::of_self_type(cls)))
+            .map(|member| {
+                self.as_instance_attribute(name, &member.value, &Instance::of_self_type(cls))
+            })
     }
 
     pub fn get_protocol_attribute(
@@ -2451,7 +2485,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<ClassAttribute> {
         self.get_class_member(cls.class_object(), name)
             .map(|member| {
-                self.as_instance_attribute(&member.value, &Instance::of_protocol(cls, self_type))
+                self.as_instance_attribute(
+                    name,
+                    &member.value,
+                    &Instance::of_protocol(cls, self_type),
+                )
             })
     }
 
@@ -2464,6 +2502,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.get_class_member(metaclass.class_object(), name)
             .map(|member| {
                 self.as_instance_attribute(
+                    name,
                     &member.value,
                     &Instance::of_metaclass(cls.clone(), metaclass),
                 )
@@ -2476,7 +2515,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_literal_string_attribute(&self, name: &Name) -> Option<ClassAttribute> {
         self.get_class_member(self.stdlib.str().class_object(), name)
             .map(|member| {
-                self.as_instance_attribute(&member.value, &Instance::literal_string(self.stdlib))
+                self.as_instance_attribute(
+                    name,
+                    &member.value,
+                    &Instance::literal_string(self.stdlib),
+                )
             })
     }
 
@@ -2500,6 +2543,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.get_class_member(upper_bound.class_object(), name)
             .map(|member| {
                 self.as_instance_attribute(
+                    name,
                     &member.value,
                     &Instance::of_type_var(quantified_with_specific_upper_bound, upper_bound),
                 )
@@ -2516,7 +2560,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         }
         self.get_class_member(td.class_object(), name)
-            .map(|member| self.as_instance_attribute(&member.value, &Instance::of_typed_dict(td)))
+            .map(|member| {
+                self.as_instance_attribute(name, &member.value, &Instance::of_typed_dict(td))
+            })
     }
 
     pub fn get_super_class_member(
@@ -2554,7 +2600,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Some(reason) = self.super_method_needs_impl_reason(&member) {
                         ClassAttribute::no_access(reason)
                     } else {
-                        self.as_instance_attribute(&member.value, &Instance::of_self_type(obj))
+                        self.as_instance_attribute(
+                            name,
+                            &member.value,
+                            &Instance::of_self_type(obj),
+                        )
                     }
                 }),
             SuperObj::Class(obj) => self
@@ -2828,7 +2878,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ClassAttribute::Descriptor(x, base) => {
                 match base {
                     DescriptorBase::Instance(class_type)
-                        if let Some(setter) = self.resolve_descriptor_setter(&x, errors) =>
+                        if let Some(setter) =
+                            self.resolve_descriptor_setter(attr_name, &x, errors) =>
                     {
                         let got = CallArg::arg(got);
                         self.call_descriptor_setter(
@@ -3038,6 +3089,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn resolve_get_class_attr(
         &self,
+        attr_name: &Name,
         class_attr: ClassAttribute,
         range: TextRange,
         errors: &ErrorCollector,
@@ -3051,7 +3103,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Ok(self.call_property_getter(getter, range, errors, context))
             }
             ClassAttribute::Descriptor(x, base) => {
-                if let Some(getter) = self.resolve_descriptor_getter(&x, errors) {
+                if let Some(getter) = self.resolve_descriptor_getter(attr_name, &x, errors) {
                     // Reading a descriptor with a getter resolves to a method call
                     //
                     // TODO(stroxler): Once we have more complex error traces, it would be good to pass
@@ -3065,13 +3117,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn resolve_descriptor_getter(&self, x: &Descriptor, errors: &ErrorCollector) -> Option<Type> {
+    fn resolve_descriptor_getter(
+        &self,
+        attr_name: &Name,
+        x: &Descriptor,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
         if x.getter
             && let Some(getter) = self.get_class_member(x.cls.class_object(), &dunder::GET)
         {
-            let attr = self.as_instance_attribute(&getter.value, &Instance::of_class(&x.cls));
+            let attr = self.as_instance_attribute(
+                &dunder::GET,
+                &getter.value,
+                &Instance::of_class(&x.cls),
+            );
             Some(
-                self.resolve_get_class_attr(attr, x.range, errors, None)
+                self.resolve_get_class_attr(attr_name, attr, x.range, errors, None)
                     .unwrap_or_else(|e| {
                         self.error(
                             errors,
@@ -3086,13 +3147,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn resolve_descriptor_setter(&self, x: &Descriptor, errors: &ErrorCollector) -> Option<Type> {
+    fn resolve_descriptor_setter(
+        &self,
+        attr_name: &Name,
+        x: &Descriptor,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
         if x.setter
             && let Some(setter) = self.get_class_member(x.cls.class_object(), &dunder::SET)
         {
-            let attr = self.as_instance_attribute(&setter.value, &Instance::of_class(&x.cls));
+            let attr = self.as_instance_attribute(
+                &dunder::SET,
+                &setter.value,
+                &Instance::of_class(&x.cls),
+            );
             Some(
-                self.resolve_get_class_attr(attr, x.range, errors, None)
+                self.resolve_get_class_attr(attr_name, attr, x.range, errors, None)
                     .unwrap_or_else(|e| {
                         self.error(
                             errors,

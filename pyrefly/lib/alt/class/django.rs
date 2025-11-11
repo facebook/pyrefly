@@ -260,6 +260,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let base_value_type = base_value_attr
             .and_then(|attr| {
                 self.resolve_get_class_attr(
+                    &VALUE_PROP,
                     attr,
                     TextRange::default(),
                     &self.error_swallower(),

@@ -525,7 +525,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut error_messages = Vec::new();
         let (found, not_found, error) = lookup_result.decompose();
         for (attr, _) in found {
-            match self.resolve_get_access(attr, range, errors, context) {
+            match self.resolve_get_access(attr_name, attr, range, errors, context) {
                 Ok(ty) => types.push(ty),
                 Err(err) => error_messages.push(err.to_error_msg(attr_name)),
             }
@@ -600,7 +600,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         for (attr, _) in lookup_result.found {
             attr_tys.push(
-                self.resolve_get_access(attr, range, errors, context)
+                self.resolve_get_access(attr_name, attr, range, errors, context)
                     .unwrap_or_else(|e| {
                         self.error(
                             errors,
@@ -675,7 +675,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .decompose();
         for (setattr_attr, _) in setattr_found {
             let result = self
-                .resolve_get_access(setattr_attr, range, errors, context)
+                .resolve_get_access(attr_name, setattr_attr, range, errors, context)
                 .map(|setattr_ty| {
                     self.call_setattr(
                         setattr_ty,
@@ -722,7 +722,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .decompose();
         for (delattr_attr, _) in delattr_found {
             let result = self
-                .resolve_get_access(delattr_attr, range, errors, context)
+                .resolve_get_access(attr_name, delattr_attr, range, errors, context)
                 .map(|delattr_ty| {
                     self.call_getattr_or_delattr(
                         delattr_ty,
@@ -1053,6 +1053,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn resolve_get_access(
         &self,
+        attr_name: &Name,
         attr: Attribute,
         range: TextRange,
         errors: &ErrorCollector,
@@ -1060,7 +1061,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Result<Type, NoAccessReason> {
         match attr {
             Attribute::ClassAttribute(class_attr) => {
-                self.resolve_get_class_attr(class_attr, range, errors, context)
+                self.resolve_get_class_attr(attr_name, class_attr, range, errors, context)
             }
             Attribute::Simple(ty) => Ok(ty),
             Attribute::ModuleFallback(_, name, ty) => {
@@ -1073,7 +1074,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Ok(ty)
             }
             Attribute::GetAttr(_, getattr_attr, name) => self
-                .resolve_get_access(*getattr_attr, range, errors, context)
+                .resolve_get_access(attr_name, *getattr_attr, range, errors, context)
                 .map(|getattr_ty| {
                     self.call_getattr_or_delattr(getattr_ty, name, range, errors, context)
                 }),
@@ -1840,7 +1841,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let (found, not_found, internal_errors) = self.lookup_attr(base, attr_name).decompose();
         let mut results = Vec::new();
         for (attr, _) in found {
-            let found_ty = match self.resolve_get_access(attr, range, errors, None) {
+            let found_ty = match self.resolve_get_access(attr_name, attr, range, errors, None) {
                 Err(..) => fall_back_to_object(),
                 Ok(ty) => ty,
             };
@@ -2110,6 +2111,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 _ => {}
                             }
                             self.resolve_get_access(
+                                &info.name,
                                 attr,
                                 // Important we do not use the resolved TextRange, as it might be in a different module.
                                 // Whereas the empty TextRange is valid for all modules.
