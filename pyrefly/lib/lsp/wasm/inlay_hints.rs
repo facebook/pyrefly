@@ -5,13 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::Reverse;
 use std::iter::once;
 use std::sync::Arc;
 
+use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::TextRangeWithModule;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::literal::Lit;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -21,10 +24,13 @@ use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprList;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::ParameterWithDefault;
+use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtImport;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use starlark_map::small_set::SmallSet;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::ClassFieldDefinition;
@@ -33,6 +39,7 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::Bindings;
+use crate::state::ide::import_regular_import_edit;
 use crate::state::lsp::AllOffPartial;
 use crate::state::lsp::AnnotationKind;
 use crate::state::lsp::DefinitionMetadata;
@@ -41,6 +48,7 @@ use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::callable::Params;
+use crate::types::display::TypeDisplayContext;
 use crate::types::types::Type;
 
 pub struct InlayHintData {
@@ -49,6 +57,148 @@ pub struct InlayHintData {
     pub label_parts: Vec<(String, Option<TextRangeWithModule>)>,
     /// Whether double-clicking should insert the type annotation.
     pub insertable: bool,
+    /// Text to insert for the hint, plus any imports needed by that inserted text.
+    pub text_edit: Option<String>,
+    pub import_edits: Vec<(TextSize, String)>,
+}
+
+#[derive(Default)]
+struct ImportTracker {
+    canonical_modules: SmallSet<ModuleName>,
+    alias_modules: Vec<(ModuleName, String)>,
+}
+
+impl ImportTracker {
+    fn from_ast(ast: &ModModule) -> Self {
+        let mut tracker = Self::default();
+        for stmt in &ast.body {
+            if let Stmt::Import(stmt_import) = stmt {
+                tracker.record_import(stmt_import);
+            }
+        }
+        tracker
+            .alias_modules
+            .sort_by_key(|(module, _)| Reverse(module.as_str().len()));
+        tracker
+    }
+
+    fn record_import(&mut self, stmt_import: &StmtImport) {
+        for alias in &stmt_import.names {
+            let module_name = ModuleName::from_str(alias.name.as_str());
+            if let Some(asname) = &alias.asname {
+                self.alias_modules
+                    .push((module_name, asname.id.to_string()));
+            } else {
+                self.canonical_modules.insert(module_name);
+            }
+        }
+    }
+
+    fn apply_aliases(&self, text: &str) -> String {
+        if self.alias_modules.is_empty() {
+            return text.to_owned();
+        }
+        let bytes = text.as_bytes();
+        let mut result = String::with_capacity(text.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            let mut replaced = false;
+            for (module, alias) in &self.alias_modules {
+                let module_str = module.as_str();
+                if module_str.is_empty() {
+                    continue;
+                }
+                let module_bytes = module_str.as_bytes();
+                if i + module_bytes.len() <= bytes.len()
+                    && &bytes[i..i + module_bytes.len()] == module_bytes
+                    && Self::is_boundary(bytes, i, i + module_bytes.len())
+                {
+                    result.push_str(alias);
+                    i += module_bytes.len();
+                    replaced = true;
+                    break;
+                }
+            }
+            if !replaced {
+                result.push(bytes[i] as char);
+                i += 1;
+            }
+        }
+        result
+    }
+
+    fn missing_modules(
+        &self,
+        modules: &SmallSet<ModuleName>,
+        current_module: ModuleName,
+    ) -> SmallSet<ModuleName> {
+        let mut missing = SmallSet::new();
+        for module in modules.iter() {
+            let module = module.dupe();
+            if module.as_str().is_empty()
+                || module == current_module
+                || module == ModuleName::builtins()
+                || module == ModuleName::extra_builtins()
+            {
+                continue;
+            }
+            if self.module_is_imported(module) {
+                continue;
+            }
+            missing.insert(module);
+        }
+        missing
+    }
+
+    fn module_is_imported(&self, module: ModuleName) -> bool {
+        self.alias_for(module).is_some() || self.has_canonical(module)
+    }
+
+    fn alias_for(&self, module: ModuleName) -> Option<String> {
+        let target = module.as_str();
+        for (alias_module, alias_name) in &self.alias_modules {
+            let alias_module_str = alias_module.as_str();
+            if alias_module_str.is_empty() {
+                continue;
+            }
+            if target == alias_module_str {
+                return Some(alias_name.clone());
+            }
+            if target.len() > alias_module_str.len()
+                && target.starts_with(alias_module_str)
+                && target.as_bytes()[alias_module_str.len()] == b'.'
+            {
+                let remainder = &target[alias_module_str.len()..];
+                return Some(format!("{alias_name}{remainder}"));
+            }
+        }
+        None
+    }
+
+    fn has_canonical(&self, module: ModuleName) -> bool {
+        let target = module.as_str();
+        self.canonical_modules.iter().any(|imported| {
+            let imported_str = imported.as_str();
+            imported_str == target
+                || (target.len() > imported_str.len()
+                    && target.starts_with(imported_str)
+                    && target.as_bytes()[imported_str.len()] == b'.')
+        })
+    }
+
+    fn is_boundary(bytes: &[u8], start: usize, end: usize) -> bool {
+        (start == 0 || !Self::is_ident(bytes[start - 1]))
+            && (end == bytes.len() || !Self::is_ident(bytes[end]))
+    }
+
+    fn is_ident(byte: u8) -> bool {
+        matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
+    }
+}
+
+struct RenderedTypeHint {
+    text: String,
+    import_edits: Vec<(TextSize, String)>,
 }
 
 #[derive(Debug)]
@@ -92,6 +242,38 @@ pub fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<
 }
 
 impl<'a> Transaction<'a> {
+    fn render_type_hint(
+        &self,
+        ty: &Type,
+        handle: &Handle,
+        tracker: Option<&ImportTracker>,
+        ast: Option<&ModModule>,
+    ) -> RenderedTypeHint {
+        let (mut text, modules) = Self::format_type_for_annotation(ty);
+        let mut import_edits = Vec::new();
+        if let (Some(tracker), Some(ast)) = (tracker, ast) {
+            text = tracker.apply_aliases(&text);
+            for module in tracker
+                .missing_modules(&modules, handle.module())
+                .into_iter()
+            {
+                if let Some(handle_to_import) = self.import_handle(handle, module, None).finding() {
+                    let (position, insert_text, _) =
+                        import_regular_import_edit(ast, handle_to_import, None);
+                    import_edits.push((position, insert_text));
+                }
+            }
+        }
+        RenderedTypeHint { text, import_edits }
+    }
+
+    fn format_type_for_annotation(ty: &Type) -> (String, SmallSet<ModuleName>) {
+        let mut ctx = TypeDisplayContext::new(&[ty]);
+        ctx.always_display_module_name_except_builtins();
+        let text = ctx.display(ty).to_string();
+        (text, ctx.referenced_modules())
+    }
+
     pub fn inlay_hints(
         &self,
         handle: &Handle,
@@ -139,6 +321,9 @@ impl<'a> Transaction<'a> {
         };
         let bindings = self.get_bindings(handle)?;
         let stdlib = self.get_stdlib(handle);
+        let ast_arc = self.get_ast(handle);
+        let ast_ref = ast_arc.as_deref();
+        let import_tracker = ast_ref.map(ImportTracker::from_ast);
         let make_type_hint =
             |prefix: &str, position: TextSize, ty: &Type, insertable: bool| -> InlayHintData {
                 let type_parts = ty.get_types_with_locations(Some(&stdlib));
@@ -149,10 +334,18 @@ impl<'a> Transaction<'a> {
                             .map(|(text, loc)| (text.clone(), loc.clone())),
                     )
                     .collect();
+                let rendered = insertable
+                    .then(|| self.render_type_hint(ty, handle, import_tracker.as_ref(), ast_ref));
+                let text_edit = rendered
+                    .as_ref()
+                    .map(|rendered| format!("{prefix}{}", rendered.text));
+                let import_edits = rendered.map_or_else(Vec::new, |rendered| rendered.import_edits);
                 InlayHintData {
                     position,
                     label_parts,
                     insertable,
+                    text_edit,
+                    import_edits,
                 }
             };
         let mut res = Vec::new();
@@ -291,8 +484,10 @@ impl<'a> Transaction<'a> {
                     .into_iter()
                     .map(|(pos, text)| InlayHintData {
                         position: pos,
-                        label_parts: vec![(text, None)],
+                        label_parts: vec![(text.clone(), None)],
                         insertable: true,
+                        text_edit: Some(text),
+                        import_edits: Vec::new(),
                     }),
             );
         }
