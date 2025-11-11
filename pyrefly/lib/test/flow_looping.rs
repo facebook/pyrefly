@@ -9,15 +9,15 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
-    bug = "We should not be dropping prior type information when a loop recursive Var passes through a generic call",
+    bug = "The results include over-eager pinning of vars in generic solving, see https://github.com/facebook/pyrefly/issues/105",
     test_loop_with_generic_pin,
     r#"
 def condition() -> bool: ...
 def f[T](x: T, y: list[T]) -> T: ...
 x = 5
 y: list[str] = []
-while condition():  # E:  `Literal[5] | str` is not assignable to `str`
-    x = f(x, y)
+while condition():
+    x = f(x, y)  # E: Argument `list[str]` is not assignable to parameter `y` with type `list[int]` in function `f`
 "#,
 );
 
@@ -587,4 +587,61 @@ while True:
 else:
     exit(1)
 "#,
+);
+
+// Test for https://github.com/facebook/pyrefly/issues/726
+testcase!(
+    test_reassign_literal_str_to_str_in_loop,
+    r#"
+import os
+
+path = '/'
+for x in ['home', 'other']:
+    path = os.path.join(path, x)
+    "#,
+);
+
+// Test for https://github.com/facebook/pyrefly/issues/747
+testcase!(
+    test_benign_reassign_and_narrow_in_loop,
+    r#"
+from typing import assert_type
+
+def test(x: int | None, i: int):
+    for _ in []:
+        x = x or i
+        assert_type(x, int)
+"#,
+);
+
+testcase!(
+    test_expand_loop_recursive_and_match_generic,
+    r#"
+from typing import assert_type
+def f[T](x: list[T]) -> T: ...
+def condition() -> bool: ...
+
+good = [1]
+while condition():
+    good = [f(good)]
+assert_type(good, list[int])
+
+bad = [1]
+while condition():  # E: `list[int] | list[str]` is not assignable to `list[int]` (caused by inconsistent types when breaking cycles)
+    if condition():
+        bad = [f(bad)]  # E:  Argument `list[int] | list[str]` is not assignable to parameter `x` with type `list[int]` in function `f`
+    else:
+        bad = [""]
+"#,
+);
+
+// Test for https://github.com/facebook/pyrefly/issues/1505
+testcase!(
+    test_dict_get_self_assignment,
+    r#"
+d: dict[str, str] = {}
+a: str | None = None
+for i in range(10):
+    a = d.get('x', a)
+    "#,
 );

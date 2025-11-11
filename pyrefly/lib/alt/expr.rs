@@ -70,6 +70,7 @@ use crate::types::facet::FacetKind;
 use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::param_spec::ParamSpec;
+use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::special_form::SpecialForm;
 use crate::types::tuple::Tuple;
@@ -109,17 +110,18 @@ impl<'a> TypeOrExpr<'a> {
         }
     }
 
-    pub fn materialize<Ans: LookupAnswer>(
+    pub fn transform<Ans: LookupAnswer>(
         &self,
         solver: &AnswersSolver<Ans>,
         errors: &ErrorCollector,
         owner: &'a Owner<Type>,
+        transformation: impl Fn(&Type) -> Type,
     ) -> (Self, bool) {
         let ty = self.infer(solver, errors);
-        let materialized = ty.materialize();
-        let changed = ty != materialized;
+        let transformed = transformation(&ty);
+        let changed = ty != transformed;
         (
-            TypeOrExpr::Type(owner.push(materialized), self.range()),
+            TypeOrExpr::Type(owner.push(transformed), self.range()),
             changed,
         )
     }
@@ -598,12 +600,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect::<Vec<_>>();
                 self.specialize(&self.stdlib.slice_class_object(), elts, x.range(), errors)
             }
-            Expr::IpyEscapeCommand(x) => self.error(
-                errors,
-                x.range,
-                ErrorInfo::Kind(ErrorKind::Unsupported),
-                "IPython escapes are not supported".to_owned(),
-            ),
+            Expr::IpyEscapeCommand(x) => {
+                if self.module().is_notebook() {
+                    Type::any_implicit()
+                } else {
+                    self.error(
+                        errors,
+                        x.range,
+                        ErrorInfo::Kind(ErrorKind::Unsupported),
+                        "IPython escapes are not supported".to_owned(),
+                    )
+                }
+            }
         }
     }
 
@@ -757,7 +765,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .collect();
                     Type::Tuple(Tuple::unpacked(
                         prefix,
-                        Type::Tuple(Tuple::Unbounded(Box::new(self.unions(middle_types)))),
+                        Type::Tuple(Tuple::unbounded(self.unions(middle_types))),
                         suffix,
                     ))
                 }
@@ -1062,9 +1070,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for (i, value) in values.iter().enumerate() {
             // If there isn't a hint for the overall expression, use the preceding branches as a "soft" hint
             // for the next one. Most useful for expressions like `optional_list or []`.
-            let hint = hint.or_else(|| Some(HintRef::soft(&t_acc)));
+            let hint = hint.or_else(|| {
+                if t_acc.is_never() {
+                    None
+                } else {
+                    Some(HintRef::soft(&t_acc))
+                }
+            });
             let mut t = self.expr_infer_with_hint(value, hint, errors);
             self.expand_vars_mut(&mut t);
+            // If this is not the last entry, we have to make a type-dependent decision and also narrow the
+            // result; both operations require us to force `Var` first or they become unpredictable.
+            if i < last_index {
+                t = self.force_for_narrowing(&t);
+            }
             if i < last_index && should_shortcircuit(&t, value.range()) {
                 t_acc = self.union(t_acc, t);
                 break;
@@ -1823,6 +1842,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn is_enum_class_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassType(cls) | Type::SelfType(cls) => {
+                self.has_superclass(cls.class_object(), self.stdlib.enum_class().class_object())
+            }
+            Type::Union(variants) => variants
+                .iter()
+                .all(|variant| self.is_enum_class_type(variant)),
+            _ => false,
+        }
+    }
+
+    fn is_restricted_to_enum_class_def_type(&self, quantified: &Quantified) -> bool {
+        match quantified.restriction() {
+            Restriction::Unrestricted => false,
+            Restriction::Bound(bound) => self.is_enum_class_type(bound),
+            Restriction::Constraints(constraints) => {
+                !constraints.is_empty()
+                    && constraints
+                        .iter()
+                        .all(|constraint| self.is_enum_class_type(constraint))
+            }
+        }
+    }
+
     pub fn subscript_infer_for_type(
         &self,
         base: &Type,
@@ -1952,6 +1996,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             range,
                             errors,
                         ))
+                    }
+                }
+                Type::Type(box Type::Quantified(quantified)) if quantified.is_type_var() => {
+                    let quantified = *quantified;
+                    let base_display_ty =
+                        Type::Type(Box::new(Type::Quantified(Box::new(quantified.clone()))));
+                    if self.is_restricted_to_enum_class_def_type(&quantified) {
+                        if self.is_subset_eq(
+                            &self.expr(slice, None, errors),
+                            &self.stdlib.str().clone().to_type(),
+                        ) {
+                            quantified.to_type()
+                        } else {
+                            self.error(
+                                errors,
+                                slice.range(),
+                                ErrorInfo::Kind(ErrorKind::BadIndex),
+                                format!(
+                                    "Enum type `{}` can only be indexed by strings",
+                                    self.for_display(base_display_ty)
+                                ),
+                            )
+                        }
+                    } else {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
+                            format!(
+                                "`{}` is not subscriptable",
+                                self.for_display(base_display_ty)
+                            ),
+                        )
                     }
                 }
                 Type::Type(box Type::SpecialForm(special)) => {

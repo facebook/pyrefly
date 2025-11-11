@@ -48,6 +48,7 @@ use crate::report::pysa::ast_visitor::visit_module_ast;
 use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::class::get_class_field;
 use crate::report::pysa::class::get_context_from_class;
+use crate::report::pysa::collect::CollectNoDuplicateKeys;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionBaseDefinition;
 use crate::report::pysa::function::FunctionId;
@@ -1629,7 +1630,8 @@ impl<'a> CallGraphVisitor<'a> {
                     }
                 }
             })
-            .collect()
+            .collect_no_duplicate_keys()
+            .expect("Found duplicate higher order parameters")
     }
 
     fn resolve_call(

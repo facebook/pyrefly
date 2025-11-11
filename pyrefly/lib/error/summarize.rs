@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::path::PathBuf;
-
 use dupe::Dupe;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display;
@@ -36,27 +34,6 @@ where
     errors
 }
 
-/// Groups the errors by the path_index'th component of the path by error_kind,
-/// and then collects and sorts the errors as in collect_and_sort.
-pub fn get_top_error_dirs_by_error_kind(
-    path_errors: &SmallMap<ModulePath, ErrorCounts>,
-    path_index: usize,
-) -> Vec<(PathBuf, Vec<(ErrorKind, usize)>)> {
-    let mut dirs: SmallMap<_, ErrorCounts> = SmallMap::new();
-    for (path, errors) in path_errors {
-        let dir = PathBuf::from(path.to_string())
-            .components()
-            .take(path_index + 1)
-            .collect::<PathBuf>();
-
-        let error_counts = dirs.entry(dir).or_default();
-        for (kind, count) in errors {
-            *error_counts.entry(*kind).or_default() += count;
-        }
-    }
-    collect_and_sort(dirs)
-}
-
 fn get_errors_per_file(errors: &[Error]) -> SmallMap<ModulePath, SmallMap<ErrorKind, usize>> {
     let mut map: SmallMap<ModulePath, SmallMap<ErrorKind, usize>> = SmallMap::new();
     for err in errors {
@@ -75,27 +52,43 @@ fn get_errors_per_file(errors: &[Error]) -> SmallMap<ModulePath, SmallMap<ErrorK
 /// path_index = 0 groups by /alpha, path_index = 1 groups by /alpha/beta,
 /// and path_index = 2 groups by alpha/beta/gamma.
 /// If the path_index is larger than the number of components in the path, then the entire path is used.
-pub fn print_error_summary(errors: &[Error], path_index: usize) {
+/// If filter_error_kind is provided, only shows files/directories that contain that specific error kind.
+pub fn print_error_summary(errors: &[Error], filter_error_kind: Option<ErrorKind>) {
     // TODO: Sort errors by count and then name. More consistent and human-readable.
     // TODO: Consider output formatting.
-    let path_errors = get_errors_per_file(errors);
-    eprintln!("=== Error Summary ===");
-    if path_errors.is_empty() {
-        eprintln!("No errors found!");
-        return;
-    }
-    eprintln!("Top 30 Directories by Error Count:");
-    let top_dirs = get_top_error_dirs_by_error_kind(&path_errors, path_index);
-    for (dir, error_kind_counts) in top_dirs.into_iter().take(30) {
-        let total_error_count = error_kind_counts.iter().fold(0, |count, (_, c)| count + *c);
+    let mut path_errors = get_errors_per_file(errors);
+
+    // Filter by error kind if specified
+    if let Some(filter_kind) = filter_error_kind {
+        path_errors = path_errors
+            .into_iter()
+            .filter_map(|(path, error_counts)| {
+                let filtered_counts: SmallMap<ErrorKind, usize> = error_counts
+                    .into_iter()
+                    .filter(|(kind, _)| *kind == filter_kind)
+                    .collect();
+                if filtered_counts.is_empty() {
+                    None
+                } else {
+                    Some((path, filtered_counts))
+                }
+            })
+            .collect();
         eprintln!(
-            "{}: {}",
-            dir.display(),
-            display::count(total_error_count, "error")
+            "=== Error Summary (filtered by: {}) ===",
+            filter_kind.to_name()
         );
-        for (kind, count) in error_kind_counts {
-            eprintln!("  {}: {}", kind.to_name(), display::number_thousands(count));
+    } else {
+        eprintln!("=== Error Summary ===");
+    }
+
+    if path_errors.is_empty() {
+        if filter_error_kind.is_some() {
+            eprintln!("No errors of this type found!");
+        } else {
+            eprintln!("No errors found!");
         }
+        return;
     }
 
     eprintln!("\nTop 30 Files by Error Count:");
@@ -125,86 +118,5 @@ pub fn print_error_summary(errors: &[Error], path_index: usize) {
     };
     for (kind, count) in error_counts {
         eprintln!("{}: {}", kind.to_name(), display::count(count, "instance"));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn mpfs(s: &str) -> ModulePath {
-        ModulePath::filesystem(PathBuf::from(s))
-    }
-
-    #[test]
-    fn test_get_top_error_dirs_by_error_kind() {
-        fn pb(s: &str) -> PathBuf {
-            PathBuf::from(s)
-        }
-        let errors = SmallMap::from_iter(vec![
-            (
-                mpfs("base/proj/sub/a.py"),
-                SmallMap::from_iter([(ErrorKind::ReadOnly, 2)]),
-            ),
-            (
-                mpfs("base/proj/sub/b.py"),
-                SmallMap::from_iter([(ErrorKind::NotAsync, 3)]),
-            ),
-            (
-                mpfs("base/proj/dub/z.py"),
-                SmallMap::from_iter([(ErrorKind::ReadOnly, 4)]),
-            ),
-            (
-                mpfs("base/short.py"),
-                SmallMap::from_iter([(ErrorKind::AnnotationMismatch, 10)]),
-            ),
-        ]);
-
-        let want = vec![(
-            pb("base"),
-            vec![
-                (ErrorKind::AnnotationMismatch, 10),
-                (ErrorKind::ReadOnly, 6),
-                (ErrorKind::NotAsync, 3),
-            ],
-        )];
-        assert_eq!(want, get_top_error_dirs_by_error_kind(&errors, 0));
-
-        let want = vec![
-            (
-                pb("base/short.py"),
-                vec![(ErrorKind::AnnotationMismatch, 10)],
-            ),
-            (
-                pb("base/proj"),
-                vec![(ErrorKind::ReadOnly, 6), (ErrorKind::NotAsync, 3)],
-            ),
-        ];
-        assert_eq!(want, get_top_error_dirs_by_error_kind(&errors, 1));
-
-        let want = vec![
-            (
-                pb("base/short.py"),
-                vec![(ErrorKind::AnnotationMismatch, 10)],
-            ),
-            (
-                pb("base/proj/sub"),
-                vec![(ErrorKind::NotAsync, 3), (ErrorKind::ReadOnly, 2)],
-            ),
-            (pb("base/proj/dub"), vec![(ErrorKind::ReadOnly, 4)]),
-        ];
-        assert_eq!(want, get_top_error_dirs_by_error_kind(&errors, 2));
-
-        let want = vec![
-            (
-                pb("base/short.py"),
-                vec![(ErrorKind::AnnotationMismatch, 10)],
-            ),
-            (pb("base/proj/dub/z.py"), vec![(ErrorKind::ReadOnly, 4)]),
-            (pb("base/proj/sub/b.py"), vec![(ErrorKind::NotAsync, 3)]),
-            (pb("base/proj/sub/a.py"), vec![(ErrorKind::ReadOnly, 2)]),
-        ];
-        assert_eq!(want, get_top_error_dirs_by_error_kind(&errors, 3));
-        assert_eq!(want, get_top_error_dirs_by_error_kind(&errors, 30000));
     }
 }

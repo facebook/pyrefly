@@ -26,6 +26,8 @@ use crate::report::pysa::call_graph::Target;
 use crate::report::pysa::call_graph::Unresolved;
 use crate::report::pysa::call_graph::UnresolvedReason;
 use crate::report::pysa::call_graph::export_call_graphs;
+use crate::report::pysa::class::ClassId;
+use crate::report::pysa::collect::CollectNoDuplicateKeys;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionBaseDefinition;
 use crate::report::pysa::function::FunctionId;
@@ -48,6 +50,8 @@ struct FunctionRefForTest {
     defining_class: Option<String>,
     identifier: String,
     is_decorated_target: bool,
+    is_property_setter: bool,
+    is_class_toplevel: Option<ClassId>,
 }
 
 impl FunctionTrait for FunctionRefForTest {}
@@ -91,23 +95,36 @@ impl FunctionRefForTest {
             }
             function_id => (function_id, false),
         };
+        let function_definition =
+            function_base_definitions.get(function_ref.module_id, &function_id);
+        let defining_class = function_definition.and_then(|definition| {
+            definition
+                .defining_class
+                .as_ref()
+                .map(|class| class.class.name().to_string())
+        });
+        let is_property_setter =
+            function_definition.is_some_and(|definition| definition.is_property_setter);
+        let is_class_toplevel = match function_id {
+            FunctionId::ClassTopLevel { class_id } => Some(class_id),
+            _ => None,
+        };
         Self {
             module_name: function_ref.module_name.to_string(),
             identifier: function_ref.function_name.to_string(),
-            defining_class: function_base_definitions
-                .get(function_ref.module_id, &function_id)
-                .and_then(|definition| {
-                    definition
-                        .defining_class
-                        .as_ref()
-                        .map(|class| class.class.name().to_string())
-                }),
+            defining_class,
             is_decorated_target,
+            is_property_setter,
+            is_class_toplevel,
         }
     }
 
     fn from_string(string: &str) -> Self {
         let (string, is_decorated_target) = match string.strip_suffix("@decorated") {
+            Some(string) => (string, true),
+            None => (string, false),
+        };
+        let (string, is_property_setter) = match string.strip_suffix("@setter") {
             Some(string) => (string, true),
             None => (string, false),
         };
@@ -117,6 +134,8 @@ impl FunctionRefForTest {
             identifier,
             defining_class,
             is_decorated_target,
+            is_property_setter,
+            is_class_toplevel: None,
         }
     }
 }
@@ -185,11 +204,13 @@ fn call_graph_for_test_from_actual(
                                 expression_callees.map_function(&create_function_ref_for_test),
                             )
                         })
-                        .collect::<HashMap<_, _>>(),
+                        .collect_no_duplicate_keys()
+                        .unwrap(),
                 );
                 (caller, callees_for_test)
             })
-            .collect::<HashMap<_, _>>(),
+            .collect_no_duplicate_keys()
+            .unwrap(),
     )
 }
 
@@ -209,11 +230,13 @@ fn call_graph_for_test_from_expected(
                                 expression_callees_for_test,
                             )
                         })
-                        .collect::<HashMap<_, _>>(),
+                        .collect_no_duplicate_keys()
+                        .unwrap(),
                 );
                 (FunctionRefForTest::from_string(caller), callees_for_test)
             })
-            .collect::<HashMap<_, _>>(),
+            .collect_no_duplicate_keys()
+            .unwrap(),
     )
 }
 

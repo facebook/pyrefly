@@ -975,7 +975,7 @@ impl IsAsync {
 #[derive(Clone, Debug)]
 pub enum FunctionParameter {
     Annotated(Idx<KeyAnnotation>),
-    Unannotated(Var, Idx<KeyUndecoratedFunction>),
+    Unannotated(Var, Idx<KeyUndecoratedFunction>, AnnotationTarget),
 }
 
 /// Is the body of this function stubbed out (contains nothing but `...`)?
@@ -1046,6 +1046,7 @@ pub struct ReturnExplicit {
     pub expr: Option<Box<Expr>>,
     pub is_generator: bool,
     pub is_async: bool,
+    pub range: TextRange,
 }
 
 #[derive(Clone, Debug)]
@@ -1543,7 +1544,7 @@ impl DisplayWith<Bindings> for Binding {
                 "FunctionParameter({})",
                 match x {
                     FunctionParameter::Annotated(k) => ctx.display(*k).to_string(),
-                    FunctionParameter::Unannotated(x, k) => format!("{x}, {}", ctx.display(*k)),
+                    FunctionParameter::Unannotated(x, k, _) => format!("{x}, {}", ctx.display(*k)),
                 }
             ),
             Self::SuperInstance(SuperStyle::ExplicitArgs(cls, obj), _range) => {
@@ -1725,9 +1726,7 @@ impl AnnotationWithTarget {
                 } else if matches!(annotation_ty, Type::Args(_)) {
                     Some(annotation_ty.clone())
                 } else {
-                    Some(Type::Tuple(Tuple::Unbounded(Box::new(
-                        annotation_ty.clone(),
-                    ))))
+                    Some(Type::Tuple(Tuple::unbounded(annotation_ty.clone())))
                 }
             }
             AnnotationTarget::KwargsParam(_) => {

@@ -378,7 +378,7 @@ fn export_function_parameters(params: &Params, context: &ModuleContext) -> Funct
                 .items()
                 .iter()
                 .map(|param| export_function_parameter(param, context))
-                .collect(),
+                .collect::<Vec<_>>(),
         ),
         Params::Ellipsis | Params::Materialization => FunctionParameters::Ellipsis,
         Params::ParamSpec(_, _) => FunctionParameters::ParamSpec,
@@ -463,7 +463,7 @@ fn export_overload_signatures(
             }) => body,
         })
         .map(|function| export_function_signature(&function.signature, context))
-        .collect()
+        .collect::<Vec<_>>()
 }
 
 fn export_signatures_from_type(ty: &Type, context: &ModuleContext) -> Vec<FunctionSignature> {
@@ -485,7 +485,7 @@ fn export_signatures_from_type(ty: &Type, context: &ModuleContext) -> Vec<Functi
         Type::Union(union) => union
             .iter()
             .flat_map(|ty| export_signatures_from_type(ty, context))
-            .collect(),
+            .collect::<Vec<_>>(),
         _ => vec![],
     }
 }
@@ -577,7 +577,7 @@ impl FunctionNode {
                                     .params
                                     .iter()
                                     .map(|param| export_function_parameter(param, context))
-                                    .collect(),
+                                    .collect::<Vec<_>>(),
                             ),
                             return_annotation: PysaType::from_type(
                                 &undecorated_return_type,

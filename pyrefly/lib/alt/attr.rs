@@ -826,13 +826,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Attribute::ClassAttribute(class_attr) => {
                     // If we are writing to an instance, we may need access to
                     // the class to special-case dataclass converters.
-                    let instance_class = match found_on {
+                    let instance_class = match &found_on {
                         AttributeBase1::ClassInstance(cls) => Some(cls),
+                        _ => None,
+                    };
+                    let class_base = match &found_on {
+                        AttributeBase1::ClassObject(cls_base) => Some(cls_base),
                         _ => None,
                     };
                     self.check_class_attr_set_and_infer_narrow(
                         class_attr,
                         instance_class,
+                        class_base,
                         attr_name,
                         got,
                         range,

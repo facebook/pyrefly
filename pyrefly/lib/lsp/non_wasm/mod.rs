@@ -10,6 +10,8 @@ pub mod lsp;
 pub mod module_helpers;
 pub mod queue;
 pub mod server;
+pub mod stdlib;
 pub mod transaction_manager;
 pub mod unopened_file_tracker;
+pub mod will_rename_files;
 pub mod workspace;

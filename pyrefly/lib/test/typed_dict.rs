@@ -1904,3 +1904,16 @@ t1: ClosedTarget = {**open}  # E: open TypedDict with unknown extra items
 t2: ExtraItemsTarget = {**open}  # E: open TypedDict with unknown extra items
     "#,
 );
+
+testcase!(
+    test_union_as_key,
+    r#"
+from typing import TypedDict, Literal
+class Foo(TypedDict):
+    bar: int
+    baz: int
+def f(foo: Foo, k: Literal["bar", "baz"]):
+    print(foo[k])
+    foo[k] = 2
+    "#,
+);

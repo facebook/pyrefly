@@ -26,6 +26,7 @@ use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
 use crate::state::errors::Errors;
+use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::subscriber::TestSubscriber;
@@ -121,9 +122,10 @@ impl Incremental {
                 .0
                 .lock()
                 .insert(ModuleName::from_str(&file), contents.dupe());
-            transaction
-                .as_mut()
-                .set_memory(vec![(PathBuf::from(file), Some(contents))]);
+            transaction.as_mut().set_memory(vec![(
+                PathBuf::from(file),
+                Some(Arc::new(FileContents::Source(contents))),
+            )]);
         }
 
         let handles = want.map(|x| self.handle(x));

@@ -8,6 +8,7 @@
 use pyrefly_python::ast::Ast;
 use pyrefly_python::sys_info::PythonVersion;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::PySourceType;
 use ruff_text_size::TextRange;
 use vec1::vec1;
 
@@ -15,9 +16,14 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 
-pub fn module_parse(contents: &str, version: PythonVersion, errors: &ErrorCollector) -> ModModule {
+pub fn module_parse(
+    contents: &str,
+    version: PythonVersion,
+    source_type: PySourceType,
+    errors: &ErrorCollector,
+) -> ModModule {
     let (module, parse_errors, unsupported_syntax_errors) =
-        Ast::parse_with_version(contents, version);
+        Ast::parse_with_version(contents, version, source_type);
     for err in parse_errors {
         errors.add(
             err.location,

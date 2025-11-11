@@ -550,7 +550,10 @@ pub fn find_import_filtered(
     } else if !config.disable_search_path_heuristics
         && let Some(path) = find_module(
             module,
-            config.fallback_search_path.iter(),
+            config
+                .fallback_search_path
+                .for_directory(origin.and_then(|p| p.parent()))
+                .iter(),
             &mut namespaces_found,
             style_filter,
             None,

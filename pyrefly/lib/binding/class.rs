@@ -378,6 +378,10 @@ impl<'a> BindingsBuilder<'a> {
                 if let Some(docstring_range) = Docstring::range_from_stmts(&func_def.body) {
                     field_docstrings.insert(func_def.name.range, docstring_range);
                 }
+            } else if let Stmt::ClassDef(class_def) = stmt {
+                if let Some(docstring_range) = Docstring::range_from_stmts(&class_def.body) {
+                    field_docstrings.insert(class_def.name.range, docstring_range);
+                }
             } else if is_field
                 && let Some(next_stmt) = body.get(i + 1)
                 && let Stmt::Expr(expr_stmt) = next_stmt

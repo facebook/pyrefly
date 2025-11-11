@@ -36,6 +36,7 @@ use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::report::pysa::ModuleContext;
 use crate::report::pysa::call_graph::Target;
 use crate::report::pysa::call_graph::resolve_decorator_callees;
+use crate::report::pysa::collect::CollectNoDuplicateKeys;
 use crate::report::pysa::function::FunctionBaseDefinition;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::function::WholeProgramFunctionDefinitions;
@@ -382,7 +383,8 @@ pub fn export_class_fields(
                 )),
             }
         })
-        .collect()
+        .collect_no_duplicate_keys()
+        .expect("Found duplicate class fields")
 }
 
 fn find_definition_ast<'a>(
@@ -458,7 +460,7 @@ pub fn export_all_classes(
                     .map(|class_type| {
                         ClassRef::from_class(class_type.class_object(), context.module_ids)
                     })
-                    .collect(),
+                    .collect::<Vec<_>>(),
             ),
             ClassMro::Cyclic => PysaClassMro::Cyclic,
         };

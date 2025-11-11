@@ -22,6 +22,29 @@ struct ResultsFilter {
     include_builtins: bool,
 }
 
+#[test]
+fn completion_magic_methods_in_class() {
+    let code = r#"
+class Foo:
+    def __
+#       ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let trimmed = report.trim();
+    for expected in [
+        "- (Method) __eq__",
+        "- (Method) __len__",
+        "- (Method) __str__",
+        "- (Method) __hash__",
+    ] {
+        assert!(
+            trimmed.contains(expected),
+            "missing {expected} in completions:\n{trimmed}"
+        );
+    }
+}
+
 fn get_default_test_report() -> impl Fn(&State, &Handle, TextSize) -> String {
     get_test_report(ResultsFilter::default(), ImportFormat::Absolute)
 }
@@ -149,9 +172,42 @@ foo.
 11 | foo.
          ^
 Completion Results:
+- (Field) x: int
 - (Field) [DEPRECATED] also_not_ok: int
 - (Method) [DEPRECATED] not_ok: def not_ok(self: Foo) -> None: ...
-- (Field) x: int
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_deprecated_top_level_function() {
+    let code = r#"
+from typing import *
+from warnings import deprecated
+
+@deprecated("this is deprecated")
+def test1() -> None:
+    ...
+
+def test2() -> None:
+    ...
+
+te
+# ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+12 | te
+       ^
+Completion Results:
+- (Class) deprecated: type[deprecated]
+- (Function) test2: () -> None
+- (Function) [DEPRECATED] test1: () -> None
 "#
         .trim(),
         report.trim(),
@@ -520,7 +576,6 @@ Completion Results:
                         ^
 Completion Results:
 - (Variable) deprecated
-- (Variable) [DEPRECATED] func_not_ok
 - (Variable) func_ok
 - (Variable) __annotations__
 - (Variable) __builtins__
@@ -534,6 +589,7 @@ Completion Results:
 - (Variable) __package__
 - (Variable) __path__
 - (Variable) __spec__
+- (Variable) [DEPRECATED] func_not_ok
 
 
 # foo.py

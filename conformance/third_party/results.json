@@ -1,9 +1,9 @@
 {
   "total": 138,
-  "pass": 97,
-  "fail": 41,
-  "pass_rate": 0.7,
-  "differences": 161,
+  "pass": 99,
+  "fail": 39,
+  "pass_rate": 0.72,
+  "differences": 158,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -19,6 +19,7 @@
     "constructors_call_new.py",
     "constructors_consistency.py",
     "dataclasses_descriptors.py",
+    "dataclasses_final.py",
     "dataclasses_frozen.py",
     "dataclasses_hash.py",
     "dataclasses_inheritance.py",
@@ -98,6 +99,7 @@
     "typeddicts_operations.py",
     "typeddicts_readonly.py",
     "typeddicts_readonly_consistency.py",
+    "typeddicts_readonly_inheritance.py",
     "typeddicts_readonly_kwargs.py",
     "typeddicts_readonly_update.py",
     "typeddicts_type_consistency.py",
@@ -115,7 +117,6 @@
     "constructors_call_init.py": 1,
     "constructors_call_type.py": 4,
     "constructors_callable.py": 9,
-    "dataclasses_final.py": 2,
     "dataclasses_slots.py": 2,
     "enums_members.py": 1,
     "exceptions_context_managers.py": 2,
@@ -143,7 +144,6 @@
     "qualifiers_final_annotation.py": 12,
     "specialtypes_never.py": 1,
     "specialtypes_type.py": 8,
-    "typeddicts_readonly_inheritance.py": 1,
     "typeddicts_required.py": 1
   },
   "comment": "@generated"

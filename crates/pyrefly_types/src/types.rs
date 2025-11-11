@@ -881,7 +881,7 @@ impl Type {
     }
 
     pub fn any_tuple() -> Self {
-        Type::Tuple(Tuple::Unbounded(Box::new(Type::Any(AnyStyle::Implicit))))
+        Type::Tuple(Tuple::unbounded(Type::Any(AnyStyle::Implicit)))
     }
 
     pub fn is_any(&self) -> bool {
@@ -1155,6 +1155,44 @@ impl Type {
                     match x {
                         OverloadType::Function(function) => f(&function.signature),
                         OverloadType::Forall(forall) => f(&forall.body.signature),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Apply `f` to this type if it is a callable. Note that we do *not* recurse into the type to
+    /// find nested callable types.
+    pub fn visit_toplevel_callable_mut<'a>(&'a mut self, mut f: impl FnMut(&'a mut Callable)) {
+        match self {
+            Type::Callable(callable) => f(callable),
+            Type::Forall(box Forall {
+                body: Forallable::Callable(callable),
+                ..
+            }) => f(callable),
+            Type::Function(box func)
+            | Type::Forall(box Forall {
+                body: Forallable::Function(func),
+                ..
+            })
+            | Type::BoundMethod(box BoundMethod {
+                func: BoundMethodType::Function(func),
+                ..
+            })
+            | Type::BoundMethod(box BoundMethod {
+                func: BoundMethodType::Forall(Forall { body: func, .. }),
+                ..
+            }) => f(&mut func.signature),
+            Type::Overload(overload)
+            | Type::BoundMethod(box BoundMethod {
+                func: BoundMethodType::Overload(overload),
+                ..
+            }) => {
+                for x in overload.signatures.iter_mut() {
+                    match x {
+                        OverloadType::Function(function) => f(&mut function.signature),
+                        OverloadType::Forall(forall) => f(&mut forall.body.signature),
                     }
                 }
             }
