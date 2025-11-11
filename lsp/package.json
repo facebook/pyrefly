@@ -107,7 +107,7 @@
                         "verbose"
                     ]
                 },
-                "python.pyrefly.analysis.disabledLanguageServices": {
+                "python.pyrefly.disabledLanguageServices": {
                     "type": "object",
                     "default": {},
                     "description": "Disable specific language services. Set individual services to true to disable them.",

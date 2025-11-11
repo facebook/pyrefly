@@ -62,6 +62,7 @@ pub struct Workspace {
     python_info: Option<PythonInfo>,
     search_path: Option<Vec<PathBuf>>,
     pub disable_language_services: bool,
+    pub disabled_language_services: Option<DisabledLanguageServices>,
     pub display_type_errors: Option<DisplayTypeErrors>,
     pub lsp_analysis_config: Option<LspAnalysisConfig>,
 }
@@ -164,6 +165,8 @@ struct PyreflyClientConfig {
     extra_paths: Option<Vec<PathBuf>>,
     #[serde(default, deserialize_with = "deserialize_analysis")]
     analysis: Option<LspAnalysisConfig>,
+    #[serde(default)]
+    disabled_language_services: Option<DisabledLanguageServices>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -237,8 +240,6 @@ pub struct LspAnalysisConfig {
     pub diagnostic_mode: Option<DiagnosticMode>,
     pub import_format: Option<ImportFormat>,
     pub inlay_hints: Option<InlayHintConfig>,
-    #[serde(default)]
-    pub disabled_language_services: Option<DisabledLanguageServices>,
 }
 
 fn deserialize_analysis<'de, D>(deserializer: D) -> Result<Option<LspAnalysisConfig>, D::Error>
@@ -344,7 +345,6 @@ impl Workspaces {
             self.update_pythonpath(modified, scope_uri, &python_path);
         }
 
-        let mut analysis_handled = false;
         if let Some(pyrefly) = config.pyrefly {
             if let Some(extra_paths) = pyrefly.extra_paths {
                 self.update_search_paths(modified, scope_uri, extra_paths);
@@ -352,15 +352,17 @@ impl Workspaces {
             if let Some(disable_language_services) = pyrefly.disable_language_services {
                 self.update_disable_language_services(scope_uri, disable_language_services);
             }
+            if let Some(disabled_language_services) = pyrefly.disabled_language_services {
+                self.update_disabled_language_services(scope_uri, disabled_language_services);
+            }
             self.update_display_type_errors(modified, scope_uri, pyrefly.display_type_errors);
-            // Handle analysis config nested under pyrefly (e.g., pyrefly.analysis.disabledLanguageServices)
+            // Handle analysis config nested under pyrefly (e.g., pyrefly.analysis)
             if let Some(analysis) = pyrefly.analysis {
                 self.update_ide_settings(modified, scope_uri, analysis);
-                analysis_handled = true;
             }
         }
-        // Also handle analysis at top level for backward compatibility (only if not already handled)
-        if !analysis_handled && let Some(analysis) = config.analysis {
+        // Always handle analysis at top level (no longer conditional on analysis_handled)
+        if let Some(analysis) = config.analysis {
             self.update_ide_settings(modified, scope_uri, analysis);
         }
     }
@@ -379,6 +381,25 @@ impl Workspaces {
                 }
             }
             None => self.default.write().disable_language_services = disable_language_services,
+        }
+    }
+
+    /// Update disabledLanguageServices setting for scope_uri, None if default workspace
+    fn update_disabled_language_services(
+        &self,
+        scope_uri: &Option<Url>,
+        disabled_language_services: DisabledLanguageServices,
+    ) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Some(workspace) = workspaces.get_mut(&scope_uri.to_file_path().unwrap()) {
+                    workspace.disabled_language_services = Some(disabled_language_services);
+                }
+            }
+            None => {
+                self.default.write().disabled_language_services = Some(disabled_language_services);
+            }
         }
     }
 

@@ -1971,8 +1971,7 @@ impl Server {
             }
 
             // Check if the specific service is disabled
-            if let Some(lsp_config) = workspace.lsp_analysis_config
-                && let Some(disabled_services) = lsp_config.disabled_language_services
+            if let Some(disabled_services) = workspace.disabled_language_services
                 && let Some(method) = method
                 && disabled_services.is_disabled(method)
             {
