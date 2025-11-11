@@ -346,6 +346,9 @@ pub struct Server {
     /// should be mapped through here in case they correspond to a cell.
     open_notebook_cells: Arc<RwLock<HashMap<Url, PathBuf>>>,
     open_files: Arc<RwLock<HashMap<PathBuf, Arc<LspFile>>>>,
+    /// Tracks URIs (including virtual/untitled ones) to synthetic on-disk paths so we can
+    /// treat them like regular files throughout the server.
+    unopened_file_tracker: UnopenedFileTracker,
     /// A set of configs where we have already indexed all the files within the config.
     indexed_configs: Mutex<HashSet<ArcId<ConfigFile>>>,
     /// A set of workspaces where we have already performed best-effort indexing.
@@ -610,6 +613,17 @@ pub fn lsp_loop(
 impl Server {
     const FILEWATCHER_ID: &str = "FILEWATCHER";
 
+    fn track_path_for_open(&self, uri: &Url, language_id: &str) -> PathBuf {
+        self.unopened_file_tracker
+            .ensure_path_for_open(uri, language_id)
+    }
+
+    fn require_path_for_uri(&self, uri: &Url) -> anyhow::Result<PathBuf> {
+        self.unopened_file_tracker
+            .path_for_uri(uri)
+            .ok_or_else(|| anyhow::anyhow!("Could not convert uri to filepath: {}", uri))
+    }
+
     fn extract_request_params_or_send_err_response<T>(
         &self,
         params: Result<T::Params, serde_json::Error>,
@@ -668,12 +682,20 @@ impl Server {
                 }
             }
             LspEvent::DidOpenTextDocument(params) => {
-                let contents = Arc::new(LspFile::from_source(params.text_document.text));
+                let lsp_types::DidOpenTextDocumentParams { text_document } = params;
+                let lsp_types::TextDocumentItem {
+                    uri,
+                    language_id,
+                    version,
+                    text,
+                } = text_document;
+                let contents = Arc::new(LspFile::from_source(text));
                 self.did_open(
                     ide_transaction_manager,
                     subsequent_mutation,
-                    params.text_document.uri,
-                    params.text_document.version,
+                    uri,
+                    &language_id,
+                    version,
                     contents,
                 )?;
             }
@@ -701,9 +723,7 @@ impl Server {
                     .collect();
                 let ruff_notebook = params.notebook_document.to_ruff_notebook(&cell_contents)?;
                 let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_document);
-                let notebook_path = url
-                    .to_file_path()
-                    .map_err(|_| anyhow::anyhow!("Could not convert uri to filepath: {}", url))?;
+                let notebook_path = self.track_path_for_open(&url, "python-notebook");
                 for cell_url in lsp_notebook.cell_urls() {
                     self.open_notebook_cells
                         .write()
@@ -713,6 +733,7 @@ impl Server {
                     ide_transaction_manager,
                     subsequent_mutation,
                     url,
+                    "python-notebook",
                     version,
                     Arc::new(LspFile::Notebook(Arc::new(lsp_notebook))),
                 )?;
@@ -1616,8 +1637,10 @@ impl Server {
     }
 
     fn did_save(&self, url: Url) {
-        let file = url.to_file_path().unwrap();
-        self.invalidate(move |t| t.invalidate_disk(&[file]));
+        match self.require_path_for_uri(&url) {
+            Ok(file) => self.invalidate(move |t| t.invalidate_disk(&[file])),
+            Err(err) => info!("Skipping didSave for unknown uri {url}: {err}"),
+        }
     }
 
     fn did_open<'a>(
@@ -1625,21 +1648,20 @@ impl Server {
         ide_transaction_manager: &mut TransactionManager<'a>,
         subsequent_mutation: bool,
         url: Url,
+        language_id: &str,
         version: i32,
         contents: Arc<LspFile>,
     ) -> anyhow::Result<()> {
-        let uri = url
-            .to_file_path()
-            .map_err(|_| anyhow::anyhow!("Could not convert uri to filepath: {}", url))?;
+        let path = self.track_path_for_open(&url, language_id);
         let config_to_populate_files = if self.indexing_mode != IndexingMode::None
-            && let Some(directory) = uri.as_path().parent()
+            && let Some(directory) = path.as_path().parent()
         {
             self.state.config_finder().directory(directory)
         } else {
             None
         };
-        self.version_info.lock().insert(uri.clone(), version);
-        self.open_files.write().insert(uri.clone(), contents);
+        self.version_info.lock().insert(path.clone(), version);
+        self.open_files.write().insert(path.clone(), contents);
         if !subsequent_mutation {
             // In order to improve perceived startup perf, when a file is opened, we run a
             // non-committing transaction that indexes the file with default require level Exports.
@@ -1710,7 +1732,7 @@ impl Server {
     ) -> anyhow::Result<()> {
         let uri = params.notebook_document.uri.clone();
         let version = params.notebook_document.version;
-        let file_path = uri.to_file_path().unwrap();
+        let file_path = self.require_path_for_uri(&uri)?;
 
         let mut version_info = self.version_info.lock();
         let old_version = version_info.get(&file_path).unwrap_or(&0);
@@ -1876,10 +1898,13 @@ impl Server {
     }
 
     fn did_close(&self, url: Url) {
-        let uri = url.to_file_path().unwrap();
-        self.version_info.lock().remove(&uri);
+        let Ok(path) = self.require_path_for_uri(&url) else {
+            info!("Skipping didClose for unknown uri {url}");
+            return;
+        };
+        self.version_info.lock().remove(&path);
         let open_files = self.open_files.dupe();
-        if let Some(LspFile::Notebook(notebook)) = open_files.write().remove(&uri).as_deref() {
+        if let Some(LspFile::Notebook(notebook)) = open_files.write().remove(&path).as_deref() {
             for cell in notebook.cell_urls() {
                 self.connection
                     .publish_diagnostics_for_uri(cell.clone(), Vec::new(), None);
@@ -1887,8 +1912,9 @@ impl Server {
             }
         } else {
             self.connection
-                .publish_diagnostics_for_uri(url, Vec::new(), None);
+                .publish_diagnostics_for_uri(url.clone(), Vec::new(), None);
         }
+        self.unopened_file_tracker.forget_uri_path(&url);
         let state = self.state.dupe();
         let lsp_queue = self.lsp_queue.dupe();
         let open_files = self.open_files.dupe();
@@ -1975,12 +2001,17 @@ impl Server {
         uri: &Url,
         method: Option<&str>,
     ) -> Option<(Handle, Option<LspAnalysisConfig>)> {
-        let path = self
-            .open_notebook_cells
-            .read()
-            .get(uri)
-            .cloned()
-            .unwrap_or_else(|| uri.to_file_path().unwrap());
+        let path = if let Some(notebook_path) = self.open_notebook_cells.read().get(uri) {
+            notebook_path.clone()
+        } else {
+            match self.require_path_for_uri(uri) {
+                Ok(path) => path,
+                Err(err) => {
+                    info!("Skipping request - invalid uri {uri}: {err}");
+                    return None;
+                }
+            }
+        };
         self.workspaces.get_with(path.clone(), |(_, workspace)| {
             // Check if all language services are disabled
             if workspace.disable_language_services {
@@ -2440,6 +2471,13 @@ impl Server {
             // TODO(yangdanny) handle notebooks
             return None;
         }
+        let path = match self.require_path_for_uri(uri) {
+            Ok(path) => path,
+            Err(err) => {
+                info!("Skipping document symbols for unknown uri {uri}: {err}");
+                return None;
+            }
+        };
         if self
             .workspaces
             .get_with(path, |(_, workspace)| workspace.disable_language_services)
@@ -2621,7 +2659,19 @@ impl Server {
             cell_uri = Some(uri);
             notebook_path.as_path().to_owned()
         } else {
-            uri.to_file_path().unwrap()
+            match self.require_path_for_uri(uri) {
+                Ok(path) => path,
+                Err(err) => {
+                    info!("Skipping diagnostics for unknown uri {uri}: {err}");
+                    return DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
+                        full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                            items: Vec::new(),
+                            result_id: None,
+                        },
+                        related_documents: None,
+                    });
+                }
+            }
         };
         let handle = make_open_handle(&self.state, &path);
         let mut items = Vec::new();

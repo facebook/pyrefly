@@ -240,6 +240,47 @@ foo()
 }
 
 #[test]
+fn test_completion_for_unsaved_file() {
+    let mut interaction = LspInteraction::new();
+    interaction.initialize(InitializeSettings::default());
+
+    let uri = Url::parse("untitled:Untitled-2").unwrap();
+    let text = r#"import math
+math.
+"#;
+    interaction.server.did_open_uri(&uri, "python", text);
+
+    interaction.server.send_message(Message::Request(Request {
+        id: RequestId::from(2),
+        method: "textDocument/completion".to_owned(),
+        params: serde_json::json!({
+            "textDocument": {"uri": uri.to_string()},
+            "position": {"line": 1, "character": 5}
+        }),
+    }));
+
+    interaction.client.expect_response_with(
+        |response| {
+            if response.id != RequestId::from(2) {
+                return false;
+            }
+            if let Some(result) = &response.result {
+                if let Some(items) = result.get("items").and_then(|items| items.as_array()) {
+                    return !items.is_empty();
+                }
+                if let Some(array) = result.as_array() {
+                    return !array.is_empty();
+                }
+            }
+            false
+        },
+        "Expected completion items for unsaved file",
+    );
+
+    interaction.shutdown();
+}
+
+#[test]
 fn test_unknown_request() {
     let mut interaction = LspInteraction::new();
     interaction.initialize(InitializeSettings::default());
