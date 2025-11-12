@@ -187,17 +187,15 @@ class B(A):
 // Ref https://github.com/facebook/pyrefly/issues/370
 // Ref https://github.com/facebook/pyrefly/issues/522
 testcase!(
-    bug =
-        "Attributes initialized in `__new__` and `__init_subclass__` should not be instance-only.",
     test_cls_attribute_in_constructor,
     r#"
 from typing import ClassVar
 class A:
     def __new__(cls, x: int):
-        cls.x = x # E: Instance-only attribute `x` of class `A` is not visible on the class
+        cls.x = x
 class B:
     def __init_subclass__(cls, x: int):
-        cls.x = x # E: Instance-only attribute `x` of class `B` is not visible on the class
+        cls.x = x
 class C:
     x: ClassVar[int]
     def __new__(cls, x: int):

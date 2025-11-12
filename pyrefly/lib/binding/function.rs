@@ -538,7 +538,9 @@ impl<'a> BindingsBuilder<'a> {
             && !decorators.is_abstract_method
             && !is_ellipse(&body);
         let method_self_kind = if class_key.is_some()
-            && (decorators.is_classmethod || func_name.id == dunder::INIT_SUBCLASS)
+            && (decorators.is_classmethod
+                || func_name.id == dunder::INIT_SUBCLASS
+                || func_name.id == dunder::NEW)
         {
             MethodSelfKind::Class
         } else {
