@@ -69,7 +69,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Methods decorated with @member are members
             _ if ty.has_enum_member_decoration() => true,
             // Callables are not valid enum members
-            Type::BoundMethod(_) | Type::Callable(_) | Type::Function(_) => false,
+            _ if ty.is_toplevel_callable() => false,
             // Values initialized with nonmember() are not members
             Type::ClassType(cls)
                 if cls.has_qname("enum", "nonmember")
@@ -91,7 +91,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         metadata: &ClassMetadata,
         attr_name: &Name,
     ) -> Option<ClassAttribute> {
-        self.special_case_enum_attr_lookup(class, metadata, attr_name)
+        self.special_case_enum_attr_lookup(class, None, metadata, attr_name)
+            .or_else(|| self.get_instance_attribute(class, attr_name))
+    }
+
+    /// Checks for a special-cased enum attribute on an enum literal, falling back to a regular instance attribute lookup.
+    pub fn get_enum_literal_or_instance_attribute(
+        &self,
+        lit: &LitEnum,
+        metadata: &ClassMetadata,
+        attr_name: &Name,
+    ) -> Option<ClassAttribute> {
+        let class = &lit.class;
+        self.special_case_enum_attr_lookup(class, Some(lit), metadata, attr_name)
             .or_else(|| self.get_instance_attribute(class, attr_name))
     }
 
@@ -107,11 +119,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// and read-write if it is `_value_`. Whether `_value_` should be considered
     /// writable is unspecified, but we at least have to allow it in `__init__`.
     ///
+    /// `enum_literal` is set if we're looking this up on a known member, like `Literal[MyEnum.X]`
+    ///
     /// Return None if either this is not an enum or this is not a special-case
     /// attribute.
     fn special_case_enum_attr_lookup(
         &self,
         class: &ClassType,
+        enum_literal: Option<&LitEnum>,
         metadata: &ClassMetadata,
         name: &Name,
     ) -> Option<ClassAttribute> {
@@ -133,9 +148,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let ty = self
                 .mixed_in_enum_data_type(class.class_object())
                 .unwrap_or_else(|| {
-                    // The `_value_` annotation on `enum.Enum` is `Any`; we can infer a better type
-                    let enum_value_types: Vec<_> =
-                        self.get_enum_members(class.class_object())
+                    if let Some(lit_enum) = enum_literal {
+                        self.enum_literal_to_value_type(lit_enum.clone(), enum_metadata.is_django)
+                    } else {
+                        // The `_value_` annotation on `enum.Enum` is `Any`; we can infer a better type
+                        let enum_value_types: Vec<_> = self
+                            .get_enum_members(class.class_object())
                             .into_iter()
                             .filter_map(|lit| {
                                 if let Lit::Enum(lit_enum) = lit {
@@ -148,15 +166,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 }
                             })
                             .collect();
-                    if enum_value_types.is_empty() {
-                        // Assume Any, rather than Never, if there are no members because they may
-                        // be created dynamically and we don't want downstream analysis to be incorrect.
-                        Type::any_implicit()
-                    } else {
-                        self.unions(enum_value_types)
+                        if enum_value_types.is_empty() {
+                            // Assume Any, rather than Never, if there are no members because they may
+                            // be created dynamically and we don't want downstream analysis to be incorrect.
+                            Type::any_implicit()
+                        } else {
+                            self.unions(enum_value_types)
+                        }
                     }
                 });
             Some(ClassAttribute::read_write(ty))
+        } else if let Some(lit_enum) = enum_literal {
+            self.get_enum_literal_or_instance_attribute(lit_enum, metadata, &VALUE)
+                .map(|attr| {
+                    // Do not allow writing `.value`, which is a property.
+                    attr.read_only_equivalent(ReadOnlyReason::EnumMemberValue)
+                })
         } else {
             self.get_enum_or_instance_attribute(class, metadata, &VALUE)
                 .map(|attr| {

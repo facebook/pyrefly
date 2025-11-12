@@ -1211,7 +1211,7 @@ impl Type {
         }
     }
 
-    fn is_toplevel_callable(&self) -> bool {
+    pub fn is_toplevel_callable(&self) -> bool {
         let mut is_callable = false;
         self.visit_toplevel_callable(&mut |_| is_callable = true);
         is_callable

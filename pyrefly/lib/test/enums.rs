@@ -523,7 +523,7 @@ class classproperty[_TClass, _TReturnType]:
     fget: Callable[[_TClass], _TReturnType]
     def __init__(self, f: Callable[[_TClass], _TReturnType]) -> None: ...
     def __get__(self, obj: _TClass | None, cls: _TClass) -> _TReturnType: ...
-    
+
 class Foo(IntEnum):
     X = 1
     @classproperty
@@ -582,7 +582,7 @@ class MyEnum(Enum):
 T_Enum = TypeVar("T_Enum", bound=Enum)
 
 def get_labels(enum_cls: type[T_Enum]) -> list[str]:
-    return [e.name for e in enum_cls] 
+    return [e.name for e in enum_cls]
     "#,
 );
 
@@ -662,5 +662,23 @@ assert_type(E1.X.value, int)
 assert_type(E2.X.value, str)
 assert_type(E3.X.value, str)
 assert_type(E4.X.value, tuple[int])
+    "#,
+);
+
+testcase!(
+    test_callable_nonmember,
+    r#"
+from enum import Enum
+from typing import Callable
+
+class InclusionLevel(Enum):
+    A = 1
+    B = 2
+    C = 3
+
+    def is_included(self):
+        return self.value >  self.B.value
+
+x: Callable[[InclusionLevel], bool] = InclusionLevel.is_included
     "#,
 );

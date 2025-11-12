@@ -1155,11 +1155,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     base,
                 )),
             },
-            AttributeBase1::ClassInstance(class)
-            | AttributeBase1::EnumLiteral(LitEnum { class, .. }) => {
+            AttributeBase1::ClassInstance(class) => {
                 let metadata = self.get_metadata_for_class(class.class_object());
                 let attr_lookup_result =
                     self.get_enum_or_instance_attribute(class, &metadata, attr_name);
+                match attr_lookup_result {
+                    Some(attr) => acc.found_class_attribute(attr, base),
+                    None if metadata.has_base_any() => {
+                        acc.found_type(Type::Any(AnyStyle::Implicit), base)
+                    }
+                    None => {
+                        acc.not_found(NotFoundOn::ClassInstance(class.class_object().dupe(), base))
+                    }
+                }
+            }
+            AttributeBase1::EnumLiteral(lit @ LitEnum { class, .. }) => {
+                let metadata = self.get_metadata_for_class(class.class_object());
+                let attr_lookup_result =
+                    self.get_enum_literal_or_instance_attribute(lit, &metadata, attr_name);
                 match attr_lookup_result {
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None if metadata.has_base_any() => {
