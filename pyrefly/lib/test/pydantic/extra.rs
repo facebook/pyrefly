@@ -143,7 +143,7 @@ pydantic_testcase!(
 from pydantic import BaseModel, ConfigDict
 
 class ModelForbid(BaseModel):
-    model_config = ConfigDict(extra=False) # E: Argument `Literal[False]` is not assignable to parameter `extra` with type `Literal['allow', 'forbid', 'ignore'] | None`
+    model_config = ConfigDict(extra=False) # E: Argument `Literal[False]` is not assignable to parameter `extra` with type `ExtraValues | None`
     x: int
 
 ModelForbid(x=1, y=2) 
@@ -156,7 +156,7 @@ pydantic_testcase!(
 from pydantic import BaseModel, ConfigDict
 
 class ModelForbid(BaseModel):
-    model_config = ConfigDict(extra="123") # E: Argument `Literal['123']` is not assignable to parameter `extra` with type `Literal['allow', 'forbid', 'ignore'] | None`
+    model_config = ConfigDict(extra="123") # E: Argument `Literal['123']` is not assignable to parameter `extra` with type `ExtraValues | None`
     x: int
 
 ModelForbid(x=1, y=2) 

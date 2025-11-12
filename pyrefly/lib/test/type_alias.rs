@@ -408,7 +408,7 @@ def f2(x: X2[int]):
     pass
 def g(x: list[bool]):
     f1(x)
-    f2(x)  # E: Argument `list[bool]` is not assignable to parameter `x` with type `list[int]`
+    f2(x)  # E: Argument `list[bool]` is not assignable to parameter `x` with type `X2`
     "#,
 );
 
@@ -487,7 +487,7 @@ a: NoneOrInt = None
 b: IntOrNone = 1
 c: NoneOrStr = "test"
 d: StrOrNone = None
-e: NoneOrInt = "test"  # E: `Literal['test']` is not assignable to `int | None`
+e: NoneOrInt = "test"  # E: `Literal['test']` is not assignable to `NoneOrInt`
 "#,
 );
 
@@ -788,7 +788,7 @@ type Spam1[T1, T2] = T2 | type[T1]
 Spam2: TypeAlias = Spam1[T1, T2]
 
 x1: Spam1[int, str] = int
-x2: Spam2[int, str] = int # E: `TypeAlias[Spam2, type[T2 | type[T1]]]` is not subscriptable
+x2: Spam2[int, str] = int # E: `Spam2` is not subscriptable
     "#,
 );
 

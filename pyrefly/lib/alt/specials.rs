@@ -201,10 +201,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     match x {
                         Type::None | Type::Literal(_) | Type::Any(AnyStyle::Error) => true,
                         Type::Union(xs) => xs.iter().all(is_valid_literal),
+                        Type::TypeAlias(alias) => is_valid_literal(&alias.body_type()),
                         _ => false,
                     }
                 }
-                let t = self.expr_untype(x, TypeFormContext::TypeArgument, errors);
+                let mut t = self.expr_untype(x, TypeFormContext::TypeArgument, errors);
+                if let Type::TypeAlias(alias) = t {
+                    t = alias.body_type();
+                }
                 if is_valid_literal(&t) {
                     literals.push(t)
                 } else {

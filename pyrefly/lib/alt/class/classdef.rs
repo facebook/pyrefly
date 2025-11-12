@@ -139,7 +139,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match ty {
             Type::ClassDef(c) if c.is_builtin("tuple") => Some(self.instantiate_fresh_tuple()),
             Type::ClassDef(c) => Some(self.instantiate_fresh_class(c)),
-            Type::TypeAlias(ta) => self.unwrap_class_object_silently(&ta.as_value(self.stdlib)),
+            Type::TypeAlias(ta) => {
+                let resolved = ta.body_type();
+                self.unwrap_class_object_silently(&resolved)
+            }
             // Note that for the purposes of type narrowing, we always unwrap Type::Type(Type::ClassType),
             // but it's not always a valid argument to isinstance/issubclass. expr_infer separately checks
             // whether the argument is valid.

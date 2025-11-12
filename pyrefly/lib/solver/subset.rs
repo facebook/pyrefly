@@ -1308,7 +1308,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             (_, Type::Forall(forall)) => self.is_subset_eq(got, &forall.body.clone().as_type()),
             (Type::TypeAlias(ta), _) => {
-                self.is_subset_eq(&ta.as_value(self.type_order.stdlib()), want)
+                let resolved = ta.body_type();
+                self.is_subset_eq(&resolved, want)
+            }
+            (_, Type::TypeAlias(ta)) => {
+                let resolved = ta.body_type();
+                self.is_subset_eq(got, &resolved)
             }
             _ => Err(SubsetError::Other),
         }

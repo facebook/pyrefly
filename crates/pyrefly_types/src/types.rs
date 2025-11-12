@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
+use std::mem;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -325,6 +326,7 @@ pub struct TypeAlias {
     ty: Box<Type>,
     pub style: TypeAliasStyle,
     annotated_metadata: Box<[Type]>,
+    is_type_form: bool,
 }
 
 impl TypeAlias {
@@ -334,11 +336,49 @@ impl TypeAlias {
             ty: Box::new(ty),
             style,
             annotated_metadata: annotated_metadata.into_boxed_slice(),
+            is_type_form: true,
         }
     }
 
     pub fn annotated_metadata(&self) -> &[Type] {
         &self.annotated_metadata
+    }
+
+    pub fn is_type_form(&self) -> bool {
+        self.is_type_form
+    }
+
+    pub fn resolved_type(&self) -> Option<&Type> {
+        if self.is_type_form {
+            None
+        } else {
+            Some(self.ty.as_ref())
+        }
+    }
+
+    pub fn set_resolved_type(&mut self, ty: Type) {
+        self.ty = Box::new(ty);
+        self.is_type_form = false;
+    }
+
+    /// Returns the underlying type that this alias represents (without the outer `type[...]` wrapper).
+    pub fn body_type(&self) -> Type {
+        if let Some(resolved) = self.resolved_type() {
+            resolved.clone()
+        } else {
+            match (*self.ty).clone() {
+                Type::Type(inner) => *inner,
+                other => other,
+            }
+        }
+    }
+
+    pub fn runtime_value(&self, stdlib: &Stdlib) -> Type {
+        if self.style == TypeAliasStyle::Scoped {
+            self.as_value(stdlib)
+        } else {
+            self.body_type()
+        }
     }
 
     /// Gets the type contained within the type alias for use in a value
@@ -1358,6 +1398,15 @@ impl Type {
         self.transform(&mut |ty| {
             if let Type::Type(box Type::Union(members)) = ty {
                 *ty = unions(members.drain(..).map(Type::type_form).collect());
+            }
+        })
+    }
+
+    pub fn flatten_unions(self) -> Self {
+        self.transform(&mut |ty| {
+            if let Type::Union(members) = ty {
+                let members = mem::take(members);
+                *ty = unions(members);
             }
         })
     }

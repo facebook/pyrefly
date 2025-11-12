@@ -66,6 +66,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .noreturn_to_never()
                     .anon_callables()
                     .distribute_type_over_union();
+                ty.transform_mut(&mut |ty| {
+                    if let Type::TypeAlias(alias) = ty {
+                        *ty = alias.body_type();
+                    }
+                });
+                ty = ty.flatten_unions();
                 // Make assert_type(Self@SomeClass, typing.Self) work.
                 ty.subst_self_type_mut(&self_form);
                 // Re-sort unions. Make sure to keep this as the final step before comparison.
@@ -495,7 +501,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         f(me, Type::type_form(t), res)
                     }
                 }
-                Type::TypeAlias(ta) => f(me, ta.as_value(me.stdlib), res),
+                Type::TypeAlias(ta) => {
+                    let ty = ta.as_value(me.stdlib);
+                    f(me, ty, res)
+                }
                 _ => res.push(t),
             }
         }
