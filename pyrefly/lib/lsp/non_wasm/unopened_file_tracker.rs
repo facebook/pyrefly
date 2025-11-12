@@ -95,10 +95,6 @@ impl UnopenedFileTracker {
         }
     }
 
-    pub fn uri_for_path(&self, path: &Path) -> Option<Url> {
-        self.open_file_uris.read().get(path).cloned()
-    }
-
     pub fn forget_uri_path(&self, uri: &Url) -> Option<PathBuf> {
         let removed = self.uri_to_path.write().remove(uri);
         if let Some(path) = &removed {
