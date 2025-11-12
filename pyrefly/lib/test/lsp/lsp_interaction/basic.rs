@@ -40,7 +40,7 @@ fn test_initialize_basic() {
                     "codeActionKinds": ["quickfix"]
                 },
                 "completionProvider": {
-                    "triggerCharacters": ["."]
+                    "triggerCharacters": [".", "'", "\""]
                 },
                 "documentHighlightProvider": true,
                 "signatureHelpProvider": {

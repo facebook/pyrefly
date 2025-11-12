@@ -228,6 +228,61 @@ impl TypeInfo {
         }
     }
 
+    /// Return the known narrowings for dictionary-style key facets at the provided prefix.
+    ///
+    /// The `prefix` is the sequence of facets (attributes, indexes, and keys) that identify the
+    /// container whose keys we are interested in. When the prefix is empty, this inspects the
+    /// top-level facets on the `TypeInfo` itself.
+    pub fn key_facets_at(&self, prefix: &[FacetKind]) -> Vec<(String, Option<Type>)> {
+        fn collect_keys(facets: &NarrowedFacets) -> Vec<(String, Option<Type>)> {
+            facets
+                .0
+                .iter()
+                .filter_map(|(facet, narrowed)| {
+                    if let FacetKind::Key(key) = facet {
+                        let ty = match narrowed {
+                            NarrowedFacet::Leaf(ty) => Some(ty.clone()),
+                            NarrowedFacet::WithRoot(ty, _) => Some(ty.clone()),
+                            NarrowedFacet::WithoutRoot(_) => None,
+                        };
+                        Some((key.clone(), ty))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        }
+
+        fn descend<'a>(
+            mut current: &'a NarrowedFacets,
+            prefix: &[FacetKind],
+        ) -> Option<&'a NarrowedFacets> {
+            for facet in prefix {
+                let narrowed = current.0.get(facet)?;
+                match narrowed {
+                    NarrowedFacet::Leaf(_) => return None,
+                    NarrowedFacet::WithRoot(_, nested) | NarrowedFacet::WithoutRoot(nested) => {
+                        current = nested;
+                    }
+                }
+            }
+            Some(current)
+        }
+
+        match &self.facets {
+            Some(facets) => {
+                if prefix.is_empty() {
+                    collect_keys(facets.as_ref())
+                } else if let Some(target) = descend(facets.as_ref(), prefix) {
+                    collect_keys(target)
+                } else {
+                    Vec::new()
+                }
+            }
+            None => Vec::new(),
+        }
+    }
+
     pub fn ty(&self) -> &Type {
         &self.ty
     }
