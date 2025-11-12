@@ -1204,15 +1204,88 @@ impl Server {
 
     /// Run the transaction with the in-memory content of open files. Returns the handles of open files when the transaction is done.
     fn validate_in_memory_for_transaction(
+        &self,
         state: &State,
         open_files: &RwLock<HashMap<PathBuf, Arc<LspFile>>>,
         transaction: &mut Transaction<'_>,
     ) -> Vec<Handle> {
-        let handles = open_files
-            .read()
-            .keys()
-            .map(|x| make_open_handle(state, x))
-            .collect::<Vec<_>>();
+        Self::validate_in_memory_for_transaction_with_workspaces(
+            Some(&self.workspaces),
+            state,
+            open_files,
+            transaction,
+        )
+    }
+
+    /// Helper that can work with or without workspaces (for background tasks)
+    fn validate_in_memory_for_transaction_with_workspaces(
+        workspaces: Option<&Arc<Workspaces>>,
+        state: &State,
+        open_files: &RwLock<HashMap<PathBuf, Arc<LspFile>>>,
+        transaction: &mut Transaction<'_>,
+    ) -> Vec<Handle> {
+        let open_file_list: Vec<_> = open_files.read().keys().cloned().collect();
+
+        // Pass 1: Collect which open files have workspace mode enabled (if workspaces available)
+        let workspace_mode_per_file: Vec<(PathBuf, bool)> = if let Some(workspaces) = workspaces {
+            open_file_list
+                .iter()
+                .map(|path| {
+                    let has_workspace_mode =
+                        workspaces.get_with(path.clone(), |(_, workspace)| {
+                            workspace
+                                .lsp_analysis_config
+                                .and_then(|config| config.diagnostic_mode)
+                                .map_or(false, |mode| matches!(mode, DiagnosticMode::Workspace))
+                        });
+                    (path.clone(), has_workspace_mode)
+                })
+                .collect()
+        } else {
+            // No workspaces means openFilesOnly mode for all
+            open_file_list.iter().map(|p| (p.clone(), false)).collect()
+        };
+
+        // Pass 2: Gather handles based on workspace mode
+        let mut handles = Vec::new();
+        let mut processed_configs: std::collections::HashSet<ArcId<ConfigFile>> =
+            std::collections::HashSet::new();
+
+        for (path, has_workspace_mode) in workspace_mode_per_file {
+            // Always add the open file handle
+            handles.push(make_open_handle(state, &path));
+
+            // If workspace mode enabled for this file, add all project files from its config
+            if has_workspace_mode {
+                let module_path = ModulePath::filesystem(path.clone());
+                let config = state
+                    .config_finder()
+                    .python_file(ModuleName::unknown(), &module_path);
+
+                // Only process each unique config once
+                if processed_configs.insert(config.dupe()) {
+                    if let Ok(paths) = config.get_filtered_globs(None).files() {
+                        for project_path in paths {
+                            // Skip files that are already open
+                            if open_file_list.contains(&project_path) {
+                                continue;
+                            }
+
+                            let project_module_path = ModulePath::filesystem(project_path.clone());
+                            let path_config = state
+                                .config_finder()
+                                .python_file(ModuleName::unknown(), &project_module_path);
+
+                            // Only include files from the same config
+                            if config == path_config {
+                                handles.push(handle_from_module_path(state, project_module_path));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         transaction.set_memory(
             open_files
                 .read()
@@ -1369,52 +1442,7 @@ impl Server {
             Err(transaction) => transaction,
         };
         let handles =
-            Self::validate_in_memory_for_transaction(&self.state, &self.open_files, transaction);
-
-        // Check if any workspace is in workspace diagnostic mode
-        let has_workspace_mode = self.workspaces.roots().iter().any(|root| {
-            matches!(
-                self.workspaces.get_diagnostic_mode(root),
-                DiagnosticMode::Workspace
-            )
-        });
-
-        // In workspace mode, analyze all project files so get_all_errors() includes unopened files
-        if has_workspace_mode {
-            let open_file_paths: std::collections::HashSet<_> =
-                self.open_files.read().keys().cloned().collect();
-            if let Some(first_open_file) = open_file_paths.iter().next() {
-                let module_path = ModulePath::filesystem(first_open_file.clone());
-                let config = self
-                    .state
-                    .config_finder()
-                    .python_file(ModuleName::unknown(), &module_path);
-                let project_path_blobs = config.get_filtered_globs(None);
-                if let Ok(paths) = project_path_blobs.files() {
-                    let project_handles: Vec<_> = paths
-                        .into_iter()
-                        .filter_map(|path| {
-                            // Skip files that are already open (already in handles)
-                            if open_file_paths.contains(&path) {
-                                return None;
-                            }
-                            let module_path = ModulePath::filesystem(path.clone());
-                            let path_config = self
-                                .state
-                                .config_finder()
-                                .python_file(ModuleName::unknown(), &module_path);
-                            if config == path_config {
-                                Some(handle_from_module_path(&self.state, module_path))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    // Analyze only for errors, not full indexing
-                    transaction.run(&project_handles, Require::Errors);
-                }
-            }
-        }
+            self.validate_in_memory_for_transaction(&self.state, &self.open_files, transaction);
 
         let publish = |transaction: &Transaction| {
             let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
@@ -1435,16 +1463,9 @@ impl Server {
                 }
             }
 
-            // In workspace mode, use get_all_errors() to get errors from all project files.
-            // In open-files-only mode, use get_errors(&handles) to only get errors from open files.
+            // handles already contains all files we need (open files + project files for workspace mode)
             // The filtering by diagnostic mode and project includes/excludes is handled in get_diag_if_shown.
-            let errors = if has_workspace_mode {
-                transaction.get_all_errors()
-            } else {
-                transaction.get_errors(&handles)
-            };
-
-            for e in errors.collect_errors().shown {
+            for e in transaction.get_errors(&handles).collect_errors().shown {
                 if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files, None) {
                     diags.entry(path.to_owned()).or_default().push(diag);
                 }
@@ -1594,11 +1615,12 @@ impl Server {
         let lsp_queue = self.lsp_queue.dupe();
         let cancellation_handles = self.cancellation_handles.dupe();
         let open_files = self.open_files.dupe();
+        let workspaces = self.workspaces.dupe();
         self.recheck_queue.queue_task(Box::new(move || {
             let mut transaction = state.new_committable_transaction(Require::indexing(), None);
             f(transaction.as_mut());
 
-            Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
+            Self::validate_in_memory_for_transaction_with_workspaces(Some(&workspaces), &state, &open_files, transaction.as_mut());
 
             // Commit will be blocked until there are no ongoing reads.
             // If we have some long running read jobs that can be cancelled, we should cancel them
@@ -1964,6 +1986,7 @@ impl Server {
         let open_files = self.open_files.dupe();
         let sourcedb_queue = self.sourcedb_queue.dupe();
         let invalidated_configs = self.invalidated_configs.dupe();
+        let workspaces = self.workspaces.dupe();
         self.recheck_queue.queue_task(Box::new(move || {
             // Clear out the memory associated with this file.
             // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
@@ -1971,7 +1994,7 @@ impl Server {
             let mut transaction = state.new_committable_transaction(Require::indexing(), None);
             transaction.as_mut().set_memory(vec![(uri, None)]);
             let _ =
-                Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
+                Self::validate_in_memory_for_transaction_with_workspaces(Some(&workspaces), &state, &open_files, transaction.as_mut());
             state.commit_transaction(transaction);
             queue_source_db_rebuild_and_recheck(
                 state.dupe(),
@@ -2279,6 +2302,7 @@ impl Server {
         let state = self.state.dupe();
         let open_files = self.open_files.dupe();
         let cancellation_handles = self.cancellation_handles.dupe();
+        let workspaces = self.workspaces.dupe();
 
         let connection = self.connection.dupe();
         self.find_reference_queue.queue_task(Box::new(move || {
@@ -2286,7 +2310,7 @@ impl Server {
             cancellation_handles
                 .lock()
                 .insert(request_id.clone(), transaction.get_cancellation_handle());
-            Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
+            Self::validate_in_memory_for_transaction_with_workspaces(Some(&workspaces), &state, &open_files, transaction.as_mut());
             match transaction.find_global_references_from_definition(
                 handle.sys_info(),
                 metadata,
@@ -2847,11 +2871,12 @@ impl Server {
         let lsp_queue = self.lsp_queue.dupe();
         let cancellation_handles = self.cancellation_handles.dupe();
         let open_files = self.open_files.dupe();
+        let workspaces = self.workspaces.dupe();
         self.recheck_queue.queue_task(Box::new(move || {
             let mut transaction = state.new_committable_transaction(Require::indexing(), None);
             transaction.as_mut().invalidate_config();
 
-            Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
+            Self::validate_in_memory_for_transaction_with_workspaces(Some(&workspaces), &state, &open_files, transaction.as_mut());
 
             // Commit will be blocked until there are no ongoing reads.
             // If we have some long running read jobs that can be cancelled, we should cancel them
