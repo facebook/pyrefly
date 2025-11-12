@@ -240,23 +240,6 @@ impl TestServer {
         }));
     }
 
-    pub fn completion_uri(&mut self, uri: &Url, line: u32, col: u32) {
-        let id = self.next_request_id();
-        self.send_message(Message::Request(Request {
-            id,
-            method: "textDocument/completion".to_owned(),
-            params: serde_json::json!({
-                "textDocument": {
-                    "uri": uri.to_string()
-                },
-                "position": {
-                    "line": line,
-                    "character": col
-                }
-            }),
-        }));
-    }
-
     pub fn diagnostic(&mut self, file: &'static str) {
         let path = self.get_root_or_panic().join(file);
         let id = self.next_request_id();
