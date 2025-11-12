@@ -206,7 +206,7 @@ Rich syntax highlighting based on token type and origin.
 Inline hints for types, parameter names, and return values.
 
 :::info
-We reuse Pyright's `pyright.analysis.inlayHints.<>` settings for backwards compatibility. If you have or had Pyright, check these settings if inlay hints do not appear.
+We reuse Pyright's `python.analysis.inlayHints.<>` settings for backwards compatibility. If you have or had Pyright, check these settings if inlay hints do not appear.
 :::
 
 You can turn inlay hints on or off using the [VSCode Setting](https://code.visualstudio.com/docs/editing/editingevolved#_inlay-hints) `editor.inlayHints.enabled`.
@@ -704,11 +704,14 @@ The glob patterns used to describe which files to avoid
 type checking as way to filter files that match `project-includes`,
 but we don't want to type check.
 
-The default here is *always* included in your `project-excludes`, even if you override
-it to something else.
+The default value is appended to your `project-excludes` unless `disable-project-excludes-heuristics`
+is set. See [`disable-project-excludes-heuristics`](#disable-project-excludes-heuristics) to fully replace
+or remove `project-excludes`.
 
 - Type: list of [filesystem glob patterns](#filesystem-globbing)
-- Default: `["**/node_modules", "**/__pycache__", "**/venv/**", "**/.[!/.]*/**"]`
+- Default: `["**/node_modules", "**/__pycache__", "**/venv/**", "**/.[!/.]*/**"]` +
+  anything in your `site-package-path` (even from the interpreter) unless it would
+  exclude items in your [`search-path`](#search-path).
 - Flag equivalent: `--project-excludes`
 - Equivalent configs: `exclude` in Pyright and mypy
 - Notes:
@@ -732,6 +735,23 @@ it to something else.
     we recommend you pull and set up your dependency from GitHub, but you can achieve
     this on files in your `site-package-path` by setting `site-package-path = []` in
     your config.
+
+### `disable-project-excludes-heuristics`
+
+By default, Pyrefly includes several items in your [`project-excludes`](#project-excludes)
+(see `project-excludes` for the default values). These items are path patterns we've
+determined rarely have files that should be type checked, but can require a very long
+time to crawl while enumerating files, or contain third-party code that you likely
+don't care about errors in. When specifying `project-excludes`, we always append
+these defaults to whatever is specified by CLI or in your configuration.
+
+Sometimes, these preselected settings can interfere with your project's setup.
+`disable-project-excludes-heuristics` lets you start from scratch, setting that default to `[]`,
+so you can fully specify your `project-excludes` in case we get it wrong.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: `--disable-project-excludes-heuristics`
 
 ### `search-path`
 
