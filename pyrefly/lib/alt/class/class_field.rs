@@ -47,6 +47,7 @@ use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassSynthesizedFields;
+use crate::binding::binding::MethodAttributeTarget;
 use crate::binding::binding::MethodThatSetsAttr;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -196,7 +197,7 @@ enum RawClassFieldInitialization {
     ///         self.x = 42
     ///         self.y = 42
     /// `x`'s initialization type is `Uninitialized`, whereas y's is `Method('__init__')`.
-    Method(MethodThatSetsAttr),
+    Method(MethodThatSetsAttr, MethodAttributeTarget),
     /// The field is declared and initialized to a value in the class body.
     ///
     /// If the value is from an assignment, stores the expression that the field is assigned to,
@@ -1050,6 +1051,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     value,
                     annotation,
                     method,
+                    target,
                 } => {
                     let annotation = annotation
                         .map(|a| self.get_idx(a))
@@ -1059,7 +1061,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         value,
                         annotation,
                         initial_value_storage
-                            .push(RawClassFieldInitialization::Method(method.clone())),
+                            .push(RawClassFieldInitialization::Method(method.clone(), *target)),
                         false,
                     )
                 }
@@ -1087,7 +1089,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     (inherited_ty, annotation)
                 };
                 let mut ty = if let Some(inherited_ty) = inherited_ty
-                    && matches!(initial_value, RawClassFieldInitialization::Method(_))
+                    && matches!(initial_value, RawClassFieldInitialization::Method(_, _))
                 {
                     // Inherit the previous type of the attribute if the only declaration-like
                     // thing the current class does is assign to the attribute in a method.
@@ -1316,8 +1318,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let ty = match initial_value {
             RawClassFieldInitialization::ClassBody(_)
-            | RawClassFieldInitialization::Uninitialized => ty,
-            RawClassFieldInitialization::Method(_) => {
+            | RawClassFieldInitialization::Uninitialized
+            | RawClassFieldInitialization::Method(_, MethodAttributeTarget::Class) => ty,
+            RawClassFieldInitialization::Method(_, MethodAttributeTarget::Instance) => {
                 self.check_and_sanitize_type_parameters(class, ty, name, range, errors)
             }
         };
@@ -1391,10 +1394,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_foreign_key,
             is_inherited,
         );
-        if let RawClassFieldInitialization::Method(MethodThatSetsAttr {
-            method_name,
-            recognized_attribute_defining_method,
-        }) = initial_value
+        if let RawClassFieldInitialization::Method(
+            MethodThatSetsAttr {
+                method_name,
+                recognized_attribute_defining_method,
+            },
+            _,
+        ) = initial_value
         {
             let mut defined_in_parent = false;
             let parents = metadata.base_class_objects();
@@ -1587,12 +1593,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ClassFieldInitialization::ClassBody(None)
                 }
             }
-            RawClassFieldInitialization::Method(_) | RawClassFieldInitialization::Uninitialized
+            RawClassFieldInitialization::Method(_, MethodAttributeTarget::Class) => {
+                ClassFieldInitialization::ClassBody(None)
+            }
+            RawClassFieldInitialization::Method(_, MethodAttributeTarget::Instance)
+            | RawClassFieldInitialization::Uninitialized
                 if magically_initialized =>
             {
                 ClassFieldInitialization::Magic
             }
-            RawClassFieldInitialization::Method(_) => ClassFieldInitialization::Method,
+            RawClassFieldInitialization::Method(_, MethodAttributeTarget::Instance) => {
+                ClassFieldInitialization::Method
+            }
             RawClassFieldInitialization::Uninitialized => ClassFieldInitialization::Uninitialized,
         }
     }

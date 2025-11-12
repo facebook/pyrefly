@@ -221,6 +221,28 @@ class MyTestCase:
 );
 
 testcase!(
+    bug = "Attributes assigned in TestCase.setUpClass should be available on the class",
+    test_class_attribute_in_setup_class,
+    r#"
+from unittest import TestCase
+
+class Base(TestCase):
+    shared: int
+
+class Child(Base):
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.shared = 1
+
+    def test_shared(self) -> None:
+        assert self.shared == 1
+
+Child.shared
+    "#,
+);
+
+testcase!(
     bug = "Example of how making methods read-write but not invariant is unsound",
     test_method_assign,
     r#"
