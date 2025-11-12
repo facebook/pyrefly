@@ -158,6 +158,15 @@ impl ClassAttribute {
             | ClassAttribute::Descriptor(..) => None,
         }
     }
+
+    pub fn is_read_only(&self) -> bool {
+        match self {
+            ClassAttribute::ReadOnly(_, _)
+            | ClassAttribute::Property(_, None, _)
+            | ClassAttribute::Descriptor(Descriptor { setter: false, .. }, _) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
@@ -672,7 +681,8 @@ impl ClassField {
         }
     }
 
-    /// Check if this field is read-only for any reason.
+    /// Check if this simple field is read-only for any reason.
+    /// This does not handle properties and descriptors.
     fn is_read_only(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Simple {
@@ -2198,53 +2208,63 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             metadata: Arc<ClassMetadata>,
             field: ClassField,
             ty: Type,
+            read_only: bool,
         }
 
-        let mro = self.get_mro_for_class(cls);
-        let mut inherited_fields: SmallMap<&Name, Vec<InheritedFieldInfo>> = SmallMap::new();
         let current_class_fields: SmallSet<_> = cls.fields().collect();
+        let current_class_metadata = self.get_metadata_for_class(cls);
+        let current_class_bases = self.get_base_types_for_class(cls);
+        let swallow_access_errors = self.error_swallower();
+        let mut inherited_fields: SmallMap<&Name, Vec<InheritedFieldInfo>> = SmallMap::new();
 
-        for parent_cls in mro.ancestors_no_object().iter() {
-            let class_object = parent_cls.class_object();
-            let class_fields = class_object.fields();
-            let parent_metadata = self.get_metadata_for_class(class_object);
-            for field in class_fields {
-                if !self.should_check_field_for_override_consistency(field) {
+        for parent_class in current_class_bases.iter() {
+            let parent_class_object = parent_class.class_object();
+            let parent_class_fields = parent_class_object.fields();
+            let parent_metadata = self.get_metadata_for_class(parent_class_object);
+            for parent_field_name in parent_class_fields {
+                if !self.should_check_field_for_override_consistency(parent_field_name) {
                     continue;
                 }
-                if current_class_fields.contains(field) {
+                if current_class_fields.contains(parent_field_name) {
                     continue;
                 }
-                let key = KeyClassField(class_object.index(), field.clone());
-                let field_entry = self.get_from_class(cls, &key);
-                let Some(field_entry) = field_entry.as_ref() else {
-                    continue;
-                };
-                if let Some(parent_member) = self.get_class_member(class_object, field) {
+                if let Some(parent_member) =
+                    self.get_class_member(parent_class_object, parent_field_name)
+                {
                     let parent_field = Arc::unwrap_or_clone(parent_member.value.clone());
-                    // Get instance method types for fields that are methods, otherwise use the field type directly.
-                    let ty = self
-                        .as_instance_attribute(
-                            field,
-                            &parent_field,
-                            &Instance::of_protocol(parent_cls, self.instantiate(cls)),
-                        )
-                        .as_instance_method()
-                        .unwrap_or(field_entry.ty());
-                    inherited_fields
-                        .entry(field)
-                        .or_default()
-                        .push(InheritedFieldInfo {
-                            class: class_object.dupe(),
+                    let class_attr = self.as_instance_attribute(
+                        parent_field_name,
+                        &parent_field,
+                        &Instance::of_protocol(parent_class, self.instantiate(cls)),
+                    );
+                    let read_only = class_attr.is_read_only();
+                    // For simple fields and methods, use their types directly
+                    // For properties and descriptors, call their getter and use the result
+                    let Ok(ty) = self.resolve_get_class_attr(
+                        parent_field_name,
+                        class_attr,
+                        TextRange::default(),
+                        &swallow_access_errors,
+                        None,
+                    ) else {
+                        continue;
+                    };
+                    // If there is an access error or the result is an overload, skip it
+                    if ty.is_error() {
+                        continue;
+                    }
+                    inherited_fields.entry(parent_field_name).or_default().push(
+                        InheritedFieldInfo {
+                            class: parent_class_object.dupe(),
                             metadata: parent_metadata.clone(),
                             field: parent_field,
                             ty,
-                        });
+                            read_only,
+                        },
+                    );
                 }
             }
         }
-
-        let child_metadata = self.get_metadata_for_class(cls);
 
         for (field_name, inherited_field_infos_by_ancestor) in inherited_fields.iter() {
             if inherited_field_infos_by_ancestor.len() > 1 {
@@ -2277,7 +2297,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // Read-write fields should check that parent field's type
                         // is assignable to the intersection.
                         // Skip function types for this check for now.
-                        if !info.field.is_read_only()
+                        if !info.read_only
                             && !info.ty.is_function_type()
                             && !self.is_subset_eq(&info.ty, &intersect)
                         {
@@ -2299,7 +2319,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(child_member) = self.get_class_member(cls, field_name) {
                     let child_field = Arc::unwrap_or_clone(child_member.value.clone());
                     if self
-                        .typed_dict_field_info(child_metadata.as_ref(), field_name, &child_field)
+                        .typed_dict_field_info(
+                            current_class_metadata.as_ref(),
+                            field_name,
+                            &child_field,
+                        )
                         .is_some()
                     {
                         for info in inherited_field_infos_by_ancestor {
@@ -2312,7 +2336,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .is_some()
                                 && !self.validate_typed_dict_field_override(
                                     cls,
-                                    child_metadata.as_ref(),
+                                    current_class_metadata.as_ref(),
                                     &info.class,
                                     info.metadata.as_ref(),
                                     field_name,
