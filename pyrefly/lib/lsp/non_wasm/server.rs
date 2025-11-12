@@ -1218,27 +1218,6 @@ impl Server {
         self.outgoing_requests.lock().insert(id, request);
     }
 
-    fn publish_diagnostics_for_paths(&self, diags: SmallMap<PathBuf, Vec<Diagnostic>>) {
-        let mut entries: Vec<(PathBuf, Url, Vec<Diagnostic>)> = Vec::with_capacity(diags.len());
-        for (path, diagnostics) in diags {
-            if let Some(uri) = self
-                .unopened_file_tracker
-                .uri_for_path(&path)
-                .or_else(|| Url::from_file_path(&path).ok())
-            {
-                entries.push((path, uri, diagnostics));
-            } else {
-                eprintln!("Unable to convert path to uri: {path:?}");
-            }
-        }
-
-        for (path, uri, diagnostics) in entries {
-            let version = self.version_info.lock().get(&path).copied();
-            self.connection
-                .publish_diagnostics_for_uri(uri, diagnostics, version);
-        }
-    }
-
     /// Run the transaction with the in-memory content of open files. Returns the handles of open files when the transaction is done.
     fn validate_in_memory_for_transaction(
         state: &State,
