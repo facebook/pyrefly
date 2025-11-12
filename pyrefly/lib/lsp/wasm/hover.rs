@@ -296,8 +296,12 @@ pub fn get_hover(
         .into_iter()
         .next()
     {
+        let mut kind = metadata.symbol_kind();
+        if matches!(kind, Some(SymbolKind::Attribute)) && type_.is_function_type() {
+            kind = Some(SymbolKind::Method);
+        }
         (
-            metadata.symbol_kind(),
+            kind,
             Some(module.code_at(definition_location).to_owned()),
             docstring_range,
             Some(module),
