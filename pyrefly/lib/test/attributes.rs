@@ -497,13 +497,9 @@ assert_type(x, int)
     "#,
 );
 
-// We currently treat `Callable` as not having method binding behavior. This is
-// not compatible with Pyright and mypy, both of which assume in the face of
-// ambiguity that the callable is probably a function or lambda.
-//
+// To align with mypy & pyright, ClassVar[Callable] attributes should have method binding behavior
 // See https://discuss.python.org/t/when-should-we-assume-callable-types-are-method-descriptors/92938
 testcase!(
-    bug = "We probably need to treat `f` as a method here.",
     test_callable_as_class_var,
     r#"
 from typing import assert_type, Callable, ClassVar
@@ -511,8 +507,7 @@ def get_callback() -> Callable[[object, int], int]: ...
 class C:
     f: ClassVar[Callable[[object, int], int]] = get_callback()
 assert_type(C.f(None, 1), int)
-# We probably should to be treating f as a bound method here.
-assert_type(C().f(None, 1), int)
+assert_type(C().f(1), int)
 "#,
 );
 

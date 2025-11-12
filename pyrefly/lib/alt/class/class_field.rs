@@ -642,6 +642,14 @@ impl ClassField {
         }
     }
 
+    fn is_callable_class_var(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Simple { annotation, .. } => annotation.as_ref().is_some_and(|ann| {
+                ann.is_class_var() && matches!(ann.get_type(), Type::Callable(_))
+            }),
+        }
+    }
+
     pub fn is_init_var(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Simple { annotation, .. } => {
@@ -1695,11 +1703,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ClassFieldInitialization::ClassBody(_) => {
                         // bind_instance matches on the type, so resolve it if we can
                         self.expand_vars_mut(&mut ty);
-                        // If the field is a dunder & the type is a callable, we replace it with a named function
-                        // so that it gets treated as a bound method
+                        // If the field is a dunder or ClassVar[Callable] & the assigned value is a callable, we replace it with a named function
+                        // so that it gets treated as a bound method.
+                        //
+                        // Both of these are heuristics that aren't guaranteed to be correct, but the dunder heuristic has useability benefits
+                        // and the ClassVar heuristic aligns us with existing type checkers.
                         let field_name_str = field_name.as_str();
-                        if field_name_str.starts_with("__")
-                            && field_name_str.ends_with("__")
+                        let is_dunder =
+                            field_name_str.starts_with("__") && field_name_str.ends_with("__");
+                        if (is_dunder || field.is_callable_class_var())
                             && let Type::Callable(box callable) = ty
                         {
                             let module = self.module();
