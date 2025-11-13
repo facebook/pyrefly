@@ -1940,18 +1940,50 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 return false;
             }
-        } else if parent_info.required && !child_info.required {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
-                format!(
-                    "TypedDict field `{field_name}` in `{}` cannot be made non-required; parent TypedDict `{}` defines it as required",
-                    child_cls.name(),
-                    parent_cls.name()
-                ),
-            );
-            return false;
+            if !self.is_equal(&child_info.ty, &parent_info.ty) {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                    format!(
+                        "TypedDict field `{field_name}` in `{}` has incompatible type `{}`; expected `{}` from parent TypedDict `{}`",
+                        child_cls.name(),
+                        self.for_display(child_info.ty.clone()),
+                        self.for_display(parent_info.ty.clone()),
+                        parent_cls.name()
+                    ),
+                );
+                return false;
+            }
+        } else {
+            if parent_info.required && !child_info.required {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                    format!(
+                        "TypedDict field `{field_name}` in `{}` cannot be made non-required; parent TypedDict `{}` defines it as required",
+                        child_cls.name(),
+                        parent_cls.name()
+                    ),
+                );
+                return false;
+            }
+            if !self.is_subset_eq(&child_info.ty, &parent_info.ty) {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                    format!(
+                        "TypedDict field `{field_name}` in `{}` with type `{}` is not assignable to read-only field type `{}` in parent TypedDict `{}`",
+                        child_cls.name(),
+                        self.for_display(child_info.ty.clone()),
+                        self.for_display(parent_info.ty.clone()),
+                        parent_cls.name()
+                    ),
+                );
+                return false;
+            }
         }
 
         true

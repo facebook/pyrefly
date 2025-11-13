@@ -200,6 +200,37 @@ class ChildReadOnly(ParentMutable):
 );
 
 testcase!(
+    test_typed_dict_inheritance_type_compatibility,
+    r#"
+from typing import ReadOnly, TypedDict
+
+class ParentMutable(TypedDict):
+    x: int
+
+class ChildMutableMismatch(ParentMutable):
+    x: str  # E: TypedDict field `x` in `ChildMutableMismatch` has incompatible type `str`; expected `int` from parent TypedDict `ParentMutable`
+
+class ParentReadOnlyWide(TypedDict):
+    x: ReadOnly[object]
+
+class ChildReadOnlyAssignable(ParentReadOnlyWide):
+    x: ReadOnly[int]
+
+class ChildMutableAssignable(ParentReadOnlyWide):
+    x: int
+
+class ParentReadOnlyStrict(TypedDict):
+    y: ReadOnly[int]
+
+class ChildReadOnlyNotAssignable(ParentReadOnlyStrict):
+    y: ReadOnly[str]  # E: TypedDict field `y` in `ChildReadOnlyNotAssignable` with type `str` is not assignable to read-only field type `int` in parent TypedDict `ParentReadOnlyStrict`
+
+class ChildMutableNotAssignable(ParentReadOnlyStrict):
+    y: str  # E: TypedDict field `y` in `ChildMutableNotAssignable` with type `str` is not assignable to read-only field type `int` in parent TypedDict `ParentReadOnlyStrict`
+"#,
+);
+
+testcase!(
     test_typed_dict_contextual,
     r#"
 from typing import TypedDict
