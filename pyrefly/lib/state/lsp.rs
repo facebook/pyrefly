@@ -13,6 +13,7 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
 use lsp_types::CompletionItem;
+use lsp_types::CompletionItemLabelDetails;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemTag;
 use lsp_types::DocumentSymbol;
@@ -149,6 +150,7 @@ pub enum DisplayTypeErrors {
 
 const RESOLVE_EXPORT_INITIAL_GAS: Gas = Gas::new(100);
 const MIN_CHARACTERS_TYPED_AUTOIMPORT: usize = 3;
+const AUTO_IMPORT_LABEL_DETAIL: &str = "auto-import";
 
 #[derive(Clone, Debug)]
 pub struct FindPreference {
@@ -2279,6 +2281,7 @@ impl<'a> Transaction<'a> {
                 {
                     continue;
                 }
+                let module_description = handle_to_import_from.module().as_str().to_owned();
                 let (insert_text, additional_text_edits) = {
                     let (position, insert_text) = insert_import_edit(
                         &ast,
@@ -2303,6 +2306,10 @@ impl<'a> Transaction<'a> {
                             Some(k.to_lsp_completion_item_kind())
                         }),
                     additional_text_edits,
+                    label_details: Some(CompletionItemLabelDetails {
+                        detail: Some(AUTO_IMPORT_LABEL_DETAIL.to_owned()),
+                        description: Some(module_description),
+                    }),
                     tags: if export.is_deprecated {
                         Some(vec![CompletionItemTag::DEPRECATED])
                     } else {
@@ -2316,7 +2323,7 @@ impl<'a> Transaction<'a> {
                 if module_name == handle.module() {
                     continue;
                 }
-                let module_name_str = module_name.as_str();
+                let module_name_str = module_name.as_str().to_owned();
                 if let Some(module_handle) = self.import_handle(handle, module_name, None).finding()
                 {
                     let (insert_text, additional_text_edits) = {
@@ -2330,10 +2337,14 @@ impl<'a> Transaction<'a> {
                         (Some(insert_text), Some(vec![import_text_edit]))
                     };
                     completions.push(CompletionItem {
-                        label: module_name_str.to_owned(),
+                        label: module_name_str.clone(),
                         detail: insert_text,
                         kind: Some(CompletionItemKind::MODULE),
                         additional_text_edits,
+                        label_details: Some(CompletionItemLabelDetails {
+                            detail: Some(AUTO_IMPORT_LABEL_DETAIL.to_owned()),
+                            description: Some(module_name_str),
+                        }),
                         ..Default::default()
                     });
                 }
