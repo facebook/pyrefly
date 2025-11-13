@@ -932,12 +932,21 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     &want,
                 )
             }
-            (t1, Type::Quantified(q)) => match q.restriction() {
-                // This only works for constraints and not bounds, because a TypeVar must resolve to exactly one of its constraints.
-                Restriction::Constraints(constraints) => all(constraints.iter(), |constraint| {
-                    self.is_subset_eq(t1, constraint)
-                }),
-                _ => Err(SubsetError::Other),
+            (t1, Type::Quantified(q)) => {
+                // Allow 'Any' to match any TypeVar
+                if let Type::ClassType(t1_class) = t1 {
+                    if self.type_order.extends_any(t1_class.class_object()) {
+                        return Ok(());
+                    }
+                }
+                match q.restriction() {
+                    Restriction::Constraints(constraints) => all(constraints.iter(), |constraint| {
+                        self.is_subset_eq(t1, constraint)
+                    }),
+                    // Handle 'Unrestricted' and 'Bound' TypeVars
+                    Restriction::Unrestricted => Ok(()),
+                    Restriction::Bound(bound) => self.is_subset_eq(t1, bound),
+                }
             },
             (Type::Union(ls), u) => all(ls.iter(), |l| self.is_subset_eq(l, u)),
             (l, Type::Intersect(us)) => all(us.iter(), |u| self.is_subset_eq(l, u)),
