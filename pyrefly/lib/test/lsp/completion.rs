@@ -14,10 +14,10 @@ use ruff_text_size::TextSize;
 use crate::state::lsp::ImportFormat;
 use crate::state::require::Require;
 use crate::state::state::State;
+use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 use crate::test::util::mk_multi_file_state;
-use crate::test::util::extract_cursors_for_test;
 
 #[derive(Default)]
 struct ResultsFilter {
