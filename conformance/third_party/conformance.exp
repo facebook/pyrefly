@@ -10904,10 +10904,10 @@
     {
       "code": -2,
       "column": 4,
-      "concise_description": "Class member `Y1.x` overrides parent class `X1` in an inconsistent manner",
-      "description": "Class member `Y1.x` overrides parent class `X1` in an inconsistent manner\n  `Y1.x` has type `int`, which is not consistent with `str` in `X1.x` (the type of read-write attributes cannot be changed)",
+      "concise_description": "TypedDict field `x` in `Y1` has incompatible type `int`; expected `str` from parent TypedDict `X1`",
+      "description": "TypedDict field `x` in `Y1` has incompatible type `int`; expected `str` from parent TypedDict `X1`",
       "line": 55,
-      "name": "bad-override",
+      "name": "bad-typed-dict-key",
       "severity": "error",
       "stop_column": 5,
       "stop_line": 55
@@ -10919,6 +10919,17 @@
       "description": "Field `x` has inconsistent types inherited from multiple base classes\n  Inherited types include:\n    `int` from `X2`\n    `str` from `Y2`",
       "line": 65,
       "name": "inconsistent-inheritance",
+      "severity": "error",
+      "stop_column": 11,
+      "stop_line": 65
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "TypedDict field `x` in `XYZ2` has incompatible type `int`; expected `str` from parent TypedDict `Y2`",
+      "description": "TypedDict field `x` in `XYZ2` has incompatible type `int`; expected `str` from parent TypedDict `Y2`",
+      "line": 65,
+      "name": "bad-typed-dict-key",
       "severity": "error",
       "stop_column": 11,
       "stop_line": 65
@@ -11220,10 +11231,10 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Class member `RecordShop.alt` overrides parent class `AlbumCollection` in an inconsistent manner",
-      "description": "Class member `RecordShop.alt` overrides parent class `AlbumCollection` in an inconsistent manner\n  `RecordShop.alt` has type `list[str]`, which is not assignable to `list[int | str]`, the type of `AlbumCollection.alt`",
+      "concise_description": "TypedDict field `alt` in `RecordShop` with type `list[str]` is not assignable to read-only field type `list[int | str]` in parent TypedDict `AlbumCollection`",
+      "description": "TypedDict field `alt` in `RecordShop` with type `list[str]` is not assignable to read-only field type `list[int | str]` in parent TypedDict `AlbumCollection`",
       "line": 50,
-      "name": "bad-override",
+      "name": "bad-typed-dict-key",
       "severity": "error",
       "stop_column": 8,
       "stop_line": 50
@@ -11312,6 +11323,17 @@
       "description": "Field `x` is declared `float` in ancestor `class TD_A2: ...\n`, which is not assignable to the type `int` implied by multiple inheritance",
       "line": 119,
       "name": "inconsistent-inheritance",
+      "severity": "error",
+      "stop_column": 11,
+      "stop_line": 119
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "TypedDict field `x` in `TD_A` has incompatible type `int`; expected `float` from parent TypedDict `TD_A2`",
+      "description": "TypedDict field `x` in `TD_A` has incompatible type `int`; expected `float` from parent TypedDict `TD_A2`",
+      "line": 119,
+      "name": "bad-typed-dict-key",
       "severity": "error",
       "stop_column": 11,
       "stop_line": 119
