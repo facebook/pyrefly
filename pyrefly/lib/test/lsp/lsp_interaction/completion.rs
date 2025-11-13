@@ -686,6 +686,10 @@ fn test_stdlib_class_completion() {
             "detail": "from email.errors import FirstHeaderLineIsContinuationDefect\n",
             "kind": 7,
             "sortText": "4",
+            "labelDetails": {
+                "detail": "auto-import",
+                "description": "email.errors",
+            },
             "additionalTextEdits": [{
                 "newText": "from email.errors import FirstHeaderLineIsContinuationDefect\n",
                 "range": {
