@@ -585,7 +585,7 @@ impl ImportTracker {
             {
                 continue;
             }
-            if self.module_is_imported(&module) {
+            if self.module_is_imported(module) {
                 continue;
             }
             missing.insert(module);
@@ -593,11 +593,11 @@ impl ImportTracker {
         missing
     }
 
-    fn module_is_imported(&self, module: &ModuleName) -> bool {
+    fn module_is_imported(&self, module: ModuleName) -> bool {
         self.alias_for(module).is_some() || self.has_canonical(module)
     }
 
-    fn alias_for(&self, module: &ModuleName) -> Option<String> {
+    fn alias_for(&self, module: ModuleName) -> Option<String> {
         let target = module.as_str();
         for (alias_module, alias_name) in &self.alias_modules {
             let alias_module_str = alias_module.as_str();
@@ -618,7 +618,7 @@ impl ImportTracker {
         None
     }
 
-    fn has_canonical(&self, module: &ModuleName) -> bool {
+    fn has_canonical(&self, module: ModuleName) -> bool {
         let target = module.as_str();
         self.canonical_modules.iter().any(|imported| {
             let imported_str = imported.as_str();
