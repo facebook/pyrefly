@@ -363,7 +363,7 @@ impl ConfigOverrideArgs {
         (ArcId::new(config), errors)
     }
 
-    pub fn excludes_heuristics_disabled(&self) -> bool {
-        self.disable_project_excludes_heuristics.unwrap_or(false)
+    pub fn disable_project_excludes_heuristics(&self) -> Option<bool> {
+        self.disable_project_excludes_heuristics
     }
 }
