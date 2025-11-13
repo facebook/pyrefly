@@ -468,16 +468,21 @@ impl Playground {
         SemanticTokensLegends::lsp_semantic_token_legends()
     }
 
-    pub fn goto_definition(&mut self, pos: Position) -> Option<Range> {
-        let handle = self.handles.get(&self.active_filename)?;
+    pub fn goto_definition(&mut self, pos: Position) -> Vec<Range> {
+        let handle = match self.handles.get(&self.active_filename) {
+            Some(handle) => handle,
+            None => return Vec::new(),
+        };
         let transaction = self.state.transaction();
-        let position = self.to_text_size(&transaction, pos)?;
-        // TODO: Support goto multiple definitions
+        let position = match self.to_text_size(&transaction, pos) {
+            Some(position) => position,
+            None => return Vec::new(),
+        };
         transaction
             .goto_definition(handle, position)
             .into_iter()
-            .next()
             .map(|r| Range::new(r.module.display_range(r.range)))
+            .collect()
     }
 
     pub fn autocomplete(&self, pos: Position) -> Vec<AutoCompletionItem> {
