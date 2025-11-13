@@ -59,6 +59,7 @@ use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyVariance;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
+use crate::binding::binding::MethodDefinedAttribute;
 use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::MethodThatSetsAttr;
 use crate::binding::binding::NarrowUseLocation;
@@ -2782,7 +2783,7 @@ impl Scopes {
     /// - Panics if the current scope is not a class body.
     pub fn finish_class_and_get_field_definitions(
         &mut self,
-    ) -> SmallMap<Name, (ClassFieldDefinition, TextRange)> {
+    ) -> SmallMap<Name, (ClassFieldDefinition, TextRange, Vec<MethodDefinedAttribute>)> {
         let mut field_definitions = SmallMap::new();
         let class_body = self.pop();
         let class_scope = {
@@ -2811,6 +2812,26 @@ impl Scopes {
                 }
             })
             .collect();
+        let method_assignments_for = |field_name: &Name| {
+            method_attrs
+                .iter()
+                .filter(|(name, _, _)| name.key() == field_name)
+                .flat_map(
+                    |(_, method, InstanceAttribute(values, annotation, range, _))| {
+                        values
+                            .iter()
+                            .cloned()
+                            .map(|value| MethodDefinedAttribute {
+                                method: method.clone(),
+                                value,
+                                annotation: *annotation,
+                                range: *range,
+                            })
+                            .collect::<Vec<_>>()
+                    },
+                )
+                .collect::<Vec<_>>()
+        };
 
         class_body.stat.0.iter_hashed().for_each(
             |(name, static_info)| {
@@ -2874,7 +2895,11 @@ impl Scopes {
                         definition: value.idx,
                     },
                 };
-                field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
+                let method_assignments = method_assignments_for(name.key());
+                field_definitions.insert_hashed(
+                    name.owned(),
+                    (definition, static_info.range, method_assignments),
+                );
             }
         });
         // Merge assignments from different methods.
@@ -2890,6 +2915,7 @@ impl Scopes {
                         receiver_kind: existing_receiver,
                     },
                     _,
+                    existing_method_assignments,
                 )) = field_definitions.get_mut(name.key())
                 {
                     if existing_method.recognized_attribute_defining_method
@@ -2900,6 +2926,14 @@ impl Scopes {
                     } else {
                         // Merge: Either both are constructors (e.g. __new__ and __init__), or both are
                         // helper methods. We combine all their assignments.
+                        existing_method_assignments.extend(values.iter().cloned().map(|value| {
+                            MethodDefinedAttribute {
+                                method: method.clone(),
+                                value,
+                                annotation,
+                                range,
+                            }
+                        }));
                         existing_values.extend(values);
                         if existing_annot.is_none() {
                             *existing_annot = annotation;
@@ -2911,6 +2945,16 @@ impl Scopes {
                         }
                     }
                 } else if !field_definitions.contains_key_hashed(name.as_ref()) {
+                    let method_assignments = values
+                        .iter()
+                        .cloned()
+                        .map(|value| MethodDefinedAttribute {
+                            method: method.clone(),
+                            value,
+                            annotation,
+                            range,
+                        })
+                        .collect();
                     field_definitions.insert_hashed(
                         name,
                         (
@@ -2921,6 +2965,7 @@ impl Scopes {
                                 receiver_kind,
                             },
                             range,
+                            method_assignments,
                         ),
                     );
                 }

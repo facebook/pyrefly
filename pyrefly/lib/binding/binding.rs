@@ -130,7 +130,7 @@ assert_bytes!(BindingClassChecks, 4);
 assert_bytes!(BindingClassDisjointBase, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_bytes!(BindingClassSubscriptSymmetry, 4);
-assert_words!(BindingClassField, 13);
+assert_words!(BindingClassField, 15);
 assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
@@ -3121,16 +3121,18 @@ pub struct BindingClassField {
     pub name: Name,
     pub range: TextRange,
     pub definition: ClassFieldDefinition,
+    pub method_assignments: Arc<[MethodDefinedAttribute]>,
 }
 
 impl DisplayWith<Bindings> for BindingClassField {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         write!(
             f,
-            "BindingClassField({}, {}, {})",
+            "BindingClassField({}, {}, {}, method_assignments = {})",
             ctx.display(self.class_idx),
             self.name,
             self.definition.display_with(ctx),
+            self.method_assignments.len(),
         )
     }
 }
@@ -3151,6 +3153,14 @@ pub struct MethodThatSetsAttr {
 pub enum MethodSelfKind {
     Instance,
     Class,
+}
+
+#[derive(Clone, Debug)]
+pub struct MethodDefinedAttribute {
+    pub method: MethodThatSetsAttr,
+    pub value: ExprOrBinding,
+    pub annotation: Option<Idx<KeyAnnotation>>,
+    pub range: TextRange,
 }
 
 /// Bindings for fields synthesized by a class, such as a dataclass's `__init__` method. This
