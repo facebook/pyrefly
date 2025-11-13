@@ -1887,8 +1887,7 @@ impl<'a> Transaction<'a> {
                                 import_format,
                             );
                             let range = TextRange::at(import_edit.position, TextSize::new(0));
-                            let title =
-                                format!("Insert import: `{}`", import_edit.display_text);
+                            let title = format!("Insert import: `{}`", import_edit.display_text);
                             code_actions.push((
                                 title,
                                 module_info.dupe(),
@@ -2422,10 +2421,8 @@ impl<'a> Transaction<'a> {
                         import_format,
                     );
                     let import_text_edit = TextEdit {
-                        range: module_info.to_lsp_range(TextRange::at(
-                            import_edit.position,
-                            TextSize::new(0),
-                        )),
+                        range: module_info
+                            .to_lsp_range(TextRange::at(import_edit.position, TextSize::new(0))),
                         new_text: import_edit.insert_text.clone(),
                     };
                     (insert_text, Some(vec![import_text_edit]), module_name)
