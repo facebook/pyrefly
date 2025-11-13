@@ -98,6 +98,19 @@ def takes_inferred(i) -> None:
 );
 
 testcase!(
+    test_lambda_type_inferred_from_decorator,
+    r#"
+from typing import Callable, reveal_type
+
+def enforce_int_arg(func: Callable[[int], int]) -> Callable[[int], int]:
+    return func
+
+f = enforce_int_arg(lambda x: x)
+reveal_type(f)  # E: revealed type: (int) -> int
+    "#,
+);
+
+testcase!(
     test_callable_instance,
     r#"
 from typing import Callable, reveal_type
