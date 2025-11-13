@@ -2218,6 +2218,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &field.name,
                 field.range,
                 &field.definition,
+                field.method_assignments.as_ref(),
                 functional_class_def,
                 errors,
             ),

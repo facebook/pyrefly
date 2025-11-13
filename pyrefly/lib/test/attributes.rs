@@ -82,6 +82,24 @@ def f(a: A):
 );
 
 testcase!(
+    bug = "https://github.com/facebook/pyrefly/issues/1159",
+    test_infers_attribute_union_from_class_and_method_assignments,
+    r#"
+from typing import assert_type
+
+class A:
+    value = 1
+
+    def promote(self, flag: bool) -> None:
+        if flag:
+            self.value = "a"
+
+def takes(a: A) -> None:
+    assert_type(a.value, int | str)
+    "#,
+);
+
+testcase!(
     test_unannotated_attribute_bad_assignment,
     r#"
 class A:

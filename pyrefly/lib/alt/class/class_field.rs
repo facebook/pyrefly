@@ -62,6 +62,7 @@ use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::MethodSelfKind;
+use crate::binding::binding::MethodDefinedAttribute;
 use crate::binding::binding::MethodThatSetsAttr;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -1370,6 +1371,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         range: TextRange,
         field_definition: &ClassFieldDefinition,
+        method_assignments: &[MethodDefinedAttribute],
         functional_class_def: bool,
         errors: &ErrorCollector,
     ) -> ClassField {
