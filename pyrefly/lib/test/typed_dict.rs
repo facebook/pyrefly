@@ -1195,8 +1195,8 @@ from typing import TypedDict
 class A(TypedDict):
     x: int
 class B(A):
-    x: str  # E: `B.x` has type `str`, which is not consistent with `int` in `A.x`
-    "#,
+    x: str  # E: TypedDict field `x` in `B` has incompatible type `str`; expected `int` from parent TypedDict `A`
+"#,
 );
 
 testcase!(
