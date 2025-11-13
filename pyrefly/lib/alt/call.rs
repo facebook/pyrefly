@@ -666,6 +666,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ctor_targs: Option<&mut TArgs>,
     ) -> Type {
         let metadata = call_target.function_metadata();
+        if let Some(meta) = metadata
+            && meta.flags.is_abstract_method
+            && self.should_error_on_abstract_call(&call_target)
+        {
+            let method_name = meta.kind.format(self.module().name());
+            self.error(
+                errors,
+                range,
+                ErrorInfo::new(ErrorKind::AbstractMethodCall, context),
+                format!("Cannot call abstract method `{method_name}`"),
+            );
+        }
         // Does this call target correspond to a function whose keyword arguments we should save?
         let kw_metadata = {
             if let Some(m) = metadata
@@ -853,6 +865,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }))
         } else {
             res
+        }
+    }
+
+    fn should_error_on_abstract_call(&self, target: &CallTarget) -> bool {
+        match target {
+            CallTarget::Function(_) | CallTarget::FunctionOverload(..) => true,
+            CallTarget::BoundMethod(obj, _) | CallTarget::BoundMethodOverload(obj, ..) => {
+                self.is_class_object_type(obj)
+            }
+            _ => false,
+        }
+    }
+
+    fn is_class_object_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassDef(_) => true,
+            Type::Type(inner) => self.is_class_object_type(inner),
+            Type::SuperInstance(_) => true,
+            _ => false,
         }
     }
 

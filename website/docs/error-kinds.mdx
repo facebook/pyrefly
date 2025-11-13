@@ -12,6 +12,24 @@ that an error is related to. Every error has exactly one kind.
 The main use of error kinds is as short names ("slugs") that can be used in
 error suppression comments.
 
+## abstract-method-call
+
+This error is raised when code attempts to invoke a method decorated with
+`@abstractmethod`. Abstract methods have no implementation, so calling them is
+always invalid, even if the signature would otherwise match.
+
+```python
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @classmethod
+    @abstractmethod
+    def build(cls) -> "Base": ...
+
+Base.build()
+# Cannot call abstract method `Base.build` [abstract-method-call]
+```
+
 ## annotation-mismatch
 
 This error indicates a mismatch between multiple annotations for a single

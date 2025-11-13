@@ -190,6 +190,51 @@ c = Concrete()
 "#,
 );
 
+testcase!(
+    test_call_abstract_classmethod_errors,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @classmethod
+    @abstractmethod
+    def build(cls) -> "Base": ...
+
+Base.build()  # E: Cannot call abstract method `Base.build`
+"#,
+);
+
+testcase!(
+    test_call_abstract_staticmethod_errors,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @staticmethod
+    @abstractmethod
+    def helper() -> None: ...
+
+Base.helper()  # E: Cannot call abstract method `Base.helper`
+"#,
+);
+
+testcase!(
+    test_call_base_method_directly_errors,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def foo(self) -> None: ...
+
+class Concrete(Base):
+    def foo(self) -> None:
+        print("ok")
+
+Base.foo(Concrete())  # E: Cannot call abstract method `Base.foo`
+"#,
+);
+
 fn env_super_protocol() -> TestEnv {
     let mut env = TestEnv::one_with_path(
         "foo",
