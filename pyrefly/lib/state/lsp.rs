@@ -1886,9 +1886,15 @@ impl<'a> Transaction<'a> {
                                 unknown_name,
                                 import_format,
                             );
-                            let range = TextRange::at(position, TextSize::new(0));
-                            let title = format!("Insert import: `{}`", insert_text.trim());
-                            code_actions.push((title, module_info.dupe(), range, insert_text));
+                            let range = TextRange::at(import_edit.position, TextSize::new(0));
+                            let title =
+                                format!("Insert import: `{}`", import_edit.display_text);
+                            code_actions.push((
+                                title,
+                                module_info.dupe(),
+                                range,
+                                import_edit.insert_text,
+                            ));
                         }
 
                         for module_name in self.search_modules_fuzzy(unknown_name) {
@@ -2416,8 +2422,11 @@ impl<'a> Transaction<'a> {
                         import_format,
                     );
                     let import_text_edit = TextEdit {
-                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                        new_text: insert_text.clone(),
+                        range: module_info.to_lsp_range(TextRange::at(
+                            import_edit.position,
+                            TextSize::new(0),
+                        )),
+                        new_text: import_edit.insert_text.clone(),
                     };
                     (insert_text, Some(vec![import_text_edit]), module_name)
                 };

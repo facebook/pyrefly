@@ -16,6 +16,8 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtImportFrom;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -31,6 +33,13 @@ use crate::export::exports::Export;
 use crate::state::lsp::ImportFormat;
 
 const KEY_TO_DEFINITION_INITIAL_GAS: Gas = Gas::new(100);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportEdit {
+    pub position: TextSize,
+    pub insert_text: String,
+    pub display_text: String,
+}
 
 pub enum IntermediateDefinition {
     Local(Export),
@@ -241,6 +250,25 @@ pub fn insert_import_edit_with_forced_import_format(
         relative_module
     } else {
         handle_to_import_from.module()
+    };
+    let display_text = format!(
+        "from {} import {}",
+        module_name_to_import.as_str(),
+        export_name
+    );
+    if let Some((position, insert_text)) =
+        try_extend_existing_from_import(ast, module_name_to_import.as_str(), export_name)
+    {
+        return ImportEdit {
+            position,
+            insert_text,
+            display_text,
+        };
+    }
+    let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
+        first_stmt.range().start()
+    } else {
+        ast.range.end()
     };
     let insert_text = format!(
         "from {} import {}\n",
