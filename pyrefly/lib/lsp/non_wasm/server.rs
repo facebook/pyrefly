@@ -2392,20 +2392,29 @@ impl Server {
             .into_iter()
             .filter_map(|x| {
                 // If the url is a notebook cell, filter out inlay hints for other cells
-                if info.to_cell_for_lsp(x.0) != maybe_cell_idx {
+                if info.to_cell_for_lsp(x.position) != maybe_cell_idx {
                     return None;
                 }
-                let position = info.to_lsp_position(x.0);
+                let position = info.to_lsp_position(x.position);
                 // The range is half-open, so the end position is exclusive according to the spec.
                 if position >= range.start && position < range.end {
+                    let mut text_edits = Vec::with_capacity(1 + x.import_edits.len());
+                    text_edits.push(TextEdit {
+                        range: Range::new(position, position),
+                        new_text: x.label.clone(),
+                    });
+                    for (offset, import_text) in x.import_edits {
+                        let insert_position = info.to_lsp_position(offset);
+                        text_edits.push(TextEdit {
+                            range: Range::new(insert_position, insert_position),
+                            new_text: import_text,
+                        });
+                    }
                     Some(InlayHint {
                         position,
-                        label: InlayHintLabel::String(x.1.clone()),
+                        label: InlayHintLabel::String(x.label),
                         kind: None,
-                        text_edits: Some(vec![TextEdit {
-                            range: Range::new(position, position),
-                            new_text: x.1,
-                        }]),
+                        text_edits: Some(text_edits),
                         tooltip: None,
                         padding_left: None,
                         padding_right: None,
