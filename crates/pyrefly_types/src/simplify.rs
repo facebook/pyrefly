@@ -263,17 +263,15 @@ fn collapse_tuple_unions_with_empty(types: &mut Vec<Type>) {
             }
             Type::Tuple(Tuple::Unpacked(unpacked)) => {
                 let (prefix, middle, suffix) = &**unpacked;
-                if prefix.len() + suffix.len() == 1 {
-                    if let Type::Tuple(Tuple::Unbounded(elem)) = middle {
-                        if prefix
-                            .iter()
-                            .chain(suffix.iter())
-                            .all(|fixed| fixed == elem.as_ref())
-                        {
-                            *ty = Type::Tuple(Tuple::Unbounded(Box::new(elem.as_ref().clone())));
-                            empty_is_redundant = true;
-                        }
-                    }
+                if prefix.len() + suffix.len() == 1
+                    && let Type::Tuple(Tuple::Unbounded(elem)) = middle
+                    && prefix
+                        .iter()
+                        .chain(suffix.iter())
+                        .all(|fixed| fixed == elem.as_ref())
+                {
+                    *ty = Type::Tuple(Tuple::Unbounded(Box::new(elem.as_ref().clone())));
+                    empty_is_redundant = true;
                 }
             }
             _ => {}
