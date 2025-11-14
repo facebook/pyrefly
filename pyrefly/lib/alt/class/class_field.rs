@@ -15,6 +15,7 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_types::callable::FuncFlags;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
@@ -2654,6 +2655,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let derived_instance = self.instantiate(cls);
         for ancestor in self.get_mro_for_class(cls).ancestors(self.stdlib) {
             let parent_cls = ancestor.class_object();
+            match parent_cls.module_path().details() {
+                ModulePathDetails::BundledTypeshed(_)
+                | ModulePathDetails::BundledTypeshedThirdParty(_) => {
+                    continue;
+                }
+                _ => {}
+            }
             let Some(member) = self.get_class_member(parent_cls, name) else {
                 continue;
             };
