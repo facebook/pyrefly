@@ -151,6 +151,24 @@ class Derived2(Base):
 );
 
 testcase!(
+    test_override_infers_parameter_type,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+
+T = TypeVar("T")
+
+class G(Generic[T]):
+    def foo(self, value: T) -> T:
+        return value
+
+class C(G[int]):
+    def foo(self, value):
+        reveal_type(value)  # E: revealed type: int
+        return value
+    "#,
+);
+
+testcase!(
     test_no_base_override,
     r#"
 from typing import override

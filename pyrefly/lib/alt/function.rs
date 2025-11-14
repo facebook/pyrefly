@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::VecDeque;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -29,6 +30,7 @@ use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
@@ -83,6 +85,62 @@ fn is_class_property_decorator_type(ty: &Type) -> bool {
         Type::ClassDef(cls) => is_class_property_decorator_class_object(cls),
         Type::ClassType(cls) => is_class_property_decorator_class_object(cls.class_object()),
         _ => false,
+    }
+}
+
+struct ParentParamHints {
+    posonly: VecDeque<Type>,
+    positional: VecDeque<Type>,
+    kwonly: SmallMap<Name, Type>,
+    vararg: Option<Type>,
+    kwargs: Option<Type>,
+}
+
+impl ParentParamHints {
+    fn new(params: ParamList, drop_first: bool) -> Self {
+        let mut items = params.into_items().into_iter();
+        if drop_first {
+            items.next();
+        }
+        let mut hints = Self {
+            posonly: VecDeque::new(),
+            positional: VecDeque::new(),
+            kwonly: SmallMap::new(),
+            vararg: None,
+            kwargs: None,
+        };
+        for param in items {
+            match param {
+                Param::PosOnly(_, ty, _) => hints.posonly.push_back(ty),
+                Param::Pos(_, ty, _) => hints.positional.push_back(ty),
+                Param::VarArg(_, ty) => hints.vararg = Some(ty),
+                Param::KwOnly(name, ty, _) => {
+                    hints.kwonly.insert(name, ty);
+                }
+                Param::Kwargs(_, ty) => hints.kwargs = Some(ty),
+            }
+        }
+        hints
+    }
+
+    fn take_posonly(&mut self) -> Option<Type> {
+        self.posonly.pop_front()
+    }
+
+    fn take_positional(&mut self) -> Option<Type> {
+        self.positional.pop_front()
+    }
+
+    fn take_vararg(&mut self) -> Option<Type> {
+        self.vararg.take()
+    }
+
+    fn take_kwonly(&mut self, name: &Identifier) -> Option<Type> {
+        self.kwonly.shift_remove(&name.id)
+    }
+
+    fn take_kwargs(&mut self) -> Option<Type> {
+        self.kwargs.take()
     }
 }
 
@@ -674,8 +732,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 decorator_hint,
                 errors,
             );
-            Param::PosOnly(Some(x.parameter.name.id.clone()), ty, required)
-        }));
+            params.push(Param::PosOnly(
+                Some(x.parameter.name.id.clone()),
+                ty,
+                required,
+            ));
+        }
 
         // See: https://typing.python.org/en/latest/spec/historical.html#positional-only-parameters
         let is_historical_args_usage =
@@ -710,14 +772,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
 
-                Param::PosOnly(Some(x.parameter.name.id.clone()), ty, required)
+                params.push(Param::PosOnly(
+                    Some(x.parameter.name.id.clone()),
+                    ty,
+                    required,
+                ));
             } else {
                 seen_keyword_args |=
                     x.parameter.name.as_str() != "self" && x.parameter.name.as_str() != "cls";
-                Param::Pos(x.parameter.name.id.clone(), ty, required)
+                params.push(Param::Pos(x.parameter.name.id.clone(), ty, required));
             }
-        }));
-        params.extend(def.parameters.vararg.iter().map(|x| {
+        }
+
+        if let Some(x) = def.parameters.vararg.as_ref() {
+            let hint = parent_hints.as_mut().and_then(|h| (**h).take_vararg());
             let (ty, _) = self.get_param_type_and_requiredness(
                 &x.name,
                 None,
@@ -729,8 +797,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if let Type::Args(q) = &ty {
                 paramspec_args = Some(q.clone());
             }
-            Param::VarArg(Some(x.name.id.clone()), ty)
-        }));
+            params.push(Param::VarArg(Some(x.name.id.clone()), ty));
+        }
         if paramspec_args.is_some()
             && let Some(param) = def.parameters.kwonlyargs.first()
         {
@@ -744,7 +812,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             );
         }
-        params.extend(def.parameters.kwonlyargs.iter().map(|x| {
+        for x in def.parameters.kwonlyargs.iter() {
+            let hint = parent_hints
+                .as_mut()
+                .and_then(|h| (**h).take_kwonly(&x.parameter.name));
             let (ty, required) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
@@ -753,9 +824,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None,
                 errors,
             );
-            Param::KwOnly(x.parameter.name.id.clone(), ty, required)
-        }));
+            params.push(Param::KwOnly(x.parameter.name.id.clone(), ty, required));
+        }
         if let Some(x) = &def.parameters.kwarg {
+            let hint = parent_hints.as_mut().and_then(|h| (**h).take_kwargs());
             let (ty, _) = self.get_param_type_and_requiredness(
                 &x.name,
                 None,
