@@ -1870,6 +1870,17 @@ testcase!(
     "#,
 );
 
+// Ref https://github.com/facebook/pyrefly/issues/273
+testcase!(
+    test_union_empty_tuple_and_variadic_tuple,
+    r#"
+from typing import assert_type
+
+def f(x: tuple[()] | tuple[int, *tuple[int, ...]]):
+    assert_type(x, tuple[int, ...])
+    "#,
+);
+
 testcase!(
     test_asyncio_gather,
     r#"
