@@ -313,14 +313,16 @@ impl ServerConnection {
         &self,
         diags: SmallMap<PathBuf, Vec<Diagnostic>>,
         notebook_cell_urls: SmallMap<PathBuf, Url>,
+        version_info: &HashMap<PathBuf, i32>,
     ) {
         for (path, diags) in diags {
             if let Some(url) = notebook_cell_urls.get(&path) {
                 self.publish_diagnostics_for_uri(url.clone(), diags, None)
             } else {
                 let path = path.absolutize();
+                let version = version_info.get(&path).copied();
                 match Url::from_file_path(&path) {
-                    Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, None),
+                    Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, version),
                     Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
                 }
             }
@@ -1423,8 +1425,11 @@ impl Server {
                 Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
                 Self::append_unused_parameter_diagnostics(transaction, &handle, diagnostics);
             }
-            self.connection
-                .publish_diagnostics(diags, notebook_cell_urls);
+            self.connection.publish_diagnostics(
+                diags,
+                notebook_cell_urls,
+                &*self.version_info.lock(),
+            );
             if self
                 .initialize_params
                 .capabilities
@@ -1903,17 +1908,21 @@ impl Server {
 
     fn did_close(&self, url: Url) {
         let uri = url.to_file_path().unwrap();
-        self.version_info.lock().remove(&uri);
+        let version = self
+            .version_info
+            .lock()
+            .remove(&uri)
+            .map(|version| version + 1);
         let open_files = self.open_files.dupe();
         if let Some(LspFile::Notebook(notebook)) = open_files.write().remove(&uri).as_deref() {
             for cell in notebook.cell_urls() {
                 self.connection
-                    .publish_diagnostics_for_uri(cell.clone(), Vec::new(), None);
+                    .publish_diagnostics_for_uri(cell.clone(), Vec::new(), version);
                 self.open_notebook_cells.write().remove(cell);
             }
         } else {
             self.connection
-                .publish_diagnostics_for_uri(url, Vec::new(), None);
+                .publish_diagnostics_for_uri(url, Vec::new(), version);
         }
         let state = self.state.dupe();
         let lsp_queue = self.lsp_queue.dupe();
