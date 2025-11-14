@@ -102,7 +102,6 @@ kwarg(xs=[B()], ys=[B()])
 );
 
 testcase!(
-    bug = "Both assignments should be allowed. When decomposing the contextual hint, we eagerly resolve vars to the 'first' branch of the union. Note: due to the union's sorted representation, the first branch is not necessarily the first in source order.",
     test_contextual_typing_against_unions,
     r#"
 class A: ...
@@ -110,7 +109,7 @@ class B: ...
 class B2(B): ...
 class C: ...
 
-x: list[A] | list[B] = [B2()] # E: `list[B2]` is not assignable to `list[A] | list[B]`
+x: list[A] | list[B] = [B2()]
 y: list[B] | list[C] = [B2()]
 "#,
 );
@@ -266,7 +265,6 @@ x2: list[A] = True and [B()]
 );
 
 testcase!(
-    bug = "x or y or ... fails due to union hints, see test_contextual_typing_against_unions",
     test_context_boolop_soft,
     r#"
 from typing import TypedDict, assert_type
@@ -280,7 +278,7 @@ def test(x: list[A] | None, y: list[C] | None, z: TD | None) -> None:
     assert_type(x or [B()], list[A])
     assert_type(x or [0], list[A] | list[int])
     assert_type(x or y or [B()], list[A] | list[C])
-    assert_type(x or y or [D()], list[A] | list[C]) # TODO # E: assert_type(list[A] | list[C] | list[D], list[A] | list[C]) failed
+    assert_type(x or y or [D()], list[A] | list[C])
     assert_type(z or {"x": 0}, TD)
     assert_type(z or {"x": ""}, TD | dict[str, str])
 "#,
