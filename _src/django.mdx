@@ -1,0 +1,280 @@
+---
+title: Experimental Django Support
+description: Pyrefly experimental support for Django ORM.
+---
+
+# Experimental Django Support
+
+Pyrefly includes **experimental support** for [Django](https://www.djangoproject.com/), a popular Python web framework. This feature aims to provide improved static type checking for Django's Object-Relational Mapping (ORM) system, which is used to interact with databases.
+
+> **Note:** This support is experimental and currently covers a subset of Django's ORM features. The implementation is actively evolving based on feedback and development. We currently support Django models, fields, and basic relationships.
+
+### Feedback
+
+We welcome your feedback and suggestions. Please share your thoughts and ideas by opening an issue on [GitHub](https://github.com/facebook/pyrefly/issues).
+
+---
+
+## What is Django?
+
+Django is a high-level Python web framework. One of its core components is the Object-Relational Mapping (ORM) system, which allows developers to interact with databases using Python classes (models) instead of writing SQL queries directly.
+
+Django models define the structure of your database tables, and Django automatically handles the creation and management of the underlying database schema.
+
+---
+
+## Getting Started with Django and Pyrefly
+
+To use Pyrefly with Django, follow these steps:
+
+### 1. Install django-stubs and set up a virtual environment
+
+```bash
+# Install django-stubs
+pip install django-stubs
+
+# Create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 2. Install pyrefly
+
+```bash
+pip install pyrefly
+```
+
+That's it! Pyrefly will automatically recognize Django constructs and provide appropriate type checking.
+
+---
+
+## How Pyrefly Supports Django
+
+Pyrefly provides type inference for Django's ORM without requiring any plugins or manual configuration. It:
+
+- Recognizes Django model classes that inherit from `models.Model`
+- Understands Django field types (`CharField`, `IntegerField`, `ForeignKey`, etc.)
+- Infers types for auto-generated fields (like `id` and `pk`)
+- Handles relationships between models (`ForeignKey`, `ManyToManyField`)
+- Provides special enum support
+- Provides immediate feedback when the code has type errors
+- Does **not** require a plugin or manual config — support is built-in and automatic
+
+---
+
+## Supported Features with Examples
+
+The following examples showcase which Django features are currently supported by Pyrefly. This is a subset of Django's full feature set, but covers the most common use cases.
+
+### Auto-Generated Fields
+
+Django automatically adds certain fields to every model, even if you don't define them explicitly.
+
+#### Primary Key: `id` Field
+
+By default, Django automatically adds an `id` field to serve as the primary key (unless you define a custom primary key):
+
+```python
+from django.db import models
+
+class Reporter(models.Model):
+    full_name = models.CharField(max_length=70)
+    # Django auto-adds: id = models.AutoField(primary_key=True)
+
+reporter = Reporter()
+reveal_type(reporter.id)  # Pyrefly infers: int
+```
+
+#### Custom Primary Keys
+
+If you define a field with `primary_key=True`, Django will not add the `id` field. Pyrefly correctly infers the type of custom primary keys:
+
+```python
+from django.db import models
+
+class Reporter(models.Model):
+    uuid = models.UUIDField(primary_key=True)
+    full_name = models.CharField(max_length=70)
+
+reporter = Reporter()
+reveal_type(reporter.uuid)  # Pyrefly infers: UUID
+reveal_type(reporter.pk)  # Pyrefly infers: UUID (pk aliases the custom primary key)
+```
+
+#### ForeignKey `_id` Suffix Fields
+
+For every `ForeignKey` field named `X`, Django automatically creates a field named `X_id` that stores the ID of the related object:
+
+```python
+class Article(models.Model):
+    reporter = models.ForeignKey(Reporter, on_delete=models.CASCADE)
+    # Django auto-adds: reporter_id: int
+
+article = Article()
+reveal_type(article.reporter_id)  # Pyrefly infers: int
+```
+
+### ForeignKey Relationships
+
+A `ForeignKey` creates a many-to-one relationship where each instance of one model relates to an instance of another model.
+
+```python
+from django.db import models
+
+class Reporter(models.Model):
+    full_name = models.CharField(max_length=70)
+
+class Article(models.Model):
+    reporter = models.ForeignKey(Reporter, on_delete=models.CASCADE)
+```
+
+#### Basic Forward Access
+
+Accessing a `ForeignKey` field returns an instance of the related model:
+
+```python
+article = Article()
+reveal_type(article.reporter)  # Pyrefly infers: Reporter
+```
+
+#### Chained Access
+
+You can access fields on the related model:
+
+```python
+reveal_type(article.reporter.full_name)  # Pyrefly infers: str
+```
+
+#### Nullable ForeignKeys
+
+If a `ForeignKey` has `null=True`, Pyrefly reflects this in the inferred type:
+
+```python
+class Article(models.Model):
+    reporter = models.ForeignKey(Reporter, null=True, on_delete=models.CASCADE)
+
+article = Article()
+reveal_type(article.reporter)  # Pyrefly infers: Reporter | None
+```
+
+### ManyToManyField Relationships
+
+A `ManyToManyField` creates a many-to-many relationship where instances of one model can be related to multiple instances of another model.
+
+```python
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+
+class Book(models.Model):
+    title = models.CharField(max_length=200)
+    authors = models.ManyToManyField(Author, related_name='books')
+```
+
+#### Forward Managers
+
+Accessing a `ManyToManyField` returns a manager object that provides methods to interact with the related objects:
+
+```python
+book = Book()
+reveal_type(book.authors)  # Pyrefly infers: ManyRelatedManager[Author, Model]
+reveal_type(book.authors.all())  # Pyrefly infers: QuerySet[Author, Author]
+```
+
+The manager provides methods like `.add()`, `.remove()`, `.clear()`, and `.all()` to manage the relationship.
+
+---
+
+### Django Model Enums
+
+Pyrefly supports Django's model choices using `Choices`, `IntegerChoices`, and `TextChoices`. These provide type-safe enumerations for model fields.
+
+```python
+from django.db import models
+
+class Vehicle(models.IntegerChoices):
+    CAR = 1, "Car"
+    TRUCK = 2, "Truck"
+    MOTORCYCLE = 3, "Motorcycle"
+
+class Product(models.Model):
+    vehicle_type = models.IntegerField(choices=Vehicle.choices)
+
+# Pyrefly correctly infers enum types
+reveal_type(Vehicle.CAR.value)  # Pyrefly infers: int
+reveal_type(Vehicle.CAR.label)  # Pyrefly infers: str
+reveal_type(Vehicle.values)  # Pyrefly infers: list[int]
+reveal_type(Vehicle.choices)  # Pyrefly infers: list[tuple[int, str]]
+```
+
+Pyrefly also supports `TextChoices` and the base `Choices` class with various value types including `enum.auto()` for automatic value generation.
+
+---
+
+## Differences from Mypy
+
+Mypy uses a plugin (`mypy-django-plugin`) that provides very detailed type information by accessing runtime Django internals and performing multiple passes over the code. Pyrefly takes a different approach by following the type stubs directly without runtime introspection.
+
+### Type Representation Differences
+
+In some cases, such as `ManyToManyField` relationships, Mypy and Pyrefly infer different types:
+
+**Example:**
+
+```python
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+
+class Book(models.Model):
+    title = models.CharField(max_length=200)
+    authors = models.ManyToManyField(Author, related_name="books")
+
+class Article(models.Model):
+    headline = models.CharField(max_length=200)
+    authors = models.ManyToManyField(Author, related_name="articles")
+
+# What types do the managers have?
+book = Book()
+article = Article()
+```
+
+Mypy (with django plugin):
+- `book.authors` has type: `Author_ManyRelatedManager[Book_authors]`
+- `article.authors` has type: `Author_ManyRelatedManager[Article_authors]`
+- These are **different types** (different class name, different type parameter)
+- Mypy will **reject** assigning one to the other
+
+Pyrefly (following stubs):
+- `book.authors` has type: `ManyRelatedManager[Author, Model]`
+- `article.authors` has type: `ManyRelatedManager[Author, Model]`
+- These are the **same type**
+- Pyrefly will **accept** assigning one to the other
+
+---
+
+## Features Not Yet Supported
+
+These are some of the Django features are **not yet supported** in this experimental release:
+
+### Reverse Relationships
+
+Django automatically creates reverse relationships for `ForeignKey` and `ManyToManyField`. For example:
+
+```python
+class Reporter(models.Model):
+    full_name = models.CharField(max_length=70)
+
+class Article(models.Model):
+    reporter = models.ForeignKey(Reporter, on_delete=models.CASCADE)
+
+# Not yet supported:
+reporter = Reporter()
+reveal_type(reporter.article_set)  # Expected: RelatedManager[Article]
+```
+
+### Advanced QuerySet Operations
+
+While basic `.all()` operations are supported, more complex QuerySet operations may not have complete type inference.
+
+Those are not the only unsupported features, so if there are specific features you would like to see, please request them by opening a github issue and adding the Django label to it.

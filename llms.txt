@@ -4,6 +4,7 @@
 
 - [Infer](autotype): Automatically add type annotations to your code with the Pyrefly infer feature.
 - [Configuration](configuration): Configure Pyrefly settings and options
+- [Experimental Django Support](django): Pyrefly experimental support for Django ORM.
 - [Pyrefly Error Kinds](error-kinds): Pyrefly error categories and suppression codes
 - [Pyrefly Error Suppressions](error-suppressions): Learn how to suppress type check errors in Pyrefly with code comments and baseline files.
 - [IDE Installation](IDE): How to add Pyrefly Language Server and Typechecking to your IDE
