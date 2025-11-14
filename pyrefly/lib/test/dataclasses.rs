@@ -13,7 +13,7 @@ use crate::testcase;
 testcase!(
     test_def,
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 import dataclasses
 @dataclasses.dataclass
 class Data:
@@ -26,7 +26,7 @@ assert_type(Data, type[Data])
 testcase!(
     test_fields,
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 import dataclasses
 @dataclasses.dataclass
 class Data:
@@ -438,7 +438,7 @@ C2(x=1)  # OK
 
 @dataclass
 class C3:
-    x: int = field(default="oops")  # E: `str` is not assignable to `int`
+    x: int = field(default="oops")  # E: `Literal['oops']` is not assignable to `int`
     y: str = field(default_factory=factory)  # E: `int` is not assignable to `str`
     "#,
 );

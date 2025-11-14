@@ -30,14 +30,14 @@ def test2[T: A](cls: type[T]) -> T:
 testcase!(
     test_tyvar_mix,
     r#"
-from typing import TypeVar, assert_type
+from typing import Literal, TypeVar, assert_type
 U = TypeVar("U")
 def foo[T](
       x: U  # E: Type parameter U is not included in the type parameter list
     ) -> U:
     return x
 
-assert_type(foo(1), int)
+assert_type(foo(1), Literal[1])
 "#,
 );
 
@@ -123,6 +123,33 @@ assert_type(f(A), A)
 assert_type(f(B), B) 
 assert_type(f(C), C[Any]) 
 assert_type(f(D), D) 
+"#,
+);
+
+testcase!(
+    bug = "regression test for https://github.com/facebook/pyrefly/issues/1138",
+    test_preserve_literal_through_generic_call,
+    r#"
+from typing import Literal, assert_type
+
+def f[T](t: T) -> T:
+    return t
+
+x = 1
+assert_type(x, Literal[1])
+assert_type(f(x), Literal[1])
+assert_type(f(1), Literal[1])
+"#,
+);
+
+testcase!(
+    test_invariant_generic_literal_widens,
+    r#"
+from typing import assert_type
+class A[T]:
+    def __init__(self, x: T) -> None: ...
+a = A(1)
+assert_type(a, A[int])
 "#,
 );
 

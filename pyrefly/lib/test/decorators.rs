@@ -270,7 +270,7 @@ assert_type(C().f("any", b"thing"), Any)
 testcase!(
     test_decorate_to_generic_callable,
     r#"
-from typing import Any, Callable, TypeVar, assert_type
+from typing import Any, Callable, TypeVar, assert_type, Literal
 T = TypeVar('T')
 
 def decorate(f) -> Callable[[Any, T], T]:
@@ -280,7 +280,7 @@ class C:
     @decorate
     def f(self): ...
 
-assert_type(C().f(0), int)
+assert_type(C().f(0), Literal[0])
     "#,
 );
 
@@ -309,7 +309,7 @@ class C:
 testcase!(
     test_decorate_generic_function,
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 
 def decorate[T](f: T) -> T:
     return f
@@ -319,7 +319,7 @@ class C:
     def f[T](self, x: T) -> T:
         return x
 
-assert_type(C().f(0), int)
+assert_type(C().f(0), Literal[0])
     "#,
 );
 
