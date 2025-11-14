@@ -343,6 +343,18 @@ def test2(match: float) -> float:  # E: Function declared to return `float` but 
     "#,
 );
 
+testcase!(
+    test_for_with_reassign,
+    r#"
+from typing import assert_type, Literal
+for i in range((y := 10)):
+    assert_type(i, int)
+    assert_type(y, Literal[10] | str)
+    i = str()  # This doesn't actually flow back into the next iteration
+    y = str()  # But this does
+"#,
+);
+
 fn loop_export_env() -> TestEnv {
     TestEnv::one(
         "imported",

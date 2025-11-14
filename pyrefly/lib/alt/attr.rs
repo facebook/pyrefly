@@ -442,6 +442,7 @@ enum AttributeBase1 {
     TypedDict(TypedDict),
     /// Attribute lookup on a base as part of a subset check against a protocol.
     ProtocolSubset(Box<AttributeBase1>),
+    Intersect(Vec<AttributeBase1>, Vec<AttributeBase1>),
 }
 
 impl AttributeBase1 {
@@ -1261,7 +1262,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     acc.not_found(NotFoundOn::ClassObject(class.class_object().dupe(), base));
                 }
             }
-
             AttributeBase1::ClassObject(class) => {
                 match self.get_class_attribute(class, attr_name) {
                     Some(attr) => acc.found_class_attribute(attr, base),
@@ -1365,6 +1365,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(attr) => acc.found_class_attribute(attr, base),
                 None => acc.not_found(NotFoundOn::ClassInstance(cls.class_object().dupe(), base)),
             },
+            AttributeBase1::Intersect(bases, fallback) => {
+                // For now, only handle the simplest case: if exactly one base has a successful lookup, use it.
+                let mut candidates = Vec::new();
+                for b in bases {
+                    let mut acc_candidate = LookupResult::empty();
+                    self.lookup_attr_from_attribute_base1(b.clone(), attr_name, &mut acc_candidate);
+                    if acc_candidate.not_found.is_empty() && acc_candidate.internal_error.is_empty()
+                    {
+                        candidates.push(acc_candidate.found);
+                    }
+                }
+                if candidates.len() == 1 {
+                    acc.found.extend(candidates.into_iter().next().unwrap());
+                } else {
+                    // TODO: Intersect the candidates instead of using the fallback.
+                    for b in fallback {
+                        self.lookup_attr_from_attribute_base1(b.clone(), attr_name, acc);
+                    }
+                }
+            }
         }
     }
 
@@ -1827,10 +1847,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.stdlib.object().clone(),
                 )),
             },
+            Type::Intersect(x) => {
+                let mut acc_intersect = Vec::new();
+                for t in x.0 {
+                    self.as_attribute_base1(t, &mut acc_intersect);
+                }
+                let mut acc_fallback = Vec::new();
+                self.as_attribute_base1(x.1, &mut acc_fallback);
+                acc.push(AttributeBase1::Intersect(acc_intersect, acc_fallback));
+            }
             // TODO: check to see which ones should have class representations
             Type::SpecialForm(_)
             | Type::Type(_)
-            | Type::Intersect(_)
             | Type::Unpack(_)
             | Type::Concatenate(_, _)
             | Type::ParamSpecValue(_)
@@ -2196,6 +2224,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AttributeBase1::Property(_) => {
                 // TODO(samzhou19815): Support autocomplete for properties
                 {}
+            }
+            AttributeBase1::Intersect(bases, _) => {
+                for b in bases {
+                    self.completions_inner1(b, expected_attribute_name, res);
+                }
             }
         }
     }

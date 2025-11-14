@@ -1986,6 +1986,13 @@ impl DisplayWith<Bindings> for BindingClassField {
 pub struct MethodThatSetsAttr {
     pub method_name: Name,
     pub recognized_attribute_defining_method: bool,
+    pub instance_or_class: MethodSelfKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MethodSelfKind {
+    Instance,
+    Class,
 }
 
 /// Bindings for fields synthesized by a class, such as a dataclass's `__init__` method. This

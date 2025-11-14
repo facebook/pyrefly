@@ -1890,6 +1890,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if matches!(&base, Type::ClassDef(t) if t.name() == "tuple") {
                 base = Type::type_form(Type::SpecialForm(SpecialForm::Tuple));
             }
+            if let Type::Intersect(x) = base {
+                // TODO: Handle subscription of intersections properly.
+                base = x.1;
+            }
             match base {
                 Type::Forall(forall) => {
                     let tys =

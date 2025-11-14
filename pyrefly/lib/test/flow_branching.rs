@@ -1146,12 +1146,12 @@ def f(x: A):
 testcase!(
     test_join_with_unrelated_narrow,
     r#"
-from typing import assert_type
+from typing import assert_type, reveal_type
 class A: pass
 class B: pass
 def f(x: A):
     if isinstance(x, B):
-        assert_type(x, B)
+        reveal_type(x) # E: A & B
     assert_type(x, A)
 # (Illustrating that all code in the body of `f` is reachable)
 class C(A, B): pass

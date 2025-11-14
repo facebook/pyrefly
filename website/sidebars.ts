@@ -61,6 +61,22 @@ let docsSidebar = [
         items: ['IDE', 'IDE-features'],
     },
     {
+        type: 'category' as const,
+        label: 'Third-Party Extensions',
+        items: [
+            {
+                type: 'doc' as const,
+                id: 'pydantic',
+                label: 'Pydantic Support',
+            },
+            {
+                type: 'doc' as const,
+                id: 'django',
+                label: 'Django Support',
+            },
+        ],
+    },
+    {
         type: 'doc' as const,
         id: 'error-suppressions',
         label: 'Error Suppressions',
@@ -74,11 +90,6 @@ let docsSidebar = [
         type: 'doc' as const,
         id: 'import-resolution',
         label: 'Import Resolution',
-    },
-    {
-        type: 'doc' as const,
-        id: 'pydantic',
-        label: 'Pydantic Support',
     },
     {
         type: 'doc' as const,

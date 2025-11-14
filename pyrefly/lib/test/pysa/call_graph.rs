@@ -2303,7 +2303,10 @@ def foo(obj: Token):
         ];
         vec![(
             "test.foo",
-            vec![("5:3-5:30", regular_attribute_access_callees(token))],
+            vec![(
+                "5:3-5:30|artificial-attribute-access|get-attr-constant-literal",
+                regular_attribute_access_callees(token),
+            )],
         )]
     }
 );

@@ -14,6 +14,7 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
+use lsp_types::CompletionItemLabelDetails;
 use lsp_types::CompletionItemTag;
 use lsp_types::DocumentSymbol;
 use lsp_types::FoldingRangeKind;
@@ -1388,7 +1389,7 @@ impl<'a> Transaction<'a> {
             let completions = |ty| solver.completions(ty, Some(name), false);
 
             match base_type {
-                Type::Union(tys) | Type::Intersect(tys) => tys
+                Type::Union(tys) | Type::Intersect(box (tys, _)) => tys
                     .into_iter()
                     .filter_map(|ty_| {
                         self.find_definition_for_base_type(
@@ -1953,7 +1954,7 @@ impl<'a> Transaction<'a> {
                  module,
                  docstring_range: _,
              }| {
-                self.local_references_from_definition(handle, metadata, definition_range, module)
+                self.local_references_from_definition(handle, metadata, definition_range, &module)
             },
         )
         .concat()
@@ -1963,7 +1964,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         definition_range: TextRange,
-        module: Module,
+        module: &Module,
     ) -> Option<Vec<TextRange>> {
         let index = self.get_solutions(handle)?.get_index()?;
         let index = index.lock();
@@ -2045,7 +2046,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         definition_metadata: DefinitionMetadata,
         definition_range: TextRange,
-        module: Module,
+        module: &Module,
     ) -> Option<Vec<TextRange>> {
         let mut references = if handle.path() != module.path() {
             self.local_references_from_external_definition(handle, definition_range, module)?
@@ -2372,12 +2373,14 @@ impl<'a> Transaction<'a> {
             }
         }
     }
+
     fn add_autoimport_completions(
         &self,
         handle: &Handle,
         identifier: &Identifier,
         completions: &mut Vec<CompletionItem>,
         import_format: ImportFormat,
+        supports_completion_item_details: bool,
     ) {
         // Auto-import can be slow. Let's only return results if there are no local
         // results for now. TODO: re-enable it once we no longer have perf issues.
@@ -2421,6 +2424,7 @@ impl<'a> Transaction<'a> {
                             Some(k.to_lsp_completion_item_kind())
                         }),
                     additional_text_edits,
+                    label_details,
                     tags: if export.is_deprecated {
                         Some(vec![CompletionItemTag::DEPRECATED])
                     } else {
@@ -2434,7 +2438,7 @@ impl<'a> Transaction<'a> {
                 if module_name == handle.module() {
                     continue;
                 }
-                let module_name_str = module_name.as_str();
+                let module_name_str = module_name.as_str().to_owned();
                 if let Some(module_handle) = self.import_handle(handle, module_name, None).finding()
                 {
                     let (insert_text, additional_text_edits) = {
@@ -2445,13 +2449,26 @@ impl<'a> Transaction<'a> {
                                 .to_lsp_range(TextRange::at(position, TextSize::new(0))),
                             new_text: insert_text.clone(),
                         };
-                        (Some(insert_text), Some(vec![import_text_edit]))
+                        (insert_text, Some(vec![import_text_edit]))
+                    };
+                    let auto_import_label_detail = format!(" (import {module_name_str})");
+                    let (label, label_details) = if supports_completion_item_details {
+                        (
+                            module_name_str.clone(),
+                            Some(CompletionItemLabelDetails {
+                                detail: Some(auto_import_label_detail),
+                                description: Some(module_name_str.clone()),
+                            }),
+                        )
+                    } else {
+                        (format!("{module_name_str}{auto_import_label_detail}"), None)
                     };
                     completions.push(CompletionItem {
-                        label: module_name_str.to_owned(),
-                        detail: insert_text,
+                        label,
+                        detail: Some(insert_text),
                         kind: Some(CompletionItemKind::MODULE),
                         additional_text_edits,
+                        label_details,
                         ..Default::default()
                     });
                 }
@@ -2634,9 +2651,15 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
         import_format: ImportFormat,
+        supports_completion_item_details: bool,
     ) -> Vec<CompletionItem> {
-        self.completion_with_incomplete(handle, position, import_format)
-            .0
+        self.completion_with_incomplete(
+            handle,
+            position,
+            import_format,
+            supports_completion_item_details,
+        )
+        .0
     }
 
     // Returns the completions, and true if they are incomplete so client will keep asking for more completions
@@ -2645,9 +2668,14 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
         import_format: ImportFormat,
+        supports_completion_item_details: bool,
     ) -> (Vec<CompletionItem>, bool) {
-        let (mut results, is_incomplete) =
-            self.completion_sorted_opt_with_incomplete(handle, position, import_format);
+        let (mut results, is_incomplete) = self.completion_sorted_opt_with_incomplete(
+            handle,
+            position,
+            import_format,
+            supports_completion_item_details,
+        );
         results.sort_by(|item1, item2| {
             item1
                 .sort_text
@@ -2664,6 +2692,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
         import_format: ImportFormat,
+        supports_completion_item_details: bool,
     ) -> (Vec<CompletionItem>, bool) {
         let mut result = Vec::new();
         let mut is_incomplete = false;
@@ -2783,6 +2812,7 @@ impl<'a> Transaction<'a> {
                         &identifier,
                         &mut result,
                         import_format,
+                        supports_completion_item_details,
                     );
                 }
                 // If autoimport completions were skipped due to character threshold,
@@ -3542,7 +3572,7 @@ impl<'a> CancellableTransaction<'a> {
                     &handle,
                     definition_kind.clone(),
                     definition.range,
-                    definition.module,
+                    &definition.module,
                 )
                 .unwrap_or_default();
             if !references.is_empty()

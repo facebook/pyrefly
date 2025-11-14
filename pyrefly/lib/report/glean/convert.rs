@@ -575,7 +575,7 @@ impl GleanState<'_> {
         {
             self.transaction
                 .ad_hoc_solve(self.handle, |solver| match base_type {
-                    Type::Union(tys) | Type::Intersect(tys) => tys
+                    Type::Union(tys) | Type::Intersect(box (tys, _)) => tys
                         .into_iter()
                         .filter(|ty: &Type| {
                             solver

@@ -53,6 +53,7 @@ use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyVariance;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
+use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::MethodThatSetsAttr;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::BindingsBuilder;
@@ -725,6 +726,7 @@ impl ScopeClass {
                         MethodThatSetsAttr {
                             method_name: method_name.clone(),
                             recognized_attribute_defining_method,
+                            instance_or_class: attr.3,
                         },
                         attr,
                     )
@@ -768,6 +770,7 @@ pub struct InstanceAttribute(
     pub ExprOrBinding,
     pub Option<Idx<KeyAnnotation>>,
     pub TextRange,
+    pub MethodSelfKind,
 );
 
 #[derive(Clone, Debug)]
@@ -778,6 +781,7 @@ struct ScopeMethod {
     parameters: SmallMap<Name, ParameterUsage>,
     yields_and_returns: YieldsAndReturns,
     is_async: bool,
+    receiver_kind: MethodSelfKind,
 }
 
 #[derive(Clone, Debug)]
@@ -825,6 +829,7 @@ impl ScopeMethod {
             parameters: SmallMap::new(),
             yields_and_returns: Default::default(),
             is_async,
+            receiver_kind: MethodSelfKind::Instance,
         }
     }
 }
@@ -837,6 +842,7 @@ enum ScopeKind {
     Function(ScopeFunction),
     Method(ScopeMethod),
     Module,
+    TypeAlias,
 }
 
 #[derive(Clone, Debug, Display, Copy)]
@@ -926,6 +932,10 @@ impl Scope {
 
     pub fn annotation(range: TextRange) -> Self {
         Self::new(range, false, ScopeKind::Annotation)
+    }
+
+    pub fn type_alias(range: TextRange) -> Self {
+        Self::new(range, false, ScopeKind::TypeAlias)
     }
 
     pub fn class_body(range: TextRange, indices: ClassIndices, name: Identifier) -> Self {
@@ -1113,6 +1123,17 @@ impl Scopes {
         false
     }
 
+    /// Check if a name is defined as a type parameter in any enclosing Annotation scope.
+    pub fn name_shadows_enclosing_annotation_scope(&self, name: &Name) -> bool {
+        // Skip the current scope, which we know isn't relevant to the check.
+        for scope in self.iter_rev().skip(1) {
+            if matches!(scope.kind, ScopeKind::Annotation) && scope.stat.0.get(name).is_some() {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn function_predecessor_indices(
         &self,
         name: &Name,
@@ -1281,7 +1302,12 @@ impl Scopes {
                 if !method_scope.instance_attributes.contains_key(&x.attr.id) {
                     method_scope.instance_attributes.insert(
                         x.attr.id.clone(),
-                        InstanceAttribute(value, annotation, x.attr.range()),
+                        InstanceAttribute(
+                            value,
+                            annotation,
+                            x.attr.range(),
+                            method_scope.receiver_kind,
+                        ),
                     );
                 }
                 return true;
@@ -1542,13 +1568,18 @@ impl Scopes {
     /// Whenever we enter the scope of a method *and* we see a matching
     /// parameter, we record the name of it so that we can detect `self` assignments
     /// that might define class fields.
-    pub fn set_self_name_if_applicable(&mut self, self_name: Option<Identifier>) {
+    pub fn set_self_name_if_applicable(
+        &mut self,
+        self_name: Option<Identifier>,
+        receiver_kind: MethodSelfKind,
+    ) {
         if let Scope {
             kind: ScopeKind::Method(method_scope),
             ..
         } = self.current_mut()
         {
             method_scope.self_name = self_name;
+            method_scope.receiver_kind = receiver_kind;
         }
     }
 
@@ -1683,7 +1714,7 @@ impl Scopes {
             }
         });
         class_scope.method_defined_attributes().for_each(
-            |(name, method, InstanceAttribute(value, annotation, range))| {
+            |(name, method, InstanceAttribute(value, annotation, range, _))| {
                 if !field_definitions.contains_key_hashed(name.as_ref()) {
                     field_definitions.insert_hashed(
                         name,
@@ -2257,8 +2288,16 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     /// Helper for loops, inserts a phi key for every name in the given flow.
-    fn insert_phi_keys(&mut self, mut flow: Flow, range: TextRange) -> Flow {
+    fn insert_phi_keys(
+        &mut self,
+        mut flow: Flow,
+        range: TextRange,
+        exclude_names: &SmallSet<Name>,
+    ) -> Flow {
         for (name, info) in flow.info.iter_mut() {
+            if exclude_names.contains(name) {
+                continue;
+            }
             // We are promising to insert a bidning for this key when we merge the flow
             let phi_idx = self.idx_for_promise(Key::Phi(name.clone(), range));
             match &mut info.value {
@@ -2279,11 +2318,23 @@ impl<'a> BindingsBuilder<'a> {
         flow
     }
 
-    pub fn setup_loop(&mut self, range: TextRange, narrow_ops: &NarrowOps) {
+    /// Set up a loop: preserve the base flow and push the loop to the current
+    /// scope's `loops`, set up loop phi keys, and bind any narrow ops from the
+    /// loop header.
+    ///
+    /// Names in `loop_header_targets` will not get phi keys - this is used for loop
+    /// variables that are unconditionally reassigned in `for` loop headers
+    pub fn setup_loop(
+        &mut self,
+        range: TextRange,
+        narrow_ops: &NarrowOps,
+        loop_header_targets: &SmallSet<Name>,
+    ) {
         let base = mem::take(&mut self.scopes.current_mut().flow);
         // To account for possible assignments to existing names in a loop, we
         // speculatively insert phi keys upfront.
-        self.scopes.current_mut().flow = self.insert_phi_keys(base.clone(), range);
+        self.scopes.current_mut().flow =
+            self.insert_phi_keys(base.clone(), range, loop_header_targets);
         self.scopes.current_mut().loops.push(Loop::new(base));
         self.bind_narrow_ops(narrow_ops, range, &Usage::Narrowing(None));
     }

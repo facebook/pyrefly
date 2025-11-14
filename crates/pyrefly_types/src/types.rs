@@ -621,8 +621,9 @@ pub enum Type {
     /// An overloaded function.
     Overload(Overload),
     Union(Vec<Type>),
-    #[allow(dead_code)] // Not currently used, but may be in the future
-    Intersect(Vec<Type>),
+    /// Our intersection support is partial, so we store a fallback type that we use for operations
+    /// that are not yet supported on intersections.
+    Intersect(Box<(Vec<Type>, Type)>),
     /// A class definition has type `Type::ClassDef(cls)`. This type
     /// has special value semantics, and can also be implicitly promoted
     /// to `Type::Type(box Type::ClassType(cls, default_targs))` by looking

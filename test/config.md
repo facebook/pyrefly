@@ -346,3 +346,14 @@ $ mkdir -p $TMPDIR/disable_excludes_heuristics/.src && \
 ERROR *main.py* ?bad-assignment? (glob)
 [1]
 ```
+
+## We can still find hard-coded `project-excludes` when overridden in configs
+
+<!-- Uss the same test setup from "We can still find hard-coded `project-excludes` when overridden -->
+
+```scrut {output_stream: stdout}
+$ echo "disable-project-excludes-heuristics = true" > $TMPDIR/disable_excludes_heuristics/pyrefly.toml && \
+> $PYREFLY check $TMPDIR/disable_excludes_heuristics/.src/main.py -c $TMPDIR/disable_excludes_heuristics/pyrefly.toml --output-format=min-text
+ERROR *main.py* ?bad-assignment? (glob)
+[1]
+```

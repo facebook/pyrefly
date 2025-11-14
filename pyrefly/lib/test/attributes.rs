@@ -187,17 +187,15 @@ class B(A):
 // Ref https://github.com/facebook/pyrefly/issues/370
 // Ref https://github.com/facebook/pyrefly/issues/522
 testcase!(
-    bug =
-        "Attributes initialized in `__new__` and `__init_subclass__` should not be instance-only.",
     test_cls_attribute_in_constructor,
     r#"
 from typing import ClassVar
 class A:
     def __new__(cls, x: int):
-        cls.x = x # E: Instance-only attribute `x` of class `A` is not visible on the class
+        cls.x = x
 class B:
     def __init_subclass__(cls, x: int):
-        cls.x = x # E: Instance-only attribute `x` of class `B` is not visible on the class
+        cls.x = x
 class C:
     x: ClassVar[int]
     def __new__(cls, x: int):
@@ -217,6 +215,28 @@ class MyTestCase:
         self.x = 5
     def run(self):
         assert self.x == 5
+    "#,
+);
+
+testcase!(
+    bug = "Attributes assigned in TestCase.setUpClass should be available on the class",
+    test_class_attribute_in_setup_class,
+    r#"
+from unittest import TestCase
+
+class Base(TestCase):
+    shared: int
+
+class Child(Base):
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.shared = 1
+
+    def test_shared(self) -> None:
+        assert self.shared == 1
+
+Child.shared
     "#,
 );
 
@@ -952,7 +972,7 @@ testcase!(
     test_illegal_type_variable_with_name_shadowing,
     r#"
 class C[R]:
-    def __init__[R](self, field: R):
+    def __init__[R](self, field: R):  # E: Type parameter `R` shadows a type parameter of the same name from an enclosing scope
         self.field = field  # E: Attribute `field` cannot depend on type variable `R`, which is not in the scope of class `C`
 "#,
 );

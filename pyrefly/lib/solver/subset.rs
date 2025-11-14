@@ -940,7 +940,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 _ => Err(SubsetError::Other),
             },
             (Type::Union(ls), u) => all(ls.iter(), |l| self.is_subset_eq(l, u)),
-            (l, Type::Intersect(us)) => all(us.iter(), |u| self.is_subset_eq(l, u)),
+            (l, Type::Intersect(u)) => all(u.0.iter(), |u| self.is_subset_eq(l, u)),
             (l, Type::Overload(overload)) => all(overload.signatures.iter(), |u| {
                 self.is_subset_eq(l, &u.as_type())
             }),
@@ -952,7 +952,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 any(nonvars.iter(), |u| self.is_subset_eq(l, u))
                     .or_else(|_| any(vars.iter(), |u| self.is_subset_eq(l, u)))
             }
-            (Type::Intersect(ls), u) => any(ls.iter(), |l| self.is_subset_eq(l, u)),
+            (Type::Intersect(l), u) => any(l.0.iter(), |l| self.is_subset_eq(l, u)),
             (Type::Quantified(q), u) if !q.restriction().is_restricted() => {
                 self.is_subset_eq(&self.type_order.stdlib().object().clone().to_type(), u)
             }

@@ -881,6 +881,22 @@ impl<'a> BindingsBuilder<'a> {
     pub fn type_params(&mut self, x: &mut TypeParams) {
         for x in x.type_params.iter_mut() {
             let name = x.name().clone();
+
+            // Check for shadowing of type parameters in enclosing Annotation scopes
+            if self
+                .scopes
+                .name_shadows_enclosing_annotation_scope(&name.id)
+            {
+                self.error(
+                    name.range,
+                    ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                    format!(
+                        "Type parameter `{}` shadows a type parameter of the same name from an enclosing scope",
+                        name.id
+                    ),
+                );
+            }
+
             let mut default = None;
             let mut bound = None;
             let mut constraints = None;
@@ -1168,17 +1184,10 @@ impl<'a> BindingsBuilder<'a> {
             })
     }
 
-    /// Perform the inner loop of looking up a possible legacy type parameter, given a starting
-    /// binding. The loop follows `Forward` nodes backward, and returns:
-    /// - Some(...) if we find either a legacy type variable or an import (in which case it *might*
-    ///   be a legacy type variable, so we'll let the solve stage decide)
-    /// - None if we find something that is definitely not a legacy type variable.
-    fn lookup_legacy_tparam_from_idx(
-        &mut self,
-        id: LegacyTParamId,
+    fn get_original_binding(
+        &'a self,
         mut original_idx: Idx<Key>,
-        has_scoped_type_params: bool,
-    ) -> Option<PossibleTParam> {
+    ) -> Option<(Idx<Key>, Option<&'a Binding>)> {
         // Follow Forwards to get to the actual original binding.
         // Short circuit if there are too many forwards - it may mean there's a cycle.
         let mut original_binding = self.table.types.1.get(original_idx);
@@ -1191,6 +1200,21 @@ impl<'a> BindingsBuilder<'a> {
                 original_binding = self.table.types.1.get(original_idx);
             }
         }
+        Some((original_idx, original_binding))
+    }
+
+    /// Perform the inner loop of looking up a possible legacy type parameter, given a starting
+    /// binding. The loop follows `Forward` nodes backward, and returns:
+    /// - Some(...) if we find either a legacy type variable or an import (in which case it *might*
+    ///   be a legacy type variable, so we'll let the solve stage decide)
+    /// - None if we find something that is definitely not a legacy type variable.
+    fn lookup_legacy_tparam_from_idx(
+        &mut self,
+        id: LegacyTParamId,
+        original_idx: Idx<Key>,
+        has_scoped_type_params: bool,
+    ) -> Option<PossibleTParam> {
+        let (original_idx, original_binding) = self.get_original_binding(original_idx)?;
         // If we found a potential legacy type variable, first insert the key / binding pair
         // for the raw lookup, then insert another key / binding pair for the
         // `CheckLegacyTypeParam`, and return the `Idx<Key>`.

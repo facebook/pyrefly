@@ -432,14 +432,17 @@ impl NarrowOps {
     }
 
     pub fn from_expr(builder: &BindingsBuilder, test: Option<&Expr>) -> Self {
+        let Some(test) = test else {
+            return Self::new();
+        };
         match test {
-            Some(Expr::Compare(ExprCompare {
+            Expr::Compare(ExprCompare {
                 node_index: _,
                 range: _,
                 left,
                 ops: cmp_ops,
                 comparators,
-            })) => {
+            }) => {
                 // If the left expression is a call to `len()` or `getattr()`, we're narrowing the first argument
                 let mut left = &**left;
                 // If the left expression is a call to `getattr()` we store attribute name and default
@@ -538,12 +541,12 @@ impl NarrowOps {
                     }
                 }
             }
-            Some(Expr::BoolOp(ExprBoolOp {
+            Expr::BoolOp(ExprBoolOp {
                 node_index: _,
                 range: _,
                 op,
                 values,
-            })) => {
+            }) => {
                 let extend = match op {
                     BoolOp::And => NarrowOps::and_all,
                     BoolOp::Or => NarrowOps::or_all,
@@ -555,29 +558,29 @@ impl NarrowOps {
                 }
                 narrow_ops
             }
-            Some(Expr::UnaryOp(ExprUnaryOp {
+            Expr::UnaryOp(ExprUnaryOp {
                 node_index: _,
                 range: _,
                 op: UnaryOp::Not,
                 operand: e,
-            })) => Self::from_expr(builder, Some(e)).negate(),
-            Some(Expr::Call(ExprCall {
+            }) => Self::from_expr(builder, Some(e)).negate(),
+            Expr::Call(ExprCall {
                 node_index: _,
                 range,
                 func,
                 arguments,
-            })) if builder.as_special_export(func) == Some(SpecialExport::Bool)
+            }) if builder.as_special_export(func) == Some(SpecialExport::Bool)
                 && arguments.args.len() == 1
                 && arguments.keywords.is_empty() =>
             {
                 Self::from_single_narrow_op(&arguments.args[0], AtomicNarrowOp::IsTruthy, *range)
             }
-            Some(Expr::Call(ExprCall {
+            Expr::Call(ExprCall {
                 node_index: _,
                 range,
                 func,
                 arguments,
-            })) if builder.as_special_export(func) == Some(SpecialExport::HasAttr)
+            }) if builder.as_special_export(func) == Some(SpecialExport::HasAttr)
                 && arguments.args.len() == 2
                 && arguments.keywords.is_empty()
                 && let Expr::StringLiteral(ExprStringLiteral { value, .. }) =
@@ -589,12 +592,12 @@ impl NarrowOps {
                     *range,
                 )
             }
-            Some(Expr::Call(ExprCall {
+            Expr::Call(ExprCall {
                 node_index: _,
                 range,
                 func,
                 arguments,
-            })) if builder.as_special_export(func) == Some(SpecialExport::GetAttr)
+            }) if builder.as_special_export(func) == Some(SpecialExport::GetAttr)
                 && (arguments.args.len() == 2 || arguments.args.len() == 3)
                 && arguments.keywords.is_empty()
                 && let Expr::StringLiteral(ExprStringLiteral { value, .. }) =
@@ -613,18 +616,18 @@ impl NarrowOps {
                     *range,
                 )
             }
-            Some(e @ Expr::Call(call)) if dict_get_subject_for_call_expr(call).is_some() => {
+            e @ Expr::Call(call) if dict_get_subject_for_call_expr(call).is_some() => {
                 // When the guard is something like `x.get("key")`, we narrow it like `x["key"]` if `x` resolves to a dict
                 // in the answers step.
                 // This cannot be a TypeGuard/TypeIs function call, since the first argument is a string literal
                 Self::from_single_narrow_op(e, AtomicNarrowOp::IsTruthy, e.range())
             }
-            Some(Expr::Call(ExprCall {
+            Expr::Call(ExprCall {
                 node_index: _,
                 range,
                 func,
                 arguments: args @ Arguments { args: posargs, .. },
-            })) if !posargs.is_empty() => {
+            }) if !posargs.is_empty() => {
                 // This may be a function call that narrows the type of its first argument. Record
                 // it as a possible narrowing operation that we'll resolve in the answers phase.
                 Self::from_single_narrow_op(
@@ -633,7 +636,7 @@ impl NarrowOps {
                     *range,
                 )
             }
-            Some(Expr::Named(named)) => {
+            Expr::Named(named) => {
                 let mut target_narrow = Self::from_single_narrow_op(
                     &named.target,
                     AtomicNarrowOp::IsTruthy,
@@ -657,8 +660,7 @@ impl NarrowOps {
                 }
                 target_narrow
             }
-            Some(e) => Self::from_single_narrow_op(e, AtomicNarrowOp::IsTruthy, e.range()),
-            None => Self::new(),
+            e => Self::from_single_narrow_op(e, AtomicNarrowOp::IsTruthy, e.range()),
         }
     }
 }

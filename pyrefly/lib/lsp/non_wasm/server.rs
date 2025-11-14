@@ -1369,6 +1369,17 @@ impl Server {
         );
     }
 
+    fn supports_completion_item_details(&self) -> bool {
+        self.initialize_params
+            .capabilities
+            .text_document
+            .as_ref()
+            .and_then(|t| t.completion.as_ref())
+            .and_then(|c| c.completion_item.as_ref())
+            .and_then(|ci| ci.label_details_support)
+            .unwrap_or(false)
+    }
+
     /// Validate open files and send errors to the LSP. In the case of an ongoing recheck
     /// (i.e., another transaction is already being committed or the state is locked for writing),
     /// we still update diagnostics using a non-committable transaction, which may have slightly stale
@@ -2106,6 +2117,7 @@ impl Server {
                     &handle,
                     self.from_lsp_position(uri, &info, params.text_document_position.position),
                     import_format,
+                    self.supports_completion_item_details(),
                 )
             })
             .unwrap_or_default();

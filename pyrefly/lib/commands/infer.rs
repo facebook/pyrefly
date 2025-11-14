@@ -610,12 +610,12 @@ def foo() -> str:
         assert_annotations(
             r#"
     def foo() -> None:
-        x = [] 
+        x = []
         x.append(1)
     "#,
             r#"
     def foo() -> None:
-        x: list[int] = [] 
+        x: list[int] = []
         x.append(1)
     "#,
             Some(flags),
@@ -734,7 +734,7 @@ def foo():
         "#;
         let file_two = r#"
         class ExampleA:
-            pass 
+            pass
         def get_a():
             return ExampleA()
         "#;
@@ -758,7 +758,7 @@ from file_two import get_a
         "#;
         let file_two = r#"
         class ExampleA:
-            pass 
+            pass
         class ExampleB:
             pass
         def get_a():
