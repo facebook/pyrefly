@@ -74,6 +74,35 @@ impl KwCall {
     }
 }
 
+/// Numeric range constraints extracted from metadata such as `annotated_types.Gt`.
+///
+/// These bounds are intentionally conservative:
+/// * Only constraints that can be recovered statically (e.g. literal arguments to
+///   `annotated_types.Gt/Ge/Lt/Le` or equivalent Field keywords) are recorded here.
+/// * The information is used primarily to vet class-body defaults; call sites that
+///   pass dynamic values are still enforced at runtime by Pydantic.
+/// * When the metadata cannot be evaluated to a literal (for example, it depends on
+///   a value computed at runtime), the corresponding entry remains `None` and the
+///   solver defers to runtime validation.
+///
+/// In other words, `RangeConstraints` lets us catch the obvious mismatches during
+/// static analysis without attempting to replicate every bit of Pydantic’s runtime
+/// behaviour.
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, VisitMut, TypeEq)]
+pub struct RangeConstraints {
+    pub lt: Option<Type>,
+    pub gt: Option<Type>,
+    pub ge: Option<Type>,
+    pub le: Option<Type>,
+}
+
+impl RangeConstraints {
+    pub fn is_empty(&self) -> bool {
+        self.lt.is_none() && self.gt.is_none() && self.ge.is_none() && self.le.is_none()
+    }
+}
+
 /// Parameters to `typing.dataclass_transform`.
 /// See https://typing.python.org/en/latest/spec/dataclasses.html#dataclass-transform-parameters.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -132,6 +161,7 @@ pub struct DataclassFieldKeywords {
     pub lt: Option<Type>,
     pub gt: Option<Type>,
     pub ge: Option<Type>,
+    pub le: Option<Type>,
     /// Whether we should strictly evaluate the type of the field
     pub strict: Option<bool>,
     /// If a converter callable is passed in, its first positional parameter
@@ -160,6 +190,7 @@ impl DataclassFieldKeywords {
             lt: None,
             gt: None,
             ge: None,
+            le: None,
             converter_param: None,
             strict: None,
         }
