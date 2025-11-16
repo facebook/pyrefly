@@ -2409,11 +2409,15 @@ impl Server {
 
     fn hover(&self, transaction: &Transaction<'_>, params: HoverParams) -> Option<Hover> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri, Some(HoverRequest::METHOD))?;
+        let (handle, lsp_config) =
+            self.make_handle_with_lsp_analysis_config_if_enabled(uri, Some(HoverRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let position =
             self.from_lsp_position(uri, &info, params.text_document_position_params.position);
-        get_hover(transaction, &handle, position)
+        let show_go_to_links = lsp_config
+            .and_then(|c| c.show_hover_go_to_links)
+            .unwrap_or(true);
+        get_hover(transaction, &handle, position, show_go_to_links)
     }
 
     fn inlay_hints(

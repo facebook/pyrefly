@@ -441,7 +441,7 @@ impl Playground {
         let handle = self.handles.get(&self.active_filename)?;
         let transaction = self.state.transaction();
         let position = self.to_text_size(&transaction, pos)?;
-        let hover = get_hover(&transaction, handle, position)?;
+        let hover = get_hover(&transaction, handle, position, true)?;
         Some(MonacoHover {
             contents: vec![hover.contents],
         })

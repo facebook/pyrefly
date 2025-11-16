@@ -243,6 +243,8 @@ pub struct LspAnalysisConfig {
     pub diagnostic_mode: Option<DiagnosticMode>,
     pub import_format: Option<ImportFormat>,
     pub inlay_hints: Option<InlayHintConfig>,
+    #[serde(default)]
+    pub show_hover_go_to_links: Option<bool>,
 }
 
 fn deserialize_analysis<'de, D>(deserializer: D) -> Result<Option<LspAnalysisConfig>, D::Error>

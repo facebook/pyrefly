@@ -16,7 +16,7 @@ use crate::state::state::State;
 use crate::test::util::get_batched_lsp_operations_report;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
-    match get_hover(&state.transaction(), handle, position) {
+    match get_hover(&state.transaction(), handle, position,true) {
         Some(Hover {
             contents: HoverContents::Markup(markup),
             ..
