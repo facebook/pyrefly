@@ -73,6 +73,9 @@ pub struct Index {
     /// A map from (attribute definition module) to a list of pairs of
     /// (range of attribute definition in the definition, range of reference in the current module).
     pub externally_defined_attribute_references: SmallMap<ModulePath, Vec<(TextRange, TextRange)>>,
+    /// A map from (child method range) to a list of parent method definitions (ModulePath, parent method range).
+    /// This is used to find reimplementations when doing find-references on parent methods.
+    pub parent_methods_map: SmallMap<TextRange, Vec<(ModulePath, TextRange)>>,
 }
 
 #[derive(Debug)]
@@ -602,6 +605,22 @@ impl Answers {
                 let chosen_index = all.iter().position(|signature| signature == closest);
                 Some((all.clone(), chosen_index))
             }
+        }
+    }
+
+    pub fn add_parent_method_mapping(
+        &self,
+        child_range: TextRange,
+        parent_module: ModulePath,
+        parent_range: TextRange,
+    ) {
+        if let Some(index) = &self.index {
+            index
+                .lock()
+                .parent_methods_map
+                .entry(child_range)
+                .or_default()
+                .push((parent_module, parent_range));
         }
     }
 }

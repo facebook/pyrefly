@@ -511,7 +511,7 @@ impl GleanState<'_> {
         let definition = self.transaction.find_definition_for_name_use(
             self.handle,
             &identifier,
-            &FindPreference::default(),
+            FindPreference::default(),
         );
 
         definition
@@ -575,7 +575,7 @@ impl GleanState<'_> {
         {
             self.transaction
                 .ad_hoc_solve(self.handle, |solver| match base_type {
-                    Type::Union(tys) | Type::Intersect(tys) => tys
+                    Type::Union(tys) | Type::Intersect(box (tys, _)) => tys
                         .into_iter()
                         .filter(|ty: &Type| {
                             solver
@@ -973,7 +973,7 @@ impl GleanState<'_> {
     fn find_fqname_definition_at_position(&self, position: TextSize) -> Vec<String> {
         let definitions =
             self.transaction
-                .find_definition(self.handle, position, &FindPreference::default());
+                .find_definition(self.handle, position, FindPreference::default());
 
         definitions
             .into_iter()

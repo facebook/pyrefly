@@ -6444,6 +6444,39 @@
       "severity": "error",
       "stop_column": 18,
       "stop_line": 44
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "line": 92,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 92
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "line": 95,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 95
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "line": 98,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 98
     }
   ],
   "generics_type_erasure.py": [

@@ -33,6 +33,8 @@ use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::call::CallStyle;
+use crate::alt::callable::CallArg;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::alt::types::decorated_function::SpecialDecorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
@@ -880,7 +882,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         // Preserve function metadata, so things like method binding still work.
-        match self.apply_decorator(decorator, decoratee, range, errors) {
+        let call_target =
+            self.as_call_target_or_error(decorator, CallStyle::FreeForm, range, errors, None);
+        let arg = CallArg::ty(&decoratee, range);
+        match self.call_infer(call_target, &[arg], &[], range, errors, None, None, None) {
             Type::Callable(c) => Type::Function(Box::new(Function {
                 signature: *c,
                 metadata: metadata.clone(),
@@ -921,7 +926,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     cls.to_type()
                 }
             }
-            t => t,
+            Type::ClassType(cls) if cls.has_qname("functools", "_Wrapped") => decoratee,
+            returned_ty => returned_ty,
         }
     }
 

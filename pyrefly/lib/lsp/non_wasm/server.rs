@@ -39,6 +39,7 @@ use lsp_types::CompletionParams;
 use lsp_types::CompletionResponse;
 use lsp_types::ConfigurationItem;
 use lsp_types::ConfigurationParams;
+use lsp_types::DeclarationCapability;
 use lsp_types::Diagnostic;
 use lsp_types::DiagnosticSeverity;
 use lsp_types::DiagnosticTag;
@@ -67,6 +68,7 @@ use lsp_types::Hover;
 use lsp_types::HoverContents;
 use lsp_types::HoverParams;
 use lsp_types::HoverProviderCapability;
+use lsp_types::ImplementationProviderCapability;
 use lsp_types::InitializeParams;
 use lsp_types::InlayHint;
 use lsp_types::InlayHintLabel;
@@ -133,7 +135,11 @@ use lsp_types::request::DocumentDiagnosticRequest;
 use lsp_types::request::DocumentHighlightRequest;
 use lsp_types::request::DocumentSymbolRequest;
 use lsp_types::request::FoldingRangeRequest;
+use lsp_types::request::GotoDeclaration;
 use lsp_types::request::GotoDefinition;
+use lsp_types::request::GotoImplementation;
+use lsp_types::request::GotoImplementationParams;
+use lsp_types::request::GotoImplementationResponse;
 use lsp_types::request::GotoTypeDefinition;
 use lsp_types::request::GotoTypeDefinitionParams;
 use lsp_types::request::GotoTypeDefinitionResponse;
@@ -201,6 +207,7 @@ use crate::lsp::non_wasm::queue::LspQueue;
 use crate::lsp::non_wasm::stdlib::is_python_stdlib_file;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::lsp::non_wasm::unsaved_file_tracker::UnsavedFileTracker;
 use crate::lsp::non_wasm::will_rename_files::will_rename_files;
 use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
 use crate::lsp::non_wasm::workspace::Workspace;
@@ -222,10 +229,12 @@ use crate::state::load::LspFile;
 use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
+use crate::state::lsp::ImportBehavior;
 use crate::state::notebook::LspNotebook;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::semantic_tokens::disabled_ranges_for_module;
+use crate::state::state::CancellableTransaction;
 use crate::state::state::CommittingTransaction;
 use crate::state::state::State;
 use crate::state::state::Transaction;
@@ -347,6 +356,9 @@ pub struct Server {
     /// should be mapped through here in case they correspond to a cell.
     open_notebook_cells: Arc<RwLock<HashMap<Url, PathBuf>>>,
     open_files: Arc<RwLock<HashMap<PathBuf, Arc<LspFile>>>>,
+    /// Tracks URIs (including virtual/untitled ones) to synthetic on-disk paths so we can
+    /// treat them like regular files throughout the server.
+    unsaved_file_tracker: UnsavedFileTracker,
     /// A set of configs where we have already indexed all the files within the config.
     indexed_configs: Mutex<HashSet<ArcId<ConfigFile>>>,
     /// A set of workspaces where we have already performed best-effort indexing.
@@ -460,7 +472,9 @@ pub fn capabilities(
                 TextDocumentSyncKind::INCREMENTAL,
             )),
             definition_provider: Some(OneOf::Left(true)),
+            declaration_provider: Some(DeclarationCapability::Simple(true)),
             type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
+            implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
             code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
                 code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
                 ..Default::default()
@@ -620,6 +634,17 @@ pub fn lsp_loop(
 impl Server {
     const FILEWATCHER_ID: &str = "FILEWATCHER";
 
+    fn path_for_uri(&self, uri: &Url) -> Option<PathBuf> {
+        if let Ok(path) = uri.to_file_path() {
+            return Some(path);
+        }
+        if let Some(path) = self.unsaved_file_tracker.path_for_uri(uri) {
+            return Some(path);
+        }
+        info!("Could not convert uri to filepath: {}", uri);
+        None
+    }
+
     fn extract_request_params_or_send_err_response<T>(
         &self,
         params: Result<T::Params, serde_json::Error>,
@@ -678,12 +703,16 @@ impl Server {
                 }
             }
             LspEvent::DidOpenTextDocument(params) => {
-                let contents = Arc::new(LspFile::from_source(params.text_document.text));
+                let lsp_types::DidOpenTextDocumentParams { text_document } = params;
+                let lsp_types::TextDocumentItem {
+                    uri, version, text, ..
+                } = text_document;
+                let contents = Arc::new(LspFile::from_source(text));
                 self.did_open(
                     ide_transaction_manager,
                     subsequent_mutation,
-                    params.text_document.uri,
-                    params.text_document.version,
+                    uri,
+                    version,
                     contents,
                 )?;
             }
@@ -711,9 +740,12 @@ impl Server {
                     .collect();
                 let ruff_notebook = params.notebook_document.to_ruff_notebook(&cell_contents)?;
                 let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_document);
-                let notebook_path = url
-                    .to_file_path()
-                    .map_err(|_| anyhow::anyhow!("Could not convert uri to filepath: {}", url))?;
+                let notebook_path = url.to_file_path().map_err(|_| {
+                    anyhow::anyhow!(
+                        "Could not convert uri to filepath: {}, expected a notebook",
+                        url
+                    )
+                })?;
                 for cell_url in lsp_notebook.cell_urls() {
                     self.open_notebook_cells
                         .write()
@@ -817,6 +849,23 @@ impl Server {
                         ));
                         ide_transaction_manager.save(transaction);
                     }
+                } else if let Some(params) = as_request::<GotoDeclaration>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<GotoDeclaration>(
+                            params, &x.id,
+                        )
+                    {
+                        let default_response = GotoDefinitionResponse::Array(Vec::new());
+                        let transaction =
+                            ide_transaction_manager.non_committable_transaction(&self.state);
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(self
+                                .goto_declaration(&transaction, params)
+                                .unwrap_or(default_response)),
+                        ));
+                        ide_transaction_manager.save(transaction);
+                    }
                 } else if let Some(params) = as_request::<GotoTypeDefinition>(&x) {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<GotoTypeDefinition>(
@@ -833,6 +882,14 @@ impl Server {
                                 .unwrap_or(default_response)),
                         ));
                         ide_transaction_manager.save(transaction);
+                    }
+                } else if let Some(params) = as_request::<GotoImplementation>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<GotoImplementation>(
+                            params, &x.id,
+                        )
+                    {
+                        self.async_go_to_implementations(x.id, ide_transaction_manager, params);
                     }
                 } else if let Some(params) = as_request::<CodeActionRequest>(&x) {
                     if let Some(params) = self
@@ -1137,12 +1194,11 @@ impl Server {
                         .open_notebook_cells
                         .read()
                         .contains_key(&text_document.uri)
+                        && let Some(path) = self.path_for_uri(&text_document.uri)
                     {
                         self.send_response(new_response(
                             x.id,
-                            Ok(self.type_error_display_status(
-                                text_document.uri.to_file_path().unwrap().as_path(),
-                            )),
+                            Ok(self.type_error_display_status(path.as_path())),
                         ));
                     } else {
                         // TODO(yangdanny): handle notebooks
@@ -1177,7 +1233,7 @@ impl Server {
         {
             folders
                 .iter()
-                .map(|x| x.uri.to_file_path().unwrap())
+                .filter_map(|x| x.uri.to_file_path().ok())
                 .collect()
         } else {
             Vec::new()
@@ -1199,6 +1255,7 @@ impl Server {
             state: Arc::new(State::new(config_finder)),
             open_notebook_cells: Arc::new(RwLock::new(HashMap::new())),
             open_files: Arc::new(RwLock::new(HashMap::new())),
+            unsaved_file_tracker: UnsavedFileTracker::new(),
             indexed_configs: Mutex::new(HashSet::new()),
             indexed_workspaces: Mutex::new(HashSet::new()),
             cancellation_handles: Arc::new(Mutex::new(HashMap::new())),
@@ -1367,6 +1424,17 @@ impl Server {
             ide_transaction_manager,
             Err(noncommittable_transaction),
         );
+    }
+
+    fn supports_completion_item_details(&self) -> bool {
+        self.initialize_params
+            .capabilities
+            .text_document
+            .as_ref()
+            .and_then(|t| t.completion.as_ref())
+            .and_then(|c| c.completion_item.as_ref())
+            .and_then(|ci| ci.label_details_support)
+            .unwrap_or(false)
     }
 
     /// Validate open files and send errors to the LSP. In the case of an ongoing recheck
@@ -1636,8 +1704,9 @@ impl Server {
     }
 
     fn did_save(&self, url: Url) {
-        let file = url.to_file_path().unwrap();
-        self.invalidate(move |t| t.invalidate_disk(&[file]));
+        if let Some(path) = self.path_for_uri(&url) {
+            self.invalidate(move |t| t.invalidate_disk(&[path]))
+        }
     }
 
     fn did_open<'a>(
@@ -1648,18 +1717,29 @@ impl Server {
         version: i32,
         contents: Arc<LspFile>,
     ) -> anyhow::Result<()> {
-        let uri = url
+        let path = url
             .to_file_path()
-            .map_err(|_| anyhow::anyhow!("Could not convert uri to filepath: {}", url))?;
+            .or_else(|_| {
+                if url.scheme() == "untitled" {
+                    Ok(self
+                        .unsaved_file_tracker
+                        .ensure_path_for_open(&url, "python"))
+                } else {
+                    Err(())
+                }
+            })
+            .map_err(|_| {
+                anyhow::anyhow!("Could not convert uri to filepath for didOpen: {}", url)
+            })?;
         let config_to_populate_files = if self.indexing_mode != IndexingMode::None
-            && let Some(directory) = uri.as_path().parent()
+            && let Some(directory) = path.as_path().parent()
         {
             self.state.config_finder().directory(directory)
         } else {
             None
         };
-        self.version_info.lock().insert(uri.clone(), version);
-        self.open_files.write().insert(uri.clone(), contents);
+        self.version_info.lock().insert(path.clone(), version);
+        self.open_files.write().insert(path.clone(), contents);
         if !subsequent_mutation {
             // In order to improve perceived startup perf, when a file is opened, we run a
             // non-committing transaction that indexes the file with default require level Exports.
@@ -1673,7 +1753,7 @@ impl Server {
             // of a config file, all features become available when background indexing completes.
             info!(
                 "File {} opened, prepare to validate open files.",
-                uri.display()
+                path.display()
             );
             self.validate_in_memory_without_committing(ide_transaction_manager);
         }
@@ -1691,7 +1771,11 @@ impl Server {
         params: DidChangeTextDocumentParams,
     ) -> anyhow::Result<()> {
         let VersionedTextDocumentIdentifier { uri, version } = params.text_document;
-        let file_path = uri.to_file_path().unwrap();
+        let Some(file_path) = self.path_for_uri(&uri) else {
+            return Err(anyhow::anyhow!(
+                "Received textDocument/didChange for unknown uri: {uri}"
+            ));
+        };
 
         let mut version_info = self.version_info.lock();
         let old_version = version_info.get(&file_path).unwrap_or(&0);
@@ -1726,7 +1810,11 @@ impl Server {
     ) -> anyhow::Result<()> {
         let uri = params.notebook_document.uri.clone();
         let version = params.notebook_document.version;
-        let file_path = uri.to_file_path().unwrap();
+        let Some(file_path) = self.path_for_uri(&uri) else {
+            return Err(anyhow::anyhow!(
+                "Received notebookDocument/didChange for unknown uri: {uri}"
+            ));
+        };
 
         let mut version_info = self.version_info.lock();
         let old_version = version_info.get(&file_path).unwrap_or(&0);
@@ -1891,10 +1979,12 @@ impl Server {
     }
 
     fn did_close(&self, url: Url) {
-        let uri = url.to_file_path().unwrap();
-        self.version_info.lock().remove(&uri);
+        let Some(path) = self.path_for_uri(&url) else {
+            return;
+        };
+        self.version_info.lock().remove(&path);
         let open_files = self.open_files.dupe();
-        if let Some(LspFile::Notebook(notebook)) = open_files.write().remove(&uri).as_deref() {
+        if let Some(LspFile::Notebook(notebook)) = open_files.write().remove(&path).as_deref() {
             for cell in notebook.cell_urls() {
                 self.connection
                     .publish_diagnostics_for_uri(cell.clone(), Vec::new(), None);
@@ -1902,19 +1992,23 @@ impl Server {
             }
         } else {
             self.connection
-                .publish_diagnostics_for_uri(url, Vec::new(), None);
+                .publish_diagnostics_for_uri(url.clone(), Vec::new(), None);
         }
+        self.unsaved_file_tracker.forget_uri_path(&url);
         let state = self.state.dupe();
         let lsp_queue = self.lsp_queue.dupe();
         let open_files = self.open_files.dupe();
         let sourcedb_queue = self.sourcedb_queue.dupe();
         let invalidated_configs = self.invalidated_configs.dupe();
+        let path_for_task = path.clone();
         self.recheck_queue.queue_task(Box::new(move || {
             // Clear out the memory associated with this file.
             // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
             // Having the extra file hanging around doesn't harm anything, but does use extra memory.
             let mut transaction = state.new_committable_transaction(Require::indexing(), None);
-            transaction.as_mut().set_memory(vec![(uri, None)]);
+            transaction
+                .as_mut()
+                .set_memory(vec![(path_for_task.clone(), None)]);
             let _ =
                 Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
             state.commit_transaction(transaction);
@@ -1987,12 +2081,11 @@ impl Server {
         uri: &Url,
         method: Option<&str>,
     ) -> Option<(Handle, Option<LspAnalysisConfig>)> {
-        let path = self
-            .open_notebook_cells
-            .read()
-            .get(uri)
-            .cloned()
-            .unwrap_or_else(|| uri.to_file_path().unwrap());
+        let path = if let Some(notebook_path) = self.open_notebook_cells.read().get(uri) {
+            notebook_path.clone()
+        } else {
+            self.path_for_uri(uri)?
+        };
         self.workspaces.get_with(path.clone(), |(_, workspace)| {
             // Check if all language services are disabled
             if workspace.disable_language_services {
@@ -2053,6 +2146,30 @@ impl Server {
         }
     }
 
+    fn goto_declaration(
+        &self,
+        transaction: &Transaction<'_>,
+        params: GotoDefinitionParams,
+    ) -> Option<GotoDefinitionResponse> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri, Some(GotoDeclaration::METHOD))?;
+        let info = transaction.get_module_info(&handle)?;
+        let range =
+            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
+        let targets = transaction.goto_declaration(&handle, range);
+        let mut lsp_targets = targets
+            .iter()
+            .filter_map(|x| self.to_lsp_location(x))
+            .collect::<Vec<_>>();
+        if lsp_targets.is_empty() {
+            None
+        } else if lsp_targets.len() == 1 {
+            Some(GotoDefinitionResponse::Scalar(lsp_targets.pop().unwrap()))
+        } else {
+            Some(GotoDefinitionResponse::Array(lsp_targets))
+        }
+    }
+
     fn goto_type_definition(
         &self,
         transaction: &Transaction<'_>,
@@ -2082,6 +2199,85 @@ impl Server {
             Some(GotoTypeDefinitionResponse::Array(lsp_targets))
         }
     }
+
+    fn async_go_to_implementations<'a>(
+        &'a self,
+        request_id: RequestId,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        params: GotoImplementationParams,
+    ) {
+        let uri = &params.text_document_position_params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return self.send_response(new_response::<Option<GotoImplementationResponse>>(
+                request_id,
+                Ok(None),
+            ));
+        }
+        let Some(handle) = self.make_handle_if_enabled(uri, Some(GotoImplementation::METHOD))
+        else {
+            return self.send_response(new_response::<Option<GotoImplementationResponse>>(
+                request_id,
+                Ok(None),
+            ));
+        };
+        self.async_find_from_definition_helper(
+            request_id,
+            ide_transaction_manager,
+            handle,
+            uri,
+            params.text_document_position_params.position,
+            move |transaction, handle, definition| {
+                let FindDefinitionItemWithDocstring {
+                    metadata: _,
+                    definition_range,
+                    module,
+                    docstring_range: _,
+                } = definition;
+                // find_global_implementations_from_definition returns Vec<TextRangeWithModule>
+                // but we need to return Vec<(ModuleInfo, Vec<TextRange>)> to match the helper's
+                // expected format. Group implementations by module while preserving order.
+                let implementations = transaction.find_global_implementations_from_definition(
+                    handle.sys_info(),
+                    TextRangeWithModule::new(module, definition_range),
+                )?;
+
+                // Group consecutive implementations by module, preserving the sorted order
+                let mut grouped: Vec<(ModuleInfo, Vec<TextRange>)> = Vec::new();
+                for impl_with_module in implementations {
+                    if let Some((last_module, ranges)) = grouped.last_mut() {
+                        if last_module.path() == impl_with_module.module.path() {
+                            ranges.push(impl_with_module.range);
+                            continue;
+                        }
+                    }
+                    grouped.push((impl_with_module.module, vec![impl_with_module.range]));
+                }
+                Ok(grouped)
+            },
+            move |results| {
+                let mut lsp_targets = Vec::new();
+                for (uri, ranges) in results {
+                    for range in ranges {
+                        lsp_targets.push(Location {
+                            uri: uri.clone(),
+                            range,
+                        });
+                    }
+                }
+                if lsp_targets.is_empty() {
+                    None
+                } else if lsp_targets.len() == 1 {
+                    Some(GotoImplementationResponse::Scalar(
+                        lsp_targets.pop().unwrap(),
+                    ))
+                } else {
+                    Some(GotoImplementationResponse::Array(lsp_targets))
+                }
+            },
+        );
+    }
+
     fn completion(
         &self,
         transaction: &Transaction<'_>,
@@ -2106,6 +2302,7 @@ impl Server {
                     &handle,
                     self.from_lsp_position(uri, &info, params.text_document_position.position),
                     import_format,
+                    self.supports_completion_item_details(),
                 )
             })
             .unwrap_or_default();
@@ -2178,37 +2375,41 @@ impl Server {
         )
     }
 
-    /// Compute references of a symbol at a given position. This is a non-blocking function, the
-    /// it will send a response to the LSP client once the results are found and transformed by
-    /// `map_result`.
-    fn async_find_references_helper<'a, V: serde::Serialize>(
+    /// Compute references or implementations of a symbol at a given position. This is a non-blocking
+    /// function that will send a response to the LSP client once the results are found and
+    /// transformed by `map_result`.
+    ///
+    /// The `find_fn` closure is called with the cancellable transaction, handle, and definition
+    /// information, and should return the results to be transformed into LSP locations.
+    fn async_find_from_definition_helper<'a, V: serde::Serialize>(
         &'a self,
         request_id: RequestId,
         ide_transaction_manager: &mut TransactionManager<'a>,
+        handle: Handle,
         uri: &Url,
         position: Position,
+        find_fn: impl FnOnce(
+            &mut CancellableTransaction,
+            &Handle,
+            FindDefinitionItemWithDocstring,
+        ) -> Result<Vec<(ModuleInfo, Vec<TextRange>)>, Cancelled>
+        + Send
+        + Sync
+        + 'static,
         map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
     ) {
-        let Some(handle) = self.make_handle_if_enabled(uri, Some(References::METHOD)) else {
-            return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
-        };
         let transaction = ide_transaction_manager.non_committable_transaction(&self.state);
         let Some(info) = transaction.get_module_info(&handle) else {
             ide_transaction_manager.save(transaction);
             return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
         let position = self.from_lsp_position(uri, &info, position);
-        let Some(FindDefinitionItemWithDocstring {
-            metadata,
-            definition_range,
-            module,
-            docstring_range: _,
-        }) = transaction
+        let Some(definition) = transaction
             .find_definition(
                 &handle,
                 position,
-                &FindPreference {
-                    jump_through_renamed_import: false,
+                FindPreference {
+                    import_behavior: ImportBehavior::StopAtRenamedImports,
                     ..Default::default()
                 },
             )
@@ -2231,14 +2432,10 @@ impl Server {
                 .lock()
                 .insert(request_id.clone(), transaction.get_cancellation_handle());
             Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
-            match transaction.find_global_references_from_definition(
-                handle.sys_info(),
-                metadata,
-                TextRangeWithModule::new(module, definition_range),
-            ) {
-                Ok(global_references) => {
+            match find_fn(&mut transaction, &handle, definition) {
+                Ok(results) => {
                     let mut locations = Vec::new();
-                    for (info, ranges) in global_references {
+                    for (info, ranges) in results {
                         if let Some(uri) = module_info_to_uri(&info) {
                             locations
                                 .push((uri, ranges.into_map(|range| info.to_lsp_range(range))));
@@ -2251,7 +2448,7 @@ impl Server {
                     )));
                 }
                 Err(Cancelled) => {
-                    let message = format!("Find reference request {request_id} is canceled");
+                    let message = format!("Request {request_id} is canceled");
                     info!("{message}");
                     connection.send(Message::Response(Response::new_err(
                         request_id,
@@ -2263,16 +2460,56 @@ impl Server {
         }));
     }
 
+    /// Compute references of a symbol at a given position using the standard find_global_references_from_definition
+    /// strategy. This is a convenience wrapper around async_find_from_definition_helper that handles
+    /// the common case of finding references.
+    fn async_find_references_helper<'a, V: serde::Serialize>(
+        &'a self,
+        request_id: RequestId,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        handle: Handle,
+        uri: &Url,
+        position: Position,
+        map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
+    ) {
+        self.async_find_from_definition_helper(
+            request_id,
+            ide_transaction_manager,
+            handle,
+            uri,
+            position,
+            move |transaction, handle, definition| {
+                let FindDefinitionItemWithDocstring {
+                    metadata,
+                    definition_range,
+                    module,
+                    docstring_range: _,
+                } = definition;
+                transaction.find_global_references_from_definition(
+                    handle.sys_info(),
+                    metadata,
+                    TextRangeWithModule::new(module, definition_range),
+                )
+            },
+            map_result,
+        )
+    }
+
     fn references<'a>(
         &'a self,
         request_id: RequestId,
         ide_transaction_manager: &mut TransactionManager<'a>,
         params: ReferenceParams,
     ) {
+        let uri = &params.text_document_position.text_document.uri;
+        let Some(handle) = self.make_handle_if_enabled(uri, Some(References::METHOD)) else {
+            return self.send_response(new_response::<Option<Vec<Location>>>(request_id, Ok(None)));
+        };
         self.async_find_references_helper(
             request_id,
             ide_transaction_manager,
-            &params.text_document_position.text_document.uri,
+            handle,
+            uri,
             params.text_document_position.position,
             move |results| {
                 let mut locations = Vec::new();
@@ -2295,10 +2532,15 @@ impl Server {
         ide_transaction_manager: &mut TransactionManager<'a>,
         params: RenameParams,
     ) {
+        let uri = &params.text_document_position.text_document.uri;
+        let Some(handle) = self.make_handle_if_enabled(uri, Some(Rename::METHOD)) else {
+            return self.send_response(new_response::<Option<WorkspaceEdit>>(request_id, Ok(None)));
+        };
         self.async_find_references_helper(
             request_id,
             ide_transaction_manager,
-            &params.text_document_position.text_document.uri,
+            handle,
+            uri,
             params.text_document_position.position,
             move |results| {
                 let mut changes = HashMap::new();
@@ -2378,21 +2620,21 @@ impl Server {
         )?;
         let res = t
             .into_iter()
-            .filter_map(|x| {
+            .filter_map(|(text_size, label_text, _locations)| {
                 // If the url is a notebook cell, filter out inlay hints for other cells
-                if info.to_cell_for_lsp(x.0) != maybe_cell_idx {
+                if info.to_cell_for_lsp(text_size) != maybe_cell_idx {
                     return None;
                 }
-                let position = info.to_lsp_position(x.0);
+                let position = info.to_lsp_position(text_size);
                 // The range is half-open, so the end position is exclusive according to the spec.
                 if position >= range.start && position < range.end {
                     Some(InlayHint {
                         position,
-                        label: InlayHintLabel::String(x.1.clone()),
+                        label: InlayHintLabel::String(label_text.clone()),
                         kind: None,
                         text_edits: Some(vec![TextEdit {
                             range: Range::new(position, position),
-                            new_text: x.1,
+                            new_text: label_text,
                         }]),
                         tooltip: None,
                         padding_left: None,
@@ -2451,11 +2693,10 @@ impl Server {
             // TODO(yangdanny) handle notebooks
             return None;
         }
+        let path = self.path_for_uri(uri)?;
         if self
             .workspaces
-            .get_with(uri.to_file_path().unwrap(), |(_, workspace)| {
-                workspace.disable_language_services
-            })
+            .get_with(path, |(_, workspace)| workspace.disable_language_services)
             || !self
                 .initialize_params
                 .capabilities
@@ -2634,7 +2875,16 @@ impl Server {
             cell_uri = Some(uri);
             notebook_path.as_path().to_owned()
         } else {
-            uri.to_file_path().unwrap()
+            let Some(path) = self.path_for_uri(uri) else {
+                return DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
+                    full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                        items: Vec::new(),
+                        result_id: None,
+                    },
+                    related_documents: None,
+                });
+            };
+            path
         };
         let handle = make_open_handle(&self.state, &path);
         let mut items = Vec::new();

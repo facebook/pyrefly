@@ -76,10 +76,12 @@ impl State {
 
     #[wasm_bindgen(js_name=gotoDefinition)]
     pub fn goto_definition(&mut self, line: i32, column: i32) -> JsValue {
-        self.0
-            .goto_definition(Position::new(line, column))
-            .map(|result| serde_wasm_bindgen::to_value(&result).unwrap())
-            .unwrap_or(JsValue::NULL)
+        let results = self.0.goto_definition(Position::new(line, column));
+        if results.is_empty() {
+            JsValue::NULL
+        } else {
+            serde_wasm_bindgen::to_value(&results).unwrap_or(JsValue::NULL)
+        }
     }
 
     #[wasm_bindgen(js_name=autoComplete)]

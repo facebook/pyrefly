@@ -181,11 +181,7 @@
   "generics_syntax_compatibility.py": [],
   "generics_syntax_declarations.py": [],
   "generics_syntax_infer_variance.py": [],
-  "generics_syntax_scoping.py": [
-    "Line 92: Expected 1 errors",
-    "Line 95: Expected 1 errors",
-    "Line 98: Expected 1 errors"
-  ],
+  "generics_syntax_scoping.py": [],
   "generics_type_erasure.py": [],
   "generics_typevartuple_args.py": [],
   "generics_typevartuple_basic.py": [

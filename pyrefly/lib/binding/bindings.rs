@@ -55,6 +55,7 @@ use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
+use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::TypeParameter;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
@@ -520,6 +521,14 @@ impl<'a> BindingsBuilder<'a> {
         self.table.get_mut::<K>().0.insert(key)
     }
 
+    pub fn idx_to_key<K>(&self, idx: Idx<K>) -> &K
+    where
+        K: Keyed,
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+    {
+        self.table.get::<K>().0.idx_to_key(idx)
+    }
+
     /// Declare a `Key` as a usage, which can be used for name lookups. Like `idx_for_promise`,
     /// this is a promise to later provide a `Binding` corresponding this key.
     pub fn declare_current_idx(&mut self, key: Key) -> CurrentIdx {
@@ -664,10 +673,27 @@ impl<'a> BindingsBuilder<'a> {
     // Only works for things with `Foo`, or `source.Foo`, or `F` where `from module import Foo as F`.
     // Does not work for things with nested modules - but no SpecialExport's have that.
     pub fn as_special_export(&self, e: &Expr) -> Option<SpecialExport> {
+        let mut visited_names: SmallSet<Name> = SmallSet::new();
+        let mut visited_keys: SmallSet<Idx<Key>> = SmallSet::new();
+        self.as_special_export_inner(e, &mut visited_names, &mut visited_keys)
+    }
+
+    fn as_special_export_inner(
+        &self,
+        e: &Expr,
+        visited_names: &mut SmallSet<Name>,
+        visited_keys: &mut SmallSet<Idx<Key>>,
+    ) -> Option<SpecialExport> {
         match e {
             Expr::Name(name) => {
+                if !visited_names.insert(name.id.clone()) {
+                    return None;
+                }
                 self.scopes
                     .as_special_export(&name.id, None, self.module_info.name(), self.lookup)
+                    .or_else(|| {
+                        self.special_export_via_alias(&name.id, visited_names, visited_keys)
+                    })
             }
             Expr::Attribute(ExprAttribute {
                 value, attr: name, ..
@@ -679,6 +705,58 @@ impl<'a> BindingsBuilder<'a> {
             ),
             _ => None,
         }
+    }
+
+    fn special_export_via_alias(
+        &self,
+        name: &Name,
+        visited_names: &mut SmallSet<Name>,
+        visited_keys: &mut SmallSet<Idx<Key>>,
+    ) -> Option<SpecialExport> {
+        let (idx, style) = self.scopes.binding_idx_for_name(name)?;
+        match style {
+            FlowStyle::Other
+            | FlowStyle::ClassField { .. }
+            | FlowStyle::PossiblyUninitialized
+            | FlowStyle::Uninitialized => {
+                self.special_export_from_binding_idx(idx, visited_names, visited_keys)
+            }
+            FlowStyle::MergeableImport(_)
+            | FlowStyle::Import(..)
+            | FlowStyle::ImportAs(_)
+            | FlowStyle::FunctionDef(..)
+            | FlowStyle::LoopRecursion => None,
+        }
+    }
+
+    fn special_export_from_binding_idx(
+        &self,
+        mut idx: Idx<Key>,
+        visited_names: &mut SmallSet<Name>,
+        visited_keys: &mut SmallSet<Idx<Key>>,
+    ) -> Option<SpecialExport> {
+        for _ in 0..16 {
+            if !visited_keys.insert(idx) {
+                return None;
+            }
+            let binding = self.table.types.1.get(idx)?;
+            match binding {
+                Binding::CompletedPartialType(inner_idx, _) => {
+                    idx = *inner_idx;
+                }
+                Binding::PartialTypeWithUpstreamsCompleted(inner_idx, _) => {
+                    idx = *inner_idx;
+                }
+                Binding::Forward(inner_idx) => {
+                    idx = *inner_idx;
+                }
+                Binding::NameAssign(_, _, value, _) => {
+                    return self.as_special_export_inner(value, visited_names, visited_keys);
+                }
+                _ => return None,
+            }
+        }
+        None
     }
 
     pub fn error(&self, range: TextRange, info: ErrorInfo, msg: String) {
@@ -881,6 +959,22 @@ impl<'a> BindingsBuilder<'a> {
     pub fn type_params(&mut self, x: &mut TypeParams) {
         for x in x.type_params.iter_mut() {
             let name = x.name().clone();
+
+            // Check for shadowing of type parameters in enclosing Annotation scopes
+            if self
+                .scopes
+                .name_shadows_enclosing_annotation_scope(&name.id)
+            {
+                self.error(
+                    name.range,
+                    ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                    format!(
+                        "Type parameter `{}` shadows a type parameter of the same name from an enclosing scope",
+                        name.id
+                    ),
+                );
+            }
+
             let mut default = None;
             let mut bound = None;
             let mut constraints = None;
@@ -936,15 +1030,20 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    pub fn bind_narrow_ops(&mut self, narrow_ops: &NarrowOps, use_range: TextRange, usage: &Usage) {
+    pub fn bind_narrow_ops(
+        &mut self,
+        narrow_ops: &NarrowOps,
+        use_location: NarrowUseLocation,
+        usage: &Usage,
+    ) {
         for (name, (op, op_range)) in narrow_ops.0.iter_hashed() {
             if let Some(initial_idx) = self
                 .lookup_name(name, &mut Usage::narrowing_from(usage))
                 .found()
             {
                 let narrowed_idx = self.insert_binding(
-                    Key::Narrow(name.into_key().clone(), *op_range, use_range),
-                    Binding::Narrow(initial_idx, Box::new(op.clone()), use_range),
+                    Key::Narrow(name.into_key().clone(), *op_range, use_location),
+                    Binding::Narrow(initial_idx, Box::new(op.clone()), use_location),
                 );
                 self.scopes.narrow_in_current_flow(name, narrowed_idx);
             }
@@ -1168,6 +1267,30 @@ impl<'a> BindingsBuilder<'a> {
             })
     }
 
+    pub fn get_original_binding(
+        &'a self,
+        mut original_idx: Idx<Key>,
+    ) -> Option<(Idx<Key>, Option<&'a Binding>)> {
+        // Follow Forwards to get to the actual original binding.
+        // Short circuit if there are too many forwards - it may mean there's a cycle.
+        let mut original_binding = self.table.types.1.get(original_idx);
+        let mut gas = Gas::new(100);
+        while let Some(
+            Binding::Forward(fwd_idx)
+            | Binding::CompletedPartialType(fwd_idx, _)
+            | Binding::Phi(JoinStyle::NarrowOf(fwd_idx), _),
+        ) = original_binding
+        {
+            if gas.stop() {
+                return None;
+            } else {
+                original_idx = *fwd_idx;
+                original_binding = self.table.types.1.get(original_idx);
+            }
+        }
+        Some((original_idx, original_binding))
+    }
+
     /// Perform the inner loop of looking up a possible legacy type parameter, given a starting
     /// binding. The loop follows `Forward` nodes backward, and returns:
     /// - Some(...) if we find either a legacy type variable or an import (in which case it *might*
@@ -1176,21 +1299,10 @@ impl<'a> BindingsBuilder<'a> {
     fn lookup_legacy_tparam_from_idx(
         &mut self,
         id: LegacyTParamId,
-        mut original_idx: Idx<Key>,
+        original_idx: Idx<Key>,
         has_scoped_type_params: bool,
     ) -> Option<PossibleTParam> {
-        // Follow Forwards to get to the actual original binding.
-        // Short circuit if there are too many forwards - it may mean there's a cycle.
-        let mut original_binding = self.table.types.1.get(original_idx);
-        let mut gas = Gas::new(100);
-        while let Some(Binding::Forward(fwd_idx)) = original_binding {
-            if gas.stop() {
-                return None;
-            } else {
-                original_idx = *fwd_idx;
-                original_binding = self.table.types.1.get(original_idx);
-            }
-        }
+        let (original_idx, original_binding) = self.get_original_binding(original_idx)?;
         // If we found a potential legacy type variable, first insert the key / binding pair
         // for the raw lookup, then insert another key / binding pair for the
         // `CheckLegacyTypeParam`, and return the `Idx<Key>`.

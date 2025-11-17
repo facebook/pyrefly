@@ -28,7 +28,7 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
 }
 
 #[test]
-fn test_rename_parameter_does_not_update_keyword_arguments() {
+fn test_rename_parameter_updates_keyword_arguments() {
     let code = r#"
 def greet(name, message):
     """Greet someone with a message."""
@@ -53,6 +53,88 @@ Rename locations:
                             ^^^^
 5 |     return name
                ^^^^
+8 |     result = greet(name="Alice", message="Hello")
+                       ^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn test_rename_parameter_only_updates_correct_function() {
+    let code = r#"
+def func1(name, message):
+    """First function with name parameter."""
+    print(f"{message}, {name}!")
+    return name
+
+def func2(name, value):
+    """Second function with same name parameter."""
+    print(f"Value: {value}, Name: {name}")
+    return name
+
+def caller():
+    result1 = func1(name="Alice", message="Hello")
+#                   ^
+    result2 = func2(name="Bob", value=42)
+    return result1, result2
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+13 |     result1 = func1(name="Alice", message="Hello")
+                         ^
+Rename locations:
+2 | def func1(name, message):
+              ^^^^
+4 |     print(f"{message}, {name}!")
+                            ^^^^
+5 |     return name
+               ^^^^
+13 |     result1 = func1(name="Alice", message="Hello")
+                         ^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn test_rename_function_parameter_updates_call_sites() {
+    let code = r#"
+def greet(name, message):
+#         ^
+    """Greet someone with a message."""
+    print(f"{message}, {name}!")
+    return name
+
+def caller():
+    result1 = greet(name="Alice", message="Hello")
+    result2 = greet(message="Hi", name="Bob")
+    result3 = greet(name="Charlie", message="Hey")
+    return result1, result2, result3
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | def greet(name, message):
+              ^
+Rename locations:
+2 | def greet(name, message):
+              ^^^^
+5 |     print(f"{message}, {name}!")
+                            ^^^^
+6 |     return name
+               ^^^^
+9 |     result1 = greet(name="Alice", message="Hello")
+                        ^^^^
+10 |     result2 = greet(message="Hi", name="Bob")
+                                       ^^^^
+11 |     result3 = greet(name="Charlie", message="Hey")
+                         ^^^^
 "#
         .trim(),
         report.trim(),

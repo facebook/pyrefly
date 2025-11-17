@@ -42,7 +42,7 @@ async function updateStatusBar() {
   if (
     document == null ||
     (document.uri.scheme !== 'file' &&
-      document.uri.scheme !== 'vscode-notebook-cell') ||
+      document.uri.scheme !== 'vscode-notebook-cell' && document.uri.scheme !== 'untitled') ||
     document.languageId !== 'python'
   ) {
     statusBarItem?.hide();
@@ -260,6 +260,8 @@ export async function activate(context: ExtensionContext) {
     // Register the server for Python documents
     documentSelector: [
       {scheme: 'file', language: 'python'},
+      // Support for unsaved/untitled files
+      {scheme: 'untitled', language: 'python'},
       // Support for notebook cells
       {scheme: 'vscode-notebook-cell', language: 'python'},
     ],

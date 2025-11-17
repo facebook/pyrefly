@@ -12,9 +12,12 @@ use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
 
 use crate::state::lsp::ImportFormat;
+use crate::state::require::Require;
 use crate::state::state::State;
+use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
+use crate::test::util::mk_multi_file_state;
 
 #[derive(Default)]
 struct ResultsFilter {
@@ -67,7 +70,7 @@ fn get_test_report(
             ..
         } in state
             .transaction()
-            .completion(handle, position, import_format)
+            .completion(handle, position, import_format, true)
         {
             let is_deprecated = if let Some(tags) = tags {
                 tags.contains(&lsp_types::CompletionItemTag::DEPRECATED)
@@ -1606,6 +1609,43 @@ Completion Results:
         .trim(),
         report.trim(),
     );
+}
+
+#[test]
+fn autoimport_completions_set_label_details() {
+    let code = r#"
+T = foooooo
+#       ^
+"#;
+    let files = [("main", code), ("bar", "foooooo = 1")];
+    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+
+    // Label details supported
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true);
+    let autoimport = completions
+        .into_iter()
+        .find(|item| item.label == "foooooo")
+        .expect("expected foooooo to be in completions");
+    let label_details = autoimport
+        .label_details
+        .expect("auto import completion should include label details");
+    assert_eq!(label_details.detail.as_deref(), Some(" (import bar)"));
+    assert_eq!(label_details.description.as_deref(), Some("bar"));
+
+    // Label details unsupported
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, false);
+    completions
+        .into_iter()
+        .find(|item| item.label == "foooooo (import bar)")
+        .expect("expected foooooo to be in completions");
 }
 
 #[test]

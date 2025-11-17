@@ -668,7 +668,6 @@ fn test_references_after_file_modification_with_line_offset_with_config() {
     interaction.shutdown();
 }
 
-// todo(kylei): find implementations in addition to just calls
 #[test]
 fn test_references_cross_file_method_inheritance() {
     let root = get_test_files_root();
@@ -691,13 +690,20 @@ fn test_references_cross_file_method_inheritance() {
     // Find references for Base.method (line 7, character 8 in base.py)
     interaction.server.references("base.py", 7, 8, true);
 
-    // finds only calls
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
         result: Some(serde_json::json!([
             {
+                "range": {"start":{"line":9,"character":8},"end":{"line":9,"character":14}},
+                "uri": Url::from_file_path(child_py.clone()).unwrap().to_string()
+            },
+            {
                 "range": {"start":{"line":14,"character":6},"end":{"line":14,"character":12}},
                 "uri": Url::from_file_path(child_py.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":9,"character":8},"end":{"line":9,"character":14}},
+                "uri": Url::from_file_path(child_of_child_py.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":14,"character":6},"end":{"line":14,"character":12}},
@@ -710,6 +716,99 @@ fn test_references_cross_file_method_inheritance() {
             {
                 "range": {"start":{"line":7,"character":8},"end":{"line":7,"character":14}},
                 "uri": Url::from_file_path(base_py.clone()).unwrap().to_string()
+            },
+        ])),
+        error: None,
+    });
+
+    interaction.shutdown();
+}
+
+// Test for __init__ priority
+// When only __init__ is overridden (not __new__), __init__ handles the constructor call
+#[test]
+fn test_references_for_init_priority() {
+    let root = get_test_files_root();
+    let root_path = root
+        .path()
+        .join("constructor_priority_references/init_priority");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root_path.clone());
+    interaction.initialize(InitializeSettings {
+        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+        ..Default::default()
+    });
+
+    let person_py = root_path.join("person.py");
+    let usage_py = root_path.join("usage.py");
+
+    interaction.server.did_open("person.py");
+    interaction.server.did_open("usage.py");
+
+    // Find references for Person.__init__
+    interaction.server.references("person.py", 9, 12, true);
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
+        result: Some(serde_json::json!([
+            {
+                "range": {"start":{"line":9,"character":8},"end":{"line":9,"character":16}},
+                "uri": Url::from_file_path(person_py.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":7,"character":5},"end":{"line":7,"character":11}},
+                "uri": Url::from_file_path(usage_py.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":8,"character":5},"end":{"line":8,"character":11}},
+                "uri": Url::from_file_path(usage_py.clone()).unwrap().to_string()
+            },
+        ])),
+        error: None,
+    });
+
+    interaction.shutdown();
+}
+
+// Test for __new__ priority
+// When __new__ is overridden, it takes priority over __init__ for constructor calls
+#[test]
+fn test_references_for_new_priority() {
+    let root = get_test_files_root();
+    let root_path = root
+        .path()
+        .join("constructor_priority_references/new_priority");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root_path.clone());
+    interaction.initialize(InitializeSettings {
+        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+        ..Default::default()
+    });
+
+    let singleton_py = root_path.join("singleton.py");
+    let usage_py = root_path.join("usage.py");
+
+    interaction.server.did_open("singleton.py");
+
+    // Find references for Singleton.__new__ (line 8, character 12 in singleton.py)
+    interaction.server.references("singleton.py", 7, 12, true);
+
+    interaction.client.expect_response(Response {
+        id: RequestId::from(2),
+        result: Some(serde_json::json!([
+            {
+                "range": {"start":{"line":7,"character":5},"end":{"line":7,"character":14}},
+                "uri": Url::from_file_path(usage_py.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":8,"character":5},"end":{"line":8,"character":14}},
+                "uri": Url::from_file_path(usage_py.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":7,"character":8},"end":{"line":7,"character":15}},
+                "uri": Url::from_file_path(singleton_py.clone()).unwrap().to_string()
             },
         ])),
         error: None,

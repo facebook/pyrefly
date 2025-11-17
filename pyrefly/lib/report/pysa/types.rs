@@ -363,7 +363,6 @@ impl ScalarTypeProperties {
         }
     }
 
-    #[cfg(test)]
     pub fn bool() -> ScalarTypeProperties {
         ScalarTypeProperties {
             is_bool: true,

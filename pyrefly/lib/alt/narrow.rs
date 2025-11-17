@@ -8,6 +8,7 @@
 use num_traits::ToPrimitive;
 use pyrefly_python::ast::Ast;
 use pyrefly_types::class::Class;
+use pyrefly_types::simplify::intersect;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
@@ -105,15 +106,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // intercepted by the is_subset_eq checks above. type(None) cannot be subclassed.
             Type::never()
         } else {
-            let left_base = self.disjoint_base(left);
-            let right_base = self.disjoint_base(right);
-            if self.has_superclass(left_base, right_base)
-                || self.has_superclass(right_base, left_base)
-            {
-                fallback()
+            let fallback = fallback();
+            if fallback.is_never() {
+                fallback
             } else {
-                // A common subclass of these two classes cannot exist.
-                Type::never()
+                let left_base = self.disjoint_base(left);
+                let right_base = self.disjoint_base(right);
+                if self.has_superclass(left_base, right_base)
+                    || self.has_superclass(right_base, left_base)
+                {
+                    intersect(vec![left.clone(), right.clone()], fallback)
+                } else {
+                    // A common subclass of these two classes cannot exist.
+                    Type::never()
+                }
             }
         }
     }

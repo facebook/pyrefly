@@ -2303,7 +2303,10 @@ def foo(obj: Token):
         ];
         vec![(
             "test.foo",
-            vec![("5:3-5:30", regular_attribute_access_callees(token))],
+            vec![(
+                "5:3-5:30|artificial-attribute-access|get-attr-constant-literal",
+                regular_attribute_access_callees(token),
+            )],
         )]
     }
 );
@@ -2333,5 +2336,59 @@ def foo(obj: Test):
     &|_context: &ModuleContext| {
         // TODO(T137969662): We should see a call to `Test.__setattr__`
         vec![("test.foo", vec![])]
+    }
+);
+
+call_graph_testcase!(
+    test_comparison_operator,
+    TEST_MODULE_NAME,
+    r#"
+def foo():
+  1 > 2
+"#,
+    &|context: &ModuleContext| {
+        let call_targets = vec![
+            create_call_target("builtins.int.__gt__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("builtins.int", context)
+                .with_return_type(Some(ScalarTypeProperties::bool())),
+        ];
+        vec![(
+            "test.foo",
+            vec![(
+                "3:7-3:8|artificial-call|comparison",
+                regular_call_callees(call_targets),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_chained_comparison_operators,
+    TEST_MODULE_NAME,
+    r#"
+def foo():
+  1 > 2 > 3
+"#,
+    &|context: &ModuleContext| {
+        let call_targets = vec![
+            create_call_target("builtins.int.__gt__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("builtins.int", context)
+                .with_return_type(Some(ScalarTypeProperties::bool())),
+        ];
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "3:7-3:8|artificial-call|comparison",
+                    regular_call_callees(call_targets.clone()),
+                ),
+                (
+                    "3:11-3:12|artificial-call|comparison",
+                    regular_call_callees(call_targets),
+                ),
+            ],
+        )]
     }
 );

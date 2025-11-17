@@ -499,7 +499,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         mut cls: ClassType,
         args: &[CallArg],
         keywords: &[CallKeyword],
-        range: TextRange,
+        arguments_range: TextRange,
+        callee_range: Option<TextRange>,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
@@ -513,11 +514,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.solver().generalize_class_targs(cls.targs_mut());
         }
         let hint = None; // discard hint
-        if let Some(ret) = self.call_metaclass(&cls, range, args, keywords, errors, context, hint)
+        if let Some(ret) =
+            self.call_metaclass(&cls, arguments_range, args, keywords, errors, context, hint)
             && !self.is_compatible_constructor_return(&ret, cls.class_object())
         {
             if let Some(metaclass_dunder_call) = self.get_metaclass_dunder_call(&cls) {
-                self.record_resolved_trace(range, metaclass_dunder_call);
+                self.record_resolved_trace(arguments_range, metaclass_dunder_call);
             }
             // Got something other than an instance of the class under construction.
             return ret;
@@ -526,7 +528,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let (overrides_new, dunder_new_has_errors) =
             if let Some(new_method) = self.get_dunder_new(&cls) {
                 let cls_ty = Type::type_form(cls.clone().to_type());
-                let full_args = iter::once(CallArg::ty(&cls_ty, range))
+                let full_args = iter::once(CallArg::ty(&cls_ty, arguments_range))
                     .chain(args.iter().cloned())
                     .collect::<Vec<_>>();
                 let dunder_new_errors = self.error_collector();
@@ -534,13 +536,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.as_call_target_or_error(
                         new_method.clone(),
                         CallStyle::Method(&dunder::NEW),
-                        range,
+                        arguments_range,
                         errors,
                         context,
                     ),
                     &full_args,
                     keywords,
-                    range,
+                    arguments_range,
                     &dunder_new_errors,
                     context,
                     hint,
@@ -548,7 +550,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 let has_errors = !dunder_new_errors.is_empty();
                 errors.extend(dunder_new_errors);
-                self.record_resolved_trace(range, new_method);
+                if let Some(callee_range) = callee_range {
+                    self.record_external_attribute_definition_index(
+                        &cls.clone().to_type(),
+                        &dunder::NEW,
+                        callee_range,
+                    );
+                }
+                self.record_resolved_trace(arguments_range, new_method);
                 if self.is_compatible_constructor_return(&ret, cls.class_object()) {
                     dunder_new_ret = Some(ret);
                 } else if !matches!(ret, Type::Any(AnyStyle::Error | AnyStyle::Implicit)) {
@@ -574,13 +583,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.as_call_target_or_error(
                     init_method.clone(),
                     CallStyle::Method(&dunder::INIT),
-                    range,
+                    arguments_range,
                     errors,
                     context,
                 ),
                 args,
                 keywords,
-                range,
+                arguments_range,
                 &dunder_init_errors,
                 context,
                 hint,
@@ -590,7 +599,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if !dunder_new_has_errors {
                 errors.extend(dunder_init_errors);
             }
-            self.record_resolved_trace(range, init_method);
+            if let Some(callee_range) = callee_range {
+                self.record_external_attribute_definition_index(
+                    &cls.clone().to_type(),
+                    &dunder::INIT,
+                    callee_range,
+                );
+            }
+            self.record_resolved_trace(arguments_range, init_method);
         }
         self.solver()
             .finish_class_targs(cls.targs_mut(), self.uniques);
@@ -654,12 +670,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn call_infer(
+    fn call_infer_with_range(
         &self,
         call_target: CallTarget,
         args: &[CallArg],
         keywords: &[CallKeyword],
         range: TextRange,
+        callee_range: Option<TextRange>,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
@@ -741,7 +758,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Some(ty) => self.check_dunder_bool_is_callable(&ty, range, errors),
                     }
                 };
-                self.construct_class(cls, args, keywords, range, errors, context, hint)
+                self.construct_class(
+                    cls,
+                    args,
+                    keywords,
+                    range,
+                    callee_range,
+                    errors,
+                    context,
+                    hint,
+                )
             }
             CallTarget::TypedDict(td) => {
                 self.construct_typed_dict(td, args, keywords, range, errors, context, hint)
@@ -831,8 +857,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let keywords = call.vec_call_keyword(keywords, self, errors);
                 self.unions(targets.into_map(|t| {
                     let ctor_targs = None; // hack
-                    self.call_infer(
-                        t, &args, &keywords, range, errors, context, hint, ctor_targs,
+                    self.call_infer_with_range(
+                        t,
+                        &args,
+                        &keywords,
+                        range,
+                        callee_range,
+                        errors,
+                        context,
+                        hint,
+                        ctor_targs,
                     )
                 }))
             }
@@ -885,6 +919,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::SuperInstance(_) => true,
             _ => false,
         }
+    pub fn call_infer(
+        &self,
+        call_target: CallTarget,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+        hint: Option<HintRef>,
+        ctor_targs: Option<&mut TArgs>,
+    ) -> Type {
+        self.call_infer_with_range(
+            call_target,
+            args,
+            keywords,
+            range,
+            None,
+            errors,
+            context,
+            hint,
+            ctor_targs,
+        )
     }
 
     /// Helper function hide details of call synthesis from the attribute resolution code.
@@ -1195,11 +1251,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                         None,
                     );
-                    self.call_infer(
+                    self.call_infer_with_range(
                         callable,
                         &args,
                         &kws,
                         x.arguments.range,
+                        Some(x.func.range()),
                         errors,
                         None,
                         hint,

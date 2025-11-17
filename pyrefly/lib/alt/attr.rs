@@ -419,10 +419,6 @@ enum AttributeBase1 {
     /// bound, which may be the original bound on `T` or a decomposition of
     /// it (e.g. if the original bound is a union).
     Quantified(Quantified, ClassType),
-    /// Attribute access on a value explicitly typed as `type[T]` where `T` is
-    /// an in-scope type variable. We will resolve it as class object attribute
-    /// access against the bounds of `T`.
-    TypeQuantified(Quantified, ClassType),
     Any(AnyStyle),
     Never,
     /// type[Any] is a special case where attribute lookups first check the
@@ -442,6 +438,7 @@ enum AttributeBase1 {
     TypedDict(TypedDict),
     /// Attribute lookup on a base as part of a subset check against a protocol.
     ProtocolSubset(Box<AttributeBase1>),
+    Intersect(Vec<AttributeBase1>, Vec<AttributeBase1>),
 }
 
 impl AttributeBase1 {
@@ -1232,14 +1229,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             AttributeBase1::ProtocolSubset(protocol_base) => {
-                // When checking protocols, we need special handling for TypeQuantified to prioritize
-                // metaclass methods (like __iter__ on EnumMeta) over regular class methods.
-                if let AttributeBase1::TypeQuantified(_quantified, class) = &**protocol_base
-                    && let Some(attr) = self
-                        .try_get_magic_dunder_attr(&ClassBase::ClassType(class.clone()), attr_name)
-                {
-                    acc.found_class_attribute(attr, base);
-                } else if let AttributeBase1::ClassObject(class) = &**protocol_base
+                if let AttributeBase1::ClassObject(class) = &**protocol_base
                     && let Some(attr) = self.try_get_magic_dunder_attr(class, attr_name)
                 {
                     // When looking up a magic dunder method as part of checking a class object
@@ -1250,20 +1240,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.lookup_attr_from_attribute_base1((**protocol_base).clone(), attr_name, acc)
                 }
             }
-            AttributeBase1::TypeQuantified(quantified, class) => {
-                if let Some(attr) = self.get_bounded_quantified_class_attribute(
-                    quantified.clone(),
-                    class,
-                    attr_name,
-                ) {
-                    acc.found_class_attribute(attr, base);
-                } else {
-                    acc.not_found(NotFoundOn::ClassObject(class.class_object().dupe(), base));
-                }
-            }
-
             AttributeBase1::ClassObject(class) => {
-                match self.get_class_attribute(class, attr_name) {
+                let attr = match class {
+                    ClassBase::Quantified(quantified, class) => self
+                        .get_bounded_quantified_class_attribute(
+                            quantified.clone(),
+                            class,
+                            attr_name,
+                        ),
+                    _ => self.get_class_attribute(class, attr_name),
+                };
+                match attr {
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None => {
                         // Classes are instances of their metaclass, which defaults to `builtins.type`.
@@ -1365,6 +1352,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(attr) => acc.found_class_attribute(attr, base),
                 None => acc.not_found(NotFoundOn::ClassInstance(cls.class_object().dupe(), base)),
             },
+            AttributeBase1::Intersect(bases, fallback) => {
+                // For now, only handle the simplest case: if exactly one base has a successful lookup, use it.
+                let mut candidates = Vec::new();
+                for b in bases {
+                    let mut acc_candidate = LookupResult::empty();
+                    self.lookup_attr_from_attribute_base1(b.clone(), attr_name, &mut acc_candidate);
+                    if acc_candidate.not_found.is_empty() && acc_candidate.internal_error.is_empty()
+                    {
+                        candidates.push(acc_candidate.found);
+                    }
+                }
+                if candidates.len() == 1 {
+                    acc.found.extend(candidates.into_iter().next().unwrap());
+                } else {
+                    // TODO: Intersect the candidates instead of using the fallback.
+                    for b in fallback {
+                        self.lookup_attr_from_attribute_base1(b.clone(), attr_name, acc);
+                    }
+                }
+            }
         }
     }
 
@@ -1620,20 +1627,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Some(base) = self.as_attribute_base(ty.clone()) {
                         for base1 in base.0 {
                             if let AttributeBase1::ClassInstance(cls) = base1 {
-                                acc.push(AttributeBase1::TypeQuantified(
+                                acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
                                     (*quantified).clone(),
                                     cls,
-                                ));
+                                )));
                             } else {
                                 use_fallback = true;
                             }
                         }
                     }
                     if use_fallback {
-                        acc.push(AttributeBase1::TypeQuantified(
+                        acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
                             (*quantified).clone(),
                             self.stdlib.object().clone(),
-                        ));
+                        )));
                     }
                 }
                 Restriction::Constraints(constraints) => {
@@ -1642,10 +1649,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         if let Some(base) = self.as_attribute_base(ty.clone()) {
                             for base1 in base.0 {
                                 if let AttributeBase1::ClassInstance(cls) = base1 {
-                                    acc.push(AttributeBase1::TypeQuantified(
+                                    acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
                                         (*quantified).clone(),
                                         cls,
-                                    ));
+                                    )));
                                 } else {
                                     use_fallback = true;
                                 }
@@ -1653,15 +1660,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                     if use_fallback {
-                        acc.push(AttributeBase1::TypeQuantified(
+                        acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
                             (*quantified).clone(),
                             self.stdlib.object().clone(),
-                        ));
+                        )));
                     }
                 }
-                Restriction::Unrestricted => acc.push(AttributeBase1::TypeQuantified(
-                    (*quantified).clone(),
-                    self.stdlib.object().clone(),
+                Restriction::Unrestricted => acc.push(AttributeBase1::ClassObject(
+                    ClassBase::Quantified((*quantified).clone(), self.stdlib.object().clone()),
                 )),
             },
             Type::Type(box Type::Any(style)) => acc.push(AttributeBase1::TypeAny(style)),
@@ -1827,10 +1833,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.stdlib.object().clone(),
                 )),
             },
+            Type::Intersect(x) => {
+                let mut acc_intersect = Vec::new();
+                for t in x.0 {
+                    self.as_attribute_base1(t, &mut acc_intersect);
+                }
+                let mut acc_fallback = Vec::new();
+                self.as_attribute_base1(x.1, &mut acc_fallback);
+                acc.push(AttributeBase1::Intersect(acc_intersect, acc_fallback));
+            }
             // TODO: check to see which ones should have class representations
             Type::SpecialForm(_)
             | Type::Type(_)
-            | Type::Intersect(_)
             | Type::Unpack(_)
             | Type::Concatenate(_, _)
             | Type::ParamSpecValue(_)
@@ -2177,9 +2191,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AttributeBase1::ClassObject(class) => {
                 self.completions_class(class.class_object(), expected_attribute_name, res)
             }
-            AttributeBase1::TypeQuantified(_, class) => {
-                self.completions_class(class.class_object(), expected_attribute_name, res)
-            }
             AttributeBase1::TypeAny(_) | AttributeBase1::TypeNever => self.completions_class_type(
                 self.stdlib.builtins_type(),
                 expected_attribute_name,
@@ -2196,6 +2207,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AttributeBase1::Property(_) => {
                 // TODO(samzhou19815): Support autocomplete for properties
                 {}
+            }
+            AttributeBase1::Intersect(bases, _) => {
+                for b in bases {
+                    self.completions_inner1(b, expected_attribute_name, res);
+                }
             }
         }
     }

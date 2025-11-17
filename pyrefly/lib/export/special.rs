@@ -14,6 +14,8 @@ use ruff_python_ast::name::Name;
 /// changes the sense of the binding.
 #[derive(Debug, Clone, Dupe, Copy, PartialEq, Eq)]
 pub enum SpecialExport {
+    ClassMethod,
+    AbstractClassMethod,
     TypeAlias,
     TypeAliasType,
     TypeVar,
@@ -74,6 +76,8 @@ impl SpecialExport {
     pub fn new(name: &Name) -> Option<Self> {
         match name.as_str() {
             "TypeAlias" => Some(Self::TypeAlias),
+            "classmethod" => Some(Self::ClassMethod),
+            "abstractclassmethod" => Some(Self::AbstractClassMethod),
             "TypeVar" => Some(Self::TypeVar),
             "ParamSpec" => Some(Self::ParamSpec),
             "TypeVarTuple" => Some(Self::TypeVarTuple),
@@ -168,6 +172,7 @@ impl SpecialExport {
             | Self::BuiltinsType
             | Self::HasAttr
             | Self::GetAttr
+            | Self::ClassMethod
             | Self::BuiltinsDict
             | Self::BuiltinsList
             | Self::NotImplemented
@@ -184,7 +189,7 @@ impl SpecialExport {
             }
             Self::Exit => matches!(m.as_str(), "sys" | "builtins"),
             Self::OsExit => matches!(m.as_str(), "os"),
-            Self::AbstractMethod => matches!(m.as_str(), "abc"),
+            Self::AbstractMethod | Self::AbstractClassMethod => matches!(m.as_str(), "abc"),
             Self::PydanticConfigDict | Self::PydanticField => matches!(m.as_str(), "pydantic"),
             Self::Callable => matches!(
                 m.as_str(),

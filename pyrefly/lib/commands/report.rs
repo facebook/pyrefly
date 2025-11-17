@@ -20,6 +20,7 @@ use serde::Serialize;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::ReturnTypeKind;
+use crate::binding::bindings::Bindings;
 use crate::commands::check::Handles;
 use crate::commands::files::FilesArgs;
 use crate::commands::util::CommandExitStatus;
@@ -182,6 +183,70 @@ impl ReportArgs {
         suppressions
     }
 
+    fn parse_functions(
+        module: &pyrefly_python::module::Module,
+        bindings: Bindings,
+    ) -> Vec<Function> {
+        let mut functions = Vec::new();
+        for idx in bindings.keys::<Key>() {
+            if let Key::Definition(id) = bindings.idx_to_key(idx)
+                && let Binding::Function(x, _pred, _class_meta) = bindings.get(idx)
+            {
+                let fun = bindings.get(bindings.get(*x).undecorated_idx);
+                let func_name = module.code_at(id.range());
+                let location = Self::range_to_location(module, fun.def.range);
+
+                // Get return annotation from ReturnTypeKind
+                let return_annotation = {
+                    let return_key = Key::ReturnType(*id);
+                    let return_idx = bindings.key_to_idx(&return_key);
+                    if let Binding::ReturnType(ret) = bindings.get(return_idx) {
+                        match &ret.kind {
+                            ReturnTypeKind::ShouldValidateAnnotation { range, .. } => {
+                                Some(module.code_at(*range).to_owned())
+                            }
+                            ReturnTypeKind::ShouldTrustAnnotation { .. } => {
+                                // For trusted annotations, get from AST
+                                fun.def
+                                    .returns
+                                    .as_ref()
+                                    .map(|ann| module.code_at(ann.range()).to_owned())
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                // Get parameters
+                let mut parameters = Vec::new();
+                let all_params = Self::extract_parameters(&fun.def.parameters);
+
+                for param in all_params {
+                    let param_name = module.code_at(param.name.range());
+                    let param_annotation = param
+                        .annotation
+                        .as_ref()
+                        .map(|ann| module.code_at(ann.range()).to_owned());
+
+                    parameters.push(Parameter {
+                        name: param_name.to_owned(),
+                        annotation: param_annotation,
+                        location: Self::range_to_location(module, param.range),
+                    });
+                }
+                functions.push(Function {
+                    name: func_name.to_owned(),
+                    return_annotation,
+                    parameters,
+                    location,
+                });
+            }
+        }
+        functions
+    }
+
     fn run_inner(
         files_to_check: Box<dyn Includes>,
         config_finder: pyrefly_config::finder::ConfigFinder,
@@ -214,69 +279,8 @@ impl ReportArgs {
                 && let Some(module) = transaction.get_module_info(&handle)
             {
                 let line_count = module.lined_buffer().line_index().line_count();
-                let mut functions = Vec::new();
-
-                // Parse suppressions from the source code
+                let functions = Self::parse_functions(&module, bindings);
                 let suppressions = Self::parse_suppressions(&module);
-
-                // Iterate through all definitions to find functions
-                for idx in bindings.keys::<Key>() {
-                    if let Key::Definition(id) = bindings.idx_to_key(idx)
-                        && let Binding::Function(x, _pred, _class_meta) = bindings.get(idx)
-                    {
-                        let fun = bindings.get(bindings.get(*x).undecorated_idx);
-                        let func_name = module.code_at(id.range());
-                        let location = Self::range_to_location(&module, fun.def.range);
-
-                        // Get return annotation from ReturnTypeKind
-                        let return_annotation = {
-                            let return_key = Key::ReturnType(*id);
-                            let return_idx = bindings.key_to_idx(&return_key);
-                            if let Binding::ReturnType(ret) = bindings.get(return_idx) {
-                                match &ret.kind {
-                                    ReturnTypeKind::ShouldValidateAnnotation { range, .. } => {
-                                        Some(module.code_at(*range).to_owned())
-                                    }
-                                    ReturnTypeKind::ShouldTrustAnnotation { .. } => {
-                                        // For trusted annotations, get from AST
-                                        fun.def
-                                            .returns
-                                            .as_ref()
-                                            .map(|ann| module.code_at(ann.range()).to_owned())
-                                    }
-                                    _ => None,
-                                }
-                            } else {
-                                None
-                            }
-                        };
-
-                        // Get parameters
-                        let mut parameters = Vec::new();
-                        let all_params = Self::extract_parameters(&fun.def.parameters);
-
-                        for param in all_params {
-                            let param_name = module.code_at(param.name.range());
-                            let param_annotation = param
-                                .annotation
-                                .as_ref()
-                                .map(|ann| module.code_at(ann.range()).to_owned());
-
-                            parameters.push(Parameter {
-                                name: param_name.to_owned(),
-                                annotation: param_annotation,
-                                location: Self::range_to_location(&module, param.range),
-                            });
-                        }
-
-                        functions.push(Function {
-                            name: func_name.to_owned(),
-                            return_annotation,
-                            parameters,
-                            location,
-                        });
-                    }
-                }
 
                 report.insert(
                     handle.path().as_path().display().to_string(),

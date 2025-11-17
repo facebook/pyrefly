@@ -323,7 +323,7 @@ fn test_completion_with_autoimport() {
                         && let Some(additional_text_edits) = item.get("additionalTextEdits")
                         && let Some(edits_array) = additional_text_edits.as_array()
                     {
-                        label_str == "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search"
+                        label_str == "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search (import autoimport_provider)"
                             && detail_str.contains("from autoimport_provider import")
                             && !edits_array.is_empty()
                     } else {
@@ -682,7 +682,7 @@ fn test_stdlib_class_completion() {
 
     interaction.client.expect_response_with_item(
         serde_json::json!({
-            "label": "FirstHeaderLineIsContinuationDefect",
+            "label": "FirstHeaderLineIsContinuationDefect (import email.errors)",
             "detail": "from email.errors import FirstHeaderLineIsContinuationDefect\n",
             "kind": 7,
             "sortText": "4",

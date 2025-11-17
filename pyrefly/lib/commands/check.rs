@@ -31,6 +31,7 @@ use pyrefly_config::finder::ConfigError;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::args::clap_env;
 use pyrefly_util::display;
 use pyrefly_util::display::count;
 use pyrefly_util::display::number_thousands;
@@ -153,7 +154,7 @@ pub struct SnippetCheckArgs {
     /// When not set, Pyrefly will perform an upward-filesystem-walk approach to find the nearest
     /// pyrefly.toml or pyproject.toml with `tool.pyrefly` section'. If no config is found, Pyrefly exits with error.
     /// If both a pyrefly.toml and valid pyproject.toml are found, pyrefly.toml takes precedence.
-    #[arg(long, short, value_name = "FILE")]
+    #[arg(long, short, value_name = "FILE", env = clap_env("CONFIG"))]
     config: Option<PathBuf>,
 
     /// Output related configuration options

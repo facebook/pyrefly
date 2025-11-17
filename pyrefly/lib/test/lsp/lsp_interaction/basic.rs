@@ -42,11 +42,13 @@ fn test_initialize_basic() {
                 "completionProvider": {
                     "triggerCharacters": ["."]
                 },
+                "declarationProvider": true,
                 "documentHighlightProvider": true,
                 "signatureHelpProvider": {
                     "triggerCharacters": ["(", ","]
                 },
                 "hoverProvider": true,
+                "implementationProvider": true,
                 "inlayHintProvider": true,
                 "notebookDocumentSync":{"notebookSelector":[{"cells":[{"language":"python"}]}]},
                 "documentSymbolProvider": true,

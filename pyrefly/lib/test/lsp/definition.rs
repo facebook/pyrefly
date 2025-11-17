@@ -65,6 +65,7 @@ x = 1 # go-to-definition is unsupported for literals
 #   ^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    println!("REPORT=>{}<=", report);
     assert_eq!(
         r#"
 # main.py
@@ -1281,6 +1282,55 @@ Definition Result:
 Definition Result:
 6 |     x: str = "abc"
         ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn union_method_access_test() {
+    let code = r#"
+class State:
+    def get_location(self) -> str: ...
+
+class NewYork:
+    def get_location(self) -> str:
+        return "10016"
+
+class Massachusetts:
+    def get_location(self) -> str:
+        return "02108"
+
+def find_location(x: Massachusetts | NewYork):
+    x.get_location()
+      # ^
+
+def find_location2(x: NewYork | Massachusetts):
+    x.get_location()
+      # ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+14 |     x.get_location()
+             ^
+Definition Result:
+10 |     def get_location(self) -> str:
+             ^^^^^^^^^^^^
+Definition Result:
+6 |     def get_location(self) -> str:
+            ^^^^^^^^^^^^
+
+18 |     x.get_location()
+             ^
+Definition Result:
+10 |     def get_location(self) -> str:
+             ^^^^^^^^^^^^
+Definition Result:
+6 |     def get_location(self) -> str:
+            ^^^^^^^^^^^^
 "#
         .trim(),
         report.trim(),

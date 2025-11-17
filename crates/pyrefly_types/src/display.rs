@@ -420,7 +420,7 @@ impl<'a> TypeDisplayContext<'a> {
                             }
                             literals.push(format!("{}", Fmt(|f| self.fmt_lit(lit, f))))
                         }
-                        Type::Callable(_) | Type::Function(_) => {
+                        Type::Callable(_) | Type::Function(_) | Type::Intersect(_) => {
                             display_types.push(format!("({})", self.display_internal(t)))
                         }
                         _ => display_types.push(format!("{}", self.display_internal(t))),
@@ -442,12 +442,17 @@ impl<'a> TypeDisplayContext<'a> {
                     .collect::<Vec<_>>();
                 write!(f, "{}", display_types_deduped.join(" | "))
             }
-            Type::Intersect(types) => {
-                write!(
-                    f,
-                    "Intersect[{}]",
-                    commas_iter(|| types.iter().map(|t| self.display_internal(t)))
-                )
+            Type::Intersect(x) => {
+                let display_types =
+                    x.0.iter()
+                        .map(|t| match t {
+                            Type::Callable(_) | Type::Function(_) => {
+                                format!("({})", self.display_internal(t))
+                            }
+                            _ => format!("{}", self.display_internal(t)),
+                        })
+                        .collect::<Vec<_>>();
+                write!(f, "{}", display_types.join(" & "))
             }
             Type::Tuple(t) => t.fmt_with_type(f, |t| self.display_internal(t)),
             Type::Forall(box Forall {
@@ -620,6 +625,7 @@ pub mod tests {
     use crate::callable::Function;
     use crate::callable::Param;
     use crate::callable::ParamList;
+    use crate::callable::Params;
     use crate::callable::Required;
     use crate::class::Class;
     use crate::class::ClassDefIndex;
@@ -1397,5 +1403,44 @@ def overloaded_func[T](
     y: Any
 ) -> None: ..."#
         );
+    }
+
+    #[test]
+    fn test_intersection() {
+        let x = Type::Intersect(Box::new((
+            vec![Type::LiteralString, Type::None],
+            Type::any_implicit(),
+        )));
+        let ctx = TypeDisplayContext::new(&[&x]);
+        assert_eq!(ctx.display(&x).to_string(), "LiteralString & None");
+    }
+
+    #[test]
+    fn test_union_of_intersection() {
+        let x = Type::Union(vec![
+            Type::Intersect(Box::new((
+                vec![Type::any_explicit(), Type::LiteralString],
+                Type::any_implicit(),
+            ))),
+            Type::None,
+        ]);
+        let ctx = TypeDisplayContext::new(&[&x]);
+        assert_eq!(ctx.display(&x).to_string(), "(Any & LiteralString) | None");
+    }
+
+    #[test]
+    fn test_callable_in_intersection() {
+        let x = Type::Intersect(Box::new((
+            vec![
+                Type::Callable(Box::new(Callable {
+                    params: Params::Ellipsis,
+                    ret: Type::None,
+                })),
+                Type::any_explicit(),
+            ],
+            Type::any_implicit(),
+        )));
+        let ctx = TypeDisplayContext::new(&[&x]);
+        assert_eq!(ctx.display(&x).to_string(), "((...) -> None) & Any");
     }
 }

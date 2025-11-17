@@ -211,3 +211,50 @@ fn test_inlay_hint_disable_returns() {
 
     interaction.shutdown();
 }
+
+#[test]
+fn test_inlay_hint_labels_do_not_support_goto_type_definition() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(None),
+        ..Default::default()
+    });
+
+    interaction.server.did_open("type_def_inlay_hint_test.py");
+    interaction
+        .server
+        .inlay_hint("type_def_inlay_hint_test.py", 0, 0, 100, 0);
+
+    interaction.client.expect_response(Response {
+        id: interaction.server.current_request_id(),
+        result: Some(serde_json::json!([
+            {
+                "label": " -> MyClass",
+                "position": {"character": 22, "line": 11},
+                "textEdits": [{
+                    "newText": " -> MyClass",
+                    "range": {
+                        "end": {"character": 22, "line": 11},
+                        "start": {"character": 22, "line": 11}
+                    }
+                }]
+            },
+            {
+                "label": ": MyClass",
+                "position": {"character": 6, "line": 15},
+                "textEdits": [{
+                    "newText": ": MyClass",
+                    "range": {
+                        "end": {"character": 6, "line": 15},
+                        "start": {"character": 6, "line": 15}
+                    }
+                }]
+            }
+        ])),
+        error: None,
+    });
+
+    interaction.shutdown();
+}

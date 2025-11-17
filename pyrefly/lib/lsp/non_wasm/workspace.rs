@@ -185,6 +185,8 @@ pub struct DisabledLanguageServices {
     #[serde(default)]
     pub definition: bool,
     #[serde(default)]
+    pub declaration: bool,
+    #[serde(default)]
     pub type_definition: bool,
     #[serde(default)]
     pub code_action: bool,
@@ -206,6 +208,8 @@ pub struct DisabledLanguageServices {
     pub document_symbol: bool,
     #[serde(default)]
     pub semantic_tokens: bool,
+    #[serde(default)]
+    pub implementation: bool,
 }
 
 impl DisabledLanguageServices {
@@ -214,6 +218,7 @@ impl DisabledLanguageServices {
     pub fn is_disabled(&self, method: &str) -> bool {
         match method {
             "textDocument/definition" => self.definition,
+            "textDocument/declaration" => self.declaration,
             "textDocument/typeDefinition" => self.type_definition,
             "textDocument/codeAction" => self.code_action,
             "textDocument/completion" => self.completion,
@@ -227,6 +232,7 @@ impl DisabledLanguageServices {
             "textDocument/semanticTokens/full" | "textDocument/semanticTokens/range" => {
                 self.semantic_tokens
             }
+            "textDocument/implementation" => self.implementation,
             _ => false, // Unknown methods are not disabled
         }
     }

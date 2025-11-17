@@ -673,3 +673,11 @@ ThisClassDoesNotWork(True) & False
 True & ThisClassDoesNotWork(False)
     "#,
 );
+
+testcase!(
+    test_type_of_typevar_equality,
+    r#"
+def f[S, T](x: type[S], y: type[T]):
+    return x == y
+    "#,
+);

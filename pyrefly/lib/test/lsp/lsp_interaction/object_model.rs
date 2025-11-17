@@ -169,6 +169,24 @@ impl TestServer {
         }));
     }
 
+    pub fn implementation(&mut self, file: &'static str, line: u32, col: u32) {
+        let path = self.get_root_or_panic().join(file);
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/implementation".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&path).unwrap().to_string(),
+                },
+                "position": {
+                    "line": line,
+                    "character": col,
+                },
+            }),
+        }));
+    }
+
     pub fn did_open(&self, file: &'static str) {
         let path = self.get_root_or_panic().join(file);
         self.send_message(Message::Notification(Notification {
@@ -179,6 +197,20 @@ impl TestServer {
                     "languageId": "python",
                     "version": 1,
                     "text": read_to_string(&path).unwrap(),
+                },
+            }),
+        }));
+    }
+
+    pub fn did_open_uri(&self, uri: &Url, language_id: &str, text: impl Into<String>) {
+        self.send_message(Message::Notification(Notification {
+            method: "textDocument/didOpen".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": uri.to_string(),
+                    "languageId": language_id,
+                    "version": 1,
+                    "text": text.into(),
                 },
             }),
         }));
@@ -680,6 +712,30 @@ impl TestClient {
                     "end": {"line": line_end, "character": char_end}
                 },
                 })),
+            error: None,
+        })
+    }
+
+    pub fn expect_implementation_response_from_root(
+        &self,
+        implementations: Vec<(&'static str, u32, u32, u32, u32)>,
+    ) {
+        let locations: Vec<_> = implementations
+            .into_iter()
+            .map(|(file, line_start, char_start, line_end, char_end)| {
+                serde_json::json!({
+                    "uri": Url::from_file_path(self.get_root_or_panic().join(file)).unwrap().to_string(),
+                    "range": {
+                        "start": {"line": line_start, "character": char_start},
+                        "end": {"line": line_end, "character": char_end}
+                    },
+                })
+            })
+            .collect();
+
+        self.expect_response(Response {
+            id: RequestId::from(*self.request_idx.lock().unwrap()),
+            result: Some(serde_json::json!(locations)),
             error: None,
         })
     }

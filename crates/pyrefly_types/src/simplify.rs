@@ -26,8 +26,11 @@ fn flatten_and_dedup(xs: Vec<Type>) -> Vec<Type> {
             }
         }
     }
-    let mut res = Vec::with_capacity(xs.len());
-    flatten(xs, &mut res);
+    let mut flattened = Vec::with_capacity(xs.len());
+    flatten(xs, &mut flattened);
+    simplify_intersections(&mut flattened);
+    let mut res = Vec::with_capacity(flattened.len());
+    flatten(flattened, &mut res);
 
     res.sort();
     res.dedup();
@@ -45,6 +48,19 @@ fn try_collapse(mut xs: Vec<Type>) -> Result<Type, Vec<Type>> {
         Ok(xs.pop().unwrap())
     } else {
         Err(xs)
+    }
+}
+
+fn simplify_intersections(xs: &mut [Type]) {
+    // Simplify `A | (A & B)` to `A`
+    let (mut intersects, non_intersects): (Vec<_>, Vec<_>) =
+        xs.iter_mut().partition(|x| matches!(x, Type::Intersect(_)));
+    for x in intersects.iter_mut() {
+        if let Type::Intersect(y) = x
+            && y.0.iter_mut().any(|t| non_intersects.contains(&t))
+        {
+            **x = Type::never();
+        }
     }
 }
 
@@ -76,6 +92,29 @@ pub fn unions_with_literals(
     enum_members: &dyn Fn(&Class) -> Option<usize>,
 ) -> Type {
     unions_internal(xs, Some(stdlib), Some(enum_members))
+}
+
+pub fn intersect(ts: Vec<Type>, fallback: Type) -> Type {
+    let mut flattened = Vec::new();
+    for t in ts {
+        match t {
+            Type::Union(_) => {
+                // TODO: Flatten these instead of giving up.
+                return fallback;
+            }
+            Type::Intersect(x) => flattened.extend(x.0),
+            t => flattened.push(t),
+        }
+    }
+    flattened.sort();
+    flattened.dedup();
+    if flattened.is_empty() || flattened.iter().any(|t| t.is_never()) {
+        Type::never()
+    } else if flattened.len() == 1 {
+        flattened.into_iter().next().unwrap()
+    } else {
+        Type::Intersect(Box::new((flattened, fallback)))
+    }
 }
 
 fn remove_maximum<T: Ord>(xs: &mut Vec<T>) {
@@ -259,6 +298,7 @@ pub fn simplify_tuples(tuple: Tuple) -> Tuple {
 
 #[cfg(test)]
 mod tests {
+    use crate::simplify::intersect;
     use crate::simplify::unions;
     use crate::types::NeverStyle;
     use crate::types::Type;
@@ -271,5 +311,41 @@ mod tests {
         ];
         let res = unions(xs);
         assert_eq!(res, Type::never());
+    }
+
+    #[test]
+    fn test_intersect_simple() {
+        let xs = vec![Type::any_tuple(), Type::any_implicit()];
+        assert_eq!(
+            intersect(xs.clone(), Type::never()),
+            Type::Intersect(Box::new((xs, Type::never())))
+        );
+    }
+
+    #[test]
+    fn test_intersect_empty() {
+        let xs = Vec::new();
+        assert_eq!(intersect(xs, Type::any_implicit()), Type::never())
+    }
+
+    #[test]
+    fn test_intersect_never() {
+        let xs = vec![Type::any_implicit(), Type::never()];
+        assert_eq!(intersect(xs, Type::any_implicit()), Type::never());
+    }
+
+    #[test]
+    fn test_intersect_one() {
+        let xs = vec![Type::None];
+        assert_eq!(intersect(xs, Type::never()), Type::None);
+    }
+
+    #[test]
+    fn test_simplify_union_with_intersect() {
+        let xs = vec![
+            Type::any_implicit(),
+            intersect(vec![Type::any_implicit(), Type::any_tuple()], Type::never()),
+        ];
+        assert_eq!(unions(xs), Type::any_implicit());
     }
 }

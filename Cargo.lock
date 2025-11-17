@@ -2001,7 +2001,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly"
-version = "0.41.2"
+version = "0.41.3"
 dependencies = [
  "anstream",
  "anyhow",
@@ -2053,7 +2053,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_build"
-version = "0.41.2"
+version = "0.41.3"
 dependencies = [
  "anyhow",
  "dupe",
@@ -2071,7 +2071,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_bundled"
-version = "0.41.2"
+version = "0.41.3"
 dependencies = [
  "anyhow",
  "starlark_map",
@@ -2081,7 +2081,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_config"
-version = "0.41.2"
+version = "0.41.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -2116,7 +2116,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_derive"
-version = "0.41.2"
+version = "0.41.3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2125,7 +2125,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_python"
-version = "0.41.2"
+version = "0.41.3"
 dependencies = [
  "anyhow",
  "dupe",
@@ -2150,7 +2150,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_types"
-version = "0.41.2"
+version = "0.41.3"
 dependencies = [
  "compact_str 0.8.0",
  "dupe",
@@ -2170,7 +2170,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_util"
-version = "0.41.2"
+version = "0.41.3"
 dependencies = [
  "anstream",
  "anyhow",
@@ -3273,7 +3273,7 @@ dependencies = [
 
 [[package]]
 name = "tsp_types"
-version = "0.41.2"
+version = "0.41.3"
 dependencies = [
  "lsp-server",
  "lsp-types",

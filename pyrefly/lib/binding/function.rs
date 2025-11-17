@@ -10,6 +10,7 @@ use std::mem;
 use dupe::Dupe as _;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
+use pyrefly_python::dunder;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
@@ -46,6 +47,7 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::LastStmt;
+use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::ReturnExplicit;
 use crate::binding::binding::ReturnImplicit;
 use crate::binding::binding::ReturnType;
@@ -68,6 +70,7 @@ struct Decorators {
     is_overload: bool,
     is_abstract_method: bool,
     is_override: bool,
+    is_classmethod: bool,
     decorators: Box<[(Idx<Key>, TextRange)]>,
 }
 
@@ -165,6 +168,7 @@ impl<'a> SelfAttrNames<'a> {
                         super::binding::ExprOrBinding::Binding(Binding::Type(Type::any_implicit())),
                         None,
                         r,
+                        MethodSelfKind::Instance,
                     ),
                 )
             })
@@ -182,6 +186,7 @@ impl<'a> BindingsBuilder<'a> {
         x: &mut Parameters,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
+        method_self_kind: MethodSelfKind,
     ) {
         let mut self_name = None;
         for x in x.iter_non_variadic_params() {
@@ -214,7 +219,8 @@ impl<'a> BindingsBuilder<'a> {
                 true,
             );
         }
-        self.scopes.set_self_name_if_applicable(self_name);
+        self.scopes
+            .set_self_name_if_applicable(self_name, method_self_kind);
     }
 
     fn to_return_annotation_with_range(
@@ -287,6 +293,7 @@ impl<'a> BindingsBuilder<'a> {
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
         is_async: bool,
+        method_self_kind: MethodSelfKind,
     ) -> (
         YieldsAndReturns,
         Option<SelfAssignments>,
@@ -294,7 +301,7 @@ impl<'a> BindingsBuilder<'a> {
     ) {
         self.scopes
             .push_function_scope(range, func_name, class_key.is_some(), is_async);
-        self.parameters(parameters, undecorated_idx, class_key);
+        self.parameters(parameters, undecorated_idx, class_key, method_self_kind);
         self.init_static_scope(&body, false);
         self.stmts(
             body,
@@ -312,11 +319,12 @@ impl<'a> BindingsBuilder<'a> {
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
         is_async: bool,
+        method_self_kind: MethodSelfKind,
     ) -> Option<SelfAssignments> {
         // Push a scope to create the parameter keys (but do nothing else with it).
         self.scopes
             .push_function_scope(range, func_name, class_key.is_some(), is_async);
-        self.parameters(parameters, undecorated_idx, class_key);
+        self.parameters(parameters, undecorated_idx, class_key, method_self_kind);
         self.scopes.pop();
         // If we are in a class, use a simple visitor to find `self.<attr>` assignments.
         if class_key.is_some() {
@@ -450,14 +458,23 @@ impl<'a> BindingsBuilder<'a> {
         let mut is_override = false;
         let mut has_no_type_check = false;
         let mut is_abstract_method = false;
+        let mut is_classmethod = false;
         for d in &decorator_list {
             let special_export = self.as_special_export(&d.expression);
             is_overload = is_overload || matches!(special_export, Some(SpecialExport::Overload));
             is_override = is_override || matches!(special_export, Some(SpecialExport::Override));
-            is_abstract_method =
-                is_abstract_method || matches!(special_export, Some(SpecialExport::AbstractMethod));
+            is_abstract_method = is_abstract_method
+                || matches!(
+                    special_export,
+                    Some(SpecialExport::AbstractMethod | SpecialExport::AbstractClassMethod)
+                );
             has_no_type_check =
                 has_no_type_check || matches!(special_export, Some(SpecialExport::NoTypeCheck));
+            is_classmethod = is_classmethod
+                || matches!(
+                    special_export,
+                    Some(SpecialExport::ClassMethod | SpecialExport::AbstractClassMethod)
+                );
         }
         let decorators = self
             .ensure_and_bind_decorators(decorator_list, usage)
@@ -467,6 +484,7 @@ impl<'a> BindingsBuilder<'a> {
             is_overload,
             is_abstract_method,
             is_override,
+            is_classmethod,
             decorators,
         }
     }
@@ -518,6 +536,15 @@ impl<'a> BindingsBuilder<'a> {
             && !decorators.is_override
             && !decorators.is_abstract_method
             && !is_ellipse(&body);
+        let method_self_kind = if class_key.is_some()
+            && (decorators.is_classmethod
+                || func_name.id == dunder::INIT_SUBCLASS
+                || func_name.id == dunder::NEW)
+        {
+            MethodSelfKind::Class
+        } else {
+            MethodSelfKind::Instance
+        };
 
         let self_assignments = if decorators.has_no_type_check
             || (self.untyped_def_behavior == UntypedDefBehavior::SkipAndInferReturnAny
@@ -532,6 +559,7 @@ impl<'a> BindingsBuilder<'a> {
                 undecorated_idx,
                 class_key,
                 is_async,
+                method_self_kind,
             )
         } else {
             match self.untyped_def_behavior {
@@ -546,6 +574,7 @@ impl<'a> BindingsBuilder<'a> {
                             undecorated_idx,
                             class_key,
                             is_async,
+                            method_self_kind,
                         );
                     if should_report_unused_parameters {
                         self.record_unused_parameters(unused_parameters);
@@ -574,6 +603,7 @@ impl<'a> BindingsBuilder<'a> {
                             undecorated_idx,
                             class_key,
                             is_async,
+                            method_self_kind,
                         );
                     if should_report_unused_parameters {
                         self.record_unused_parameters(unused_parameters);
@@ -602,6 +632,7 @@ impl<'a> BindingsBuilder<'a> {
                             undecorated_idx,
                             class_key,
                             is_async,
+                            method_self_kind,
                         );
                     if should_report_unused_parameters {
                         self.record_unused_parameters(unused_parameters);

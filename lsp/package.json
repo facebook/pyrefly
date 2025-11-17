@@ -140,6 +140,10 @@
                             "type": "boolean",
                             "default": false
                         },
+                        "declaration": {
+                            "type": "boolean",
+                            "default": false
+                        },
                         "typeDefinition": {
                             "type": "boolean",
                             "default": false
@@ -165,6 +169,10 @@
                             "default": false
                         },
                         "signatureHelp": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "implementation": {
                             "type": "boolean",
                             "default": false
                         }

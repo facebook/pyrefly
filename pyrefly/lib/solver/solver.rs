@@ -14,6 +14,7 @@ use std::fmt::Display;
 use std::mem;
 
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::simplify::intersect;
 use pyrefly_types::types::TArgs;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
@@ -457,6 +458,9 @@ impl Solver {
         t.transform_mut(&mut |x| {
             if let Type::Union(xs) = x {
                 *x = unions(mem::take(xs));
+            }
+            if let Type::Intersect(y) = x {
+                *x = intersect(mem::take(&mut y.0), y.1.clone());
             }
             if let Type::Tuple(tuple) = x {
                 *x = Type::Tuple(simplify_tuples(mem::take(tuple)));

@@ -1666,6 +1666,71 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Arc::new(EmptyAnswer)
     }
 
+    /// Check if a module path should be skipped for indexing purposes.
+    /// Skips typeshed (bundled stdlib and third-party stubs) and site-packages (external libraries).
+    fn should_skip_module_for_indexing(
+        module_path: &pyrefly_python::module_path::ModulePath,
+    ) -> bool {
+        use pyrefly_python::module_path::ModulePathDetails;
+        match module_path.details() {
+            ModulePathDetails::BundledTypeshed(_)
+            | ModulePathDetails::BundledTypeshedThirdParty(_) => true,
+            ModulePathDetails::FileSystem(path)
+            | ModulePathDetails::Memory(path)
+            | ModulePathDetails::Namespace(path) => {
+                // Skip site-packages
+                path.to_string_lossy().contains("site-packages")
+            }
+        }
+    }
+
+    /// Populate parent methods map for find-references on reimplementations.
+    /// This is done once per class before checking individual fields.
+    /// Uses MRO to walk ALL ancestors (not just direct bases).
+    /// Only adds if the ancestor directly declares the field.
+    /// Skips library code to keep the index focused on user source code.
+    fn populate_parent_methods_map(&self, cls: &Class) {
+        if Self::should_skip_module_for_indexing(cls.module().path()) {
+            return;
+        }
+
+        let mro = self.get_mro_for_class(cls);
+        for (field_name, _field) in self.get_class_field_map(cls).iter() {
+            // Apply the same filters as check_consistent_override_for_field.
+            // Skip special methods that don't participate in override checks:
+            // - Object construction: __new__, __init__, __init_subclass__
+            // - __hash__ (often overridden to None)
+            // - __call__ (too many typeshed issues)
+            // - Private/mangled attributes (start with __ but don't end with __)
+            if field_name == &dunder::NEW
+                || field_name == &dunder::INIT
+                || field_name == &dunder::INIT_SUBCLASS
+                || field_name == &dunder::HASH
+                || field_name == &dunder::CALL
+                || Self::is_mangled_attr(field_name)
+            {
+                continue;
+            }
+
+            if let Some(child_range) = cls.field_decl_range(field_name) {
+                for ancestor in mro.ancestors(self.stdlib) {
+                    if let Some(ancestor_range) =
+                        ancestor.class_object().field_decl_range(field_name)
+                    {
+                        let ancestor_module_path = ancestor.class_object().module().path();
+                        if !Self::should_skip_module_for_indexing(ancestor_module_path) {
+                            self.current().add_parent_method_mapping(
+                                child_range,
+                                ancestor_module_path.dupe(),
+                                ancestor_range,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn solve_consistent_override_check(
         &self,
         binding: &BindingConsistentOverrideCheck,
@@ -1673,6 +1738,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Arc<EmptyAnswer> {
         if let Some(cls) = &self.get_idx(binding.class_key).0 {
             let class_bases = self.get_base_types_for_class(cls);
+
+            self.populate_parent_methods_map(cls);
+
             for (name, field) in self.get_class_field_map(cls).iter() {
                 self.check_consistent_override_for_field(
                     cls,
@@ -2033,7 +2101,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match binding {
             Binding::Forward(k) => self.get_idx(*k).arc_clone(),
             Binding::Narrow(k, op, range) => {
-                self.narrow(self.get_idx(*k).as_ref(), op, *range, errors)
+                self.narrow(self.get_idx(*k).as_ref(), op, range.range(), errors)
             }
             Binding::Phi(join_style, ks) => {
                 if ks.len() == 1 {
@@ -2711,31 +2779,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     None => (None, self.expr(expr, None, errors)),
                 };
-                // Then, handle the possibility that we need to treat the type as a type alias
-                match has_type_alias_qualifier {
-                    Some(true) => self.as_type_alias(
-                        name,
-                        TypeAliasStyle::LegacyExplicit,
-                        ty,
-                        expr,
-                        None,
-                        legacy_tparams,
-                        errors,
-                    ),
-                    None if Self::may_be_implicit_type_alias(&ty)
-                        && self.has_valid_annotation_syntax(expr, &self.error_swallower()) =>
-                    {
-                        self.as_type_alias(
+                let is_bare_annotated = has_type_alias_qualifier != Some(true)
+                    && matches!(expr.as_ref(), Expr::Name(_) | Expr::Attribute(_))
+                    && matches!(
+                        &ty,
+                        Type::Type(inner)
+                            if matches!(inner.as_ref(), Type::SpecialForm(SpecialForm::Annotated))
+                    );
+                if is_bare_annotated {
+                    ty
+                } else {
+                    // Then, handle the possibility that we need to treat the type as a type alias
+                    match has_type_alias_qualifier {
+                        Some(true) => self.as_type_alias(
                             name,
-                            TypeAliasStyle::LegacyImplicit,
+                            TypeAliasStyle::LegacyExplicit,
                             ty,
                             expr,
                             None,
                             legacy_tparams,
                             errors,
-                        )
+                        ),
+                        None if Self::may_be_implicit_type_alias(&ty)
+                            && self.has_valid_annotation_syntax(expr, &self.error_swallower()) =>
+                        {
+                            self.as_type_alias(
+                                name,
+                                TypeAliasStyle::LegacyImplicit,
+                                ty,
+                                expr,
+                                None,
+                                legacy_tparams,
+                                errors,
+                            )
+                        }
+                        _ => ty,
                     }
-                    _ => ty,
                 }
             }
             Binding::TypeVar(ann, name, x) => {
@@ -3194,16 +3273,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::Import(m, name, _aliased) => self
                 .get_from_export(*m, None, &KeyExport(name.clone()))
                 .arc_clone(),
-            Binding::ClassDef(x, decorators) => match &self.get_idx(*x).0 {
+            Binding::ClassDef(x, _decorators) => match &self.get_idx(*x).0 {
                 None => Type::any_implicit(),
                 Some(cls) => {
-                    let mut ty = Type::ClassDef(cls.dupe());
-                    for x in decorators.iter().rev() {
-                        let decorator = self.get_idx(*x).arc_clone_ty();
-                        let range = self.bindings().idx_to_key(*x).range();
-                        ty = self.apply_decorator(decorator, ty, range, errors)
-                    }
-                    ty
+                    // TODO: analyze the class decorators. At the moment, we don't actually support any type-level
+                    // analysis of class decorators (the decorators we do support like dataclass-related ones are
+                    // handled via custom bindings).
+                    //
+                    // Note that all decorators have their own binding so they are still type checked for errors
+                    // *inside* the decorator, we just don't analyze the application.
+                    Type::ClassDef(cls.dupe())
                 }
             },
             Binding::AnnotatedType(ann, val) => match &self.get_idx(*ann).ty(self.stdlib) {

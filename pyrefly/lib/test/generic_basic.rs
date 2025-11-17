@@ -394,6 +394,20 @@ class A[T]:  # E: Cannot use type parameter lists on Python 3.8 (syntax was adde
 );
 
 testcase!(
+    test_shadowing_scoped_type_vars,
+    r#"
+from typing import TypeVar, Generic
+class C0[T]:
+    def foo[T](self, x: T) -> T:  # E: Type parameter `T` shadows a type parameter of the same name from an enclosing scope
+        return x
+T = TypeVar("T")
+class C1(Generic[T]):
+    def foo[T](self, x: T) -> T:  # E: Type parameter `T` shadows a type parameter of the same name from an enclosing scope
+        return x
+    "#,
+);
+
+testcase!(
     test_typevar_or_none,
     r#"
 from typing import assert_type
@@ -442,5 +456,44 @@ def f[T](x: T) -> T:
     return x
 def g() -> int:
     return f((1, "hello world"))[0]
+    "#,
+);
+
+testcase!(
+    test_type_attr,
+    r#"
+from typing import assert_type
+def f[T](
+    config_type: type[T],
+) -> T:
+    assert_type(config_type.__name__, str)
+    return config_type()
+    "#,
+);
+
+testcase!(
+    test_nested_typevar,
+    r#"
+from typing import assert_type
+def f[T](x: list[T] | list[None], y: list[T]) -> T:
+    return y[0]
+assert_type(f([None], [0]), int)
+    "#,
+);
+
+testcase!(
+    test_generator_iterable,
+    r#"
+from typing import Any
+
+type TypeForm[T] = type[T] | Any
+
+def _to_list[T](
+    value: Any,
+    kind: type[list[T]] = list,
+) -> list[T]:
+    return kind(to_type(val, Any) for val in value)
+
+def to_type[T](value: Any, kind: TypeForm[T]) -> T: ...
     "#,
 );

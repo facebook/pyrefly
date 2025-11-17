@@ -287,7 +287,7 @@ pub fn get_hover(
         .find_definition(
             handle,
             position,
-            &FindPreference {
+            FindPreference {
                 prefer_pyi: false,
                 ..Default::default()
             },
