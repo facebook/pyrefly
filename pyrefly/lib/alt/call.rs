@@ -685,15 +685,51 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let metadata = call_target.function_metadata();
         if let Some(meta) = metadata
             && meta.flags.is_abstract_method
-            && self.should_error_on_abstract_call(&call_target)
         {
-            let method_name = meta.kind.format(self.module().name());
-            self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::AbstractMethodCall, context),
-                format!("Cannot call abstract method `{method_name}`"),
-            );
+            // We only raise here for calls where we know the callee is the
+            // abstract definition itself. That includes:
+            //   * direct calls on the defining class object (e.g. Base.build())
+            //   * super() lookups that surface the abstract method
+            // We skip calls via variables of type[Base] for non-final classes,
+            // because those values might point at a concrete subclass.
+            let should_error = match &call_target {
+                CallTarget::Function(_) | CallTarget::FunctionOverload(..) => true,
+                CallTarget::BoundMethod(obj, _) | CallTarget::BoundMethodOverload(obj, ..) => {
+                    // Definite class object?
+                    let mut is_definite_abstract_owner = matches!(obj, Type::ClassDef(_));
+
+                    // super() always refers to a specific class in the MRO
+                    if matches!(obj, Type::SuperInstance(_)) {
+                        is_definite_abstract_owner = true;
+                    }
+
+                    // Final classes can't be refined by subclasses, so treat
+                    // any reference to them as definite.
+                    let is_final = match obj {
+                        Type::ClassDef(cls) => self.get_metadata_for_class(cls).is_final(),
+                        Type::Type(inner) => match &**inner {
+                            Type::ClassType(cls) | Type::SelfType(cls) => {
+                                self.get_metadata_for_class(cls.class_object()).is_final()
+                            }
+                            _ => false,
+                        },
+                        _ => false,
+                    };
+
+                    is_definite_abstract_owner || is_final
+                }
+                _ => false,
+            };
+
+            if should_error {
+                let method_name = meta.kind.format(self.module().name());
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::new(ErrorKind::AbstractMethodCall, context),
+                    format!("Cannot call abstract method `{method_name}`"),
+                );
+            }
         }
         // Does this call target correspond to a function whose keyword arguments we should save?
         let kw_metadata = {
@@ -902,23 +938,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn should_error_on_abstract_call(&self, target: &CallTarget) -> bool {
-        match target {
-            CallTarget::Function(_) | CallTarget::FunctionOverload(..) => true,
-            CallTarget::BoundMethod(obj, _) | CallTarget::BoundMethodOverload(obj, ..) => {
-                self.is_class_object_type(obj)
-            }
-            _ => false,
-        }
-    }
-
-    fn is_class_object_type(&self, ty: &Type) -> bool {
-        match ty {
-            Type::ClassDef(_) => true,
-            Type::Type(inner) => self.is_class_object_type(inner),
-            Type::SuperInstance(_) => true,
-            _ => false,
-        }
     pub fn call_infer(
         &self,
         call_target: CallTarget,

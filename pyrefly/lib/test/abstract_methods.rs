@@ -219,6 +219,39 @@ Base.helper()  # E: Cannot call abstract method `Base.helper`
 );
 
 testcase!(
+    test_call_abstract_classmethod_via_type_var_ok,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @classmethod
+    @abstractmethod
+    def build(cls) -> "Base": ...
+
+def ok(cls: type[Base]) -> Base:
+    # cls could be a concrete subclass, so this should be allowed
+    return cls.build()
+"#,
+);
+
+testcase!(
+    test_call_abstract_classmethod_on_final_type_var_errors,
+    r#"
+from abc import ABC, abstractmethod
+from typing import final
+
+@final
+class FinalBase(ABC):  # E: Final class `FinalBase` cannot have unimplemented abstract members: `build`
+    @classmethod
+    @abstractmethod
+    def build(cls) -> "FinalBase": ...
+
+def err(cls: type[FinalBase]) -> FinalBase:
+    return cls.build()  # E: Cannot call abstract method `FinalBase.build`
+"#,
+);
+
+testcase!(
     test_call_base_method_directly_errors,
     r#"
 from abc import ABC, abstractmethod
