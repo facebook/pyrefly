@@ -24,6 +24,7 @@ use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_server::ResponseError;
+use lsp_types::PublishDiagnosticsParams;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeConfiguration;
 use lsp_types::notification::DidChangeNotebookDocument;
@@ -34,6 +35,8 @@ use lsp_types::notification::DidOpenNotebookDocument;
 use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::notification::Exit;
 use lsp_types::notification::Initialized;
+use lsp_types::notification::Notification as _;
+use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::Completion;
 use lsp_types::request::DocumentDiagnosticRequest;
 use lsp_types::request::GotoDefinition;
@@ -686,48 +689,25 @@ impl TestClient {
         assert_eq!(json!(expected), json!(actual));
     }
 
-    /// Wait until we get a publishDiagnostics notification with the correct number of errors
+    /// Wait for a publishDiagnostics notification, then check if it has the correct path and count
     pub fn expect_publish_diagnostics_error_count(&self, path: PathBuf, count: usize) {
-        self.expect_message_helper(
+        let params: PublishDiagnosticsParams = self.expect_message(
+            &format!(
+                "publishDiagnostics notification with {count} errors for file: {}",
+                path.display()
+            ),
             |msg| {
-                match msg {
-                    Message::Notification(Notification { method, params}) if method == "textDocument/publishDiagnostics" => {
-                        // Check if this notification is for the expected file
-                        if let Some(uri) = params.get("uri")
-                            && let Some(uri_str) = uri.as_str()
-                            && let (Ok(expected_url), Ok(actual_url)) = (Url::parse(Url::from_file_path(&path).unwrap().as_ref()), Url::parse(uri_str))
-                            && let (Ok(expected_path), Ok(actual_path)) = (expected_url.to_file_path(), actual_url.to_file_path()) {
-                                // Canonicalize both paths for comparison to handle symlinks and normalize case
-                                // This is very relevant for publish diagnostics, where the LS might send a notification for
-                                // a file that does not exactly match the file_open message.
-                                // This is very relevant for publish diagnostics, where the LS might send a notification for
-                                // a file that does not exactly match the file_open message.
-                                // This is very relevant for publish diagnostics, where the LS might send a notification for
-                                // a file that does not exactly match the file_open message.
-                                let expected_canonical = expected_path.canonicalize().unwrap_or(expected_path);
-                                let actual_canonical = actual_path.canonicalize().unwrap_or(actual_path);
-
-                                if expected_canonical == actual_canonical
-                                    && let Some(diagnostics) = params.get("diagnostics")
-                                    && let Some(diagnostics_array) = diagnostics.as_array() {
-                                        let actual_count = diagnostics_array.len();
-                                        if actual_count == count {
-                                            return ValidationResult::Pass;
-                                        } else {
-                                            // If the counts do not match, we continue waiting
-                                            return ValidationResult::Skip;
-                                        }
-                                    } else if expected_canonical == actual_canonical {
-                                        panic!("publishDiagnostics notification malformed: missing or invalid 'diagnostics' field");
-                                    }
-                            }
-                        ValidationResult::Skip
-                    }
-                    _ => ValidationResult::Skip
+                if let Message::Notification(x) = msg
+                    && x.method == PublishDiagnostics::METHOD
+                {
+                    Some(serde_json::from_value(x.params).unwrap())
+                } else {
+                    None
                 }
             },
-            &format!("publishDiagnostics notification with {count} errors for file: {}", path.display()),
         );
+        assert_eq!(params.uri.to_file_path().unwrap(), path);
+        assert_eq!(params.diagnostics.len(), count);
     }
 
     pub fn expect_publish_diagnostics_exact_uri(&self, expected_uri: &str, count: usize) {
