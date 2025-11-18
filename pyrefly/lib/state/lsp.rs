@@ -2389,7 +2389,6 @@ impl<'a> Transaction<'a> {
         }
     }
 
-
     fn add_autoimport_completions(
         &self,
         handle: &Handle,
