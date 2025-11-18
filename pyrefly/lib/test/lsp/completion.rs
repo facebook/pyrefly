@@ -100,8 +100,7 @@ fn get_test_report(
                     report.push_str(" with text edit: ");
                     report.push_str(&format!("{:?}", &text_edit));
                 }
-                let mut added_extra_line = false;
-                if let Some(documentation) = documentation {
+                if let Some(ref documentation) = documentation {
                     report.push('\n');
                     match documentation {
                         lsp_types::Documentation::String(s) => {
@@ -111,11 +110,6 @@ fn get_test_report(
                             report.push_str(&content.value);
                         }
                     }
-                    added_extra_line = true;
-                }
-                if detail.is_some() || added_extra_line {
-                    // Insert a blank line between rich (import/doc) entries for readability.
-                    report.push('\n');
                 }
             }
         }

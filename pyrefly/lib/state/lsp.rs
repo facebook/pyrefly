@@ -2435,7 +2435,7 @@ impl<'a> Transaction<'a> {
                         new_text: import_edit.insert_text.clone(),
                     };
                     (
-                        Some(import_edit.display_text),
+                        Some(import_edit.insert_text.clone()),
                         Some(vec![import_text_edit]),
                         import_edit.module_name,
                     )
@@ -2871,10 +2871,11 @@ impl<'a> Transaction<'a> {
                         self.add_builtins_autoimport_completions(handle, None, &mut result);
                     }
                     self.add_literal_completions(handle, position, &mut result);
-                    // in foo(x=<>, y=2<>), the first containing node is AnyNodeRef::Arguments(_)
-                    // in foo(<>), the first containing node is AnyNodeRef::ExprCall
-                    if let Some(first) = nodes.first()
-                        && matches!(first, AnyNodeRef::ExprCall(_) | AnyNodeRef::Arguments(_))
+                    // Only offer kwargs when the cursor isn't inside a literal value.
+                    if !nodes.iter().any(|n| matches!(n, AnyNodeRef::ExprStringLiteral(_)))
+                        && nodes
+                            .iter()
+                            .any(|n| matches!(n, AnyNodeRef::ExprCall(_) | AnyNodeRef::Arguments(_)))
                     {
                         self.add_kwargs_completions(handle, position, &mut result);
                     }
