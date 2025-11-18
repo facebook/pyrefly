@@ -2666,7 +2666,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 continue;
             };
             let instance = Instance::of_protocol(ancestor, derived_instance.clone());
-            let instantiated = member.value.instantiate_for(&instance);
+            let instantiated = member.instantiate_for(&instance);
             if let Some(sig) = Self::callable_params_and_flags(instantiated.ty()) {
                 return Some(sig);
             }
