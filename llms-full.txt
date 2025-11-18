@@ -1634,7 +1634,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 2. Install pyrefly
+### 2. Install pyrefly (version 0.42.0 or later)
 
 ```bash
 pip install pyrefly
