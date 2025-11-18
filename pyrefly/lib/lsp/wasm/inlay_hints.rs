@@ -5,11 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::cmp::Reverse;
 use std::iter::once;
 use std::sync::Arc;
 
-use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
@@ -24,8 +22,6 @@ use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprList;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::ParameterWithDefault;
-use ruff_python_ast::Stmt;
-use ruff_python_ast::StmtImport;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -40,6 +36,7 @@ use crate::binding::binding::KeyClassField;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::Bindings;
 use crate::state::ide::import_regular_import_edit;
+use crate::state::import_tracker::ImportTracker;
 use crate::state::lsp::AllOffPartial;
 use crate::state::lsp::AnnotationKind;
 use crate::state::lsp::DefinitionMetadata;
@@ -60,140 +57,6 @@ pub struct InlayHintData {
     /// Text to insert for the hint, plus any imports needed by that inserted text.
     pub text_edit: Option<String>,
     pub import_edits: Vec<(TextSize, String)>,
-}
-
-#[derive(Default)]
-struct ImportTracker {
-    canonical_modules: SmallSet<ModuleName>,
-    alias_modules: Vec<(ModuleName, String)>,
-}
-
-impl ImportTracker {
-    fn from_ast(ast: &ModModule) -> Self {
-        let mut tracker = Self::default();
-        for stmt in &ast.body {
-            if let Stmt::Import(stmt_import) = stmt {
-                tracker.record_import(stmt_import);
-            }
-        }
-        tracker
-            .alias_modules
-            .sort_by_key(|(module, _)| Reverse(module.as_str().len()));
-        tracker
-    }
-
-    fn record_import(&mut self, stmt_import: &StmtImport) {
-        for alias in &stmt_import.names {
-            let module_name = ModuleName::from_str(alias.name.as_str());
-            if let Some(asname) = &alias.asname {
-                self.alias_modules
-                    .push((module_name, asname.id.to_string()));
-            } else {
-                self.canonical_modules.insert(module_name);
-            }
-        }
-    }
-
-    fn apply_aliases(&self, text: &str) -> String {
-        if self.alias_modules.is_empty() {
-            return text.to_owned();
-        }
-        let bytes = text.as_bytes();
-        let mut result = String::with_capacity(text.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            let mut replaced = false;
-            for (module, alias) in &self.alias_modules {
-                let module_str = module.as_str();
-                if module_str.is_empty() {
-                    continue;
-                }
-                let module_bytes = module_str.as_bytes();
-                if i + module_bytes.len() <= bytes.len()
-                    && &bytes[i..i + module_bytes.len()] == module_bytes
-                    && Self::is_boundary(bytes, i, i + module_bytes.len())
-                {
-                    result.push_str(alias);
-                    i += module_bytes.len();
-                    replaced = true;
-                    break;
-                }
-            }
-            if !replaced {
-                result.push(bytes[i] as char);
-                i += 1;
-            }
-        }
-        result
-    }
-
-    fn missing_modules(
-        &self,
-        modules: &SmallSet<ModuleName>,
-        current_module: ModuleName,
-    ) -> SmallSet<ModuleName> {
-        let mut missing = SmallSet::new();
-        for module in modules.iter() {
-            let module = module.dupe();
-            if module.as_str().is_empty()
-                || module == current_module
-                || module == ModuleName::builtins()
-                || module == ModuleName::extra_builtins()
-            {
-                continue;
-            }
-            if self.module_is_imported(module) {
-                continue;
-            }
-            missing.insert(module);
-        }
-        missing
-    }
-
-    fn module_is_imported(&self, module: ModuleName) -> bool {
-        self.alias_for(module).is_some() || self.has_canonical(module)
-    }
-
-    fn alias_for(&self, module: ModuleName) -> Option<String> {
-        let target = module.as_str();
-        for (alias_module, alias_name) in &self.alias_modules {
-            let alias_module_str = alias_module.as_str();
-            if alias_module_str.is_empty() {
-                continue;
-            }
-            if target == alias_module_str {
-                return Some(alias_name.clone());
-            }
-            if target.len() > alias_module_str.len()
-                && target.starts_with(alias_module_str)
-                && target.as_bytes()[alias_module_str.len()] == b'.'
-            {
-                let remainder = &target[alias_module_str.len()..];
-                return Some(format!("{alias_name}{remainder}"));
-            }
-        }
-        None
-    }
-
-    fn has_canonical(&self, module: ModuleName) -> bool {
-        let target = module.as_str();
-        self.canonical_modules.iter().any(|imported| {
-            let imported_str = imported.as_str();
-            imported_str == target
-                || (target.len() > imported_str.len()
-                    && target.starts_with(imported_str)
-                    && target.as_bytes()[imported_str.len()] == b'.')
-        })
-    }
-
-    fn is_boundary(bytes: &[u8], start: usize, end: usize) -> bool {
-        (start == 0 || !Self::is_ident(bytes[start - 1]))
-            && (end == bytes.len() || !Self::is_ident(bytes[end]))
-    }
-
-    fn is_ident(byte: u8) -> bool {
-        matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
-    }
 }
 
 struct RenderedTypeHint {

@@ -643,13 +643,15 @@ impl Playground {
             .map(|(info, hints)| {
                 hints.into_map(|hint_data| {
                     let position = Position::from_display_pos(info.display_pos(hint_data.position));
-                    // Concatenate all label parts into a single string for the playground
-                    let label: String = hint_data
+                    let label = hint_data
                         .label_parts
                         .iter()
                         .map(|(text, _)| text.as_str())
                         .collect();
-                    InlayHint { label, position }
+                    InlayHint {
+                        label,
+                        position,
+                    }
                 })
             })
             .unwrap_or_default()
