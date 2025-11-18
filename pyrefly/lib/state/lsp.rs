@@ -2872,10 +2872,12 @@ impl<'a> Transaction<'a> {
                     }
                     self.add_literal_completions(handle, position, &mut result);
                     // Only offer kwargs when the cursor isn't inside a literal value.
-                    if !nodes.iter().any(|n| matches!(n, AnyNodeRef::ExprStringLiteral(_)))
-                        && nodes
-                            .iter()
-                            .any(|n| matches!(n, AnyNodeRef::ExprCall(_) | AnyNodeRef::Arguments(_)))
+                    if !nodes
+                        .iter()
+                        .any(|n| matches!(n, AnyNodeRef::ExprStringLiteral(_)))
+                        && nodes.iter().any(|n| {
+                            matches!(n, AnyNodeRef::ExprCall(_) | AnyNodeRef::Arguments(_))
+                        })
                     {
                         self.add_kwargs_completions(handle, position, &mut result);
                     }

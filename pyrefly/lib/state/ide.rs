@@ -254,8 +254,8 @@ pub fn insert_import_edit_with_forced_import_format(
         module_name_to_import.as_str(),
         export_name
     );
-    if merge_with_existing {
-        if let Some(edit) = try_extend_existing_from_import(
+    if merge_with_existing
+        && let Some(edit) = try_extend_existing_from_import(
             ast,
             module_name_to_import.as_str(),
             export_name,
@@ -264,7 +264,6 @@ pub fn insert_import_edit_with_forced_import_format(
         ) {
             return edit;
         }
-    }
     let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
         first_stmt.range().start()
     } else {
@@ -313,8 +312,8 @@ fn try_extend_existing_from_import(
     module_name: &str,
 ) -> Option<ImportEdit> {
     for stmt in &ast.body {
-        if let Stmt::ImportFrom(import_from) = stmt {
-            if import_from_module_name(import_from) == target_module_name {
+        if let Stmt::ImportFrom(import_from) = stmt
+            && import_from_module_name(import_from) == target_module_name {
                 if import_from
                     .names
                     .iter()
@@ -334,7 +333,6 @@ fn try_extend_existing_from_import(
                     });
                 }
             }
-        }
     }
     None
 }
